@@ -42,6 +42,30 @@ function normalizedOptions(
   );
 }
 
+export type ResolvedPlannerConnection = {
+  id: string;
+  provider: string;
+  model: string;
+};
+
+export async function resolvePlannerConnection(
+  spindle: SpindleAPI,
+  config: { parserConnectionId: string | null },
+  userId?: string
+): Promise<ResolvedPlannerConnection | null> {
+  // Honor the user's explicitly chosen planner connection first (Inlay pattern).
+  if (config.parserConnectionId) {
+    const chosen = await spindle.connections?.get?.(config.parserConnectionId, userId);
+    if (chosen) return { id: chosen.id, provider: chosen.provider, model: chosen.model };
+  }
+  // Otherwise fall back to the default connection so "Lumiverse default" works instead of failing.
+  const connections = await spindle.connections?.list?.(userId);
+  if (!connections) return null;
+  const fallback = connections.find((connection) => connection.is_default) ?? connections[0];
+  if (!fallback) return null;
+  return { id: fallback.id, provider: fallback.provider, model: fallback.model };
+}
+
 export async function loadConnectionCatalog(spindle: SpindleAPI, userId?: string): Promise<ConnectionCatalog> {
   const [plannerResult, imageResult] = await Promise.allSettled([
     spindle.connections.list(userId),

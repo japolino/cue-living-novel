@@ -20,6 +20,7 @@ import { validateTurnPlan } from "../core/turn-plan.js";
 import { profilesForPrompt, upsertProfiles } from "../core/visual-state.js";
 import type { VisualProfileState } from "../core/visual-state.js";
 import { loadVisualContext, type VisualContextDiagnostics, type VisualContextSnapshot } from "./context.js";
+import { resolvePlannerConnection, type ResolvedPlannerConnection } from "./connections.js";
 
 const PlannerSceneSchema = z.object({
   startParagraph: z.number().int().nonnegative(),
@@ -147,7 +148,8 @@ async function requestPlannerOutput(
   spindle: SpindleAPI,
   input: PlanTurnInput,
   paragraphText: string,
-  visualContext: VisualContextSnapshot
+  visualContext: VisualContextSnapshot,
+  connection: ResolvedPlannerConnection | null
 ): Promise<z.infer<typeof PlannerOutputSchema>> {
   const response = await spindle.generate.raw({
     type: "raw",
@@ -177,7 +179,9 @@ async function requestPlannerOutput(
         ].join("\n\n")
       }
     ],
-    ...(input.config.parserConnectionId ? { connection_id: input.config.parserConnectionId } : {}),
+    ...(connection
+      ? { provider: connection.provider, model: connection.model, connection_id: connection.id }
+      : {}),
     parameters: input.config.parserParameters,
     reasoning: { source: "off" },
     ...(input.userId ? { userId: input.userId } : {})
@@ -260,12 +264,14 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
 
   let planner: z.infer<typeof PlannerOutputSchema>;
   let usedFallback = false;
+  const plannerConnection = await resolvePlannerConnection(spindle, input.config, input.userId);
   try {
     planner = await requestPlannerOutput(
       spindle,
       input,
       narrative.paragraphs.map((paragraph) => `[${paragraph.index}] ${paragraph.text}`).join("\n\n"),
-      visualContext
+      visualContext,
+      plannerConnection
     );
   } catch (error) {
     usedFallback = true;
