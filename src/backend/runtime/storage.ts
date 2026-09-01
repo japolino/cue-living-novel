@@ -1,6 +1,8 @@
 import type { SpindleAPI } from "lumiverse-spindle-types";
 import { normalizeConfig, type VisualNovelConfig } from "../../config.js";
 import { AssetJobSchema, SceneStateSchema, TurnPlanSchema, type AssetJob, type SceneState, type TurnPlan } from "../../shared/contracts.js";
+import { parseProfiles } from "../core/visual-state.js";
+import type { VisualProfileState } from "../core/visual-state.js";
 
 export type StoredTurnRecord = {
   schemaVersion: 1;
@@ -52,6 +54,35 @@ export function turnPath(chatId: string, messageId: string, swipeId: string | nu
 
 export function chatStatePath(chatId: string): string {
   return `chats/${safeSegment(chatId)}/state.json`;
+}
+
+export function visualProfilePath(chatId: string): string {
+  return `chats/${safeSegment(chatId)}/visual-state.json`;
+}
+
+export async function loadVisualProfiles(spindle: SpindleAPI, chatId: string, userId?: string): Promise<VisualProfileState> {
+  const raw = await spindle.userStorage.getJson<unknown>(visualProfilePath(chatId), {
+    fallback: {},
+    ...(userOptions(userId) ?? {})
+  });
+  return parseProfiles(raw);
+}
+
+export async function saveVisualProfiles(
+  spindle: SpindleAPI,
+  chatId: string,
+  profiles: VisualProfileState,
+  userId?: string
+): Promise<void> {
+  const path = visualProfilePath(chatId);
+  await serializedWrite(scopedKey(userId, path), () => spindle.userStorage.setJson(path, {
+    schemaVersion: 1,
+    profiles,
+    updatedAt: new Date().toISOString()
+  }, {
+    indent: 2,
+    ...(userOptions(userId) ?? {})
+  }));
 }
 
 export async function loadConfig(spindle: SpindleAPI, userId?: string): Promise<VisualNovelConfig> {

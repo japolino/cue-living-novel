@@ -17,8 +17,10 @@ import {
   loadChatState,
   loadConfig,
   loadTurnRecord,
+  loadVisualProfiles,
   saveChatState,
   saveTurnRecord,
+  saveVisualProfiles,
   turnPath,
   updateConfig,
   type StoredTurnRecord
@@ -190,6 +192,7 @@ async function processAssistantMessage(
   const scheduled = planningQueue.enqueue(userId, chatId, message.id, async (operation) => {
     const config = await loadConfig(spindle, userId);
     const chatState = await loadChatState(spindle, chatId, userId);
+    const previousProfiles = await loadVisualProfiles(spindle, chatId, userId);
     const messages = await spindle.chat.getMessages(chatId) as NormalizedChatMessage[];
     const result = await planTurn(spindle, {
       chatId,
@@ -199,9 +202,11 @@ async function processAssistantMessage(
       previousContinuity: chatState.terminalContinuity,
       recentMessages: messages.slice(-config.includeRecentMessages),
       config,
+      previousProfiles,
       ...(userId ? { userId } : {})
     });
     if (operation.controller.signal.aborted) return;
+    await saveVisualProfiles(spindle, chatId, result.profiles, userId);
     const jobs = config.generateImages ? createAssetJobs(result.plan) : [];
     const record: StoredTurnRecord = {
       schemaVersion: 1,
