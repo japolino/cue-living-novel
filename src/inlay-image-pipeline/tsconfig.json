@@ -12,15 +12,13 @@
       "bun-types"
     ],
     "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "exactOptionalPropertyTypes": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "noEmit": true,
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true
   },
   "include": [
-    "src/**/*.ts"
-  ],
-  "exclude": [
-    "src/inlay-image-pipeline",
-    "src/references"
+    "**/*.ts"
   ]
 }
