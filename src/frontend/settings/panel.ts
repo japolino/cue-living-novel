@@ -114,6 +114,7 @@ export class VisualNovelSettingsPanel {
           </div>
           <label data-check><input name="autoEnter" type="checkbox" /><span>Enter visual novel mode automatically when a chat opens</span></label>
           <label data-check><input name="generateImages" type="checkbox" /><span>Generate scene images</span></label>
+          <label data-check><input name="useInlayPipeline" type="checkbox" /><span>Use the Inlay image pipeline (character-consistent prompts)</span></label>
           <label data-check><input name="generateChoices" type="checkbox" /><span>Generate choices when the response has no authored Choice tags</span></label>
         </section>
         <section>
@@ -188,6 +189,7 @@ export class VisualNovelSettingsPanel {
     control<HTMLSelectElement>(this.root, "mode").value = config.mode;
     control<HTMLInputElement>(this.root, "autoEnter").checked = config.autoEnter;
     control<HTMLInputElement>(this.root, "generateImages").checked = config.generateImages;
+    control<HTMLInputElement>(this.root, "useInlayPipeline").checked = config.useInlayPipeline;
     control<HTMLInputElement>(this.root, "generateChoices").checked = config.generateChoices;
     control<HTMLInputElement>(this.root, "maxImagesPerTurn").value = String(config.maxImagesPerTurn);
     this.renderConnectionSelect("planner", this.connectionStates.planner, config.parserConnectionId);
@@ -229,6 +231,7 @@ export class VisualNovelSettingsPanel {
       mode: control<HTMLSelectElement>(this.root, "mode").value === "cyoa" ? "cyoa" : "standard",
       autoEnter: control<HTMLInputElement>(this.root, "autoEnter").checked,
       generateImages: control<HTMLInputElement>(this.root, "generateImages").checked,
+      useInlayPipeline: control<HTMLInputElement>(this.root, "useInlayPipeline").checked,
       generateChoices: control<HTMLInputElement>(this.root, "generateChoices").checked,
       maxImagesPerTurn: Number(control<HTMLInputElement>(this.root, "maxImagesPerTurn").value),
       parserConnectionId: optional("parserConnectionId"),
