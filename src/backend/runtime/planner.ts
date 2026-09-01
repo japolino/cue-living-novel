@@ -93,19 +93,6 @@ function id(prefix: string, source: string): string {
   return `${prefix}-${stableHash(source)}`;
 }
 
-function jsonObject(content: string): unknown {
-  const fenced = content.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
-  const candidate = (fenced ?? content).trim();
-  try {
-    return JSON.parse(candidate);
-  } catch {
-    const start = candidate.indexOf("{");
-    const end = candidate.lastIndexOf("}");
-    if (start < 0 || end <= start) throw new Error("The visual planner did not return a JSON object.");
-    return JSON.parse(candidate.slice(start, end + 1));
-  }
-}
-
 function plannerInstruction(config: VisualNovelConfig): string {
   return [
     "You plan illustrations for a visual-novel presentation. Return one JSON object and no prose.",
@@ -142,6 +129,145 @@ function previousSceneContext(scene: SceneState | null): string {
     cameraLock: scene.cameraLock,
     compositionLock: scene.compositionLock
   });
+}
+
+const BOUNDARY_REASONS = ["initial", "location_change", "major_time_jump", "environment_replacement", "forced", "none"] as const;
+
+function normalizeBoundaryReason(value: unknown): string {
+  if (typeof value !== "string") return "none";
+  const text = value.trim().toLowerCase().replace(/[\s]+/g, "_");
+  if ((BOUNDARY_REASONS as readonly string[]).includes(text)) return text;
+  if (/initial|first|start|greeting|opening/.test(text)) return "initial";
+  if (/location|place|setting|move|teleport|travel|leave|arriv/.test(text)) return "location_change";
+  if (/time_jump|time|skip|later|next_day|morning|evening|passes|jump/.test(text)) return "major_time_jump";
+  if (/environment|weather|structure|replace|rebuild|interior|exterior/.test(text)) return "environment_replacement";
+  if (/forced|override|hard|reset/.test(text)) return "forced";
+  return "none";
+}
+
+function asBoolean(value: unknown): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") return value.trim().toLowerCase() === "true";
+  if (typeof value === "number") return value !== 0;
+  return false;
+}
+
+function asNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value))) return Number(value);
+  return undefined;
+}
+
+// Inlay-style tolerant recovery: a missing or extra field must never nuke the
+// whole plan into a fallback. Coerce values and rebuild only the known shape.
+function normalizeBoundary(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { claimedNewScene: false, reason: "none", location: "", timeOfDay: null, majorTimeJump: false, environmentReplacement: false, forced: false };
+  }
+  const record = value as Record<string, unknown>;
+  return {
+    claimedNewScene: asBoolean(record.claimedNewScene),
+    reason: normalizeBoundaryReason(record.reason ?? "none"),
+    location: typeof record.location === "string" ? record.location.trim() : "",
+    timeOfDay: typeof record.timeOfDay === "string" ? record.timeOfDay.trim() : null,
+    majorTimeJump: asBoolean(record.majorTimeJump),
+    environmentReplacement: asBoolean(record.environmentReplacement),
+    forced: asBoolean(record.forced)
+  };
+}
+
+function normalizeEnvironment(value: unknown): unknown {
+  const fallback = {
+    location: "the current setting",
+    timeOfDay: null,
+    weather: null,
+    lighting: null,
+    description: "A coherent visual-novel environment in a visual novel scene.",
+    persistentElements: []
+  };
+  if (!value || typeof value !== "object" || Array.isArray(value)) return fallback;
+  const record = value as Record<string, unknown>;
+  const persistent = Array.isArray(record.persistentElements)
+    ? record.persistentElements.map((item) => typeof item === "string" ? item.trim() : String(item)).filter(Boolean)
+    : (typeof record.persistentElements === "string"
+      ? record.persistentElements.split(",").map((item) => item.trim()).filter(Boolean)
+      : []);
+  return {
+    location: typeof record.location === "string" && record.location.trim() ? record.location.trim() : fallback.location,
+    timeOfDay: typeof record.timeOfDay === "string" ? record.timeOfDay.trim() : null,
+    weather: typeof record.weather === "string" ? record.weather.trim() : null,
+    lighting: typeof record.lighting === "string" ? record.lighting.trim() : null,
+    description: typeof record.description === "string" && record.description.trim() ? record.description.trim() : fallback.description,
+    persistentElements: persistent
+  };
+}
+
+function normalizeScene(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const record = value as Record<string, unknown>;
+  return {
+    startParagraph: asNumber(record.startParagraph) ?? 0,
+    boundary: normalizeBoundary(record.boundary),
+    environment: normalizeEnvironment(record.environment),
+    cast: Array.isArray(record.cast)
+      ? record.cast.map((item) => typeof item === "string" ? item.trim() : String(item)).filter(Boolean)
+      : [],
+    basePrompt: typeof record.basePrompt === "string" ? record.basePrompt.trim() : "",
+    compositionLock: typeof record.compositionLock === "string" ? record.compositionLock.trim() : "Character centered with clear negative space behind the dialogue window."
+  };
+}
+
+function normalizeCue(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const record = value as Record<string, unknown>;
+  return {
+    paragraphIndex: asNumber(record.paragraphIndex) ?? 0,
+    action: typeof record.action === "string" ? record.action.trim() : null,
+    expression: typeof record.expression === "string" ? record.expression.trim() : null,
+    promptDelta: typeof record.promptDelta === "string" ? record.promptDelta.trim() : ""
+  };
+}
+
+function normalizeChoice(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const record = value as Record<string, unknown>;
+  return {
+    label: typeof record.label === "string" ? record.label.trim() : "",
+    submission: typeof record.submission === "string" ? record.submission.trim() : ""
+  };
+}
+
+function normalizeCharacter(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const record = value as Record<string, unknown>;
+  return {
+    name: typeof record.name === "string" ? record.name.trim() : "",
+    description: typeof record.description === "string" ? record.description.trim() : ""
+  };
+}
+
+function normalizePlannerOutput(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const record = value as Record<string, unknown>;
+  return {
+    scenes: Array.isArray(record.scenes) ? record.scenes.map(normalizeScene) : [],
+    cues: Array.isArray(record.cues) ? record.cues.map(normalizeCue) : (Array.isArray(record.visualCues) ? record.visualCues.map(normalizeCue) : []),
+    choices: Array.isArray(record.choices) ? record.choices.map(normalizeChoice) : [],
+    characters: Array.isArray(record.characters) ? record.characters.map(normalizeCharacter) : []
+  };
+}
+
+function jsonObject(content: string): unknown {
+  const fenced = content.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
+  const candidate = (fenced ?? content).trim();
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    const start = candidate.indexOf("{");
+    const end = candidate.lastIndexOf("}");
+    if (start < 0 || end <= start) throw new Error("The visual planner did not return a JSON object.");
+    return JSON.parse(candidate.slice(start, end + 1));
+  }
 }
 
 async function requestPlannerOutput(
@@ -190,7 +316,7 @@ async function requestPlannerOutput(
     ? (response as { content?: unknown }).content
     : undefined;
   if (typeof content !== "string") throw new Error("The visual planner returned no text content.");
-  return PlannerOutputSchema.parse(jsonObject(content));
+  return PlannerOutputSchema.parse(normalizePlannerOutput(jsonObject(content)));
 }
 
 function fallbackPlanner(input: PlanTurnInput, paragraphCount: number): z.infer<typeof PlannerOutputSchema> {
