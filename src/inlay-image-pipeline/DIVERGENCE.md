@@ -88,3 +88,30 @@ strictness: `noUncheckedIndexedAccess`/`exactOptionalPropertyTypes` off). The ma
 Cue `tsconfig.json` excludes the adapter, its test, and the pipeline tree so
 Cue's strict flags never touch transplanted Inlay code.
 
+## COMMIT 3.5 — live wiring (build boundary)
+
+Cue's strict controller now routes through the transplanted pipeline behind a
+`useInlayPipeline` config flag. To keep the strict TS program from pulling in the
+loose Inlay source, Cue imports a small **build boundary**:
+
+- `src/runtime/inlay-pipeline.d.ts` — committed strict-clean declaration of the
+  adapter API the controller needs (`generateInlayImages`, `CueGeneratedImage`,
+  etc.). No Inlay types leak into the strict program.
+- `src/runtime/inlay-pipeline.js` — a runtime re-export that bun bundles into the
+  real loose `inlay-adapter.ts` (and its imported Inlay pipeline) at build time.
+  Deliberately a `.js` so TS (`allowJs` off) never follows the loose source.
+
+### Divergences introduced by the live wiring
+
+- **CUE INPUT ADAPTER / CUE OUTPUT ADAPTER**: `runInlayPipeline` (controller) calls
+  the adapter's `generateInlayImages`, then `buildTurnFromInlay` projects the
+  returned images into Cue's `StoredTurnRecord`/`TurnPlan`/`AssetView` presentation
+  shape. This is all Cue glue; Inlay internals are untouched.
+- **HOST API ADAPTER**: the adapter installs a scoped, namespaced `spindle` proxy
+  for the duration of one `generateForMessage` call (mutex-serialized), restoring
+  the original afterward.
+- **Required behavior change**: none. Parsing, memory, prompt construction,
+  planning, generation sequencing, and state-update timing remain Inlay's.
+- When `useInlayPipeline` is false (default), Cue runs its original planner→images
+  path unchanged, so the two can be compared side-by-side during migration.
+

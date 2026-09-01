@@ -5,14 +5,26 @@ import type {
   SwipeEditedPayloadDTO,
   SpindleAPI
 } from "lumiverse-spindle-types";
-import { AssetJobSchema } from "../../shared/contracts.js";
+import {
+  AssetJobSchema,
+  CameraLockSchema,
+  ChoiceSchema,
+  ContinuityStateSchema,
+  SceneStateSchema,
+  TurnKeySchema,
+  TurnPlanSchema,
+  VisualCueSchema
+} from "../../shared/contracts.js";
+import { prepareNarrative } from "../core/paragraphs.js";
 import type { FrontendRequest, AssetView, TurnView } from "../../protocol.js";
+import type { VisualNovelConfig } from "../../config.js";
 import { isFrontendRequest } from "../../protocol.js";
 import { compareTurnKeys } from "../core/guards.js";
 import { PlanningQueue, isAbortError } from "../core/planning-queue.js";
 import { createAssetJobs, generateAssets } from "./images.js";
 import { fingerprintForMessage, planTurn } from "./planner.js";
 import { loadConnectionCatalog } from "./connections.js";
+import { generateInlayImages, type CueGeneratedImage } from "../../runtime/inlay-pipeline.js";
 import {
   loadChatState,
   loadConfig,
@@ -169,6 +181,177 @@ async function startAssets(
   }
 }
 
+const INLAY_CAMERA = CameraLockSchema.parse({
+  framing: "medium-wide visual novel composition",
+  angle: "eye level",
+  perspective: "third-person cinematic view",
+  lens: "50mm equivalent",
+  subjectAnchor: "primary speaking character centered",
+  horizon: "stable horizon at the upper middle third",
+  safeDialogueRegion: "lower quarter free of faces and important objects",
+  aspectRatio: "16:9"
+});
+
+function stableId(prefix: string, source: string): string {
+  let left = 0x811c9dc5;
+  let right = 0x9e3779b9;
+  for (let index = 0; index < source.length; index += 1) {
+    const code = source.charCodeAt(index);
+    left = Math.imul(left ^ code, 0x01000193) >>> 0;
+    right = Math.imul(right ^ (code + index), 0x85ebca6b) >>> 0;
+  }
+  return `${prefix}-${left.toString(16).padStart(8, "0")}${right.toString(16).padStart(8, "0")}`;
+}
+
+/**
+ * Builds a Cue StoredTurnRecord whose paragraphs/choices come from Cue's own
+ * narrative extraction and whose per-paragraph images come from the Inlay
+ * pipeline (already projected to @CueGeneratedImage). This is Cue's presentation
+ * shell: Cue decides when an illustration is requested and which image is shown;
+ * Inlay decided what each illustration is. The scene/visual-cue structure here is
+ * a minimal, valid presentation container for Cue's frontend (which reads
+ * assets by paragraphIndex).
+ */
+function buildTurnFromInlay(
+  key: StoredTurnRecord["plan"]["key"],
+  speaker: string,
+  narrative: ReturnType<typeof prepareNarrative>,
+  images: CueGeneratedImage[]
+): StoredTurnRecord {
+  const continuity = ContinuityStateSchema.parse({ revision: 0, characters: {}, facts: {} });
+  const sceneId = stableId("scene", `${key.sourceFingerprint}:0`);
+  const scene = SceneStateSchema.parse({
+    sceneId,
+    revision: 1,
+    startParagraph: 0,
+    environment: {
+      location: "a visual-novel scene",
+      timeOfDay: null,
+      weather: null,
+      lighting: null,
+      description: narrative.paragraphs[0]?.text ?? "A visual-novel scene.",
+      persistentElements: []
+    },
+    cast: [],
+    continuity,
+    basePrompt: "visual-novel scene",
+    identityPrompt: null,
+    cameraLock: INLAY_CAMERA,
+    compositionLock: "Speaking character centered with the lower quarter clear for dialogue.",
+    activeAssetId: null,
+    priorSceneId: null
+  });
+
+  const visualCues = images.map((image, index) => {
+    const cueId = stableId("cue", `${key.sourceFingerprint}:${image.paragraph}:${index}`);
+    const assetJobId = stableId("asset", `${key.sourceFingerprint}:${image.paragraph}:${index}`);
+    return VisualCueSchema.parse({
+      cueId,
+      paragraphIndex: image.paragraph,
+      sceneId,
+      sceneRevision: scene.revision,
+      kind: "flattened_scene",
+      action: null,
+      expression: null,
+      promptDelta: image.prompt,
+      assetJobId
+    });
+  });
+
+  const jobs = images.map((image, index) => AssetJobSchema.parse({
+    jobId: stableId("asset", `${key.sourceFingerprint}:${image.paragraph}:${index}`),
+    ownerTurnKey: key,
+    sceneId,
+    sceneRevision: scene.revision,
+    paragraphIndex: image.paragraph,
+    promptFingerprint: `${stableId("fingerprint", image.prompt)}${stableId("fingerprint", image.prompt).split("").reverse().join("")}`,
+    provider: "inlay",
+    priority: index === 0 ? "visible" : index === 1 ? "next" : "background",
+    status: image.status === "completed" ? "generated" : image.status === "generating" ? "generating" : image.status === "failed" ? "failed" : "queued",
+    imageId: image.imageId || null,
+    imageUrl: image.imageUrl || null,
+    error: null,
+    queuedAt: new Date().toISOString(),
+    startedAt: null,
+    generatedAt: image.status === "completed" ? new Date().toISOString() : null,
+    readyAt: null,
+    finishedAt: null
+  }));
+
+  const plan = TurnPlanSchema.parse({
+    schemaVersion: 1,
+    key,
+    paragraphs: narrative.paragraphs,
+    scenes: [scene],
+    visualCues,
+    choices: narrative.choices,
+    initialContinuity: continuity,
+    continuityDeltas: [],
+    terminalContinuity: continuity,
+    planningStatus: "planned",
+    createdAt: new Date().toISOString()
+  });
+
+  return {
+    schemaVersion: 1,
+    speaker,
+    status: "ready",
+    plan,
+    jobs,
+    updatedAt: new Date().toISOString()
+  };
+}
+
+async function runInlayPipeline(
+  spindle: SpindleAPI,
+  chatId: string,
+  message: NormalizedChatMessage,
+  content: string,
+  config: VisualNovelConfig,
+  userId?: string
+): Promise<void> {
+  const narrative = prepareNarrative(content);
+  if (narrative.paragraphs.length === 0) return;
+  const path = turnPath(chatId, message.id, message.swipe_id);
+  const fingerprint = fingerprintForMessage({ id: message.id, swipe_id: message.swipe_id, content });
+  const revision = 1;
+  const key = TurnKeySchema.parse({
+    chatId,
+    assistantMessageId: message.id,
+    swipeId: message.swipe_id,
+    sourceFingerprint: fingerprint,
+    revision
+  });
+  // Cue decides WHEN to request an illustration; Inlay decides HOW.
+  const images = config.generateImages
+    ? await generateInlayImages(spindle, config, chatId, message.id, content, userId)
+    : [];
+  const record = buildTurnFromInlay(key, message.name || "Narrator", narrative, images);
+  const keyId = runtimeKey(userId, chatId);
+  activeTurnKeys.set(keyId, record.plan.key);
+  await persistActiveTurn(spindle, record, path, userId);
+  spindle.sendToFrontend({ type: "vn_turn", turn: turnView(record) }, userId);
+  // Progressive per-image reporting: Inlay surfaces each completed slot through
+  // the same sendToFrontend path; forward the mapped assets as vn_asset.
+  for (const image of images) {
+    if (image.status !== "completed" || !image.imageUrl) continue;
+    const cue = record.plan.visualCues.find((candidate) => candidate.paragraphIndex === image.paragraph);
+    spindle.sendToFrontend({
+      type: "vn_asset",
+      chatId,
+      messageId: message.id,
+      asset: {
+        jobId: cue?.assetJobId ?? "",
+        cueId: cue?.cueId ?? "",
+        paragraphIndex: image.paragraph,
+        status: "generated",
+        imageId: image.imageId,
+        imageUrl: image.imageUrl
+      }
+    }, userId);
+  }
+}
+
 async function processAssistantMessage(
   spindle: SpindleAPI,
   chatId: string,
@@ -191,6 +374,10 @@ async function processAssistantMessage(
   const dedupeId = `${message.id}:${message.swipe_id}:${fingerprint}`;
   const scheduled = planningQueue.enqueue(userId, chatId, message.id, async (operation) => {
     const config = await loadConfig(spindle, userId);
+    if (config.useInlayPipeline) {
+      await runInlayPipeline(spindle, chatId, message, content, config, userId);
+      return;
+    }
     const chatState = await loadChatState(spindle, chatId, userId);
     const previousProfiles = await loadVisualProfiles(spindle, chatId, userId);
     const messages = await spindle.chat.getMessages(chatId) as NormalizedChatMessage[];

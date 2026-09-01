@@ -23,6 +23,7 @@ export type VisualNovelConfig = {
   negativePrompt: string;
   customPlannerInstructions: string;
   customCss: string;
+  useInlayPipeline: boolean;
 };
 
 export const DEFAULT_CONFIG: VisualNovelConfig = {
@@ -47,7 +48,8 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   promptSuffix: "wide composition, centered subject, stable eye-level camera, dialogue-safe lower frame",
   negativePrompt: "low quality, blurry, malformed hands, text, subtitles, speech bubble, watermark, logo, frame, border",
   customPlannerInstructions: "",
-  customCss: ""
+  customCss: "",
+  useInlayPipeline: false
 };
 
 function record(value: unknown): Record<string, unknown> {
@@ -100,6 +102,7 @@ export function normalizeConfig(value: unknown): VisualNovelConfig {
     promptSuffix: stringValue(input.promptSuffix, DEFAULT_CONFIG.promptSuffix),
     negativePrompt: stringValue(input.negativePrompt, DEFAULT_CONFIG.negativePrompt),
     customPlannerInstructions: stringValue(input.customPlannerInstructions, DEFAULT_CONFIG.customPlannerInstructions),
-    customCss: stringValue(input.customCss, DEFAULT_CONFIG.customCss)
+    customCss: stringValue(input.customCss, DEFAULT_CONFIG.customCss),
+    useInlayPipeline: bool(input.useInlayPipeline, DEFAULT_CONFIG.useInlayPipeline)
   };
 }
