@@ -212,7 +212,7 @@ function stableId(prefix: string, source: string): string {
  * a minimal, valid presentation container for Cue's frontend (which reads
  * assets by paragraphIndex).
  */
-function buildTurnFromInlay(
+export function buildTurnFromInlay(
   key: StoredTurnRecord["plan"]["key"],
   speaker: string,
   narrative: ReturnType<typeof prepareNarrative>,
@@ -258,25 +258,37 @@ function buildTurnFromInlay(
     });
   });
 
-  const jobs = images.map((image, index) => AssetJobSchema.parse({
-    jobId: stableId("asset", `${key.sourceFingerprint}:${image.paragraph}:${index}`),
-    ownerTurnKey: key,
-    sceneId,
-    sceneRevision: scene.revision,
-    paragraphIndex: image.paragraph,
-    promptFingerprint: `${stableId("fingerprint", image.prompt)}${stableId("fingerprint", image.prompt).split("").reverse().join("")}`,
-    provider: "inlay",
-    priority: index === 0 ? "visible" : index === 1 ? "next" : "background",
-    status: image.status === "completed" ? "generated" : image.status === "generating" ? "generating" : image.status === "failed" ? "failed" : "queued",
-    imageId: image.imageId || null,
-    imageUrl: image.imageUrl || null,
-    error: null,
-    queuedAt: new Date().toISOString(),
-    startedAt: null,
-    generatedAt: image.status === "completed" ? new Date().toISOString() : null,
-    readyAt: null,
-    finishedAt: null
-  }));
+  const jobs = images.map((image, index) => {
+    const now = new Date().toISOString();
+    const status = image.status === "completed" ? "generated" : image.status === "generating" ? "generating" : image.status === "failed" ? "failed" : "queued";
+    const started = ["generating", "generated", "failed"].includes(status) ? now : null;
+    const generated = status === "generated" ? now : null;
+    // "generated" means the image is ready but not yet browser-acknowledged; it
+    // must carry startedAt + generatedAt + imageId but no readyAt/finishedAt/error.
+    // Inlay slots only map to generated/generating/failed/queued; the frontend
+    // transitions a generated job to browser_ready via the acknowledgment flow.
+    const ready = null;
+    const finished = status === "failed" ? now : null;
+    return AssetJobSchema.parse({
+      jobId: stableId("asset", `${key.sourceFingerprint}:${image.paragraph}:${index}`),
+      ownerTurnKey: key,
+      sceneId,
+      sceneRevision: scene.revision,
+      paragraphIndex: image.paragraph,
+      promptFingerprint: `${stableId("fingerprint", image.prompt)}${stableId("fingerprint", image.prompt).split("").reverse().join("")}`,
+      provider: "inlay",
+      priority: index === 0 ? "visible" : index === 1 ? "next" : "background",
+      status,
+      imageId: image.imageId || null,
+      imageUrl: image.imageUrl || null,
+      error: status === "failed" ? (image.error ?? "Image generation failed.") : null,
+      queuedAt: now,
+      startedAt: started,
+      generatedAt: generated,
+      readyAt: ready,
+      finishedAt: finished
+    });
+  });
 
   const plan = TurnPlanSchema.parse({
     schemaVersion: 1,
@@ -322,8 +334,14 @@ async function runInlayPipeline(
     sourceFingerprint: fingerprint,
     revision
   });
-  // Cue decides WHEN to request an illustration; Inlay decides HOW.
-  const images = config.generateImages
+  // Cue decides WHEN to request an illustration; Inlay decides HOW. Do not
+  // generate images for the opening greeting (an assistant message with no user
+  // message before it) — images are only produced once the player has replied.
+  const messages = await spindle.chat.getMessages(chatId) as NormalizedChatMessage[];
+  const greeting = !messages.slice(0, messages.findIndex((candidate) => candidate.id === message.id))
+    .some((candidate) => candidate.is_user);
+  const shouldGenerate = config.generateImages && !greeting;
+  const images = shouldGenerate
     ? await generateInlayImages(spindle, config, chatId, message.id, content, userId)
     : [];
   const record = buildTurnFromInlay(key, message.name || "Narrator", narrative, images);

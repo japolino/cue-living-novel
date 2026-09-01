@@ -98,6 +98,7 @@ export type CueGeneratedImage = {
   negativePrompt: string;
   status: "pending" | "generating" | "completed" | "failed" | "cancelled";
   placement: "cover" | "paragraph";
+  error?: string;
 };
 
 /**
