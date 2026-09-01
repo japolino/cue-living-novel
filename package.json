@@ -1,0 +1,27 @@
+{
+  "name": "cue-living-novel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.4.0",
+  "engines": {
+    "bun": ">=1.4.0"
+  },
+  "scripts": {
+    "test": "bun test --isolate",
+    "typecheck": "tsc --project tsconfig.json --noEmit",
+    "typecheck:build": "tsc --project tsconfig.build.json --noEmit",
+    "build": "bun run typecheck:build && bun build ./src/backend.ts ./src/frontend.ts --outdir ./dist --target browser --format esm",
+    "build:demo": "bun build ./src/demo.ts --outfile ./demo/demo.js --target browser --format esm",
+    "serve:demo": "bun run build:demo && bunx serve ./demo -l 4173",
+    "verify": "bun run test && bun run typecheck && bun run build"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "bun-types": "^1.4.0",
+    "lumiverse-spindle-types": "0.6.23",
+    "typescript": "7.0.2"
+  }
+}

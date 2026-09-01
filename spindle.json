@@ -1,0 +1,21 @@
+{
+  "version": "0.1.0",
+  "name": "Visual Novel Preview",
+  "identifier": "visual_novel_preview",
+  "author": "japolino",
+  "description": "A full-screen visual-novel presentation for Lumiverse with paragraph reveal, choices, custom input, scene continuity, and generated scene art.",
+  "permissions": [
+    "app_manipulation",
+    "generation",
+    "chat_mutation",
+    "image_gen",
+    "images",
+    "chats",
+    "characters",
+    "personas",
+    "world_books"
+  ],
+  "entry_backend": "dist/backend.js",
+  "entry_frontend": "dist/frontend.js",
+  "minimum_lumiverse_version": "1.1.6"
+}

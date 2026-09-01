@@ -1,0 +1,228 @@
+export type VnMode = "cyoa" | "standard";
+
+export type VnPhase =
+  | "idle"
+  | "waiting-for-response"
+  | "planning"
+  | "revealing"
+  | "awaiting-input"
+  | "submitting"
+  | "error";
+
+export interface VnParagraph {
+  id: string;
+  text: string;
+  speaker?: string;
+}
+
+export interface VnChoice {
+  id: string;
+  label: string;
+  value: string;
+  disabled?: boolean;
+}
+
+export interface VnSceneImage {
+  url: string;
+  alt: string;
+  requestId: string;
+}
+
+export interface VnActivity {
+  kind: "loading" | "error";
+  label: string;
+}
+
+export interface VnStageState {
+  mode: VnMode;
+  phase: VnPhase;
+  paragraphs: readonly VnParagraph[];
+  currentParagraphIndex: number;
+  choices: readonly VnChoice[];
+  draft: string;
+  displayedImage: VnSceneImage | null;
+  pendingImage: VnSceneImage | null;
+  imageError: string | null;
+  activity: VnActivity | null;
+  error: string | null;
+  inputPlaceholder: string;
+}
+
+export interface VnTurnInput {
+  mode: VnMode;
+  paragraphs: readonly VnParagraph[];
+  choices?: readonly VnChoice[];
+  inputPlaceholder?: string;
+  preserveImage?: boolean;
+}
+
+export type VnStageAction =
+  | { type: "load-turn"; turn: VnTurnInput }
+  | { type: "advance" }
+  | { type: "set-mode"; mode: VnMode }
+  | { type: "set-draft"; draft: string }
+  | { type: "set-phase"; phase: VnPhase }
+  | { type: "set-activity"; activity: VnActivity | null }
+  | { type: "set-error"; error: string | null }
+  | { type: "submit-started" }
+  | { type: "submit-failed"; error: string }
+  | { type: "image-requested"; image: VnSceneImage }
+  | { type: "image-ready"; requestId: string }
+  | { type: "image-failed"; requestId: string; error: string }
+  | { type: "reset" };
+
+export interface VnStageView {
+  paragraph: VnParagraph | null;
+  paragraphNumber: number;
+  paragraphCount: number;
+  canAdvance: boolean;
+  acceptsInput: boolean;
+  showChoices: boolean;
+  showStandardInput: boolean;
+  isBusy: boolean;
+}
+
+export const createInitialVnStageState = (
+  values: Partial<VnStageState> = {},
+): VnStageState => ({
+  mode: "standard",
+  phase: "idle",
+  paragraphs: [],
+  currentParagraphIndex: 0,
+  choices: [],
+  draft: "",
+  displayedImage: null,
+  pendingImage: null,
+  imageError: null,
+  activity: null,
+  error: null,
+  inputPlaceholder: "What do you do?",
+  ...values,
+});
+
+const clampParagraphIndex = (
+  paragraphs: readonly VnParagraph[],
+  index: number,
+): number => {
+  if (paragraphs.length === 0) return 0;
+  return Math.min(Math.max(index, 0), paragraphs.length - 1);
+};
+
+export const selectVnStageView = (state: VnStageState): VnStageView => {
+  const paragraph =
+    state.paragraphs[clampParagraphIndex(state.paragraphs, state.currentParagraphIndex)] ??
+    null;
+  const acceptsInput = state.phase === "awaiting-input";
+
+  return {
+    paragraph,
+    paragraphNumber: paragraph ? state.currentParagraphIndex + 1 : 0,
+    paragraphCount: state.paragraphs.length,
+    canAdvance: state.phase === "revealing" && paragraph !== null,
+    acceptsInput,
+    showChoices: acceptsInput && state.mode === "cyoa",
+    showStandardInput: acceptsInput && state.mode === "standard",
+    isBusy:
+      state.phase === "waiting-for-response" ||
+      state.phase === "planning" ||
+      state.phase === "submitting",
+  };
+};
+
+export const reduceVnStage = (
+  state: VnStageState,
+  action: VnStageAction,
+): VnStageState => {
+  switch (action.type) {
+    case "load-turn": {
+      const paragraphs = [...action.turn.paragraphs];
+      return {
+        ...state,
+        mode: action.turn.mode,
+        phase: paragraphs.length === 0 ? "awaiting-input" : "revealing",
+        paragraphs,
+        currentParagraphIndex: 0,
+        choices: [...(action.turn.choices ?? [])],
+        draft: "",
+        displayedImage: action.turn.preserveImage === false ? null : state.displayedImage,
+        pendingImage: null,
+        imageError: null,
+        activity: null,
+        error: null,
+        inputPlaceholder: action.turn.inputPlaceholder ?? state.inputPlaceholder,
+      };
+    }
+
+    case "advance": {
+      if (state.phase !== "revealing" || state.paragraphs.length === 0) return state;
+
+      const finalIndex = state.paragraphs.length - 1;
+      if (state.currentParagraphIndex < finalIndex) {
+        return {
+          ...state,
+          currentParagraphIndex: state.currentParagraphIndex + 1,
+        };
+      }
+
+      return { ...state, phase: "awaiting-input" };
+    }
+
+    case "set-mode":
+      return { ...state, mode: action.mode };
+
+    case "set-draft":
+      return { ...state, draft: action.draft };
+
+    case "set-phase":
+      return { ...state, phase: action.phase };
+
+    case "set-activity":
+      return { ...state, activity: action.activity };
+
+    case "set-error":
+      return {
+        ...state,
+        error: action.error,
+        phase: action.error ? "error" : state.phase,
+      };
+
+    case "submit-started":
+      if (state.phase !== "awaiting-input") return state;
+      return { ...state, phase: "submitting", error: null };
+
+    case "submit-failed":
+      return {
+        ...state,
+        phase: "awaiting-input",
+        error: action.error,
+      };
+
+    case "image-requested":
+      return {
+        ...state,
+        pendingImage: action.image,
+        imageError: null,
+      };
+
+    case "image-ready":
+      if (state.pendingImage?.requestId !== action.requestId) return state;
+      return {
+        ...state,
+        displayedImage: state.pendingImage,
+        pendingImage: null,
+        imageError: null,
+      };
+
+    case "image-failed":
+      if (state.pendingImage?.requestId !== action.requestId) return state;
+      return {
+        ...state,
+        pendingImage: null,
+        imageError: action.error,
+      };
+
+    case "reset":
+      return createInitialVnStageState({ displayedImage: state.displayedImage });
+  }
+};
+
