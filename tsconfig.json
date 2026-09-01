@@ -21,6 +21,8 @@
   ],
   "exclude": [
     "src/inlay-image-pipeline",
-    "src/references"
+    "src/references",
+    "src/runtime/inlay-adapter.ts",
+    "src/runtime/inlay-adapter.test.ts"
   ]
 }

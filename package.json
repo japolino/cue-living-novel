@@ -16,7 +16,8 @@
     "serve:demo": "bun run build:demo && bunx serve ./demo -l 4173",
     "verify": "bun run test && bun run typecheck && bun run build",
     "typecheck:image-pipeline": "tsc --project ./src/inlay-image-pipeline/tsconfig.json --noEmit",
-    "verify:image-pipeline": "bun run typecheck:image-pipeline"
+    "verify:image-pipeline": "bun run typecheck:image-pipeline",
+    "typecheck:inlay-adapter": "tsc --project ./tsconfig.inlay-adapter.json --noEmit"
   },
   "dependencies": {
     "zod": "^4.4.3"
