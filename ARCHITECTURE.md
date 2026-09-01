@@ -40,7 +40,8 @@ Lumiverse staging host
         +-- per-chat planning queue
         +-- context assembly
         +-- scene and cue planner
-        +-- provider-scoped image scheduler
+        +-- fixed-camera single-character prompt compiler
+        +-- per-provider image scheduler
         +-- chat mutation
         +-- per-user storage
 ```
@@ -54,11 +55,13 @@ Lumiverse staging host
 | `src/frontend/store` | deterministic paragraph, acknowledgement, choice, and input gating |
 | `src/frontend/settings` | Lumiverse settings surface |
 | `src/frontend/theme` | stable `data-vn-*` selectors, base theme, CSS isolation, network-fetch stripping |
-| `src/backend/runtime/controller.ts` | host event handling, submission reconciliation, active-turn ownership |
-| `src/backend/runtime/planner.ts` | sidecar request, fallback plan, fixed camera, scene/cue/choice construction |
-| `src/backend/runtime/images.ts` | prompt compilation, image generation, asset updates |
-| `src/backend/runtime/storage.ts` | versioned per-user config, per-chat continuity, serialized writes |
+| `src/backend/runtime/controller.ts` | host event handling, submission reconciliation, active-turn ownership, single-character load/save |
+| `src/backend/runtime/planner.ts` | sidecar request, fallback plan, fixed camera, exactly-one-protagonist scene/cue/choice construction, deterministic pose assignment |
+| `src/backend/runtime/images.ts` | deterministic prompt compilation, image generation, per-provider asset scheduling, asset updates |
+| `src/backend/runtime/storage.ts` | versioned per-user config, per-chat state, frozen single-character visual state, serialized writes |
+| `src/backend/core/visual-state.ts` | immutable single-character identity registry, frozen tag block, schema-v1 profile migration |
 | `src/backend/core` | host-neutral queues, contracts, continuity reduction, boundary decisions, stale guards |
+| `src/shared/character.ts` | closed pose/expression catalogue, pure pose selection, frozen single-character identity types |
 | `src/shared/contracts.ts` | strict Zod trust-boundary schemas |
 | `src/protocol.ts` | narrow frontend/backend message protocol |
 
@@ -74,8 +77,9 @@ GENERATION_ENDED
   -> enqueue one planning job for that chat
   -> gather recent and enabled structured context
   -> ask sidecar for scenes, cues, and optional choices
+  -> resolve the frozen single-character identity (seed once, then freeze) and assign each cue a closed-catalogue pose
   -> validate claimed scene changes against objective evidence
-  -> persist TurnPlan
+  -> persist TurnPlan and the single-character visual state
   -> show paragraph 0 immediately
   -> enqueue all cue images by visible/next/background priority
 
@@ -103,15 +107,15 @@ Choices are presentation metadata. Selecting one submits its configured value as
 A scene owns:
 
 - structured location, time, weather, lighting, and persistent environment elements
-- cast names and continuity state
+- exactly one protagonist via `cast` (a single name) and the frozen identity/tag block (`identityPrompt`)
 - a reusable base prompt
-- a fixed camera lock
+- a fixed, centered 16:9 camera lock
 - composition constraints and prior-scene lineage
 - zero or more paragraph cues
 
-The planner may propose a boundary, but the deterministic boundary reducer accepts a new scene only for an initial scene, location change, major time jump, environment replacement, or explicit force. Emotion, pose, ordinary action, punctuation, and camera wording do not create a new scene.
+The planner may propose a boundary, but the deterministic boundary reducer accepts a new scene only for an initial scene, location change, major time jump, environment replacement, or explicit force. Emotion, pose, ordinary action, punctuation, and camera wording do not create a new scene. Where a boundary is not justified, the previous scene (and its camera, composition, and base prompt) is reused so the frame stays stable.
 
-Camera framing is fixed to an eye-level, medium-wide, 50mm-equivalent, centered-subject composition with the lower quarter kept free for dialogue. This matches the supplied reference frames: the character stays centered, background geometry remains stable, and the dialogue or choice surface occupies the lower portion without covering the face.
+Camera framing is fixed to an eye-level, medium-wide, 50mm-equivalent, centered-subject composition with the lower quarter kept free for dialogue. This matches the supplied reference frames: the character stays centered, background geometry remains stable, and the dialogue or choice surface occupies the lower portion without covering the face. The lock is carried verbatim on every scene, so no scene can widen or re-frame the shot in a way that breaks the composition.
 
 ## Asset state machine
 
@@ -123,7 +127,7 @@ queued/generating   \-> cancelled
 
 `generated` means the provider returned a persisted image ID and URL. `browser_ready` means the active browser decoded that image successfully. Those are intentionally separate states.
 
-Jobs carry their owning turn key, scene ID, scene revision, paragraph index, prompt fingerprint, provider key, and priority. Concurrency is enforced per provider. This lets another provider progress without violating a slow provider's limit.
+Jobs carry their owning turn key, scene ID, scene revision, paragraph index, prompt fingerprint, provider key, and priority. The prompt fingerprint includes the byte-identical identity/scene/camera block and the resolved pose id and suffix, so distinct poses and distinct identity states produce distinct jobs. Concurrency is enforced per provider. This lets another provider progress without violating a slow provider's limit.
 
 ## Canonical data and storage
 
@@ -132,31 +136,45 @@ Lumiverse chat messages are canonical. Paragraphs, choices, scenes, cues, and as
 ```text
 config.json
 chats/<chat-id>/state.json
+chats/<chat-id>/visual-state.json
 turns/<chat-id>/<assistant-message-id>/<swipe-id>.json
 ```
 
-Per-path writes are serialized because `userStorage` has no transaction or compare-and-swap operation. Chat state points to the active turn and carries the latest accepted scene and terminal continuity.
+Per-path writes are serialized because `userStorage` has no transaction or compare-and-swap operation. Chat state points to the active turn and carries the latest accepted scene and terminal continuity. The visual-state record holds the frozen single-character identity and the latest environment descriptor.
 
-## Inlay reuse map
+## Image pipeline
 
-The preview intentionally adapts architecture from Inlay Illustrator staging, with permission from its owner. The context work comes directly from the design of Inlay's `src/backend/context.ts` and `src/backend/continuity-context.ts`:
+The extension has one native image pipeline. `planner.ts` asks a sidecar model — or a deterministic fallback planner when the sidecar is unavailable — for scene boundaries, environments, and paragraph cues, then builds a strict `TurnPlan`. `images.ts` compiles each cue into a prompt with `compileImagePrompt` and turns the plan into asset jobs with `createAssetJobs`, which a per-provider scheduler (`AssetScheduler`) generates with bounded concurrency and delivers progressively to the browser.
 
-| Inlay idea | VN use |
-|---|---|
-| per-user, per-chat scheduling | prevents one chat from blocking another and preserves operator isolation |
-| serialized extension storage | protects config and active-turn records from overlapping writes |
-| source fingerprints and duplicate suppression | makes generation events, reconnects, and edits idempotent |
-| stale-result ownership guards | prevents old image results from replacing a newer swipe or scene |
-| progressive image generation | prefetches every relevant paragraph image while keeping readable content available |
-| previous visual state reuse | keeps the scene prompt and composition stable until a justified boundary |
-| context-aware prompting | failure-isolated chat, card, persona, and activated-lore lookups; bounded blocks; macro resolution; visual-segment preference |
-| identity separate from rolling continuity | reused scenes retain their stored identity baseline, while a new scene refreshes from current host data |
-| connection fallback | uses selected connections when configured and Lumiverse defaults otherwise |
-| debug fallback reporting | exposes sidecar failures without making the chat unreadable |
+The compiled prompt is:
 
-The VN-specific renderer, paragraph acknowledgement model, CYOA protocol, fixed-camera scene contract, component overrides, settings UI, browser-readiness handshake, and safe Exit layer are new for this extension.
+```text
+prefix + (identity: <tags>, solo | solo) + basePrompt + camera + composition + pose suffix + suffix
+```
 
-Not copied into the preview are Inlay's inline message widgets, lightbox, rerolls, avatar-vision enrichment, Asset/Creative/Static/Dynamic mode family, manual generation workflow, image-prompt studies, or evaluation harnesses. They solve a different presentation problem and would expand the preview beyond its purpose.
+The sidecar never supplies free-form `action`, `expression`, or prompt content. Those cue fields are emitted empty and ignored by the compiler, so no unbounded pose/expression vocabulary can re-enter the prompt. `PROMPT_PREFIX` and `PROMPT_SUFFIX` come from `config.ts`; the camera and composition come from the scene's fixed camera lock; the pose suffix comes from the closed catalogue.
+
+Where the extension owns the data, behavior is deterministic: a byte-identical content fingerprint keyed by message, swipe, and content makes generation events, reconnects, and edits idempotent; stale asset results are rejected by ownership guards; previous visual state is reused so the scene prompt and composition stay stable until a justified boundary; and the pipeline never mutates the canonical chat message.
+
+### Exactly one protagonist
+
+The planner instruction requires exactly one protagonist and explicitly forbids a second character, a crowd, a bystander, or "another" person. Its `characters` output is a single entry, and every scene `cast` is exactly `[protagonist.name]`. The prompt compiler forces `solo` into every compiled prompt, so a multi-character or background character frame cannot be generated from the planned scene.
+
+### Frozen identity and tag block
+
+The protagonist's physical identity is a frozen per-chat tag block stored at `chats/<chat-id>/visual-state.json` as:
+
+```text
+{ schemaVersion: 2, protagonist: { name, tags }, environment, updatedAt }
+```
+
+On a fresh chat it is seeded once from the planner's single `characters` entry, whose comma-separated description becomes the normalized `tags` list. After seeding, the identity is immutable: `resolveSingleCharacter` returns the existing state whenever a name is already present, and `saveSingleCharacterState` never overwrites a stored `protagonist`. A later turn therefore cannot drift the appearance even if the sidecar proposes a different description. Only `environment` and `updatedAt` advance, and only on a real scene or environment change.
+
+Legacy `{ schemaVersion: 1, profiles }` records are migrated transparently on read. The first profile — or an explicit `protagonistName` — is promoted to the frozen protagonist and its comma-separated `description` split into normalized, de-duplicated tags. No manual migration or storage rewrite is needed for existing chats, and nothing mutates the canonical chat message.
+
+### Closed pose/expression catalogue
+
+Pose and expression belong to a closed, bounded catalogue (`POSE_EXPRESSION_CATALOGUE`, ≤ 16 entries, unique ids, non-empty suffixes). Selection is a pure function of `(paragraphIndex, paragraphText)`: a keyword match in the text wins, otherwise the set is indexed by paragraph index with a stable wrap-around. Each cue stores only a `poseExpressionId`; `compileImagePrompt` resolves it back to its exact suffix. Unknown or absent ids fall back to the first catalogue entry, so old stored cues and corrupt ids still resolve deterministically. The same paragraph always produces the same compiled prompt.
 
 ## Staging host contract
 

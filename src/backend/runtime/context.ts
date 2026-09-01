@@ -107,6 +107,34 @@ function visualIdentity(character: CharacterDTO | null, persona: PersonaDTO | nu
   return compact(`visual identity reference, apply only to identities visible in the scene: ${rows.join(" | ")}`, MAX_IDENTITY_PROMPT);
 }
 
+export type PromptIdentity = {
+  name: string;
+  tags: string[];
+};
+
+/**
+ * Best-effort, safe normalization of the identity prompt into a structured
+ * `{ name, tags }` identity. The prompt is written by `visualIdentity` as a
+ * deterministic run of `Character <name>; <description>; stable tags: <tags>`
+ * rows, so parsing it is deliberate: we accept it only when a character name is
+ * present and we tolerate a missing tags section (the caller refills a tag).
+ * Unknown or unmatchable prompts return null so the caller falls through to a
+ * weaker source rather than seeding a bogus identity.
+ */
+export function identityFromVisualPrompt(prompt: string): PromptIdentity | null {
+  const source = clean(prompt);
+  if (!source) return null;
+  const characterMatch = source.match(/Character\s+([^;:|]+)/);
+  const name = characterMatch?.[1]?.trim();
+  if (!name) return null;
+  const tagsMatch = source.match(/stable tags:\s*([^|]+)/);
+  const tagsCapture = tagsMatch?.[1];
+  const tags = tagsCapture
+    ? tagsCapture.split(",").map((tag) => clean(tag)).filter(Boolean)
+    : [];
+  return { name, tags };
+}
+
 function normalizedTerms(value: string): string[] {
   return [...new Set((value.toLocaleLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}_-]{2,}/gu) ?? [])
     .map((term) => term.replace(/[_-]+/g, " "))

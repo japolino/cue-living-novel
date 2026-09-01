@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { AssetJobSchema, TurnKeySchema, TurnPlanSchema, type ContinuityState, type TurnPlan } from "./contracts.js";
+import { AssetJobSchema, TurnKeySchema, TurnPlanSchema, VisualCueSchema, type ContinuityState, type TurnPlan } from "./contracts.js";
 import { validateTurnPlan } from "../backend/core/turn-plan.js";
 
 const continuity: ContinuityState = { revision: 0, characters: {}, facts: {} };
@@ -105,5 +105,40 @@ describe("shared contracts", () => {
       imageId: "image",
       generatedAt: new Date().toISOString()
     })).toBeDefined();
+  });
+});
+
+describe("VisualCueSchema poseExpressionId (additive)", () => {
+  const base = {
+    cueId: "cue",
+    paragraphIndex: 1,
+    sceneId: "scene",
+    sceneRevision: 0,
+    kind: "flattened_scene",
+    action: null,
+    expression: null,
+    promptDelta: "Mira turns",
+    assetJobId: "job"
+  };
+
+  test("accepts a declared poseExpressionId", () => {
+    const cue = VisualCueSchema.parse({ ...base, poseExpressionId: "smile" });
+    expect(cue.poseExpressionId).toBe("smile");
+  });
+
+  test("still parses an old stored cue without poseExpressionId", () => {
+    const cue = VisualCueSchema.parse({ ...base });
+    // Backward compatibility: the field is optional and absent when unset.
+    expect(cue.poseExpressionId).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(cue, "poseExpressionId")).toBe(false);
+  });
+
+  test("still rejects unknown fields at the trust boundary", () => {
+    expect(() => VisualCueSchema.parse({ ...base, unexpected: true })).toThrow();
+  });
+
+  test("allows an empty promptDelta (no free-form visual delta)", () => {
+    const cue = VisualCueSchema.parse({ ...base, promptDelta: "" });
+    expect(cue.promptDelta).toBe("");
   });
 });

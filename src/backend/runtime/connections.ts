@@ -53,7 +53,7 @@ export async function resolvePlannerConnection(
   config: { parserConnectionId: string | null },
   userId?: string
 ): Promise<ResolvedPlannerConnection | null> {
-  // Honor the user's explicitly chosen planner connection first (Inlay pattern).
+  // Honor the user's explicitly chosen planner connection first.
   if (config.parserConnectionId) {
     const chosen = await spindle.connections?.get?.(config.parserConnectionId, userId);
     if (chosen) return { id: chosen.id, provider: chosen.provider, model: chosen.model };

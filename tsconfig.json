@@ -19,10 +19,5 @@
   "include": [
     "src/**/*.ts"
   ],
-  "exclude": [
-    "src/inlay-image-pipeline",
-    "src/references",
-    "src/runtime/inlay-adapter.ts",
-    "src/runtime/inlay-adapter.test.ts"
-  ]
+  "exclude": []
 }

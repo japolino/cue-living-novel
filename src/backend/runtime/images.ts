@@ -2,6 +2,7 @@ import type { SpindleAPI } from "lumiverse-spindle-types";
 import type { VisualNovelConfig } from "../../config.js";
 import { AssetJobSchema, type AssetJob, type SceneState, type TurnPlan, type VisualCue } from "../../shared/contracts.js";
 import { AssetScheduler } from "../core/asset-scheduler.js";
+import { POSE_EXPRESSION_CATALOGUE, poseById } from "../../shared/character.js";
 
 export type AssetUpdateHandler = (jobs: AssetJob[], changed: AssetJob) => Promise<void> | void;
 
@@ -21,15 +22,15 @@ function sceneForCue(plan: TurnPlan, cue: VisualCue): SceneState {
 
 export function compileImagePrompt(config: VisualNovelConfig, scene: SceneState, cue: VisualCue): string {
   const camera = scene.cameraLock;
+  const pose = poseById(POSE_EXPRESSION_CATALOGUE, cue.poseExpressionId);
+  const identityTags = scene.identityPrompt?.trim();
   return [
     config.promptPrefix,
-    scene.identityPrompt ? `identity: ${scene.identityPrompt}` : "",
+    identityTags ? `identity: ${identityTags}, solo` : "solo",
     scene.basePrompt,
     `camera: ${camera.framing}, ${camera.angle}, ${camera.perspective}, ${camera.lens ?? "natural lens"}`,
     `composition: ${camera.subjectAnchor}; ${camera.horizon}; ${camera.safeDialogueRegion}; ${scene.compositionLock}`,
-    cue.action ? `action: ${cue.action}` : "",
-    cue.expression ? `expression: ${cue.expression}` : "",
-    cue.promptDelta,
+    pose.suffix,
     config.promptSuffix
   ].filter(Boolean).join(", ");
 }
@@ -38,7 +39,8 @@ export function createAssetJobs(plan: TurnPlan): AssetJob[] {
   const now = new Date().toISOString();
   return plan.visualCues.map((cue, index) => {
     const scene = sceneForCue(plan, cue);
-    const promptIdentity = `${scene.identityPrompt ?? ""}\0${scene.basePrompt}\0${scene.cameraLock.framing}\0${scene.compositionLock}\0${cue.promptDelta}`;
+    const pose = poseById(POSE_EXPRESSION_CATALOGUE, cue.poseExpressionId);
+    const promptIdentity = `${scene.identityPrompt ?? ""}\0${scene.basePrompt}\0${scene.cameraLock.framing}\0${scene.compositionLock}\0${pose.id}\0${pose.suffix}`;
     return AssetJobSchema.parse({
       jobId: cue.assetJobId,
       ownerTurnKey: plan.key,

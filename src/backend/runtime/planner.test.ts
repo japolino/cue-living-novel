@@ -3,6 +3,7 @@ import test from "node:test";
 import type { ChatMessageDTO, SpindleAPI } from "lumiverse-spindle-types";
 import { DEFAULT_CONFIG } from "../../config";
 import { ContinuityStateSchema, SceneStateSchema } from "../../shared/contracts";
+import { emptySingleCharacter } from "../core/visual-state";
 import { planTurn } from "./planner";
 
 const message: ChatMessageDTO & { role: "assistant" } = {
@@ -39,7 +40,8 @@ test("planner fallback still creates a valid revealable turn and authored choice
     previousScene: null,
     previousContinuity: null,
     recentMessages: [],
-    config: { ...DEFAULT_CONFIG, mode: "cyoa" }
+    config: { ...DEFAULT_CONFIG, mode: "cyoa" },
+    singleCharacter: emptySingleCharacter()
   });
   assert.equal(result.usedFallback, true);
   assert.deepEqual(result.plan.paragraphs.map((paragraph) => paragraph.text), ["First paragraph.", "Second paragraph."]);
@@ -86,7 +88,8 @@ test("fallback planning reuses the active scene prompt and camera identity", asy
     previousScene,
     previousContinuity: continuity,
     recentMessages: [],
-    config: DEFAULT_CONFIG
+    config: DEFAULT_CONFIG,
+    singleCharacter: emptySingleCharacter()
   });
   assert.equal(result.plan.scenes[0]?.sceneId, previousScene.sceneId);
   assert.equal(result.plan.scenes[0]?.revision, previousScene.revision);

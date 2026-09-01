@@ -2,20 +2,34 @@
 
 Cue is a Lumiverse extension that turns a chat into a living visual novel. It replaces the native message and input surfaces only while VN mode is active. Canonical chat messages remain the source of truth.
 
-> The project was previously named *Visual Novel Preview*; the package and docs still refer to that history in a few places.
+> The project was previously named *Visual Novel Preview*; the extension display name and install identifier still reflect that history.
 
 The preview includes:
 
 - paragraph-by-paragraph reveal with a final acknowledgement gate
 - Standard typed-response and CYOA choice modes
-- parallel image prefetch with previous-image retention
-- fixed-camera scene planning and explicit scene-boundary checks
+- a single native image pipeline — planner → asset scheduler — with per-provider bounded concurrency and progressive delivery
+- previous-image retention and decode-before-swap so a late image never blanks the stage
+- exactly one centered protagonist per frame: no second character, crowd, or bystander
+- a frozen per-chat character-identity/tag block, migrated automatically from the legacy visual-profile record
+- a closed deterministic pose/expression catalogue chosen purely by paragraph index and text
+- fixed 16:9 camera scene planning and explicit scene-boundary checks
 - swipe, edit, delete, duplicate-submit, and stale-image reconciliation
 - per-user and per-chat persisted continuity
 - a settings tab and shadow-DOM custom CSS contract
 - an always-accessible Exit control that restores native Lumiverse
 
 It targets Lumiverse staging `1.1.6`, audited at commit `33dfa9ee62999fa3e2567066ed5cdadf61635323`, and `lumiverse-spindle-types` `0.6.23`.
+
+## Image pipeline and identity
+
+Generated scene images come from the one built-in path: `src/backend/runtime/planner.ts`, then `src/backend/runtime/images.ts`, then the per-provider `AssetScheduler`. The sidecar planner proposes only scene boundaries, environments, and paragraph cues. It never supplies free-form pose, expression, or a prompt delta; those fields are emitted empty and ignored by the prompt compiler.
+
+Every image shows exactly one centered protagonist composed from a stable identity/tag block and a pose suffix from a finite catalogue. The tag block is frozen per chat and is never auto-updated by a later turn. Pose is selected by a pure function of paragraph index and text, so a given paragraph always produces the same image. The camera is fixed to a centered, eye-level, medium-wide 16:9 composition with the lower quarter clear for the dialogue surface.
+
+The pipeline never mutates canonical chat messages. It writes only extension-owned projections: per-turn records, per-chat state, and the single-character visual-state identity record.
+
+As with any generative system, image-provider speed and visual identity quality depend on the selected model, provider, and prompt settings. Cue does not promise a specific provider result.
 
 ## Run the standalone preview
 
@@ -55,4 +69,4 @@ bun run build
 bun run build:demo
 ```
 
-See [ARCHITECTURE.md](./ARCHITECTURE.md) for the viability decision, staging host contract, Inlay reuse map, data ownership, state machines, and remaining preview limits.
+See [ARCHITECTURE.md](./ARCHITECTURE.md) for the viability decision, staging host contract, image pipeline, deterministic single-character identity, data ownership, state machines, and remaining preview limits.

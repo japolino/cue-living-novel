@@ -8,7 +8,7 @@ import type {
   WorldBookEntryDTO
 } from "lumiverse-spindle-types";
 import { DEFAULT_CONFIG } from "../../config.js";
-import { loadVisualContext } from "./context.js";
+import { identityFromVisualPrompt, loadVisualContext } from "./context.js";
 
 const chat: ChatDTO = {
   id: "chat-1",
@@ -160,6 +160,28 @@ describe("visual context assembly", () => {
     expect(snapshot.plannerContext).toBe("");
     expect(snapshot.identityPrompt).toBe("");
     expect(snapshot.diagnostics.errors).toHaveLength(3);
+  });
+});
+
+describe("identityFromVisualPrompt (safe normalization)", () => {
+  test("extracts the character name and stable tags from the identity prompt", () => {
+    const prompt = "visual identity reference, apply only to identities visible in the scene: " +
+      "Character Mira; A tall woman with silver hair, green eyes, and a red wool coat.; " +
+      "stable tags: silver hair, red coat | User persona Theo; Archivist; A short man.";
+    expect(identityFromVisualPrompt(prompt)).toEqual({ name: "Mira", tags: ["silver hair", "red coat"] });
+  });
+
+  test("tolerates a missing tags section and keeps the name", () => {
+    const prompt = "visual identity reference, apply only to identities visible in the scene: " +
+      "Character Mira; A tall woman.";
+    expect(identityFromVisualPrompt(prompt)).toEqual({ name: "Mira", tags: [] });
+  });
+
+  test("returns null for a persona-only or blank prompt", () => {
+    expect(identityFromVisualPrompt("")).toBeNull();
+    const personaOnly = "visual identity reference, apply only to identities visible in the scene: " +
+      "User persona Theo; Archivist; A short man.";
+    expect(identityFromVisualPrompt(personaOnly)).toBeNull();
   });
 });
 

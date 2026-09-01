@@ -1,8 +1,13 @@
 import type { SpindleAPI } from "lumiverse-spindle-types";
 import { normalizeConfig, type VisualNovelConfig } from "../../config.js";
 import { AssetJobSchema, SceneStateSchema, TurnPlanSchema, type AssetJob, type SceneState, type TurnPlan } from "../../shared/contracts.js";
-import { parseProfiles } from "../core/visual-state.js";
-import type { VisualProfileState } from "../core/visual-state.js";
+import {
+  normalizeSingleCharacter
+} from "../core/visual-state.js";
+import {
+  SINGLE_CHARACTER_SCHEMA_VERSION,
+  type SingleCharacterState
+} from "../../shared/character.js";
 
 export type StoredTurnRecord = {
   schemaVersion: 1;
@@ -56,33 +61,84 @@ export function chatStatePath(chatId: string): string {
   return `chats/${safeSegment(chatId)}/state.json`;
 }
 
-export function visualProfilePath(chatId: string): string {
+/** Path of the persisted single-character visual state for a chat. */
+export function singleCharacterStatePath(chatId: string): string {
   return `chats/${safeSegment(chatId)}/visual-state.json`;
 }
 
-export async function loadVisualProfiles(spindle: SpindleAPI, chatId: string, userId?: string): Promise<VisualProfileState> {
-  const raw = await spindle.userStorage.getJson<unknown>(visualProfilePath(chatId), {
-    fallback: {},
-    ...(userOptions(userId) ?? {})
-  });
-  return parseProfiles(raw);
+
+/**
+ * Migrate an arbitrary stored value into a `SingleCharacterState`.
+ *
+ * Handles the old `{ schemaVersion: 1, profiles }` visual-profile records (the
+ * first profile, or `protagonistName` when supplied, becomes the frozen
+ * protagonist; the description is split into normalized tags) as well as
+ * already-migrated new-style records. `environment` overrides the stored /
+ * default descriptor (e.g. the latest scene's `environment.description`).
+ */
+export function migrateVisualProfilesToSingleCharacter(
+  raw: unknown,
+  options: { protagonistName?: string; environment?: string } = {}
+): SingleCharacterState {
+  const state = normalizeSingleCharacter(raw, options.protagonistName);
+  if (options.environment && options.environment.trim()) {
+    return { ...state, environment: options.environment.trim() };
+  }
+  return state;
 }
 
-export async function saveVisualProfiles(
+/**
+ * Load the single-character visual state for a chat, migrating any legacy
+ * v1 profile record present at the path. Returns the empty state when nothing
+ * is stored yet.
+ */
+export async function loadSingleCharacterState(
   spindle: SpindleAPI,
   chatId: string,
-  profiles: VisualProfileState,
+  userId?: string
+): Promise<SingleCharacterState> {
+  const raw = await spindle.userStorage.getJson<unknown>(singleCharacterStatePath(chatId), {
+    fallback: null,
+    ...(userOptions(userId) ?? {})
+  });
+  return migrateVisualProfilesToSingleCharacter(raw);
+}
+
+/**
+ * Persist the single-character visual state for a chat.
+ *
+ * Freeze rule: once a protagonist is seeded (a non-empty `name`), later saves
+ * NEVER overwrite `protagonist` — the identity block is frozen. Only
+ * `environment` and `updatedAt` change on subsequent turns. A brand-new chat
+ * (no stored protagonist, or a stored legacy record whose migrated protagonist
+ * is empty) adopts the incoming protagonist exactly once.
+ */
+export async function saveSingleCharacterState(
+  spindle: SpindleAPI,
+  chatId: string,
+  state: SingleCharacterState,
   userId?: string
 ): Promise<void> {
-  const path = visualProfilePath(chatId);
-  await serializedWrite(scopedKey(userId, path), () => spindle.userStorage.setJson(path, {
-    schemaVersion: 1,
-    profiles,
-    updatedAt: new Date().toISOString()
-  }, {
-    indent: 2,
-    ...(userOptions(userId) ?? {})
-  }));
+  const path = singleCharacterStatePath(chatId);
+  await serializedWrite(scopedKey(userId, path), async () => {
+    const existingRaw = await spindle.userStorage.getJson<unknown>(path, {
+      fallback: null,
+      ...(userOptions(userId) ?? {})
+    });
+    const existing = migrateVisualProfilesToSingleCharacter(existingRaw);
+    const frozen = existing.protagonist.name.trim() !== ""
+      ? { ...state, protagonist: existing.protagonist }
+      : state;
+    await spindle.userStorage.setJson(path, {
+      schemaVersion: SINGLE_CHARACTER_SCHEMA_VERSION,
+      protagonist: frozen.protagonist,
+      environment: frozen.environment,
+      updatedAt: new Date().toISOString()
+    }, {
+      indent: 2,
+      ...(userOptions(userId) ?? {})
+    });
+  });
 }
 
 export async function loadConfig(spindle: SpindleAPI, userId?: string): Promise<VisualNovelConfig> {

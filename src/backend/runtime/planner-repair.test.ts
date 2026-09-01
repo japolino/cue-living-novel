@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ChatMessageDTO, SpindleAPI } from "lumiverse-spindle-types";
 import { DEFAULT_CONFIG } from "../../config.js";
+import { emptySingleCharacter } from "../core/visual-state.js";
 import { planTurn } from "./planner.js";
 
 const message: ChatMessageDTO & { role: "assistant" } = {
@@ -63,7 +64,8 @@ describe("planner tolerant parse", () => {
       previousScene: null,
       previousContinuity: null,
       recentMessages: [],
-      config: { ...DEFAULT_CONFIG, parserConnectionId: "conn" }
+      config: { ...DEFAULT_CONFIG, parserConnectionId: "conn" },
+      singleCharacter: emptySingleCharacter()
     });
     expect(usedFallback()).toBe(false);
     expect(result.plan.scenes[0]?.basePrompt).toBe("test place");
@@ -89,7 +91,8 @@ describe("planner tolerant parse", () => {
       previousScene: null,
       previousContinuity: null,
       recentMessages: [],
-      config: { ...DEFAULT_CONFIG, parserConnectionId: "conn" }
+      config: { ...DEFAULT_CONFIG, parserConnectionId: "conn" },
+      singleCharacter: emptySingleCharacter()
     });
     expect(usedFallback()).toBe(false);
   });

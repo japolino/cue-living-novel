@@ -144,7 +144,8 @@ export const VisualCueSchema = z.object({
   kind: VisualCueKindSchema,
   action: z.string().trim().nullable().default(null),
   expression: z.string().trim().nullable().default(null),
-  promptDelta: TextSchema,
+  poseExpressionId: z.string().trim().optional(),
+  promptDelta: z.string().trim().default(""),
   assetJobId: IdentifierSchema
 }).strict();
 export type VisualCue = z.infer<typeof VisualCueSchema>;
