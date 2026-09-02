@@ -83,7 +83,15 @@ const THEME_MARKUP = `
       <div data-vn-dialogue>
         <nav data-vn-controls aria-label="Dialogue controls">
           <button data-vn-control="log" type="button" aria-label="History Log">Log</button>
-          <button data-vn-control="auto" type="button" aria-label="Toggle auto play">Auto</button>
+          <button data-vn-control="auto" type="button" aria-label="Toggle auto play">
+            <span data-vn-auto-ring aria-hidden="true">
+              <svg viewBox="0 0 16 16" width="14" height="14">
+                <circle class="vn-auto-track" cx="8" cy="8" r="6" fill="none" stroke-width="2" />
+                <circle class="vn-auto-bar" cx="8" cy="8" r="6" fill="none" stroke-width="2" stroke-dasharray="37.7" stroke-dashoffset="37.7" />
+              </svg>
+            </span>
+            <span>Auto</span>
+          </button>
           <button data-vn-control="skip" type="button" aria-label="Toggle fast forward">Skip</button>
         </nav>
         <span data-vn-speaker hidden></span>
@@ -243,6 +251,7 @@ export class VnStage {
   private readonly exitButton: HTMLButtonElement;
   private readonly logButton: HTMLButtonElement;
   private readonly autoButton: HTMLButtonElement;
+  private readonly autoBar: HTMLElement | null;
   private readonly skipButton: HTMLButtonElement;
   private readonly backlogModal: HTMLElement;
   private readonly backlogClose: HTMLButtonElement;
@@ -343,6 +352,7 @@ export class VnStage {
     this.submitButton = queryRequired(this.themeRoot, "[data-vn-submit]");
     this.logButton = queryRequired(this.themeRoot, "[data-vn-control='log']");
     this.autoButton = queryRequired(this.themeRoot, "[data-vn-control='auto']");
+    this.autoBar = this.themeRoot.querySelector<HTMLElement>(".vn-auto-bar");
     this.skipButton = queryRequired(this.themeRoot, "[data-vn-control='skip']");
     this.backlogModal = queryRequired(this.themeRoot, "[data-vn-backlog]");
     this.backlogClose = queryRequired(this.themeRoot, "[data-vn-backlog-close]");
@@ -450,6 +460,9 @@ export class VnStage {
   private updateControlButtons(): void {
     this.autoButton.dataset.vnActive = String(this.isAutoPlay);
     this.skipButton.dataset.vnActive = String(this.isSkipping);
+    if (!this.isAutoPlay) {
+      this.resetAutoRing();
+    }
   }
 
   setSceneImageFit(fit: VisualNovelSceneImageFit): void {
@@ -811,6 +824,41 @@ export class VnStage {
       clearTimeout(this.autoPlayTimer);
       this.autoPlayTimer = null;
     }
+    this.resetAutoRing();
+  }
+
+  private resetAutoRing(): void {
+    if (this.autoBar) {
+      const circumference = 37.7;
+      this.autoBar.style.transition = "none";
+      this.autoBar.style.strokeDashoffset = String(circumference);
+    }
+  }
+
+  private startAutoCountdown(delayMs: number): void {
+    if (this.autoPlayTimer !== null) {
+      clearTimeout(this.autoPlayTimer);
+      this.autoPlayTimer = null;
+    }
+    this.resetAutoRing();
+
+    if (this.autoBar) {
+      const circumference = 37.7;
+      this.autoBar.style.transition = "none";
+      this.autoBar.style.strokeDashoffset = String(circumference);
+      if (typeof this.autoBar.getBoundingClientRect === "function") {
+        void this.autoBar.getBoundingClientRect();
+      }
+      this.autoBar.style.transition = `stroke-dashoffset ${delayMs}ms linear`;
+      this.autoBar.style.strokeDashoffset = "0";
+    }
+
+    this.autoPlayTimer = setTimeout(() => {
+      if (!this.destroyed && this.isAutoPlay) {
+        this.resetAutoRing();
+        this.advance();
+      }
+    }, delayMs);
   }
 
   private clearSkipTimer(): void {
@@ -852,14 +900,9 @@ export class VnStage {
     } else if (this.isAutoPlay) {
       const view = selectVnStageView(this.state);
       if (view.canAdvance) {
-        const textLen = view.paragraph?.text.length ?? 0;
-        const delay = Math.max(this.autoPlayDelay, textLen * 30);
-        this.clearAutoPlayTimer();
-        this.autoPlayTimer = setTimeout(() => {
-          if (!this.destroyed && this.isAutoPlay) {
-            this.advance();
-          }
-        }, delay);
+        this.startAutoCountdown(this.autoPlayDelay);
+      } else {
+        this.resetAutoRing();
       }
     }
   }
@@ -890,6 +933,7 @@ export class VnStage {
 
   private startTypewriter(formatted: string): void {
     this.clearTypewriter();
+    this.resetAutoRing();
     this.dialogueText.innerHTML = formatted;
 
     if (typeof document.createTreeWalker !== "function") {

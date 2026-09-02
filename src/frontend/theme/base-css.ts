@@ -654,6 +654,10 @@ button[data-vn-badge]:active {
 }
 
 [data-vn-control] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
   padding: 0.28rem 0.68rem;
   border: 1px solid rgba(255, 255, 255, 0.22);
   border-radius: 999px;
@@ -686,6 +690,39 @@ button[data-vn-badge]:active {
 [data-vn-control]:focus-visible {
   outline: 2px solid var(--vn-accent);
   outline-offset: 2px;
+}
+
+/*
+ * Auto-play animated countdown ring
+ */
+[data-vn-auto-ring] {
+  display: none;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+[data-vn-control="auto"][data-vn-active="true"] [data-vn-auto-ring] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+[data-vn-auto-ring] svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+.vn-auto-track {
+  stroke: rgba(13, 15, 23, 0.25);
+}
+
+.vn-auto-bar {
+  stroke: #0d0f17;
+  stroke-linecap: round;
+  transform-origin: center;
+  transform: rotate(-90deg);
 }
 
 /*
