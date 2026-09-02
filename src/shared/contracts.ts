@@ -135,6 +135,15 @@ export const SceneBoundaryProposalSchema = z.object({
 }).strict();
 export type SceneBoundaryProposal = z.infer<typeof SceneBoundaryProposalSchema>;
 
+export const StageEffectSchema = z.enum([
+  "shake",
+  "flash_white",
+  "flash_red",
+  "zoom_in",
+  "fade_to_black"
+]);
+export type StageEffect = z.infer<typeof StageEffectSchema>;
+
 export const VisualCueKindSchema = z.enum(["flattened_scene", "background", "sprite"]);
 export const VisualCueSchema = z.object({
   cueId: IdentifierSchema,
@@ -145,8 +154,11 @@ export const VisualCueSchema = z.object({
   action: z.string().trim().nullable().default(null),
   expression: z.string().trim().nullable().default(null),
   poseExpressionId: z.string().trim().optional(),
+  effect: StageEffectSchema.optional(),
   promptDelta: z.string().trim().default(""),
-  assetJobId: IdentifierSchema
+  assetJobId: IdentifierSchema,
+  bgm: z.string().trim().nullable().optional(),
+  sfx: z.string().trim().nullable().optional()
 }).strict();
 export type VisualCue = z.infer<typeof VisualCueSchema>;
 

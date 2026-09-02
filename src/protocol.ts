@@ -7,7 +7,8 @@ export type FrontendRequest =
   | { type: "vn_submit"; chatId: string; content: string; requestId: string }
   | { type: "vn_asset_ready"; chatId: string; messageId: string; jobId: string; sourceFingerprint: string }
   | { type: "vn_cancel"; chatId: string }
-  | { type: "vn_retry_turn"; chatId: string; messageId: string };
+  | { type: "vn_retry_turn"; chatId: string; messageId: string }
+  | { type: "vn_scan_audio"; directory?: string };
 
 export type AssetView = {
   jobId: string;
@@ -17,6 +18,14 @@ export type AssetView = {
   imageId?: string;
   imageUrl?: string;
   error?: string;
+};
+
+export type AudioCueView = {
+  paragraphIndex: number;
+  bgm?: string | null;
+  sfx?: string | null;
+  bgmUrl?: string | null;
+  sfxUrl?: string | null;
 };
 
 export type TurnView = {
@@ -30,6 +39,7 @@ export type TurnView = {
   paragraphs: string[];
   choices: Array<{ id: string; label: string; value: string }>;
   assets: AssetView[];
+  audioCues?: AudioCueView[];
   status: "planning" | "ready" | "failed" | "cancelled";
   error?: string;
 };
@@ -61,6 +71,7 @@ export type BackendResponse =
   | { type: "vn_planning"; chatId: string }
   | { type: "vn_generation"; chatId: string; active: boolean; error?: string }
   | { type: "vn_permission"; permission: string; granted: boolean }
+  | { type: "vn_audio_scanned"; bgmCount: number; sfxCount: number }
   | { type: "vn_error"; chatId?: string; operation: string; error: string };
 
 export function isFrontendRequest(value: unknown): value is FrontendRequest {

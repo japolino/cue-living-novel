@@ -52,6 +52,9 @@ export type VisualNovelConfig = {
   textSpeed: number;
   autoPlayDelay: number;
   skipMode: "read" | "all";
+  audioDirectory: string;
+  bgmVolume: number;
+  sfxVolume: number;
 };
 
 export const DEFAULT_CONFIG: VisualNovelConfig = {
@@ -85,6 +88,9 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   textSpeed: 20,
   autoPlayDelay: 2000,
   skipMode: "read",
+  audioDirectory: "",
+  bgmVolume: 0.7,
+  sfxVolume: 0.8,
 };
 
 function record(value: unknown): Record<string, unknown> {
@@ -104,6 +110,14 @@ function stringValue(value: unknown, fallback: string): string {
 
 function bool(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
+}
+
+function floatBetween(value: unknown, minimum: number, maximum: number, fallback: number): number {
+  if (value === null || value === undefined || value === "") return fallback;
+  const number = Number(value);
+  return Number.isFinite(number)
+    ? Math.min(maximum, Math.max(minimum, number))
+    : fallback;
 }
 
 function integer(value: unknown, minimum: number, maximum: number, fallback: number): number {
@@ -166,6 +180,9 @@ export function normalizeConfig(value: unknown): VisualNovelConfig {
     useNativeCardImages: bool(input.useNativeCardImages, DEFAULT_CONFIG.useNativeCardImages),
     textSpeed: integer(input.textSpeed, 0, 100, DEFAULT_CONFIG.textSpeed),
     autoPlayDelay: integer(input.autoPlayDelay, 500, 10000, DEFAULT_CONFIG.autoPlayDelay),
-    skipMode: input.skipMode === "all" ? "all" : "read"
+    skipMode: input.skipMode === "all" ? "all" : "read",
+    audioDirectory: stringValue(input.audioDirectory, DEFAULT_CONFIG.audioDirectory).trim(),
+    bgmVolume: floatBetween(input.bgmVolume, 0, 1, DEFAULT_CONFIG.bgmVolume),
+    sfxVolume: floatBetween(input.sfxVolume, 0, 1, DEFAULT_CONFIG.sfxVolume),
   };
 }

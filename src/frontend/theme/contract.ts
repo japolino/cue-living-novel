@@ -5,6 +5,7 @@ export const VN_THEME_SELECTORS = {
   sceneImage: "[data-vn-scene-image]",
   ornaments: "[data-vn-ornaments]",
   ornamentGroup: "[data-vn-ornament-group]",
+  flash: "[data-vn-flash]",
   statusStack: "[data-vn-status-stack]",
   badge: "[data-vn-badge]",
   narrative: "[data-vn-narrative]",

@@ -17,6 +17,7 @@ import { resolveNativeCardJobs } from "./native-assets.js";
 import { createAssetJobs, generateAssets } from "./images.js";
 import { fingerprintForMessage, planTurn } from "./planner.js";
 import { loadConnectionCatalog } from "./connections.js";
+import { resolveAudioUrl, scanAudioCatalog } from "./audio-catalog.js";
 import {
   loadCharacterAppearance,
   loadChatState,
@@ -64,6 +65,14 @@ function assetView(record: StoredTurnRecord, job: StoredTurnRecord["jobs"][numbe
 
 export function turnView(record: StoredTurnRecord): TurnView {
   const swipe = record.plan.key.swipeId;
+  const audioCues = record.plan.visualCues
+    .filter((cue) => Boolean(cue.bgm || cue.sfx))
+    .map((cue) => ({
+      paragraphIndex: cue.paragraphIndex,
+      ...(cue.bgm ? { bgm: cue.bgm, bgmUrl: resolveAudioUrl(cue.bgm) } : {}),
+      ...(cue.sfx ? { sfx: cue.sfx, sfxUrl: resolveAudioUrl(cue.sfx) } : {}),
+    }));
+
   return {
     chatId: record.plan.key.chatId,
     messageId: record.plan.key.assistantMessageId,
@@ -75,6 +84,7 @@ export function turnView(record: StoredTurnRecord): TurnView {
     paragraphs: record.plan.paragraphs.map((paragraph) => paragraph.text),
     choices: record.plan.choices.map((choice) => ({ id: choice.id, label: choice.label, value: choice.submission })),
     assets: record.jobs.map((job) => assetView(record, job)),
+    ...(audioCues.length > 0 ? { audioCues } : {}),
     status: record.status,
     ...(record.error ? { error: record.error } : {})
   };
@@ -384,7 +394,21 @@ async function handleFrontendMessage(spindle: SpindleAPI, request: FrontendReque
     }
     case "vn_set_config": {
       const config = await updateConfig(spindle, request.patch, userId);
+      if (request.patch.audioDirectory !== undefined) {
+        void scanAudioCatalog(config.audioDirectory);
+      }
       spindle.sendToFrontend({ type: "vn_config", config }, userId);
+      return;
+    }
+    case "vn_scan_audio": {
+      const config = await loadConfig(spindle, userId);
+      const dir = request.directory?.trim() || config.audioDirectory;
+      const catalog = await scanAudioCatalog(dir);
+      spindle.sendToFrontend({
+        type: "vn_audio_scanned",
+        bgmCount: catalog.bgm.length,
+        sfxCount: catalog.sfx.length,
+      }, userId);
       return;
     }
     case "vn_submit":
@@ -494,5 +518,8 @@ export function registerVisualNovelBackend(spindle: SpindleAPI): void {
       spindle.sendToFrontend({ type: "vn_error", ...(chatId ? { chatId } : {}), operation: payload.type, error: errorText(error) }, userId);
     });
   });
+  void loadConfig(spindle).then((cfg) => {
+    if (cfg.audioDirectory) void scanAudioCatalog(cfg.audioDirectory);
+  }).catch(() => {});
   spindle.log.info("Cue — Living Novel loaded.");
 }

@@ -142,3 +142,64 @@ describe("VisualCueSchema poseExpressionId (additive)", () => {
     expect(cue.promptDelta).toBe("");
   });
 });
+
+describe("VisualCueSchema audio cues (additive)", () => {
+  const base = {
+    cueId: "cue",
+    paragraphIndex: 1,
+    sceneId: "scene",
+    sceneRevision: 0,
+    kind: "flattened_scene",
+    action: null,
+    expression: null,
+    promptDelta: "Mira turns",
+    assetJobId: "job",
+  };
+
+  test("accepts optional bgm and sfx fields", () => {
+    const cue = VisualCueSchema.parse({ ...base, bgm: "theme_peaceful", sfx: "door_open" });
+    expect(cue.bgm).toBe("theme_peaceful");
+    expect(cue.sfx).toBe("door_open");
+  });
+
+  test("allows null or omitted bgm and sfx", () => {
+    const cue = VisualCueSchema.parse({ ...base, bgm: null, sfx: null });
+    expect(cue.bgm).toBeNull();
+    expect(cue.sfx).toBeNull();
+
+    const omitted = VisualCueSchema.parse({ ...base });
+    expect(omitted.bgm).toBeUndefined();
+    expect(omitted.sfx).toBeUndefined();
+  });
+});
+describe("VisualCueSchema effect (additive)", () => {
+  const base = {
+    cueId: "cue",
+    paragraphIndex: 1,
+    sceneId: "scene",
+    sceneRevision: 0,
+    kind: "flattened_scene",
+    action: null,
+    expression: null,
+    promptDelta: "Mira turns",
+    assetJobId: "job",
+  };
+
+  test("accepts declared stage effects", () => {
+    const effects = ["shake", "flash_white", "flash_red", "zoom_in", "fade_to_black"] as const;
+    for (const effect of effects) {
+      const cue = VisualCueSchema.parse({ ...base, effect });
+      expect(cue.effect).toBe(effect);
+    }
+  });
+
+  test("still parses cue without effect field", () => {
+    const cue = VisualCueSchema.parse({ ...base });
+    expect(cue.effect).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(cue, "effect")).toBe(false);
+  });
+
+  test("rejects invalid effect values", () => {
+    expect(() => VisualCueSchema.parse({ ...base, effect: "barrel_roll" })).toThrow();
+  });
+});

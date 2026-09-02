@@ -1,7 +1,7 @@
 import type { SpindleFrontendContext } from "lumiverse-spindle-types";
 import type { VisualNovelConfig } from "../../config.js";
 import type { AssetView, BackendResponse, TurnView } from "../../protocol.js";
-import { VnStage } from "../stage/index.js";
+import { AudioEngine, VnStage } from "../stage/index.js";
 import { VisualNovelSettingsPanel } from "../settings/panel.js";
 import type { VnChoice } from "../store/index.js";
 import { createVnHeaderLauncher } from "./manual-launcher.js";
@@ -183,6 +183,24 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   let overrideHandles: ComponentOverrideHandle[] = [];
   const acknowledgedAssets = new Set<string>();
   let destroyed = false;
+  const audioEngine = new AudioEngine({
+    bgmVolume: configRef.current?.bgmVolume ?? 0.7,
+    sfxVolume: configRef.current?.sfxVolume ?? 0.8,
+  });
+
+  function syncAudioForParagraph(activeTurn: TurnView, paragraphIndex: number): void {
+    if (!activeTurn.audioCues || activeTurn.audioCues.length === 0) return;
+    const cue = activeTurn.audioCues.find((c) => c.paragraphIndex === paragraphIndex);
+    if (!cue) return;
+    const bgmSrc = cue.bgmUrl || cue.bgm;
+    if (bgmSrc) {
+      audioEngine.playBgm(bgmSrc);
+    }
+    const sfxSrc = cue.sfxUrl || cue.sfx;
+    if (sfxSrc) {
+      audioEngine.playSfx(sfxSrc);
+    }
+  }
 
   const stage = new VnStage({
     mount: app.root,
@@ -195,6 +213,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
         applyTurn(next, turn);
         return;
       }
+      if (turn) syncAudioForParagraph(turn, paragraphIndex);
       void syncImageForParagraph(paragraphIndex);
     },
     onChoice: async (choice: VnChoice) => {
@@ -250,12 +269,17 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     mount: settingsHandle.root,
     onOpenPreview: () => activate(),
     onRefreshConnections: () => requestConnectionCatalog(),
+    onScanAudio: (directory) => {
+      ctx.sendToBackend({ type: "vn_scan_audio", directory });
+    },
     onSave: (patch) => {
       const current = configRef.current;
       if (current) {
         const next = { ...current, ...patch };
         configRef.current = next;
         applyVisualConfigToStage(stage, next);
+        audioEngine.setBgmVolume(next.bgmVolume);
+        audioEngine.setSfxVolume(next.sfxVolume);
         settingsPanel?.setConfig(next);
       }
       ctx.sendToBackend({ type: "vn_set_config", patch, chatId: chatId() });
@@ -321,6 +345,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   function deactivate(): void {
     if (destroyed) return;
     active = false;
+    audioEngine.stopAll();
     destroyOverrides();
     app.setVisible(false);
     action.setLabel("Open visual novel");
@@ -405,6 +430,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       preserveImage
     });
     void syncImageForParagraph(0);
+    syncAudioForParagraph(next, 0);
   }
 
   function routeBackend(payload: unknown): void {
@@ -415,9 +441,15 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       settingsPanel?.setConnectionCatalog("image", { status: "ready", options: message.image ?? [] });
       return;
     }
+    if (type === "vn_audio_scanned" && message.type === "vn_audio_scanned") {
+      settingsPanel?.setAudioStatus(`Scanned ${message.bgmCount} BGM, ${message.sfxCount} SFX.`);
+      return;
+    }
     if (type === "vn_state" && message.type === "vn_state") {
       configRef.current = message.config;
       applyVisualConfigToStage(stage, configRef.current);
+      audioEngine.setBgmVolume(configRef.current.bgmVolume);
+      audioEngine.setSfxVolume(configRef.current.sfxVolume);
       settingsPanel?.setConfig(configRef.current);
       if (configRef.current?.autoEnter && !active) activate();
       if (message.turn && message.turn.chatId === chatId()) {
@@ -432,6 +464,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     if (type === "vn_config" && message.type === "vn_config") {
       configRef.current = message.config;
       applyVisualConfigToStage(stage, configRef.current);
+      audioEngine.setBgmVolume(configRef.current.bgmVolume);
+      audioEngine.setSfxVolume(configRef.current.sfxVolume);
       settingsPanel?.setConfig(configRef.current);
       return;
     }
@@ -518,6 +552,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     action.destroy();
     settingsPanel?.destroy();
     settingsHandle?.destroy();
+    audioEngine.destroy();
     stage.destroy();
     app.destroy();
     if ((globalThis as Record<PropertyKey, unknown>)[CLEANUP_KEY] === cleanup) {

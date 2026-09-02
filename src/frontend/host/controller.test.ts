@@ -54,6 +54,9 @@ const baseConfig: VisualNovelConfig = {
   textSpeed: 20,
   autoPlayDelay: 2000,
   skipMode: "read",
+  audioDirectory: "",
+  bgmVolume: 0.7,
+  sfxVolume: 0.8,
 };
 
 describe("applyVisualConfigToStage (live controller config application)", () => {

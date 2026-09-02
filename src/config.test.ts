@@ -108,3 +108,44 @@ test("configuration defaults textSpeed, autoPlayDelay, and skipMode", () => {
   assert.equal(config.autoPlayDelay, 2000);
   assert.equal(config.skipMode, "read");
 });
+
+test("configuration preserves audioDirectory, bgmVolume, and sfxVolume", () => {
+  const config = normalizeConfig({
+    audioDirectory: "/path/to/audio",
+    bgmVolume: 0.5,
+    sfxVolume: 0.9,
+  });
+  assert.equal(config.audioDirectory, "/path/to/audio");
+  assert.equal(config.bgmVolume, 0.5);
+  assert.equal(config.sfxVolume, 0.9);
+});
+
+test("configuration defaults audioDirectory, bgmVolume, and sfxVolume", () => {
+  const config = normalizeConfig({});
+  assert.equal(config.audioDirectory, "");
+  assert.equal(config.bgmVolume, 0.7);
+  assert.equal(config.sfxVolume, 0.8);
+});
+
+test("configuration clamps bgmVolume and sfxVolume to [0, 1]", () => {
+  const low = normalizeConfig({
+    bgmVolume: -0.5,
+    sfxVolume: -10,
+  });
+  assert.equal(low.bgmVolume, 0);
+  assert.equal(low.sfxVolume, 0);
+
+  const high = normalizeConfig({
+    bgmVolume: 1.5,
+    sfxVolume: 999,
+  });
+  assert.equal(high.bgmVolume, 1);
+  assert.equal(high.sfxVolume, 1);
+
+  const invalid = normalizeConfig({
+    bgmVolume: "not-a-number",
+    sfxVolume: null,
+  });
+  assert.equal(invalid.bgmVolume, 0.7);
+  assert.equal(invalid.sfxVolume, 0.8);
+});

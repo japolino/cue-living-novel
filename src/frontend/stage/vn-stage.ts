@@ -13,10 +13,26 @@ import {
   type VnChoice,
   type VnPhase,
   type VnSceneImage,
+  type StageEffect,
+  type VnParagraph,
   type VnStageAction,
   type VnStageState,
   type VnTurnInput,
 } from "../store";
+
+export type { StageEffect };
+
+export function isStageEffect(value: unknown): value is StageEffect {
+  return (
+    value === "shake" ||
+    value === "flash_white" ||
+    value === "flash_red" ||
+    value === "zoom_in" ||
+    value === "fade_to_black"
+  );
+}
+
+export const TEXT_SHAKE_HEURISTIC_REGEX = /\*\s*(?:thud|slam|crash|smack|shake)[!?.,]*\s*\*/i;
 import type {
   VisualNovelSceneImageFit,
   VisualNovelThemePreset,
@@ -68,11 +84,14 @@ export interface VnSceneImageRequest {
 const THEME_MARKUP = `
   <main data-vn-root data-vn-mode="standard" data-vn-phase="idle" tabindex="0" aria-label="Visual novel">
     <div data-vn-scene aria-hidden="true">
-      <img data-vn-scene-image data-vn-empty="true" alt="" />
+      <img data-vn-scene-image data-vn-layer="active" data-vn-empty="true" alt="" />
+      <img data-vn-scene-image data-vn-layer="incoming" data-vn-empty="true" alt="" />
       <div data-vn-scrim></div>
     </div>
 
     ${VN_ORNAMENT_LAYER_MARKUP}
+
+    <div data-vn-flash aria-hidden="true"></div>
 
     <div data-vn-status-stack aria-live="polite" aria-atomic="false"></div>
     <div data-vn-empty-state>
@@ -235,7 +254,12 @@ export class VnStage {
   private readonly themeRoot: ShadowRoot;
   private readonly userStyle: HTMLStyleElement;
   private readonly root: HTMLElement;
-  private readonly sceneImage: HTMLImageElement;
+  private readonly scene: HTMLElement;
+  private readonly sceneImages: HTMLImageElement[];
+  private activeImageEl: HTMLImageElement;
+  private incomingImageEl: HTMLImageElement;
+  private sceneImage: HTMLImageElement;
+  private readonly flashOverlay: HTMLElement;
   private readonly statusStack: HTMLElement;
   private readonly emptyState: HTMLElement;
   private readonly narrative: HTMLElement;
@@ -270,6 +294,11 @@ export class VnStage {
   private typewriterTimer: ReturnType<typeof setInterval> | null = null;
   private autoPlayTimer: ReturnType<typeof setTimeout> | null = null;
   private skipTimer: ReturnType<typeof setTimeout> | null = null;
+  private crossfadeTimer: ReturnType<typeof setTimeout> | null = null;
+  private currentDisplayedUrl: string | null = null;
+  private shakeTimer: ReturnType<typeof setTimeout> | null = null;
+  private flashTimer: ReturnType<typeof setTimeout> | null = null;
+  private fadeTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly readParagraphIds = new Set<string>();
   private readonly backlogEntries: Array<{ speaker?: string | undefined; text: string; formatted: string }> = [];
   private activeTextNodes: Array<{ node: Text; fullText: string }> = [];
@@ -336,7 +365,12 @@ export class VnStage {
 
     this.root = queryRequired(this.themeRoot, "[data-vn-root]");
     this.applyThemePreset(options.themePreset ?? "lumiverse");
-    this.sceneImage = queryRequired(this.themeRoot, "[data-vn-scene-image]");
+    this.scene = queryRequired(this.themeRoot, "[data-vn-scene]");
+    this.sceneImages = Array.from(this.themeRoot.querySelectorAll<HTMLImageElement>("[data-vn-scene-image]"));
+    this.activeImageEl = queryRequired(this.themeRoot, "[data-vn-scene-image][data-vn-layer='active']");
+    this.incomingImageEl = queryRequired(this.themeRoot, "[data-vn-scene-image][data-vn-layer='incoming']");
+    this.sceneImage = this.activeImageEl;
+    this.flashOverlay = queryRequired(this.themeRoot, "[data-vn-flash]");
     this.setSceneImageFit(options.sceneImageFit ?? "cover");
     this.statusStack = queryRequired(this.themeRoot, "[data-vn-status-stack]");
     this.emptyState = queryRequired(this.themeRoot, "[data-vn-empty-state]");
@@ -466,7 +500,9 @@ export class VnStage {
   }
 
   setSceneImageFit(fit: VisualNovelSceneImageFit): void {
-    this.sceneImage.dataset.vnSceneImageFit = fit;
+    for (const img of this.sceneImages) {
+      img.dataset.vnSceneImageFit = fit;
+    }
   }
 
   /**
@@ -484,6 +520,8 @@ export class VnStage {
 
   reset(): void {
     this.clearAllTimers();
+    this.resetEffects();
+    this.clearSceneImages();
     this.isAutoPlay = false;
     this.isSkipping = false;
     this.isTyping = false;
@@ -493,6 +531,7 @@ export class VnStage {
   }
 
   loadTurn(turn: VnTurnInput): void {
+    this.resetZoom();
     this.dispatch({ type: "load-turn", turn });
     this.focus();
   }
@@ -587,9 +626,248 @@ export class VnStage {
 
   destroy(): void {
     this.clearAllTimers();
+    this.resetEffects();
+    if (this.crossfadeTimer !== null) {
+      clearTimeout(this.crossfadeTimer);
+      this.crossfadeTimer = null;
+    }
     if (this.destroyed) return;
     this.destroyed = true;
     this.host.remove();
+  }
+
+  getActiveSceneImage(): HTMLImageElement {
+    return this.activeImageEl;
+  }
+
+  getIncomingSceneImage(): HTMLImageElement {
+    return this.incomingImageEl;
+  }
+
+  getFlashOverlay(): HTMLElement {
+    return this.flashOverlay;
+  }
+
+  isCrossfading(): boolean {
+    return this.crossfadeTimer !== null;
+  }
+
+  triggerEffect(effect: StageEffect): void {
+    if (this.destroyed) return;
+    switch (effect) {
+      case "shake":
+        this.triggerShake();
+        break;
+      case "flash_white":
+        this.triggerFlash("white");
+        break;
+      case "flash_red":
+        this.triggerFlash("red");
+        break;
+      case "zoom_in":
+        this.triggerZoomIn();
+        break;
+      case "fade_to_black":
+        this.triggerFadeToBlack();
+        break;
+    }
+  }
+
+  resetZoom(): void {
+    this.scene.classList.remove("vn-zoom-in");
+    delete this.scene.dataset.vnZoom;
+    for (const img of this.sceneImages) {
+      img.classList.remove("vn-zoom-in");
+      delete img.dataset.vnZoom;
+    }
+  }
+
+  resetEffects(): void {
+    if (this.shakeTimer !== null) {
+      clearTimeout(this.shakeTimer);
+      this.shakeTimer = null;
+    }
+    if (this.flashTimer !== null) {
+      clearTimeout(this.flashTimer);
+      this.flashTimer = null;
+    }
+    if (this.fadeTimer !== null) {
+      clearTimeout(this.fadeTimer);
+      this.fadeTimer = null;
+    }
+    this.root.classList.remove("vn-shake");
+    this.scene.classList.remove("vn-shake");
+    delete this.root.dataset.vnShake;
+    delete this.scene.dataset.vnShake;
+
+    this.flashOverlay.classList.remove("vn-flash-white", "vn-flash-red", "vn-fade-to-black");
+    delete this.flashOverlay.dataset.vnFlash;
+
+    this.resetZoom();
+  }
+
+  private triggerShake(): void {
+    if (this.shakeTimer !== null) {
+      clearTimeout(this.shakeTimer);
+      this.shakeTimer = null;
+    }
+    this.root.classList.remove("vn-shake");
+    this.scene.classList.remove("vn-shake");
+    delete this.root.dataset.vnShake;
+    delete this.scene.dataset.vnShake;
+
+    if (typeof this.root.offsetWidth === "number") {
+      void this.root.offsetWidth;
+    }
+
+    this.root.classList.add("vn-shake");
+    this.scene.classList.add("vn-shake");
+    this.root.dataset.vnShake = "true";
+    this.scene.dataset.vnShake = "true";
+
+    this.shakeTimer = setTimeout(() => {
+      if (this.destroyed) return;
+      this.root.classList.remove("vn-shake");
+      this.scene.classList.remove("vn-shake");
+      delete this.root.dataset.vnShake;
+      delete this.scene.dataset.vnShake;
+      this.shakeTimer = null;
+    }, 300);
+  }
+
+  private triggerFlash(color: "white" | "red"): void {
+    if (this.flashTimer !== null) {
+      clearTimeout(this.flashTimer);
+      this.flashTimer = null;
+    }
+    this.flashOverlay.classList.remove("vn-flash-white", "vn-flash-red", "vn-fade-to-black");
+    delete this.flashOverlay.dataset.vnFlash;
+
+    if (typeof this.flashOverlay.offsetWidth === "number") {
+      void this.flashOverlay.offsetWidth;
+    }
+
+    const className = color === "white" ? "vn-flash-white" : "vn-flash-red";
+    this.flashOverlay.classList.add(className);
+    this.flashOverlay.dataset.vnFlash = color;
+
+    this.flashTimer = setTimeout(() => {
+      if (this.destroyed) return;
+      this.flashOverlay.classList.remove(className);
+      delete this.flashOverlay.dataset.vnFlash;
+      this.flashTimer = null;
+    }, 500);
+  }
+
+  private triggerFadeToBlack(): void {
+    if (this.fadeTimer !== null) {
+      clearTimeout(this.fadeTimer);
+      this.fadeTimer = null;
+    }
+    this.flashOverlay.classList.remove("vn-flash-white", "vn-flash-red", "vn-fade-to-black");
+    delete this.flashOverlay.dataset.vnFlash;
+
+    if (typeof this.flashOverlay.offsetWidth === "number") {
+      void this.flashOverlay.offsetWidth;
+    }
+
+    this.flashOverlay.classList.add("vn-fade-to-black");
+    this.flashOverlay.dataset.vnFlash = "fade_to_black";
+
+    this.fadeTimer = setTimeout(() => {
+      if (this.destroyed) return;
+      this.flashOverlay.classList.remove("vn-fade-to-black");
+      delete this.flashOverlay.dataset.vnFlash;
+      this.fadeTimer = null;
+    }, 1000);
+  }
+
+  private triggerZoomIn(): void {
+    this.scene.classList.add("vn-zoom-in");
+    this.scene.dataset.vnZoom = "in";
+    for (const img of this.sceneImages) {
+      img.classList.add("vn-zoom-in");
+      img.dataset.vnZoom = "in";
+    }
+  }
+
+  private triggerParagraphEffects(paragraph: VnParagraph): void {
+    let triggeredEffect: StageEffect | null = null;
+    const explicitEffect = paragraph.effect ?? paragraph.cue?.effect;
+    if (explicitEffect && isStageEffect(explicitEffect)) {
+      this.triggerEffect(explicitEffect);
+      triggeredEffect = explicitEffect;
+    }
+
+    if (triggeredEffect !== "shake" && TEXT_SHAKE_HEURISTIC_REGEX.test(paragraph.text)) {
+      this.triggerEffect("shake");
+    }
+  }
+
+  private clearSceneImages(): void {
+    if (this.crossfadeTimer !== null) {
+      clearTimeout(this.crossfadeTimer);
+      this.crossfadeTimer = null;
+    }
+    this.activeImageEl.removeAttribute("src");
+    this.activeImageEl.alt = "";
+    this.activeImageEl.dataset.vnEmpty = "true";
+
+    this.incomingImageEl.removeAttribute("src");
+    this.incomingImageEl.alt = "";
+    this.incomingImageEl.dataset.vnEmpty = "true";
+
+    this.currentDisplayedUrl = null;
+  }
+
+  private updateSceneImage(displayedImage: VnSceneImage): void {
+    if (this.currentDisplayedUrl === displayedImage.url) {
+      this.activeImageEl.alt = displayedImage.alt;
+      return;
+    }
+
+    // First image (empty stage): show directly on active layer
+    if (!this.currentDisplayedUrl || this.activeImageEl.dataset.vnEmpty === "true") {
+      this.currentDisplayedUrl = displayedImage.url;
+      this.activeImageEl.src = displayedImage.url;
+      this.activeImageEl.alt = displayedImage.alt;
+      this.activeImageEl.dataset.vnEmpty = "false";
+      this.incomingImageEl.removeAttribute("src");
+      this.incomingImageEl.alt = "";
+      this.incomingImageEl.dataset.vnEmpty = "true";
+      return;
+    }
+
+    // Previous image exists: smooth crossfade to incoming layer
+    if (this.crossfadeTimer !== null) {
+      clearTimeout(this.crossfadeTimer);
+      this.crossfadeTimer = null;
+      const temp = this.activeImageEl;
+      this.activeImageEl = this.incomingImageEl;
+      this.incomingImageEl = temp;
+      this.activeImageEl.setAttribute("data-vn-layer", "active");
+      this.incomingImageEl.setAttribute("data-vn-layer", "incoming");
+    }
+
+    this.currentDisplayedUrl = displayedImage.url;
+    this.incomingImageEl.src = displayedImage.url;
+    this.incomingImageEl.alt = displayedImage.alt;
+    this.incomingImageEl.dataset.vnEmpty = "false";
+
+    this.crossfadeTimer = setTimeout(() => {
+      if (this.destroyed) return;
+      const temp = this.activeImageEl;
+      this.activeImageEl = this.incomingImageEl;
+      this.incomingImageEl = temp;
+
+      this.activeImageEl.setAttribute("data-vn-layer", "active");
+      this.incomingImageEl.setAttribute("data-vn-layer", "incoming");
+      this.incomingImageEl.dataset.vnEmpty = "true";
+      this.incomingImageEl.removeAttribute("src");
+      this.incomingImageEl.alt = "";
+      this.sceneImage = this.activeImageEl;
+      this.crossfadeTimer = null;
+    }, 350);
   }
 
   private bindEvents(): void {
@@ -764,15 +1042,9 @@ export class VnStage {
 
     const displayedImage = this.state.displayedImage;
     if (displayedImage) {
-      if (this.sceneImage.getAttribute("src") !== displayedImage.url) {
-        this.sceneImage.src = displayedImage.url;
-      }
-      this.sceneImage.alt = displayedImage.alt;
-      this.sceneImage.dataset.vnEmpty = "false";
+      this.updateSceneImage(displayedImage);
     } else {
-      this.sceneImage.removeAttribute("src");
-      this.sceneImage.alt = "";
-      this.sceneImage.dataset.vnEmpty = "true";
+      this.clearSceneImages();
     }
 
     this.narrative.hidden = view.paragraph === null;
@@ -810,6 +1082,11 @@ export class VnStage {
     this.clearTypewriter();
     this.clearAutoPlayTimer();
     this.clearSkipTimer();
+    if (this.crossfadeTimer !== null) {
+      clearTimeout(this.crossfadeTimer);
+      this.crossfadeTimer = null;
+    }
+    this.resetEffects();
   }
 
   private clearTypewriter(): void {
@@ -1001,6 +1278,7 @@ export class VnStage {
     }
     this.currentRenderedParagraphId = paragraph.id;
     this.recordBacklogAndRead(paragraph.id, paragraph.speaker, paragraph.text, formatted);
+    this.triggerParagraphEffects(paragraph);
 
     if (this.textSpeed <= 0 || this.isSkipping) {
       this.clearTypewriter();

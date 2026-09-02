@@ -12,6 +12,7 @@ export type SettingsPanelOptions = {
   onSave: (patch: Partial<VisualNovelConfig>) => void;
   onOpenPreview: () => void;
   onRefreshConnections: () => void;
+  onScanAudio?: (directory: string) => Promise<{ bgmCount: number; sfxCount: number } | void> | void;
 };
 
 export type ConnectionCatalogKind = "planner" | "image";
@@ -70,6 +71,8 @@ label[data-check] { grid-template-columns: auto 1fr; align-items: center; font-w
 small { color: var(--lumiverse-text-muted, rgba(255,255,255,.68)); font-weight: 400; }
 [data-connection-status][data-kind="error"] { color: var(--lumiverse-danger, #ff8ca0); }
 input, select, textarea, button { font: inherit; }
+input[type="range"] { width: 100%; accent-color: var(--lumiverse-primary, #a986ff); cursor: pointer; }
+[data-audio-status] { display: inline-block; margin-left: .5rem; font-style: italic; color: var(--lumiverse-text-muted, rgba(255,255,255,.75)); }
 input[type="text"], input[type="number"], select, textarea { width: 100%; padding: .65rem .75rem; border: 1px solid var(--lumiverse-border, rgba(255,255,255,.2)); border-radius: .55rem; background: var(--lumiverse-bg-elevated, #171822); color: inherit; }
 textarea { min-height: 10rem; resize: vertical; font-family: var(--lumiverse-font-mono, ui-monospace, monospace); font-size: .82rem; }
 [data-row] { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .8rem; }
@@ -131,6 +134,7 @@ export class VisualNovelSettingsPanel {
   private readonly root: ShadowRoot;
   private readonly form: HTMLFormElement;
   private readonly status: HTMLElement;
+  private readonly audioStatus: HTMLElement | null;
   private readonly options: SettingsPanelOptions;
 
   constructor(options: SettingsPanelOptions) {
@@ -219,6 +223,26 @@ export class VisualNovelSettingsPanel {
           </label>
         </section>
         <section>
+          <h2>Audio &amp; Atmosphere</h2>
+          <label>Audio directory
+            <input name="audioDirectory" type="text" placeholder="/path/to/audio or C:\\audio" />
+            <small>Local directory scanned recursively for BGM and SFX (.mp3, .ogg, .wav, .m4a, .flac).</small>
+          </label>
+          <div data-actions>
+            <button type="button" data-scan-audio>Scan Audio</button>
+            <small data-audio-status role="status"></small>
+          </div>
+          <div data-row>
+            <label>BGM volume (<span data-bgm-val>70%</span>)
+              <input name="bgmVolume" type="range" min="0" max="1" step="0.05" />
+            </label>
+            <label>SFX volume (<span data-sfx-val>80%</span>)
+              <input name="sfxVolume" type="range" min="0" max="1" step="0.05" />
+            </label>
+          </div>
+        </section>
+
+        <section>
           <h2>Prompt</h2>
           <label>Positive prefix<input name="promptPrefix" type="text" /></label>
           <label>Positive suffix<input name="promptSuffix" type="text" /></label>
@@ -248,6 +272,34 @@ export class VisualNovelSettingsPanel {
     options.mount.append(this.host);
     this.form = this.root.querySelector("form")!;
     this.status = this.root.querySelector("[data-status]")!;
+    this.audioStatus = this.root.querySelector("[data-audio-status]");
+
+    const bgmInput = control<HTMLInputElement>(this.root, "bgmVolume");
+    const sfxInput = control<HTMLInputElement>(this.root, "sfxVolume");
+    const bgmVal = this.root.querySelector<HTMLElement>("[data-bgm-val]");
+    const sfxVal = this.root.querySelector<HTMLElement>("[data-sfx-val]");
+
+    const updateVolumeLabels = () => {
+      if (bgmVal) bgmVal.textContent = `${Math.round(Number(bgmInput.value) * 100)}%`;
+      if (sfxVal) sfxVal.textContent = `${Math.round(Number(sfxInput.value) * 100)}%`;
+    };
+    bgmInput.addEventListener("input", updateVolumeLabels);
+    sfxInput.addEventListener("input", updateVolumeLabels);
+
+    this.root.querySelector("[data-scan-audio]")?.addEventListener("click", async () => {
+      const dir = control<HTMLInputElement>(this.root, "audioDirectory").value.trim();
+      if (this.audioStatus) this.audioStatus.textContent = "Scanning audio files...";
+      try {
+        if (this.options.onScanAudio) {
+          const res = await this.options.onScanAudio(dir);
+          if (res && typeof res === "object" && "bgmCount" in res) {
+            if (this.audioStatus) this.audioStatus.textContent = `Scanned ${res.bgmCount} BGM, ${res.sfxCount} SFX.`;
+          }
+        }
+      } catch (err) {
+        if (this.audioStatus) this.audioStatus.textContent = err instanceof Error ? err.message : String(err);
+      }
+    });
     this.form.addEventListener("submit", (event) => {
       event.preventDefault();
       try {
@@ -267,6 +319,10 @@ export class VisualNovelSettingsPanel {
     });
   }
 
+  setAudioStatus(message: string): void {
+    if (this.audioStatus) this.audioStatus.textContent = message;
+  }
+
   setConfig(config: VisualNovelConfig): void {
     control<HTMLSelectElement>(this.root, "mode").value = config.mode;
     control<HTMLSelectElement>(this.root, "themePreset").value = config.themePreset;
@@ -279,6 +335,13 @@ export class VisualNovelSettingsPanel {
     control<HTMLInputElement>(this.root, "textSpeed").value = String(config.textSpeed);
     control<HTMLInputElement>(this.root, "autoPlayDelay").value = String(config.autoPlayDelay);
     control<HTMLSelectElement>(this.root, "skipMode").value = config.skipMode;
+    control<HTMLInputElement>(this.root, "audioDirectory").value = config.audioDirectory;
+    control<HTMLInputElement>(this.root, "bgmVolume").value = String(config.bgmVolume);
+    control<HTMLInputElement>(this.root, "sfxVolume").value = String(config.sfxVolume);
+    const bgmLabel = this.root.querySelector<HTMLElement>("[data-bgm-val]");
+    const sfxLabel = this.root.querySelector<HTMLElement>("[data-sfx-val]");
+    if (bgmLabel) bgmLabel.textContent = `${Math.round(config.bgmVolume * 100)}%`;
+    if (sfxLabel) sfxLabel.textContent = `${Math.round(config.sfxVolume * 100)}%`;
     this.renderConnectionSelect("planner", this.connectionStates.planner, config.parserConnectionId);
     this.renderConnectionSelect("image", this.connectionStates.image, config.imageConnectionId);
     control<HTMLInputElement>(this.root, "imageModel").value = config.imageModel;
@@ -328,6 +391,9 @@ export class VisualNovelSettingsPanel {
       textSpeed: Number(control<HTMLInputElement>(this.root, "textSpeed").value),
       autoPlayDelay: Number(control<HTMLInputElement>(this.root, "autoPlayDelay").value),
       skipMode: control<HTMLSelectElement>(this.root, "skipMode").value === "all" ? "all" : "read",
+      audioDirectory: control<HTMLInputElement>(this.root, "audioDirectory").value.trim(),
+      bgmVolume: Number(control<HTMLInputElement>(this.root, "bgmVolume").value),
+      sfxVolume: Number(control<HTMLInputElement>(this.root, "sfxVolume").value),
       parserConnectionId: optional("parserConnectionId"),
       imageConnectionId: optional("imageConnectionId"),
       imageModel: control<HTMLInputElement>(this.root, "imageModel").value.trim(),

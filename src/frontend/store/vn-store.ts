@@ -9,10 +9,22 @@ export type VnPhase =
   | "submitting"
   | "error";
 
+export type StageEffect =
+  | "shake"
+  | "flash_white"
+  | "flash_red"
+  | "zoom_in"
+  | "fade_to_black";
+
 export interface VnParagraph {
   id: string;
   text: string;
   speaker?: string;
+  effect?: StageEffect;
+  cue?: {
+    effect?: StageEffect;
+    [key: string]: unknown;
+  };
 }
 
 export interface VnChoice {

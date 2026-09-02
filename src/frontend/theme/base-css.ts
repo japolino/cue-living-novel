@@ -52,6 +52,8 @@ textarea {
 }
 
 [data-vn-scene-image] {
+  position: absolute;
+  inset: 0;
   display: block;
   width: 100%;
   height: 100%;
@@ -60,6 +62,17 @@ textarea {
   opacity: 1;
   user-select: none;
   -webkit-user-drag: none;
+  transform: scale(1);
+  transform-origin: center center;
+  transition: opacity var(--vn-transition-duration, 280ms) ease, transform 2s ease;
+}
+
+[data-vn-scene-image][data-vn-layer="active"] {
+  z-index: 1;
+}
+
+[data-vn-scene-image][data-vn-layer="incoming"] {
+  z-index: 2;
 }
 
 /*
@@ -85,15 +98,42 @@ textarea {
 
 [data-vn-scene-image][data-vn-empty="true"] {
   opacity: 0;
+  pointer-events: none;
+}
+
+/*
+ * Camera zoom / push-in: CSS transform on scene image (scale 1.12 with smooth 2s ease)
+ */
+[data-vn-scene-image].vn-zoom-in,
+[data-vn-scene-image][data-vn-zoom="in"],
+[data-vn-scene].vn-zoom-in [data-vn-scene-image],
+[data-vn-scene][data-vn-zoom="in"] [data-vn-scene-image],
+[data-vn-root].vn-zoom-in [data-vn-scene-image],
+[data-vn-root][data-vn-zoom="in"] [data-vn-scene-image],
+[data-vn-root][data-vn-effect="zoom_in"] [data-vn-scene-image] {
+  transform: scale(1.12);
 }
 
 [data-vn-scrim] {
   position: absolute;
   inset: 0;
+  z-index: 3;
   pointer-events: none;
   background:
     linear-gradient(180deg, rgba(0, 0, 0, 0.2), transparent 30%),
     linear-gradient(0deg, rgba(0, 0, 0, 0.72), transparent 45%);
+}
+
+/*
+ * Screen flashes: Fullscreen overlay <div data-vn-flash> supporting white flash,
+ * red flash, and fade to black.
+ */
+[data-vn-flash] {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+  opacity: 0;
 }
 
 /*
@@ -626,6 +666,105 @@ button[data-vn-badge]:active {
   [data-vn-anim-delay="1.2s"] { animation-delay: 1.2s; }
   [data-vn-anim-delay="1.8s"] { animation-delay: 1.8s; }
   [data-vn-anim-delay="0.3s"] { animation-delay: 0.3s; }
+
+  /*
+   * Camera & Screen Effects:
+   * - Screen shake: Keyframe animation for impacts, earthquakes, shocks (300ms)
+   * - Screen flashes: White and red fullscreen flashes
+   * - Fade to black: Scene blackout transition
+   */
+  @keyframes vn-shake {
+    0%, 100% {
+      transform: translate3d(0, 0, 0);
+    }
+    15% {
+      transform: translate3d(-4px, 2px, 0);
+    }
+    30% {
+      transform: translate3d(4px, -3px, 0);
+    }
+    45% {
+      transform: translate3d(-4px, -2px, 0);
+    }
+    60% {
+      transform: translate3d(3px, 3px, 0);
+    }
+    75% {
+      transform: translate3d(-2px, 1px, 0);
+    }
+    90% {
+      transform: translate3d(2px, -1px, 0);
+    }
+  }
+
+  .vn-shake,
+  [data-vn-shake],
+  [data-vn-root].vn-shake,
+  [data-vn-root][data-vn-shake],
+  [data-vn-scene].vn-shake,
+  [data-vn-scene][data-vn-shake] {
+    animation: vn-shake 300ms cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+  }
+
+  @keyframes vn-flash-white {
+    0% {
+      opacity: 0.88;
+      background-color: #ffffff;
+    }
+    100% {
+      opacity: 0;
+      background-color: #ffffff;
+    }
+  }
+
+  @keyframes vn-flash-red {
+    0% {
+      opacity: 0.82;
+      background-color: #e53935;
+    }
+    100% {
+      opacity: 0;
+      background-color: #e53935;
+    }
+  }
+
+  @keyframes vn-fade-to-black {
+    0% {
+      opacity: 0;
+      background-color: #000000;
+    }
+    35% {
+      opacity: 1;
+      background-color: #000000;
+    }
+    65% {
+      opacity: 1;
+      background-color: #000000;
+    }
+    100% {
+      opacity: 0;
+      background-color: #000000;
+    }
+  }
+
+  [data-vn-flash].vn-flash-white,
+  [data-vn-flash][data-vn-flash="white"] {
+    background-color: #ffffff;
+    animation: vn-flash-white 500ms cubic-bezier(0.1, 0.9, 0.2, 1) forwards;
+  }
+
+  [data-vn-flash].vn-flash-red,
+  [data-vn-flash][data-vn-flash="red"] {
+    background-color: #e53935;
+    animation: vn-flash-red 500ms cubic-bezier(0.1, 0.9, 0.2, 1) forwards;
+  }
+
+  [data-vn-flash].vn-fade-to-black,
+  [data-vn-flash][data-vn-flash="fade_to_black"],
+  [data-vn-flash][data-vn-flash="black"] {
+    background-color: #000000;
+    animation: vn-fade-to-black 1000ms ease-in-out forwards;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -636,6 +775,37 @@ button[data-vn-badge]:active {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
+  }
+
+  .vn-shake,
+  [data-vn-shake],
+  [data-vn-root].vn-shake,
+  [data-vn-root][data-vn-shake],
+  [data-vn-scene].vn-shake,
+  [data-vn-scene][data-vn-shake] {
+    animation: none !important;
+    transform: none !important;
+  }
+
+  [data-vn-scene-image] {
+    transform: none !important;
+    transition: none !important;
+  }
+
+  [data-vn-scene-image].vn-zoom-in,
+  [data-vn-scene-image][data-vn-zoom="in"],
+  [data-vn-scene].vn-zoom-in [data-vn-scene-image],
+  [data-vn-scene][data-vn-zoom="in"] [data-vn-scene-image],
+  [data-vn-root].vn-zoom-in [data-vn-scene-image],
+  [data-vn-root][data-vn-zoom="in"] [data-vn-scene-image],
+  [data-vn-root][data-vn-effect="zoom_in"] [data-vn-scene-image] {
+    transform: none !important;
+    transition: none !important;
+  }
+
+  [data-vn-flash] {
+    animation: none !important;
+    opacity: 0 !important;
   }
 }
 

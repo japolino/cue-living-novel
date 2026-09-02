@@ -31,6 +31,7 @@ import {
 } from "../../shared/identity.js";
 import { loadVisualContext, type VisualContextDiagnostics, type VisualContextSnapshot } from "./context.js";
 import { resolvePlannerConnection, type ResolvedPlannerConnection } from "./connections.js";
+import { getAudioCatalog } from "./audio-catalog.js";
 
 const PlannerSceneSchema = z.object({
   startParagraph: z.number().int().nonnegative(),
@@ -45,7 +46,9 @@ const PlannerCueSchema = z.object({
   paragraphIndex: z.number().int().nonnegative(),
   action: z.string().trim().nullable().optional(),
   expression: z.string().trim().nullable().optional(),
-  promptDelta: z.string().trim().optional()
+  promptDelta: z.string().trim().optional(),
+  bgm: z.string().trim().nullable().optional(),
+  sfx: z.string().trim().nullable().optional()
 }).strict();
 
 const PlannerChoiceSchema = z.object({
@@ -105,6 +108,23 @@ function id(prefix: string, source: string): string {
 }
 
 function plannerInstruction(config: VisualNovelConfig): string {
+  const audioCatalog = getAudioCatalog();
+  const hasAudio = audioCatalog.all.length > 0;
+  const audioInstructions: string[] = [];
+  if (hasAudio) {
+    audioInstructions.push(
+      "Audio & Atmosphere: You may sparsely assign background music ('bgm') and sound effects ('sfx') to cues where mood or dramatic actions call for it."
+    );
+    if (audioCatalog.bgm.length > 0) {
+      const bgmList = audioCatalog.bgm.map((e) => e.name).slice(0, 25).join(", ");
+      audioInstructions.push(`Available BGM: [${bgmList}]. Specify 'bgm' only when changing the ambient mood or at the start of a scene.`);
+    }
+    if (audioCatalog.sfx.length > 0) {
+      const sfxList = audioCatalog.sfx.map((e) => e.name).slice(0, 30).join(", ");
+      audioInstructions.push(`Available SFX: [${sfxList}]. Specify 'sfx' only for prominent impact/action moments.`);
+    }
+  }
+
   return [
     "You plan illustrations for a visual-novel presentation. Return one JSON object and no prose.",
     "Paragraph indexes are zero-based. scenes must ALWAYS contain at least one scene with startParagraph: 0. Later scene starts must increase.",
@@ -121,7 +141,8 @@ function plannerInstruction(config: VisualNovelConfig): string {
       ? "choices: If the response does not contain authored Choice tags, return 2 to 4 contextual choices from the user's/persona's perspective. For each choice provide 'label' (a concise button text, e.g. 'Step closer and call her bluff') and 'submission' (a natural, descriptive action or dialogue sentence written in first-person prose from the user's perspective reacting to the scene, e.g. 'I take a slow step toward the desk, meeting her eyes with a quiet smirk. \"Are you really in a position to be making demands, Hina?\"'). NEVER return an index, number, or option code for submission."
       : "Return an empty choices array.",
     "characters must contain EXACTLY ONE entry: the single protagonist. Return name and ONE compact comma-separated line containing ONLY visible physical appearance tags extracted from the card context: age, gender, build, hair, eyes, face, skin, clothing, accessories, and visible distinguishing marks. Never copy markdown headings or labels, personality, psychology, speech, catchphrases, behavior, backstory, scenario, intimate/NSFW notes, macros, or prose sentences. A description that merely repeats the name is invalid. Keep stable traits and never invent appearance that contradicts the card or KNOWN CHARACTERS baseline. Never return a second character.",
-    "Shape: {scenes:[{startParagraph,boundary:{claimedNewScene,reason,location,timeOfDay,majorTimeJump,environmentReplacement,forced},environment:{location,timeOfDay,weather,lighting,description,persistentElements},cast,basePrompt,compositionLock}],cues:[{paragraphIndex,expression}],choices:[{label,submission}],characters:[{name,description}]}",
+        hasAudio ? audioInstructions.join("\n") : "",
+    `Shape: {scenes:[{startParagraph,boundary:{claimedNewScene,reason,location,timeOfDay,majorTimeJump,environmentReplacement,forced},environment:{location,timeOfDay,weather,lighting,description,persistentElements},cast,basePrompt,compositionLock}],cues:[{paragraphIndex,expression${hasAudio ? ",bgm?,sfx?" : ""}}],choices:[{label,submission}],characters:[{name,description}]}`,
     config.customPlannerInstructions ? config.customPlannerInstructions.trim() : ""
   ].filter(Boolean).join("\n");
 }
@@ -249,7 +270,9 @@ function normalizeCue(value: unknown): unknown {
     expression: typeof record.expression === "string" ? record.expression.trim() : null,
     promptDelta: typeof record.promptDelta === "string"
       ? record.promptDelta.trim()
-      : (typeof record.prompt_delta === "string" ? record.prompt_delta.trim() : "")
+      : (typeof record.prompt_delta === "string" ? record.prompt_delta.trim() : ""),
+    bgm: typeof record.bgm === "string" ? record.bgm.trim() : (typeof record.music === "string" ? record.music.trim() : null),
+    sfx: typeof record.sfx === "string" ? record.sfx.trim() : (typeof record.sound === "string" ? record.sound.trim() : null),
   };
 }
 
@@ -807,7 +830,9 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
         expression: null,
         poseExpressionId: pose.id,
         promptDelta: "",
-        assetJobId: id("asset", `${sourceFingerprint}:${cue.paragraphIndex}:${index}`)
+        assetJobId: id("asset", `${sourceFingerprint}:${cue.paragraphIndex}:${index}`),
+        ...(cue.bgm ? { bgm: cue.bgm } : {}),
+        ...(cue.sfx ? { sfx: cue.sfx } : {})
       });
     });
 

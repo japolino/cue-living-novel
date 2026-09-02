@@ -227,3 +227,88 @@ test("parseIgnoredTags parses comma and newline separated tag names", () => {
   const result = parseIgnoredTags("status, <stats>, [system]\n inventory");
   assert.deepEqual(result, ["status", "stats", "[system]", "inventory"]);
 });
+
+test("planner includes audio catalog in prompt instructions and preserves returned audio cues", async () => {
+  const { clearAudioCatalogCache, scanAudioCatalog } = await import("./audio-catalog");
+  const { mkdir, rm, writeFile } = await import("node:fs/promises");
+  const path = await import("node:path");
+  const os = await import("node:os");
+
+  const tempDir = path.join(os.tmpdir(), `planner-audio-${Date.now()}`);
+  await mkdir(path.join(tempDir, "bgm"), { recursive: true });
+  await mkdir(path.join(tempDir, "sfx"), { recursive: true });
+  await writeFile(path.join(tempDir, "bgm", "romantic_theme.mp3"), "dummy");
+  await writeFile(path.join(tempDir, "sfx", "sword_slash.wav"), "dummy");
+
+  await scanAudioCatalog(tempDir);
+
+  const captured = { system: "" };
+  const spindleWithAudio: SpindleAPI = {
+    generate: {
+      raw: async (request: any) => {
+        captured.system = request.messages?.[0]?.content ?? "";
+        return {
+          content: JSON.stringify({
+            scenes: [{
+              startParagraph: 0,
+              boundary: {
+                claimedNewScene: true,
+                reason: "initial",
+                location: "Garden",
+                timeOfDay: "afternoon",
+                majorTimeJump: false,
+                environmentReplacement: false,
+                forced: false
+              },
+              environment: {
+                location: "Garden",
+                timeOfDay: "afternoon",
+                weather: null,
+                lighting: "sunlight",
+                description: "A flower garden",
+                persistentElements: []
+              },
+              cast: ["Mira"],
+              basePrompt: "flower garden, sunlight",
+              compositionLock: "Mira centered"
+            }],
+            cues: [
+              { paragraphIndex: 0, expression: "smile", bgm: "romantic_theme", sfx: null },
+              { paragraphIndex: 1, expression: "surprise", sfx: "sword_slash" }
+            ],
+            choices: [],
+            characters: [{ name: "Mira", description: "silver hair, green eyes" }]
+          })
+        };
+      }
+    },
+    log: { warn() {} }
+  } as unknown as SpindleAPI;
+
+  try {
+    const content = "First line in the garden.\n\nA sudden sound.";
+    const result = await planTurn(spindleWithAudio, {
+      chatId: "chat-1",
+      message: { ...message, content },
+      content,
+      previousScene: null,
+      previousContinuity: null,
+      recentMessages: [],
+      config: DEFAULT_CONFIG,
+      singleCharacter: emptySingleCharacter(),
+      characterAppearance: {}
+    });
+
+    // Check system prompt instruction contains audio section
+    assert.match(captured.system, /Audio & Atmosphere/);
+    assert.match(captured.system, /romantic_theme/);
+    assert.match(captured.system, /sword_slash/);
+
+    // Check plan visual cues preserve bgm & sfx
+    assert.equal(result.plan.visualCues[0]?.bgm, "romantic_theme");
+    assert.equal(result.plan.visualCues[1]?.sfx, "sword_slash");
+  } finally {
+    clearAudioCatalogCache();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
