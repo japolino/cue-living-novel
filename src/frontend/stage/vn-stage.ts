@@ -347,6 +347,10 @@ export class VnStage {
     this.root.dataset.vnPreset = preset;
   }
 
+  reset(): void {
+    this.dispatch({ type: "reset" });
+  }
+
   loadTurn(turn: VnTurnInput): void {
     this.dispatch({ type: "load-turn", turn });
     this.focus();

@@ -162,7 +162,7 @@ export const reduceVnStage = (
         currentParagraphIndex: 0,
         choices: [...(action.turn.choices ?? [])],
         draft: "",
-        displayedImage: action.turn.preserveImage === false ? null : state.displayedImage,
+        displayedImage: action.turn.preserveImage ? state.displayedImage : null,
         pendingImage: null,
         imageError: null,
         activity: null,
@@ -289,6 +289,6 @@ export const reduceVnStage = (
       };
 
     case "reset":
-      return createInitialVnStageState({ displayedImage: state.displayedImage });
+      return createInitialVnStageState();
   }
 };

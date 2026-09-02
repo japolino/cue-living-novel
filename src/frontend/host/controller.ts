@@ -66,6 +66,24 @@ export type TurnApplicationDecision =
   | { kind: "same-turn"; paragraphIndex: number }
   | { kind: "load-turn" };
 
+/**
+ * Whether the stage should preserve the currently displayed image across turns.
+ * Preserving the image is only safe when advancing to a new turn within the SAME chat
+ * and for the same speaker/card, so that the stage does not flash a blank screen while
+ * the new turn's scene image generates.
+ *
+ * It must NEVER preserve the image when switching to a new chat, opening a new card,
+ * or on the initial turn delivery.
+ */
+export function shouldPreserveImage(previous: TurnView | null, next: TurnView): boolean {
+  if (!previous) return false;
+  if (previous.chatId !== next.chatId) return false;
+  const prevSpeaker = (previous.speaker || "").trim().toLowerCase();
+  const nextSpeaker = (next.speaker || "").trim().toLowerCase();
+  if (prevSpeaker && nextSpeaker && prevSpeaker !== nextSpeaker) return false;
+  return true;
+}
+
 export function decideTurnApplication(
   previous: TurnView | null,
   next: TurnView,
@@ -267,6 +285,11 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     app.setVisible(true);
     action.setLabel("Exit visual novel");
     headerLauncher.setActive(true);
+    const activeChatId = chatId();
+    if (!turn || turn.chatId !== activeChatId) {
+      turn = null;
+      stage.reset();
+    }
     requestState();
     stage.focus();
   }
@@ -338,7 +361,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     }
     const requestedMode = configRef.current?.mode ?? "standard";
     const mode = requestedMode === "cyoa" && next.choices.length > 0 ? "cyoa" : "standard";
-    const preserveImage = !previous || previous.chatId === next.chatId;
+    const preserveImage = shouldPreserveImage(previous, next);
     stage.loadTurn({
       mode,
       paragraphs: next.paragraphs.map((text, index) => ({
@@ -365,8 +388,13 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       applyVisualConfigToStage(stage, configRef.current);
       settingsPanel?.setConfig(configRef.current);
       if (configRef.current?.autoEnter && !active) activate();
-      if (message.turn) applyTurn(message.turn, turn);
-      else if (active) stage.setPhase("idle");
+      if (message.turn && message.turn.chatId === chatId()) {
+        applyTurn(message.turn, turn);
+      } else {
+        turn = null;
+        stage.reset();
+        if (active) stage.setPhase("idle");
+      }
       return;
     }
     if (type === "vn_config" && message.type === "vn_config") {
@@ -419,6 +447,12 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   const unsubAction = action.onClick(toggleVisualNovel);
   const unsubChat = ctx.events.on("CHAT_SWITCHED", () => {
     turn = null;
+    stage.reset();
+    requestState();
+  });
+  const unsubFork = ctx.events.on("CHAT_FORKED", () => {
+    turn = null;
+    stage.reset();
     requestState();
   });
   const unsubPermission = ctx.events.on("PERMISSION_CHANGED", (payload) => {
@@ -438,6 +472,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     unsubBackend();
     unsubAction();
     unsubChat();
+    unsubFork();
     unsubPermission();
     headerLauncher.destroy();
     action.destroy();

@@ -7,6 +7,7 @@ import {
   decideTurnApplication,
   sameTurnIdentity,
   selectCurrentImage,
+  shouldPreserveImage,
   type VisualStageThemeTarget,
 } from "./controller";
 import type { AssetView, TurnView } from "../../protocol.js";
@@ -261,5 +262,35 @@ describe("computeAssetProgress (granular image generation progress)", () => {
       ],
     });
     expect(computeAssetProgress(source)).toBeNull();
+  });
+});
+
+describe("shouldPreserveImage", () => {
+  test("returns false when previous turn is null (initial load or fresh chat)", () => {
+    expect(shouldPreserveImage(null, turn({ chatId: "chat-1" }))).toBe(false);
+  });
+
+  test("returns false when chat ids differ (swapped chat or card)", () => {
+    const prev = turn({ chatId: "chat-1", speaker: "Alice" });
+    const next = turn({ chatId: "chat-2", speaker: "Alice" });
+    expect(shouldPreserveImage(prev, next)).toBe(false);
+  });
+
+  test("returns false when speakers differ (swapped character card)", () => {
+    const prev = turn({ chatId: "chat-1", speaker: "Alice" });
+    const next = turn({ chatId: "chat-1", speaker: "Bob" });
+    expect(shouldPreserveImage(prev, next)).toBe(false);
+  });
+
+  test("returns true when advancing turns within the same chat and same speaker", () => {
+    const prev = turn({ chatId: "chat-1", speaker: "Alice", messageId: "msg-1" });
+    const next = turn({ chatId: "chat-1", speaker: "Alice", messageId: "msg-2" });
+    expect(shouldPreserveImage(prev, next)).toBe(true);
+  });
+
+  test("returns true when advancing turns within the same chat with empty speaker", () => {
+    const prev = turn({ chatId: "chat-1", speaker: "", messageId: "msg-1" });
+    const next = turn({ chatId: "chat-1", speaker: "", messageId: "msg-2" });
+    expect(shouldPreserveImage(prev, next)).toBe(true);
   });
 });

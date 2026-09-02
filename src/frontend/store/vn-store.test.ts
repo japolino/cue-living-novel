@@ -81,7 +81,7 @@ test("load-turn with preserveImage:false clears the previous scene image", () =>
   assert.equal(state.currentParagraphIndex, 0);
 });
 
-test("load-turn without preserveImage keeps the previous image and resets to paragraph 0", () => {
+test("load-turn without preserveImage clears the previous scene image", () => {
   const previous = { url: "old.webp", alt: "Old scene", requestId: "old" };
   let state = createInitialVnStageState({ displayedImage: previous });
 
@@ -90,8 +90,32 @@ test("load-turn without preserveImage keeps the previous image and resets to par
     turn: { mode: "standard", paragraphs },
   });
 
+  assert.equal(state.displayedImage, null);
+  assert.equal(state.currentParagraphIndex, 0);
+});
+
+test("load-turn with preserveImage:true keeps the previous image and resets to paragraph 0", () => {
+  const previous = { url: "old.webp", alt: "Old scene", requestId: "old" };
+  let state = createInitialVnStageState({ displayedImage: previous });
+
+  state = reduceVnStage(state, {
+    type: "load-turn",
+    turn: { mode: "standard", paragraphs, preserveImage: true },
+  });
+
   assert.equal(state.displayedImage, previous);
   assert.equal(state.currentParagraphIndex, 0);
+});
+
+test("reset action clears stage state and displayed image", () => {
+  const previous = { url: "old.webp", alt: "Old scene", requestId: "old" };
+  let state = createInitialVnStageState({ displayedImage: previous, paragraphs });
+
+  state = reduceVnStage(state, { type: "reset" });
+
+  assert.equal(state.displayedImage, null);
+  assert.equal(state.paragraphs.length, 0);
+  assert.equal(state.phase, "idle");
 });
 
 test("advancing past the last paragraph marks turnFinished and enables reroll prompt", () => {
