@@ -143,6 +143,92 @@ export function sanitizeMemoryTags(tags: string): string {
   }).join(", "));
 }
 
+/** Compact visual words accepted from planner output and card fallbacks. */
+const VISUAL_TAG_WORDS = /\b(?:age|year[- ]old|girl|woman|female|boy|man|male|petite|slender|slim|lean|athletic|muscular|stocky|curvy|tall|short|build|body|figure|frame|physique|hair|haired|bangs|fringe|ponytail|pigtails?|braids?|bob|bun|curls?|wavy|straight|bald|blonde?|brunette|auburn|eyes?|eyed|iris(?:es)?|pupils?|eyebrows?|eyelashes?|face|facial|cheeks?|jaw|chin|nose|lips?|mouth|ears?|freckles?|moles?|scar|tattoo|complexion|skin|pale|tan(?:ned)?|fair|flushed|clothes?|clothing|attire|outfit|uniform|dress|skirt|shirt|blouse|sweater|cardigan|jacket|coat|hoodie|vest|suit|robe|kimono|pants|trousers|jeans|shorts|leggings|tights|pantyhose|socks?|stockings?|shoes?|boots?|sneakers?|heels?|sandals?|gloves?|hat|cap|hood|scarf|tie|ribbon|bow|collar|sleeves?|belt|apron|swimsuit|accessor(?:y|ies)|glasses|goggles|earrings?|necklace|bracelet|choker|ring|hairpin|headband|clip|jewelry|jewellery|horns?|wings?|tail|black|white|gray|grey|silver|gold|golden|brown|red|crimson|scarlet|orange|yellow|green|emerald|blue|navy|cyan|teal|turquoise|purple|violet|pink|magenta|beige|ivory|cream|platinum|round|soft|youthful|small)\b/i;
+
+const NON_VISUAL_DOCUMENT_FIELD = /\b(?:full name|name|nationality|occupation|personality|demeanou?r|strengths?|weaknesses?|fears?|loves?|likes?|dislikes?|habits?|values?|behaviou?r|emotional stance|physical intimacy|communication style|psychology|motivations?|inner conflicts?|defense mechanisms?|psychological quirks?|worldview|speech patterns?|tone|vocabulary|catchphrases?|scenario|backstory|creator notes?)\b/i;
+const VISUAL_DOCUMENT_FIELD = /^(?:age|gender|hair|eyes?|facial features?|face|skin|complexion|build|body|height|figure|physique|clothing style|clothing|clothes|attire|outfit|accessories|distinguishing marks?)$/i;
+const INTIMATE_CONTENT = /\b(?:nsfw|intimate|sexual|sex|nude|naked|shaved|breasts?|boobs?|bust|cleavage|nipples?|genitals?|crotch|pussy|vagina|penis|testicles?|butt(?:ocks)?|ass|anus|aroused|orgasm|masturbat|intercourse|lap|fetish)\b/i;
+const PROSE_OR_META = /\b(?:she|he|her|his|hers|him|they|them|their|you|your|user|personality|psychology|speech|catchphrase|habit|likes?|loves?|fears?|behaviou?r|communication|motivation)\b/i;
+
+/** Whether stored identity text is a card document rather than canonical tags. */
+export function hasIdentityDocumentNoise(source: string): boolean {
+  return /#{1,6}|\*{1,3}|\{\{|(?:^|[,;\n])\s*[A-Za-z][A-Za-z /_-]{1,40}:/.test(source);
+}
+
+function compactVisualFragment(raw: string): string[] {
+  const clean = collapse(raw.replace(/^wearing\s+/i, ""));
+  if (!clean || clean.length > 56 || clean.split(/\s+/).length > 7) return [];
+  if (INTIMATE_CONTENT.test(clean) || PROSE_OR_META.test(clean)) return [];
+  if (!VISUAL_TAG_WORDS.test(clean)) return [];
+  return [clean];
+}
+
+/**
+ * Convert a compact planner tag line or a markdown character card into visual
+ * appearance tags only. Document fields are allow-listed before their labels
+ * are removed, so a Habits line mentioning hair can never become appearance.
+ */
+export function distillVisualTags(source: string): string[] {
+  if (typeof source !== "string" || !source.trim()) return [];
+  const withoutMacros = source
+    .replace(/\{\{[^{}]*\}\}/g, " ")
+    .replace(/\{[^{}]*\}/g, " ")
+    .replace(/\r\n?/g, "\n");
+  const documentLike = hasIdentityDocumentNoise(withoutMacros);
+  const candidates: string[] = [];
+
+  if (documentLike) {
+    // Stored legacy arrays can collapse document lines around commas. Restore
+    // boundaries before parsing labels and headings.
+    const expanded = withoutMacros
+      .replace(/\s*(#{1,6}\s+)/g, "\n$1")
+      .replace(/\s*(\*{1,3}[^*\n:]{1,48}\*{1,3}\s*:)/g, "\n$1");
+    let visualSection = false;
+    for (const rawLine of expanded.split(/\n+/)) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      const heading = line.match(/^#{1,6}\s*(.+)$/);
+      if (heading) {
+        const title = collapse(heading[1]!.replace(/\*|_/g, ""));
+        visualSection = /(?:physical )?appearance|visual|body|attire|clothing/i.test(title)
+          && !NON_VISUAL_DOCUMENT_FIELD.test(title);
+        continue;
+      }
+      const plain = line.replace(/^\s*[-*+]\s+/, "").replace(/\*{1,3}|_{1,3}|`+/g, "").trim();
+      const labelled = plain.match(/^([^:]{1,48}):\s*(.*)$/);
+      if (labelled) {
+        const label = collapse(labelled[1]!).toLowerCase();
+        if (!VISUAL_DOCUMENT_FIELD.test(label) || NON_VISUAL_DOCUMENT_FIELD.test(label)) continue;
+        let value = collapse(labelled[2]!);
+        if (!value) continue;
+        if (label === "age" && /^\d{1,3}$/.test(value)) value = `${value}-year-old`;
+        if (label === "gender") value = /male/i.test(value) && !/female/i.test(value) ? "male" : /female/i.test(value) ? "female" : value;
+        let parts = value.split(/[,;]+/);
+        if (/clothing|clothes|attire|outfit/.test(label)) {
+          const unsafeAt = parts.findIndex((part) => INTIMATE_CONTENT.test(part));
+          if (unsafeAt >= 0) parts = parts.slice(0, unsafeAt);
+          parts = parts.flatMap((part) => part.split(/\s+with\s+(?=(?:black|white|red|blue|green|gold|golden|silver|navy|pink|purple|brown|gray|grey|a\b|an\b))/i));
+        } else if (/face|facial/.test(label)) {
+          parts = parts.flatMap((part) => part.split(/\s+with\s+/i));
+          parts = parts.map((part) => /^round$/i.test(part.trim()) ? "round face" : part);
+        }
+        for (const part of parts) candidates.push(...compactVisualFragment(part));
+        continue;
+      }
+      // Unlabelled prose in document cards is ignored. Only explicit visual
+      // bullets inside a visual section may pass the compact tag filter.
+      if (visualSection && /^[-*+]/.test(line)) {
+        for (const part of plain.split(/[,;]+/)) candidates.push(...compactVisualFragment(part));
+      }
+    }
+  } else {
+    for (const part of withoutMacros.split(/[,;\n]+/)) candidates.push(...compactVisualFragment(part));
+  }
+
+  return dedupeSubsumed(splitTags(sanitizeMemoryTags(candidates.join(", ")))).slice(0, 16);
+}
+
 /**
  * The usable appearance tags for an identity: sanitized, de-duplicated, and with
  * any tag that equals (or repeats) the character's own name removed. A tag that
@@ -150,7 +236,7 @@ export function sanitizeMemoryTags(tags: string): string {
  */
 export function toUsableTags(name: string, tags: string[]): string[] {
   const nameKey = characterAppearanceKey(name);
-  return dedupeSubsumed(splitTags(sanitizeMemoryTags(tags.join(", ")))
+  return dedupeSubsumed(distillVisualTags(tags.join(", "))
     .filter((tag) => characterAppearanceKey(tag) !== nameKey));
 }
 

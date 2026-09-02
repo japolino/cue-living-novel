@@ -314,3 +314,25 @@ describe("migrateCharacterAppearanceStates (one-time scan + repair)", () => {
     expect(data.get(characterAppearancePath())).toEqual({ Mira: "silver hair, green eyes" });
   });
 });
+
+
+describe("document identity invalidation", () => {
+  test("clears a raw markdown card state so the planner can rebuild it", () => {
+    const state = migrateVisualProfilesToSingleCharacter({
+      schemaVersion: SINGLE_CHARACTER_SCHEMA_VERSION,
+      protagonist: {
+        name: "Hina",
+        tags: ["## Physical Appearance **Hair:** golden blonde short cut", "## Personality **Habits:** Twirling hair when thinking"]
+      },
+      environment: DEFAULT_ENVIRONMENT_DESCRIPTOR
+    });
+    expect(state.protagonist).toEqual({ name: "Hina", tags: [] });
+  });
+
+  test("drops a poisoned global appearance entry instead of freezing a partial cleanup", async () => {
+    const { spindle } = storageRuntime(new Map([[characterAppearancePath(), {
+      Hina: "## Physical Appearance **Hair:** golden blonde short cut, ## Personality **Habits:** Twirling hair when thinking"
+    }]]));
+    expect(await loadCharacterAppearance(spindle)).toEqual({});
+  });
+});

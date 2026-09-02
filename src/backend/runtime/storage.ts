@@ -11,6 +11,7 @@ import {
 import {
   appearanceMapKeyFor,
   characterAppearanceKey,
+  hasIdentityDocumentNoise,
   isUsableIdentity,
   normalizeCharacterName,
   splitTags,
@@ -89,7 +90,14 @@ export function migrateVisualProfilesToSingleCharacter(
   raw: unknown,
   options: { protagonistName?: string; environment?: string } = {}
 ): SingleCharacterState {
-  const state = normalizeSingleCharacter(raw, options.protagonistName);
+  const normalized = normalizeSingleCharacter(raw, options.protagonistName);
+  const rawTags = normalized.protagonist.tags.join(", ");
+  // Old Cue builds could persist an entire markdown card as appearance. Never
+  // promote that document into canonical memory; leave the name key repairable.
+  const tags = hasIdentityDocumentNoise(rawTags)
+    ? []
+    : toUsableTags(normalized.protagonist.name, normalized.protagonist.tags);
+  const state = { ...normalized, protagonist: { name: normalized.protagonist.name, tags } };
   if (options.environment && options.environment.trim()) {
     return { ...state, environment: options.environment.trim() };
   }
@@ -179,7 +187,8 @@ function normalizeAppearanceMap(raw: unknown): CharacterAppearanceMap {
   const map: CharacterAppearanceMap = {};
   for (const [name, rawTags] of Object.entries(raw as Record<string, unknown>)) {
     const cleanName = normalizeCharacterName(name);
-    const tags = typeof rawTags === "string" ? splitTags(rawTags) : [];
+    if (typeof rawTags !== "string" || hasIdentityDocumentNoise(rawTags)) continue;
+    const tags = splitTags(rawTags);
     if (!cleanName || !isUsableIdentity(cleanName, tags)) continue;
     map[name] = toUsableTags(cleanName, tags).join(", ");
   }

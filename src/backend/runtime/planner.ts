@@ -22,9 +22,9 @@ import { POSE_EXPRESSION_CATALOGUE, selectPoseExpression, type SingleCharacterSt
 import {
   appearanceMapKeyFor,
   buildCanonicalIdentity,
+  distillVisualTags,
   isUsableIdentity,
   normalizeCharacterName,
-  sanitizeMemoryTags,
   splitTags,
   toUsableTags,
   type CharacterAppearanceMap
@@ -120,7 +120,7 @@ function plannerInstruction(config: VisualNovelConfig): string {
     config.mode === "cyoa" && config.generateChoices
       ? "Return 2 to 4 concise choices if the response does not contain authored Choice tags."
       : "Return an empty choices array.",
-    "characters must contain EXACTLY ONE entry: the single protagonist. Return name and one compact line of comma-separated visual tags (age, build, hair, eyes, skin, clothing, accessories, distinguishing marks). Base it ONLY on the authoritative KNOWN CHARACTERS block or the Character card, which are the sole admissible appearance sources; a description that is merely the character name is invalid and will be ignored. Only change a tag on a real visible change (new outfit, injury, hairstyle). Keep stable traits. Never invent appearance that contradicts the source. Never return a second character.",
+    "characters must contain EXACTLY ONE entry: the single protagonist. Return name and ONE compact comma-separated line containing ONLY visible physical appearance tags extracted from the card context: age, gender, build, hair, eyes, face, skin, clothing, accessories, and visible distinguishing marks. Never copy markdown headings or labels, personality, psychology, speech, catchphrases, behavior, backstory, scenario, intimate/NSFW notes, macros, or prose sentences. A description that merely repeats the name is invalid. Keep stable traits and never invent appearance that contradicts the card or KNOWN CHARACTERS baseline. Never return a second character.",
     "Shape: {scenes:[{startParagraph,boundary:{claimedNewScene,reason,location,timeOfDay,majorTimeJump,environmentReplacement,forced},environment:{location,timeOfDay,weather,lighting,description,persistentElements},cast,basePrompt,compositionLock}],cues:[{paragraphIndex}],choices:[{label,submission}],characters:[{name,description}]}",
     config.customPlannerInstructions.trim()
   ].filter(Boolean).join("\n");
@@ -407,10 +407,10 @@ function buildCardIdentity(visualContext: VisualContextSnapshot): { name: string
   if (!card) return null;
   const name = normalizeCharacterName(card.name);
   if (!name) return null;
-  // Retain the full card description (never discard it) plus the curated stable
-  // tags. Description tags are sanitized so transient terms cannot enter identity.
-  const descriptionTags = splitTags(sanitizeMemoryTags(card.description));
-  const stableTags = splitTags(sanitizeMemoryTags(card.tags.join(", ")));
+  // The card is planner context first. This deterministic path is only a
+  // fallback when planner extraction fails; document fields are allow-listed.
+  const descriptionTags = distillVisualTags(card.description);
+  const stableTags = distillVisualTags(card.tags.join(", "));
   return buildCanonicalIdentity(name, [...descriptionTags, ...stableTags]);
 }
 
@@ -446,21 +446,22 @@ function resolveSingleCharacter(
     }
   }
 
-  // 3. Full character-card identity (full description + stable tags).
-  const cardIdentity = buildCardIdentity(visualContext);
-  if (cardIdentity && isUsableIdentity(cardIdentity.name, cardIdentity.tags)) {
-    return { ...frozen, protagonist: cardIdentity, environment: frozen.environment };
-  }
-
-  // 4. Usable planner extraction. Never above the card / durable memory, and a
-  //    degraded name-only description is rejected.
+  // 3. Usable planner extraction. This mirrors Inlay: the card is parser
+  //    context, while the parser emits the compact visual fields used by memory.
+  //    A name-only or document-like result distills to no usable identity.
   const plannerCharacter = planner.characters[0];
   if (plannerCharacter) {
     const pName = normalizeCharacterName(plannerCharacter.name);
-    const pTags = toUsableTags(pName, splitTags(sanitizeMemoryTags(plannerCharacter.description)));
-    if (isUsableIdentity(pName, pTags)) {
+    const pTags = distillVisualTags(plannerCharacter.description);
+    if (pTags.length >= 2 && isUsableIdentity(pName, pTags)) {
       return { ...frozen, protagonist: { name: pName, tags: pTags }, environment: frozen.environment };
     }
+  }
+
+  // 4. Deterministic card fallback for planner failure/offline operation.
+  const cardIdentity = buildCardIdentity(visualContext);
+  if (cardIdentity && cardIdentity.tags.length >= 2 && isUsableIdentity(cardIdentity.name, cardIdentity.tags)) {
+    return { ...frozen, protagonist: cardIdentity, environment: frozen.environment };
   }
 
   // 5. Name-only NON-durable fallback: the name is a memory key, never a tag.

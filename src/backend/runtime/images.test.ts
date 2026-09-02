@@ -92,6 +92,20 @@ describe("compileImagePrompt (vendored Inlay compiler)", () => {
     }
   });
 
+
+  test("retains a 'short cut' hair tag under upper body framing (does not drop as figure)", () => {
+    const hina = {
+      ...scene,
+      identityPrompt: "Golden blonde short cut, Brilliant red irises with stark white pupils, round face, Black high school uniform, red sailor ribbon"
+    };
+    const compiled = compileImagePrompt(DEFAULT_CONFIG, hina, cue("smile"));
+    expect(compiled).toContain("Golden blonde short cut");
+    expect(compiled).toContain("Brilliant red irises with stark white pupils");
+    expect(compiled).toContain("Black high school uniform");
+    expect(compiled).toContain("red sailor ribbon");
+    expect(compiled).not.toContain("identity:");
+  });
+
   test("projects away lower-body attire under upper body framing", () => {
     const hina = {
       ...scene,

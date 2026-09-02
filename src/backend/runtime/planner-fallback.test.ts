@@ -131,6 +131,29 @@ describe("fresh single-character fallback", () => {
     expect(prompt).not.toBe("solo");
   });
 
+
+  test("uses a valid planner visual extraction before the raw-card fallback", async () => {
+    const captured = { systemMessage: "" };
+    const result = await plan(spindleFor("success", captured, {
+      plannerCharacterDescription: "18-year-old petite girl, golden blonde short hair, brilliant red eyes, black sailor uniform, red sailor ribbon"
+    }), emptySingleCharacter());
+    expect(result.singleCharacter.protagonist.tags).toEqual([
+      "18-year-old petite girl",
+      "golden blonde short hair",
+      "brilliant red eyes",
+      "black sailor uniform",
+      "red sailor ribbon"
+    ]);
+  });
+
+  test("rejects a degraded planner identity and falls back to distilled card visuals", async () => {
+    const captured = { systemMessage: "" };
+    const result = await plan(spindleFor("success", captured, {
+      plannerCharacterDescription: "Mira"
+    }), emptySingleCharacter());
+    expect(result.singleCharacter.protagonist.tags).toEqual(["silver hair", "green eyes", "red wool coat"]);
+  });
+
   test("seeds the card identity when the planner returns characters: []", async () => {
     const captured = { systemMessage: "" };
     const result = await plan(spindleFor("emptyCharacters", captured), emptySingleCharacter());

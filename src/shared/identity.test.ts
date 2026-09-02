@@ -3,6 +3,8 @@ import {
   appearanceMapKeyFor,
   buildCanonicalIdentity,
   characterAppearanceKey,
+  distillVisualTags,
+  hasIdentityDocumentNoise,
   isUsableIdentity,
   normalizeCharacterName,
   normalizeReferenceTags,
@@ -86,5 +88,48 @@ describe("buildCanonicalIdentity", () => {
   test("produces a cleaned name + usable tags", () => {
     expect(buildCanonicalIdentity("  Hina  ", ["silver hair", "Hina", "red coat", "red wool coat"]))
       .toEqual({ name: "Hina", tags: ["silver hair", "red wool coat"] });
+  });
+});
+
+
+describe("distillVisualTags", () => {
+  test("extracts visual fields from the real markdown card shape and rejects all other fields", () => {
+    const card = `## Basic Information
+**Full Name:** Tachibana Hina
+**Age:** 18
+**Gender:** Female
+**Nationality:** Japanese
+**Occupation:** High School Student
+## Physical Appearance
+**Hair:** Golden blonde short cut
+**Eyes:** Brilliant red irises with stark white pupils
+**Facial Features:** Round, naturally flushed cheeks
+**Clothing Style:** Black high school uniform with red sailor ribbon, completely shaved intimate areas, Plump, soft cheeks
+## Personality
+**General Demeanor:** Dual-faced - proper lady in public, teasing devil with {{user}}
+**Habits:** Twirling hair when thinking, secretly taking photos of {{user}} without permission
+## Speech Pattern
+**Catchphrases:** "Hmph, she sits on {{user}}'s lap."`;
+    expect(distillVisualTags(card)).toEqual([
+      "18-year-old",
+      "female",
+      "Golden blonde short cut",
+      "Brilliant red irises with stark white pupils",
+      "round face",
+      "naturally flushed cheeks",
+      "Black high school uniform",
+      "red sailor ribbon"
+    ]);
+    const joined = distillVisualTags(card).join(", ");
+    for (const rejected of ["##", "**", "{{", "Twirling", "Catchphrases", "shaved", "Plump", "soft cheeks", "lap"]) {
+      expect(joined).not.toContain(rejected);
+    }
+  });
+
+  test("rejects document noise in stored identity while accepting compact planner tags", () => {
+    expect(hasIdentityDocumentNoise("## Appearance **Hair:** blonde")).toBe(true);
+    expect(hasIdentityDocumentNoise("golden blonde short hair, brilliant red eyes, black uniform")).toBe(false);
+    expect(distillVisualTags("18-year-old petite Japanese girl, golden blonde short hair, brilliant red eyes, black sailor uniform"))
+      .toEqual(["18-year-old petite Japanese girl", "golden blonde short hair", "brilliant red eyes", "black sailor uniform"]);
   });
 });
