@@ -98,4 +98,77 @@ describe("planner tolerant parse", () => {
     });
     expect(usedFallback()).toBe(false);
   });
+
+  test("tolerates empty scenes array without fallback, preserving multiple cues", async () => {
+    const multiParaContent = [
+      "Paragraph zero.",
+      "Paragraph one.",
+      "Paragraph two.",
+      "Paragraph three.",
+      "Paragraph four.",
+      "Paragraph five.",
+      "Paragraph six.",
+      "Paragraph seven.",
+      "Paragraph eight."
+    ].join("\n\n");
+
+    const { spindle, usedFallback } = spindleWith({
+      scenes: [],
+      cues: [
+        { paragraphIndex: 0 },
+        { paragraph_index: 2 },
+        { paragraph: 4 },
+        { p_index: 6 },
+        { index: 8 }
+      ],
+      choices: [],
+      characters: [{ name: "Sandra", description: "silver hair" }]
+    });
+    const result = await planTurn(spindle, {
+      chatId: "chat-1",
+      message: { ...message, content: multiParaContent },
+      content: multiParaContent,
+      previousScene: null,
+      previousContinuity: null,
+      recentMessages: [],
+      config: { ...DEFAULT_CONFIG, maxImagesPerTurn: 5, parserConnectionId: "conn" },
+      singleCharacter: emptySingleCharacter(),
+      characterAppearance: {}
+    });
+    expect(usedFallback()).toBe(false);
+    expect(result.plan.scenes.length).toBeGreaterThanOrEqual(1);
+    expect(result.plan.scenes[0]?.startParagraph).toBe(0);
+    expect(result.plan.visualCues.length).toBe(5);
+    expect(result.plan.visualCues.map((c) => c.paragraphIndex)).toEqual([0, 2, 4, 6, 8]);
+  });
+
+  test("normalizes singular scene object into scenes array", async () => {
+    const twoParaContent = "Paragraph zero.\n\nParagraph one.";
+    const { spindle, usedFallback } = spindleWith({
+      scene: {
+        startParagraph: 0,
+        boundary: { claimedNewScene: true, reason: "initial", location: "Courtyard" },
+        environment: { location: "Courtyard", description: "Stone courtyard" },
+        cast: ["Sandra"],
+        basePrompt: "stone courtyard"
+      },
+      cues: [{ paragraphIndex: 0 }, { paragraphIndex: 1 }],
+      choices: [],
+      characters: []
+    });
+    const result = await planTurn(spindle, {
+      chatId: "chat-1",
+      message: { ...message, content: twoParaContent },
+      content: twoParaContent,
+      previousScene: null,
+      previousContinuity: null,
+      recentMessages: [],
+      config: { ...DEFAULT_CONFIG, maxImagesPerTurn: 2, parserConnectionId: "conn" },
+      singleCharacter: emptySingleCharacter(),
+      characterAppearance: {}
+    });
+    expect(usedFallback()).toBe(false);
+    expect(result.plan.scenes[0]?.environment.location).toBe("Courtyard");
+    expect(result.plan.visualCues.length).toBe(2);
+  });
 });

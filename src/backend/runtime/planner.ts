@@ -59,7 +59,7 @@ const PlannerCharacterSchema = z.object({
 }).strict();
 
 const PlannerOutputSchema = z.object({
-  scenes: z.array(PlannerSceneSchema).min(1),
+  scenes: z.array(PlannerSceneSchema).default([]),
   cues: z.array(PlannerCueSchema).default([]),
   choices: z.array(PlannerChoiceSchema).max(6).default([]),
   characters: z.array(PlannerCharacterSchema).default([])
@@ -107,22 +107,22 @@ function id(prefix: string, source: string): string {
 function plannerInstruction(config: VisualNovelConfig): string {
   return [
     "You plan illustrations for a visual-novel presentation. Return one JSON object and no prose.",
-    "Paragraph indexes are zero-based. scenes[0].startParagraph must be 0. Later scene starts must increase.",
-    "Only claim a new scene for a location change, major time jump, or complete environment replacement.",
+    "Paragraph indexes are zero-based. scenes must ALWAYS contain at least one scene with startParagraph: 0. Later scene starts must increase.",
+    "If continuing the current setting without a major jump, set boundary.claimedNewScene: false and boundary.reason: 'none'. Only set claimedNewScene: true for a true location change, major time jump, or environment replacement.",
     "Do not create a new scene for emotion, pose, dialogue, camera, or action changes.",
     "Keep the camera fixed at eye level with the protagonist centered and the lower quarter clear for dialogue UI.",
     "EXACTLY ONE protagonist is visible in every frame. Never depict a second character, a crowd, a bystander, or any other person. The protagonist is always the single centered subject.",
     "basePrompt must be concise comma-separated Danbooru-style scene tags for persistent location, time, weather, lighting, and background elements. Include no camera or composition prose, character names, or character description. The protagonist's appearance belongs only in the single characters entry.",
-    "cues only select a paragraph index. Never supply action, expression, promptDelta, or any free-text pose/expression — pose is derived deterministically.",
+    "cues selects paragraph indexes where illustration updates should occur.",
     config.maxImagesPerTurn > 0
-      ? `Return at most ${config.maxImagesPerTurn} cues. Prefer paragraph 0 and material visual changes.`
-      : "Return as many cues as there are distinct material visual changes (unlimited). Prefer paragraph 0 and material visual changes.",
+      ? `Generate up to ${config.maxImagesPerTurn} distinct cues spread across key dialogue or action beats in the turn (always include paragraph 0 as the opening cue).`
+      : "Generate cues spread across distinct visual or emotional beats (unlimited). Always include paragraph 0.",
     config.mode === "cyoa" && config.generateChoices
       ? "Return 2 to 4 concise choices if the response does not contain authored Choice tags."
       : "Return an empty choices array.",
     "characters must contain EXACTLY ONE entry: the single protagonist. Return name and ONE compact comma-separated line containing ONLY visible physical appearance tags extracted from the card context: age, gender, build, hair, eyes, face, skin, clothing, accessories, and visible distinguishing marks. Never copy markdown headings or labels, personality, psychology, speech, catchphrases, behavior, backstory, scenario, intimate/NSFW notes, macros, or prose sentences. A description that merely repeats the name is invalid. Keep stable traits and never invent appearance that contradicts the card or KNOWN CHARACTERS baseline. Never return a second character.",
     "Shape: {scenes:[{startParagraph,boundary:{claimedNewScene,reason,location,timeOfDay,majorTimeJump,environmentReplacement,forced},environment:{location,timeOfDay,weather,lighting,description,persistentElements},cast,basePrompt,compositionLock}],cues:[{paragraphIndex}],choices:[{label,submission}],characters:[{name,description}]}",
-    config.customPlannerInstructions.trim()
+    config.customPlannerInstructions ? config.customPlannerInstructions.trim() : ""
   ].filter(Boolean).join("\n");
 }
 
@@ -175,14 +175,16 @@ function asNumber(value: unknown): number | undefined {
 // Tolerant recovery: a missing or extra field must never nuke the whole plan
 // into a fallback. Coerce values and rebuild only the known shape.
 function normalizeBoundary(value: unknown): unknown {
+  const defaultLocation = "the current setting";
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return { claimedNewScene: false, reason: "none", location: "", timeOfDay: null, majorTimeJump: false, environmentReplacement: false, forced: false };
+    return { claimedNewScene: false, reason: "none", location: defaultLocation, timeOfDay: null, majorTimeJump: false, environmentReplacement: false, forced: false };
   }
   const record = value as Record<string, unknown>;
+  const loc = typeof record.location === "string" && record.location.trim() ? record.location.trim() : defaultLocation;
   return {
     claimedNewScene: asBoolean(record.claimedNewScene),
     reason: normalizeBoundaryReason(record.reason ?? "none"),
-    location: typeof record.location === "string" ? record.location.trim() : "",
+    location: loc,
     timeOfDay: typeof record.timeOfDay === "string" ? record.timeOfDay.trim() : null,
     majorTimeJump: asBoolean(record.majorTimeJump),
     environmentReplacement: asBoolean(record.environmentReplacement),
@@ -226,7 +228,7 @@ function normalizeScene(value: unknown): unknown {
     cast: Array.isArray(record.cast)
       ? record.cast.map((item) => typeof item === "string" ? item.trim() : String(item)).filter(Boolean)
       : [],
-    basePrompt: typeof record.basePrompt === "string" ? record.basePrompt.trim() : "",
+    basePrompt: typeof record.basePrompt === "string" && record.basePrompt.trim() ? record.basePrompt.trim() : "a visual novel scene",
     compositionLock: typeof record.compositionLock === "string" ? record.compositionLock.trim() : "Character centered with clear negative space behind the dialogue window."
   };
 }
@@ -234,11 +236,20 @@ function normalizeScene(value: unknown): unknown {
 function normalizeCue(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const record = value as Record<string, unknown>;
+  const rawPIdx = asNumber(record.paragraphIndex)
+    ?? asNumber(record.paragraph_index)
+    ?? asNumber(record.paragraph)
+    ?? asNumber(record.p_index)
+    ?? asNumber(record.para)
+    ?? asNumber(record.index)
+    ?? 0;
   return {
-    paragraphIndex: asNumber(record.paragraphIndex) ?? 0,
+    paragraphIndex: Math.max(0, Math.floor(rawPIdx)),
     action: typeof record.action === "string" ? record.action.trim() : null,
     expression: typeof record.expression === "string" ? record.expression.trim() : null,
-    promptDelta: typeof record.promptDelta === "string" ? record.promptDelta.trim() : ""
+    promptDelta: typeof record.promptDelta === "string"
+      ? record.promptDelta.trim()
+      : (typeof record.prompt_delta === "string" ? record.prompt_delta.trim() : "")
   };
 }
 
@@ -263,11 +274,58 @@ function normalizeCharacter(value: unknown): unknown {
 function normalizePlannerOutput(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const record = value as Record<string, unknown>;
+
+  // Handle scenes: array, single object, or empty recovery
+  let rawScenes: unknown[] = [];
+  if (Array.isArray(record.scenes)) {
+    rawScenes = record.scenes;
+  } else if (record.scene && typeof record.scene === "object" && !Array.isArray(record.scene)) {
+    rawScenes = [record.scene];
+  } else if (record.current_scene && typeof record.current_scene === "object" && !Array.isArray(record.current_scene)) {
+    rawScenes = [record.current_scene];
+  }
+
+  let scenes = rawScenes.map(normalizeScene);
+  if (scenes.length === 0) {
+    scenes = [
+      normalizeScene({
+        startParagraph: 0,
+        boundary: { claimedNewScene: false, reason: "none" },
+        environment: {},
+        cast: [],
+        basePrompt: "a visual novel scene",
+        compositionLock: "Character centered with clear negative space behind the dialogue window."
+      })
+    ];
+  }
+
+  // Handle cues across various naming conventions
+  const rawCues = Array.isArray(record.cues)
+    ? record.cues
+    : (Array.isArray(record.visualCues)
+      ? record.visualCues
+      : (Array.isArray(record.visual_cues)
+        ? record.visual_cues
+        : (Array.isArray(record.shots)
+          ? record.shots
+          : (Array.isArray(record.images)
+            ? record.images
+            : (Array.isArray(record.frames)
+              ? record.frames
+              : [])))));
+
+  let rawCharacters: unknown[] = [];
+  if (Array.isArray(record.characters)) {
+    rawCharacters = record.characters;
+  } else if (record.character && typeof record.character === "object" && !Array.isArray(record.character)) {
+    rawCharacters = [record.character];
+  }
+
   return {
-    scenes: Array.isArray(record.scenes) ? record.scenes.map(normalizeScene) : [],
-    cues: Array.isArray(record.cues) ? record.cues.map(normalizeCue) : (Array.isArray(record.visualCues) ? record.visualCues.map(normalizeCue) : []),
+    scenes,
+    cues: rawCues.map(normalizeCue),
     choices: Array.isArray(record.choices) ? record.choices.map(normalizeChoice) : [],
-    characters: Array.isArray(record.characters) ? record.characters.map(normalizeCharacter) : []
+    characters: rawCharacters.map(normalizeCharacter)
   };
 }
 
@@ -335,6 +393,30 @@ function fallbackPlanner(input: PlanTurnInput, paragraphCount: number): z.infer<
   const previous = input.previousScene;
   const location = previous?.environment.location ?? "the current setting";
   const description = previous?.environment.description ?? "A coherent visual-novel environment inferred from the response.";
+
+  // Distribute cues across paragraphs up to maxImagesPerTurn if paragraphCount > 0
+  const targetCount = input.config.maxImagesPerTurn > 0
+    ? Math.max(1, Math.min(input.config.maxImagesPerTurn, paragraphCount))
+    : (paragraphCount > 0 ? 1 : 0);
+
+  const cues: Array<{ paragraphIndex: number; action: null; expression: null; promptDelta: string }> = [];
+  if (paragraphCount > 0 && targetCount > 0) {
+    const step = Math.max(1, Math.floor(paragraphCount / targetCount));
+    const seen = new Set<number>();
+    for (let i = 0; i < targetCount; i++) {
+      const pIdx = Math.min(i * step, paragraphCount - 1);
+      if (!seen.has(pIdx)) {
+        seen.add(pIdx);
+        cues.push({
+          paragraphIndex: pIdx,
+          action: null,
+          expression: null,
+          promptDelta: input.content.slice(0, 900)
+        });
+      }
+    }
+  }
+
   return {
     scenes: [{
       startParagraph: 0,
@@ -359,9 +441,7 @@ function fallbackPlanner(input: PlanTurnInput, paragraphCount: number): z.infer<
       basePrompt: previous?.basePrompt ?? `${description}, ${location}`,
       compositionLock: previous?.compositionLock ?? "Speaking character centered with the lower quarter clear for dialogue."
     }],
-    cues: paragraphCount > 0
-      ? [{ paragraphIndex: 0, action: null, expression: null, promptDelta: input.content.slice(0, 900) }]
-      : [],
+    cues,
     choices: [],
     characters: []
   };
