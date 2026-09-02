@@ -304,8 +304,38 @@ button[data-vn-badge]:active {
   white-space: pre-wrap;
 }
 
-[data-vn-dialogue-text] font[color] {
+[data-vn-dialogue-text] em,
+[data-vn-dialogue-text] i {
+  font-style: italic;
+}
+
+[data-vn-dialogue-text] strong,
+[data-vn-dialogue-text] b {
+  font-weight: 700;
+}
+
+[data-vn-dialogue-text] code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.9em;
+  padding: 0.1em 0.35em;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 0.25rem;
+}
+
+[data-vn-dialogue-text] del,
+[data-vn-dialogue-text] s {
+  text-decoration: line-through;
+}
+
+[data-vn-dialogue-text] mark {
+  background: rgba(255, 220, 100, 0.35);
   color: inherit;
+  padding: 0.1em 0.25em;
+  border-radius: 0.2rem;
+}
+
+[data-vn-dialogue-text] u {
+  text-decoration: underline;
 }
 
 [data-vn-dialogue-text] .vn-transmission {

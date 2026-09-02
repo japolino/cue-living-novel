@@ -38,3 +38,54 @@ test("escapes unsafe HTML script tags", () => {
   assert.doesNotMatch(result, /<script>/);
   assert.match(result, /&lt;script&gt;/);
 });
+
+test("renders complex nested markdown and underscore formatting", () => {
+  assert.equal(
+    formatDialogueText("**bold and *italic* inside**"),
+    "<strong>bold and <em>italic</em> inside</strong>"
+  );
+  assert.equal(
+    formatDialogueText("*italic and **bold** inside*"),
+    "<em>italic and <strong>bold</strong> inside</em>"
+  );
+  assert.equal(
+    formatDialogueText("***triple asterisk***"),
+    "<strong><em>triple asterisk</em></strong>"
+  );
+  assert.equal(
+    formatDialogueText("___triple underscore___"),
+    "<strong><em>triple underscore</em></strong>"
+  );
+  assert.equal(
+    formatDialogueText("This is _italic_ and __bold__ with underscores."),
+    "This is <em>italic</em> and <strong>bold</strong> with underscores."
+  );
+  assert.equal(
+    formatDialogueText("variable_name_with_underscores"),
+    "variable_name_with_underscores"
+  );
+  assert.equal(
+    formatDialogueText("`inline code` and ~~strikethrough~~"),
+    "<code>inline code</code> and <del>strikethrough</del>"
+  );
+});
+
+test("renders font tags with multiple attributes and preserves quotes", () => {
+  const input = '<font color="#4a7c59" style="font-weight:bold">"Taking the bait?"</font> you murmur. <font color="#e05275" style="letter-spacing:0.03em">"Maybe I am."</font>';
+  const result = formatDialogueText(input);
+  assert.match(result, /<font color="#4a7c59" style="font-weight:bold">"Taking the bait\?"<\/font>/);
+  assert.match(result, /<font color="#e05275" style="letter-spacing:0.03em">"Maybe I am\."<\/font>/);
+});
+
+test("renders font tags wrapping markdown italic", () => {
+  const input = '<font color="#e05275">*Look at you trying to sound so collected,*</font>';
+  const result = formatDialogueText(input);
+  assert.equal(result, '<font color="#e05275"><em>Look at you trying to sound so collected,</em></font>');
+});
+
+test("strips dangerous attributes like onmouseover from font or span", () => {
+  const input = '<font onmouseover="alert(1)" color="red">danger</font>';
+  const result = formatDialogueText(input);
+  assert.doesNotMatch(result, /onmouseover/);
+  assert.match(result, /<font color="red">danger<\/font>/);
+});

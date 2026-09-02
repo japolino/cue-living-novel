@@ -43,44 +43,146 @@ export function parseCustomRegexRules(input: string | undefined): CustomRegexRul
 }
 
 /**
- * Escape HTML special characters for safe rendering before applying allowed formatting.
+ * Escape HTML special characters (&, <, >) for safe rendering.
+ * Quotes (' and ") do not have syntactic meaning in HTML text nodes
+ * and are preserved so dialogue quotes remain natural.
  */
 function escapeHtml(text: string): string {
   return text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
+    .replace(/>/g, "&gt;");
 }
 
 /**
- * Allow safe HTML tags after markdown and regex processing.
- * Tags permitted: <font color="...">, <span style="...">, <em>, <strong>, <b>, <i>, <del>, <s>, <ruby>, <rt>, <mark>.
+ * Parse standard Markdown syntax:
+ * - Bold + Italic: ***text***, ___text___, **_text_**, __*text*__
+ * - Bold: **text**, __text__
+ * - Italic: *text*, _text_
+ * - Strikethrough: ~~text~~
+ * - Inline code: `text`
  */
-function sanitizeAllowedHtml(html: string): string {
-  // Re-enable safe tags that were either escaped or introduced by regex / markdown
-  return html
-    // <font color="..."> ... </font>
-    .replace(/&lt;font\s+color=(?:&quot;|")(#?[a-zA-Z0-9_-]+)(?:&quot;|")&gt;([\s\S]*?)&lt;\/font&gt;/gi, '<font color="$1">$2</font>')
-    // <span class="..."> or <span style="...">
-    .replace(/&lt;span\s+(class|style)=(?:&quot;|")([^"&]+)(?:&quot;|")&gt;([\s\S]*?)&lt;\/span&gt;/gi, '<span $1="$2">$3</span>')
-    // <em ...> ... </em>
-    .replace(/&lt;em(?:\s+class=(?:&quot;|")([^"&]+)(?:&quot;|"))?&gt;([\s\S]*?)&lt;\/em&gt;/gi, (_m, cls, body) => cls ? `<em class="${cls}">${body}</em>` : `<em>${body}</em>`)
-    // <strong> ... </strong>
-    .replace(/&lt;strong&gt;([\s\S]*?)&lt;\/strong&gt;/gi, "<strong>$1</strong>")
-    // <b> ... </b>
-    .replace(/&lt;b&gt;([\s\S]*?)&lt;\/b&gt;/gi, "<b>$1</b>")
-    // <i> ... </i>
-    .replace(/&lt;i&gt;([\s\S]*?)&lt;\/i&gt;/gi, "<i>$1</i>");
+function parseMarkdown(text: string): string {
+  // 1. Triple formatting (bold + italic)
+  let md = text
+    .replace(/\*\*\*([^\s*](?:[\s\S]*?[^\s*])?)\*\*\*/g, "<strong><em>$1</em></strong>")
+    .replace(/(^|[^\w])___([^\s_](?:[\s\S]*?[^\s_])?)___(?=[^\w]|$)/g, "$1<strong><em>$2</em></strong>")
+    .replace(/\*\*_(.+?)_\*\*/g, "<strong><em>$1</em></strong>")
+    .replace(/__\*(.+?)\*__/g, "<strong><em>$1</em></strong>");
+
+  // 2. Bold (**text** or __text__)
+  md = md
+    .replace(/\*\*([^\s*](?:[\s\S]*?[^\s*])?)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[^\w])__([^\s_](?:[\s\S]*?[^\s_])?)__(?=[^\w]|$)/g, "$1<strong>$2</strong>");
+
+  // 3. Italic (*text* or _text_)
+  md = md
+    .replace(/\*([^\s*](?:[\s\S]*?[^\s*])?)\*/g, "<em>$1</em>")
+    .replace(/(^|[^\w])_([^\s_](?:[\s\S]*?[^\s_])?)_(?=[^\w]|$)/g, "$1<em>$2</em>");
+
+  // 4. Strikethrough (~~text~~)
+  md = md.replace(/~~([^\s~](?:[\s\S]*?[^\s~])?)~~/g, "<del>$1</del>");
+
+  // 5. Inline code (`text`)
+  md = md.replace(/`([^`]+)`/g, "<code>$1</code>");
+
+  return md;
+}
+
+const ALLOWED_TAGS = new Set([
+  "font",
+  "span",
+  "em",
+  "strong",
+  "b",
+  "i",
+  "del",
+  "s",
+  "u",
+  "mark",
+  "ruby",
+  "rt",
+  "rp",
+  "code",
+  "small",
+  "sub",
+  "sup",
+  "br",
+]);
+
+const ALLOWED_ATTRS: Record<string, Set<string>> = {
+  font: new Set(["color", "style", "face", "size"]),
+  span: new Set(["class", "style"]),
+  em: new Set(["class", "style"]),
+  strong: new Set(["class", "style"]),
+  b: new Set(["class", "style"]),
+  i: new Set(["class", "style"]),
+  code: new Set(["class", "style"]),
+  mark: new Set(["class", "style"]),
+};
+
+/**
+ * Safely restore allowed HTML tags and sanitize their attributes.
+ * Prevents XSS (scripts, event handlers, javascript: URIs, untrusted tags).
+ */
+function sanitizeAndRestoreAllowedHtml(escapedText: string): string {
+  // Matches escaped tags: &lt;tag-name ...&gt; or &lt;/tag-name&gt;
+  return escapedText.replace(/&lt;(\/?[a-zA-Z][a-zA-Z0-9]*)(.*?)&gt;/gs, (fullMatch, rawTag: string, rawAttrs: string) => {
+    const isClosing = rawTag.startsWith("/");
+    const tagName = (isClosing ? rawTag.slice(1) : rawTag).toLowerCase();
+
+    if (!ALLOWED_TAGS.has(tagName)) {
+      return fullMatch;
+    }
+
+    if (isClosing) {
+      return `</${tagName}>`;
+    }
+
+    if (tagName === "br") {
+      return "<br>";
+    }
+
+    const allowedAttrSet = ALLOWED_ATTRS[tagName];
+    if (!allowedAttrSet) {
+      return `<${tagName}>`;
+    }
+
+    // Extract attributes: name="val", name='val', name=val
+    const attrRegex = /([a-zA-Z_-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|(\S+))/g;
+    const safeAttrs: string[] = [];
+    let match: RegExpExecArray | null;
+
+    while ((match = attrRegex.exec(rawAttrs)) !== null) {
+      const attrName = match[1]!.toLowerCase();
+      if (!allowedAttrSet.has(attrName)) continue;
+
+      let val = match[2] ?? match[3] ?? match[4] ?? "";
+
+      if (attrName === "style") {
+        // Disallow dangerous CSS expressions or url imports
+        if (/javascript:|expression\(|url\(|behavior:|vbscript:/i.test(val)) {
+          continue;
+        }
+        val = val.replace(/"/g, "&quot;");
+      } else if (attrName === "class" || attrName === "face" || attrName === "color" || attrName === "size") {
+        val = val.replace(/[^a-zA-Z0-9_#.,\s-]/g, "");
+      }
+
+      safeAttrs.push(`${attrName}="${val}"`);
+    }
+
+    const attrStr = safeAttrs.length > 0 ? ` ${safeAttrs.join(" ")}` : "";
+    return `<${tagName}${attrStr}>`;
+  });
 }
 
 /**
  * Format raw paragraph text for rich display:
  * 1. Strip inline image tags (<img="name">, {{img::name}})
  * 2. Apply user custom display regex rules
- * 3. Escape HTML
- * 4. Parse markdown (**bold**, *italic*, ~~strike~~, `code`)
+ * 3. Escape HTML special characters
+ * 4. Parse markdown syntax (**bold**, *italic*, _italic_, ~~strike~~, `code`)
  * 5. Sanitize and allow safe HTML tags (<font>, <span>, <em>, etc.)
  */
 export function formatDialogueText(
@@ -108,17 +210,10 @@ export function formatDialogueText(
   let formatted = escapeHtml(text);
 
   // 4. Parse markdown syntax
-  // Bold: **text**
-  formatted = formatted.replace(/\*\*([^\*]+)\*\*/g, "<strong>$1</strong>");
-  // Italic: *text*
-  formatted = formatted.replace(/\*([^\*]+)\*/g, "<em>$1</em>");
-  // Strikethrough: ~~text~~
-  formatted = formatted.replace(/~~([^~]+)~~/g, "<del>$1</del>");
-  // Inline code: `text`
-  formatted = formatted.replace(/`([^`]+)`/g, "<code>$1</code>");
+  formatted = parseMarkdown(formatted);
 
   // 5. Restore sanitized safe tags
-  formatted = sanitizeAllowedHtml(formatted);
+  formatted = sanitizeAndRestoreAllowedHtml(formatted);
 
   return formatted;
 }
