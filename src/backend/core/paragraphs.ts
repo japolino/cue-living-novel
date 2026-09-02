@@ -79,13 +79,14 @@ function stripIgnoredTags(content: string, tags: readonly string[]): string {
   return output;
 }
 
+const INLINE_IMG_REGEX = /<img\s*=\s*["']([^"']+)["']\s*\/?>|<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["'][^>]*?\/?>|\{\{img::([^\}]+)\}\}/gi;
+
 /**
  * Extract inline card asset references like `<img="asset_name">`,
  * `<img src="asset_name">`, or `{{img::asset_name}}`.
  */
 export function extractInlineCardImages(text: string): { text: string; assetNames: string[] } {
   const assetNames: string[] = [];
-  const INLINE_IMG_REGEX = /<img\s*=\s*["']([^"']+)["']\s*\/?>|<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["'][^>]*?\/?>|\{\{img::([^\}]+)\}\}/gi;
   const cleaned = text.replace(INLINE_IMG_REGEX, (_match, p1, p2, p3) => {
     const name = (p1 || p2 || p3 || "").trim();
     if (name) assetNames.push(name);
@@ -93,9 +94,47 @@ export function extractInlineCardImages(text: string): { text: string; assetName
   });
   return { text: cleaned, assetNames };
 }
+
+/**
+ * Extract inline card asset references along with their target paragraphIndex in the plan.
+ */
+export function extractInlineCardImagesWithParagraphs(
+  content: string,
+  paragraphs: readonly Paragraph[],
+): Array<{ name: string; paragraphIndex: number }> {
+  const blocks = splitBlocks(content);
+  const sourceToPara = new Map<number, number>();
+  for (const p of paragraphs) {
+    sourceToPara.set(p.sourceIndex, p.index);
+  }
+
+  const results: Array<{ name: string; paragraphIndex: number }> = [];
+  let lastKnownParaIndex = 0;
+
+  for (const block of blocks) {
+    if (sourceToPara.has(block.sourceIndex)) {
+      lastKnownParaIndex = sourceToPara.get(block.sourceIndex)!;
+    }
+    const pIndex = lastKnownParaIndex;
+
+    const matches = block.text.matchAll(INLINE_IMG_REGEX);
+    for (const match of matches) {
+      const name = (match[1] || match[2] || match[3] || "").trim();
+      if (name) {
+        results.push({ name, paragraphIndex: pIndex });
+      }
+    }
+  }
+
+  return results;
+}
+
 function cleanNarrativeBlock(block: string): string {
-  // First strip inline card expression tags so they don't count as narrative lines
-  const { text: withoutInlineImages } = extractInlineCardImages(block);
+  // Strip caption pipes like | <"😏:caption"> or | <'caption'>
+  let text = block.replace(/\|\s*<[^>]+>/g, "");
+
+  // Strip inline card expression tags so they don't count as narrative lines
+  const { text: withoutInlineImages } = extractInlineCardImages(text);
   return withoutInlineImages
     .replace(/CARDDATA:.*$/gim, "")
     .replace(/<Update Log\b[\s\S]*?<\/Update Log>/gi, "")
@@ -103,6 +142,7 @@ function cleanNarrativeBlock(block: string): string {
     .filter((line) => {
       const trimmed = line.trim();
       if (!trimmed) return false;
+      if (/^\s*\|\s*$/.test(trimmed)) return false;
       return !/^\[(?:Date|FLOOR|RESERVEDFLOOR)\s*:/i.test(trimmed)
         && !/^<\s*(?:suggestion|scene\s+seed=|check)\b/i.test(trimmed);
     })
