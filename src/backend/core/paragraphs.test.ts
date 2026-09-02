@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { prepareNarrative } from "./paragraphs.js";
+import { extractInlineCardImages, prepareNarrative } from "./paragraphs.js";
 
 describe("narrative preparation", () => {
   test("keeps paragraph source indexes after removing metadata", () => {
@@ -39,5 +39,43 @@ describe("narrative preparation", () => {
     expect(first.choices.map(({ label }) => label)).toEqual(["Yes", "No", "Yes"]);
     expect(new Set(first.choices.map(({ id }) => id))).toHaveLength(3);
     expect(first.choices.map(({ id }) => id)).toEqual(second.choices.map(({ id }) => id));
+  });
+
+  test("extractInlineCardImages extracts asset names and strips tags", () => {
+    const raw = 'Look at this: <img="neeko_excited"> and {{img::neeko_smug}} with <img src="neeko_neutral">';
+    const extracted = extractInlineCardImages(raw);
+    expect(extracted.assetNames).toEqual(["neeko_excited", "neeko_smug", "neeko_neutral"]);
+    expect(extracted.text).toBe("Look at this:  and  with ");
+  });
+
+  test("prepareNarrative strips inline card images from paragraphs", () => {
+    const content = 'Neeko says hello! <img="neeko_wave">\n\nShe winks. {{img::neeko_wink}}';
+    const prepared = prepareNarrative(content);
+    expect(prepared.paragraphs).toEqual([
+      { index: 0, sourceIndex: 0, text: "Neeko says hello!" },
+      { index: 1, sourceIndex: 1, text: "She winks." },
+    ]);
+  });
+
+  test("prepareNarrative strips custom ignoredTags including bracket syntax", () => {
+    const content = [
+      "Before status window.",
+      "",
+      "<status>",
+      "HP: 100/100",
+      "MP: 50/50",
+      "</status>",
+      "",
+      "[Status]",
+      "Level 5 Adventurer",
+      "[/Status]",
+      "",
+      "After status window.",
+    ].join("\n");
+    const prepared = prepareNarrative(content, { ignoredTags: ["status"] });
+    expect(prepared.paragraphs).toEqual([
+      { index: 0, sourceIndex: 0, text: "Before status window." },
+      { index: 1, sourceIndex: 3, text: "After status window." },
+    ]);
   });
 });

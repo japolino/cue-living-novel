@@ -13,6 +13,7 @@ import type { FrontendRequest, AssetView, TurnView } from "../../protocol.js";
 import { isFrontendRequest } from "../../protocol.js";
 import { compareTurnKeys } from "../core/guards.js";
 import { PlanningQueue, isAbortError } from "../core/planning-queue.js";
+import { extractInlineCardImages } from "../core/paragraphs.js";
 import { createAssetJobs, generateAssets } from "./images.js";
 import { fingerprintForMessage, planTurn } from "./planner.js";
 import { loadConnectionCatalog } from "./connections.js";
@@ -215,7 +216,82 @@ async function processAssistantMessage(
     if (operation.controller.signal.aborted) return;
     await saveSingleCharacterState(spindle, chatId, result.singleCharacter, userId);
     await mergeCharacterAppearanceFromState(spindle, result.singleCharacter, userId);
-    const jobs = config.generateImages ? createAssetJobs(result.plan, config) : [];
+    let jobs: StoredTurnRecord["jobs"] = [];
+    if (config.useNativeCardImages) {
+      // Resolve native card images / expressions attached to the character
+      try {
+        const now = new Date().toISOString();
+        const { assetNames } = extractInlineCardImages(content);
+        const charRes = await spindle.characters.list(userId ? { userId } : undefined);
+        const characters = Array.isArray(charRes) ? charRes : charRes.data;
+        const char = characters.find((c) => c.name.toLowerCase() === (message.name || "").toLowerCase()) || characters[0];
+        if (char) {
+          const imgRes = await spindle.images.list({ characterId: char.id, ...(userId ? { userId } : {}) });
+          const charImages = Array.isArray(imgRes) ? imgRes : imgRes.data;
+          const lumirealmExt = char.extensions?.["lumirealm"] as Record<string, unknown> | undefined;
+          const assetIndex = (lumirealmExt?.["asset_index"] || lumirealmExt?.["emotion_index"] || {}) as Record<string, string>;
+
+          // Map found asset names to jobs or fallback to character avatar
+          for (const [idx, name] of assetNames.entries()) {
+            const normalizedName = name.toLowerCase();
+            const matchedImg = charImages.find((img) =>
+              img.original_filename?.toLowerCase().includes(normalizedName) ||
+              img.id === assetIndex[name] ||
+              img.id === assetIndex[normalizedName]
+            );
+            if (matchedImg) {
+              jobs.push({
+                jobId: `native-${result.plan.key.sourceFingerprint.slice(0, 8)}-${idx}`,
+                ownerTurnKey: result.plan.key,
+                sceneId: result.plan.scenes[0]?.sceneId ?? "scene-0",
+                sceneRevision: 1,
+                paragraphIndex: 0,
+                promptFingerprint: result.plan.key.sourceFingerprint,
+                provider: "native_card",
+                priority: "visible",
+                status: "browser_ready",
+                imageId: matchedImg.id,
+                imageUrl: matchedImg.url,
+                error: null,
+                queuedAt: now,
+                startedAt: now,
+                generatedAt: now,
+                readyAt: now,
+                finishedAt: now,
+              });
+            }
+          }
+          if (jobs.length === 0 && char.image_id) {
+            const avatarImg = charImages.find((img) => img.id === char.image_id);
+            if (avatarImg) {
+              jobs.push({
+                jobId: `native-${result.plan.key.sourceFingerprint.slice(0, 8)}-avatar`,
+                ownerTurnKey: result.plan.key,
+                sceneId: result.plan.scenes[0]?.sceneId ?? "scene-0",
+                sceneRevision: 1,
+                paragraphIndex: 0,
+                promptFingerprint: result.plan.key.sourceFingerprint,
+                provider: "native_card",
+                priority: "visible",
+                status: "browser_ready",
+                imageId: avatarImg.id,
+                imageUrl: avatarImg.url,
+                error: null,
+                queuedAt: now,
+                startedAt: now,
+                generatedAt: now,
+                readyAt: now,
+                finishedAt: now,
+              });
+            }
+          }
+        }
+      } catch (err) {
+        if (config.debugLogging) spindle.log.warn(`Native card image resolution failed: ${errorText(err)}`);
+      }
+    } else if (config.generateImages) {
+      jobs = createAssetJobs(result.plan, config);
+    }
     const record: StoredTurnRecord = {
       schemaVersion: 1,
       speaker: message.name || "Narrator",
@@ -228,12 +304,14 @@ async function processAssistantMessage(
     activeTurnKeys.set(key, record.plan.key);
     await persistActiveTurn(spindle, record, path, userId);
     spindle.sendToFrontend({ type: "vn_turn", turn: turnView(record) }, userId);
-    void startAssets(spindle, record, path, userId).catch((error) => {
-      if (!isAbortError(error)) {
-        spindle.log.error(`Visual novel asset pipeline failed: ${errorText(error)}`);
-        spindle.sendToFrontend({ type: "vn_error", chatId, operation: "generate_assets", error: errorText(error) }, userId);
-      }
-    });
+    if (!config.useNativeCardImages && config.generateImages) {
+      void startAssets(spindle, record, path, userId).catch((error) => {
+        if (!isAbortError(error)) {
+          spindle.log.error(`Visual novel asset pipeline failed: ${errorText(error)}`);
+          spindle.sendToFrontend({ type: "vn_error", chatId, operation: "generate_assets", error: errorText(error) }, userId);
+        }
+      });
+    }
   }, dedupeId);
 
   try {

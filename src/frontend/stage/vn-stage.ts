@@ -1,7 +1,14 @@
 import {
+  formatDialogueText,
+  parseCustomRegexRules,
+  type CustomRegexRule,
+} from "./rich-text.js";
+import {
   createInitialVnStageState,
   reduceVnStage,
   selectVnStageView,
+  type VnActivity,
+  type VnAssetProgress,
   type VnChoice,
   type VnPhase,
   type VnSceneImage,
@@ -33,6 +40,8 @@ export interface VnStageCallbacks {
   onChoice?: (choice: VnChoice) => void | Promise<void>;
   onSubmit?: (text: string) => void | Promise<void>;
   onExit?: () => void;
+  onReroll?: () => void | Promise<void>;
+  onSwipe?: () => void | Promise<void>;
 }
 
 export interface VnStageOptions extends VnStageCallbacks {
@@ -106,15 +115,85 @@ const isInteractiveTarget = (target: EventTarget | null): boolean =>
 const phaseLoadingLabel = (phase: VnPhase): string | null => {
   switch (phase) {
     case "waiting-for-response":
-      return "Waiting for response";
+      return "Generating message...";
     case "planning":
-      return "Planning scene";
+      return "Planning scene...";
     case "submitting":
-      return "Sending response";
+      return "Sending response...";
     default:
       return null;
   }
 };
+
+function createBadgeIconSvg(icon: "spinner" | "image" | "check" | "alert" | "reroll"): SVGElement {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("width", "16");
+  svg.setAttribute("height", "16");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("data-vn-badge-icon", icon);
+
+  switch (icon) {
+    case "spinner": {
+      svg.setAttribute("fill", "none");
+      svg.innerHTML = `
+        <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2.5" opacity="0.25"/>
+        <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="24 36"/>
+      `;
+      break;
+    }
+    case "image": {
+      svg.setAttribute("fill", "none");
+      svg.setAttribute("stroke", "currentColor");
+      svg.setAttribute("stroke-width", "2");
+      svg.setAttribute("stroke-linecap", "round");
+      svg.setAttribute("stroke-linejoin", "round");
+      svg.innerHTML = `
+        <rect x="3" y="3" width="18" height="18" rx="3"/>
+        <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"/>
+        <path d="m21 15-5-5L5 21"/>
+      `;
+      break;
+    }
+    case "check": {
+      svg.setAttribute("fill", "none");
+      svg.setAttribute("stroke", "currentColor");
+      svg.setAttribute("stroke-width", "2.5");
+      svg.setAttribute("stroke-linecap", "round");
+      svg.setAttribute("stroke-linejoin", "round");
+      svg.innerHTML = `<path d="M20 6 9 17l-5-5"/>`;
+      break;
+    }
+    case "alert": {
+      svg.setAttribute("fill", "none");
+      svg.setAttribute("stroke", "currentColor");
+      svg.setAttribute("stroke-width", "2");
+      svg.setAttribute("stroke-linecap", "round");
+      svg.setAttribute("stroke-linejoin", "round");
+      svg.innerHTML = `
+        <circle cx="12" cy="12" r="10"/>
+        <line x1="12" y1="8" x2="12" y2="12"/>
+        <line x1="12" y1="16" x2="12.01" y2="16"/>
+      `;
+      break;
+    }
+    case "reroll": {
+      svg.setAttribute("fill", "none");
+      svg.setAttribute("stroke", "currentColor");
+      svg.setAttribute("stroke-width", "2");
+      svg.setAttribute("stroke-linecap", "round");
+      svg.setAttribute("stroke-linejoin", "round");
+      svg.innerHTML = `
+        <path d="M3 12a9 9 0 0 1 15-6.7L21 8"/>
+        <path d="M21 3v5h-5"/>
+        <path d="M21 12a9 9 0 0 1-15 6.7L3 16"/>
+        <path d="M3 21v-5h5"/>
+      `;
+      break;
+    }
+  }
+  return svg;
+}
 
 const errorMessage = (error: unknown): string =>
   error instanceof Error && error.message.trim()
@@ -148,6 +227,7 @@ export class VnStage {
   private readonly createImage: VnImageFactory | undefined;
   private imageRequestSequence = 0;
   private destroyed = false;
+  private customRegexRules: CustomRegexRule[] = [];
 
   constructor(options: VnStageOptions) {
     this.state = options.initialState ?? createInitialVnStageState();
@@ -245,6 +325,11 @@ export class VnStage {
     applyVnUserCss(this.userStyle, css);
   }
 
+  setDisplayRegexRules(rulesText: string): void {
+    this.customRegexRules = parseCustomRegexRules(rulesText);
+    this.renderDialogueContent();
+  }
+
   setSceneImageFit(fit: VisualNovelSceneImageFit): void {
     this.sceneImage.dataset.vnSceneImageFit = fit;
   }
@@ -271,10 +356,41 @@ export class VnStage {
     this.dispatch({ type: "set-phase", phase });
   }
 
-  setActivity(label: string | null, kind: "loading" | "error" = "loading"): void {
+  setActivity(
+    label: string | null,
+    kind: "loading" | "error" | "success" | "warning" | "reroll" | "prompt" = "loading",
+  ): void {
     this.dispatch({
       type: "set-activity",
       activity: label ? { kind, label } : null,
+    });
+  }
+
+  setAssetProgress(progress: VnAssetProgress | null): void {
+    this.dispatch({
+      type: "set-asset-progress",
+      progress,
+    });
+  }
+
+  setTurnFinished(finished: boolean): void {
+    this.dispatch({
+      type: "set-turn-finished",
+      finished,
+    });
+  }
+
+  setNoValidOutput(noValidOutput: boolean): void {
+    this.dispatch({
+      type: "set-no-valid-output",
+      noValidOutput,
+    });
+  }
+
+  setRerollPrompt(show: boolean): void {
+    this.dispatch({
+      type: "set-reroll-prompt",
+      show,
     });
   }
 
@@ -435,10 +551,7 @@ export class VnStage {
 
     this.narrative.hidden = view.paragraph === null;
     this.emptyState.hidden = view.paragraph !== null || this.state.phase !== "idle";
-    const paragraphText = view.paragraph?.text ?? "";
-    if (this.dialogueText.textContent !== paragraphText) {
-      this.dialogueText.textContent = paragraphText;
-    }
+    this.renderDialogueContent();
     this.dialogueText.dataset.vnParagraphId = view.paragraph?.id ?? "";
     this.dialogueText.dataset.vnParagraphIndex = String(
       view.paragraph ? this.state.currentParagraphIndex : -1,
@@ -467,21 +580,113 @@ export class VnStage {
     }
   }
 
+  private renderDialogueContent(): void {
+    const view = selectVnStageView(this.state);
+    const paragraphText = view.paragraph?.text ?? "";
+    const formatted = formatDialogueText(paragraphText, this.customRegexRules);
+    if (this.dialogueText.innerHTML !== formatted) {
+      this.dialogueText.innerHTML = formatted;
+    }
+  }
+
   private renderStatus(): void {
-    const badges: Array<{ kind: "loading" | "error"; label: string }> = [];
+    type BadgeSpec = {
+      kind: "loading" | "error" | "image" | "success" | "warning" | "reroll";
+      label: string;
+      icon?: "spinner" | "image" | "check" | "alert" | "reroll";
+      interactive?: boolean;
+      action?: () => void;
+    };
+
+    const badges: BadgeSpec[] = [];
     const phaseLabel = phaseLoadingLabel(this.state.phase);
-    if (phaseLabel) badges.push({ kind: "loading", label: phaseLabel });
-    if (this.state.pendingImage) badges.push({ kind: "loading", label: "Loading scene image" });
-    if (this.state.activity) badges.push(this.state.activity);
-    if (this.state.imageError) badges.push({ kind: "error", label: this.state.imageError });
-    if (this.state.error) badges.push({ kind: "error", label: this.state.error });
+    if (phaseLabel) {
+      badges.push({ kind: "loading", label: phaseLabel, icon: "spinner" });
+    }
+
+    if (this.state.assetProgress && this.state.assetProgress.total > 0) {
+      badges.push({
+        kind: "image",
+        label: `Generating images ${this.state.assetProgress.current}/${this.state.assetProgress.total}`,
+        icon: "image",
+      });
+    } else if (this.state.pendingImage) {
+      badges.push({ kind: "loading", label: "Loading scene image", icon: "spinner" });
+    }
+
+    if (this.state.activity) {
+      const actKind = this.state.activity.kind;
+      const icon =
+        actKind === "error"
+          ? "alert"
+          : actKind === "success"
+            ? "check"
+            : actKind === "warning"
+              ? "alert"
+              : actKind === "reroll" || actKind === "prompt"
+                ? "reroll"
+                : "spinner";
+      badges.push({
+        kind: actKind === "prompt" ? "reroll" : actKind,
+        label: this.state.activity.label,
+        icon,
+      });
+    }
+
+    if (this.state.turnFinished) {
+      badges.push({ kind: "success", label: "Turn finished", icon: "check" });
+    }
+
+    if (this.state.noValidOutput) {
+      badges.push({ kind: "warning", label: "No valid output produced", icon: "alert" });
+    }
+
+    if (this.state.showRerollPrompt) {
+      const handleReroll = () => {
+        if (this.callbacks.onReroll) {
+          void this.callbacks.onReroll();
+        } else if (this.callbacks.onSwipe) {
+          void this.callbacks.onSwipe();
+        }
+      };
+      badges.push({
+        kind: "reroll",
+        label: "Swipe? (reroll the message)",
+        icon: "reroll",
+        interactive: true,
+        action: handleReroll,
+      });
+    }
+
+    if (this.state.imageError) {
+      badges.push({ kind: "error", label: this.state.imageError, icon: "alert" });
+    }
+    if (this.state.error) {
+      badges.push({ kind: "error", label: this.state.error, icon: "alert" });
+    }
 
     this.statusStack.replaceChildren(
-      ...badges.map(({ kind, label }) => {
-        const badge = document.createElement("span");
+      ...badges.map(({ kind, label, icon, interactive, action }) => {
+        const badge = document.createElement(interactive ? "button" : "span");
+        if (interactive) {
+          (badge as HTMLButtonElement).type = "button";
+          badge.setAttribute("data-vn-badge-interactive", "true");
+          if (action) {
+            badge.addEventListener("click", (e) => {
+              e.stopPropagation();
+              action();
+            });
+          }
+        }
         badge.setAttribute("data-vn-badge", "");
         badge.dataset.vnBadgeKind = kind;
-        badge.textContent = label;
+        if (icon) {
+          badge.appendChild(createBadgeIconSvg(icon));
+        }
+        const textSpan = document.createElement("span");
+        textSpan.textContent = label;
+        badge.appendChild(textSpan);
+
         if (kind === "error") badge.setAttribute("role", "alert");
         return badge;
       }),

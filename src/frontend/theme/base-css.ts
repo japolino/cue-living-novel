@@ -137,18 +137,59 @@ textarea {
 [data-vn-badge] {
   display: inline-flex;
   align-items: center;
+  gap: 0.45rem;
   min-height: 2rem;
-  padding: 0.38rem 0.7rem;
+  padding: 0.38rem 0.75rem;
   border: 1px solid rgba(255, 255, 255, 0.28);
   border-radius: 999px;
   background: rgba(8, 9, 15, 0.78);
   color: var(--vn-text);
   font-size: 0.82rem;
+  font-weight: 500;
+  line-height: 1.2;
   box-shadow: 0 0.2rem 0.8rem rgba(0, 0, 0, 0.25);
   backdrop-filter: blur(0.7rem);
+  user-select: none;
+  transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease, border-color 160ms ease;
 }
 
-[data-vn-badge-kind="loading"]::before {
+[data-vn-badge-icon] {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 0.95rem;
+  height: 0.95rem;
+  vertical-align: middle;
+}
+
+[data-vn-badge-icon="spinner"] {
+  color: var(--vn-accent);
+  animation: vn-spin 800ms linear infinite;
+}
+
+[data-vn-badge-icon="image"] {
+  color: #93c5fd;
+  animation: vn-pulse 1.35s ease-in-out infinite;
+}
+
+[data-vn-badge-icon="check"] {
+  color: #86efac;
+}
+
+[data-vn-badge-icon="alert"] {
+  color: #fde047;
+}
+
+[data-vn-badge-icon="reroll"] {
+  color: var(--vn-accent);
+  transition: transform 300ms ease;
+}
+
+[data-vn-badge-kind="loading"] {
+  border-color: rgba(216, 168, 255, 0.38);
+  background: linear-gradient(135deg, rgba(25, 18, 38, 0.88), rgba(8, 9, 15, 0.92));
+}
+
+[data-vn-badge-kind="loading"]:not(:has([data-vn-badge-icon]))::before {
   width: 0.72rem;
   height: 0.72rem;
   margin-right: 0.45rem;
@@ -159,9 +200,60 @@ textarea {
   animation: vn-spin 800ms linear infinite;
 }
 
+[data-vn-badge-kind="image"] {
+  border-color: rgba(147, 197, 253, 0.42);
+  background: linear-gradient(135deg, rgba(16, 26, 44, 0.88), rgba(8, 12, 20, 0.92));
+  color: #dbeafe;
+}
+
+[data-vn-badge-kind="success"] {
+  border-color: rgba(74, 222, 128, 0.45);
+  background: linear-gradient(135deg, rgba(14, 34, 22, 0.88), rgba(6, 18, 12, 0.92));
+  color: #bbf7d0;
+}
+
+[data-vn-badge-kind="warning"] {
+  border-color: rgba(251, 191, 36, 0.5);
+  background: linear-gradient(135deg, rgba(38, 28, 10, 0.88), rgba(20, 14, 6, 0.92));
+  color: #fef08a;
+}
+
+[data-vn-badge-kind="reroll"] {
+  border-color: rgba(216, 168, 255, 0.45);
+  background: linear-gradient(135deg, rgba(30, 20, 48, 0.92), rgba(12, 10, 22, 0.94));
+  color: var(--vn-text);
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+[data-vn-badge][data-vn-badge-interactive="true"],
+button[data-vn-badge] {
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+[data-vn-badge][data-vn-badge-interactive="true"]:hover,
+button[data-vn-badge]:hover {
+  border-color: var(--vn-accent);
+  background: linear-gradient(135deg, rgba(48, 30, 76, 0.95), rgba(20, 15, 34, 0.95));
+  transform: translateY(-1px);
+  box-shadow: 0 0.35rem 1.1rem rgba(0, 0, 0, 0.35), 0 0 0.75rem rgba(216, 168, 255, 0.25);
+}
+
+[data-vn-badge][data-vn-badge-interactive="true"]:hover [data-vn-badge-icon="reroll"],
+button[data-vn-badge]:hover [data-vn-badge-icon="reroll"] {
+  transform: rotate(180deg);
+}
+
+[data-vn-badge][data-vn-badge-interactive="true"]:active,
+button[data-vn-badge]:active {
+  transform: translateY(0);
+}
+
 [data-vn-badge-kind="error"] {
   border-color: rgba(255, 132, 151, 0.7);
   background: rgba(62, 10, 23, 0.88);
+  color: #fecdd3;
 }
 
 [data-vn-narrative] {
@@ -210,6 +302,17 @@ textarea {
   line-height: 1.55;
   text-wrap: pretty;
   white-space: pre-wrap;
+}
+
+[data-vn-dialogue-text] font[color] {
+  color: inherit;
+}
+
+[data-vn-dialogue-text] .vn-transmission {
+  font-style: italic;
+  opacity: 0.72;
+  color: var(--vn-muted-text, #9ca3af);
+  filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.15));
 }
 
 [data-vn-progress] {
@@ -399,9 +502,28 @@ textarea {
     animation: vn-pulse 1.35s ease-in-out infinite;
   }
 
+  [data-vn-badge] {
+    animation: vn-badge-enter 220ms ease both;
+  }
+
+  [data-vn-badge-icon="check"] {
+    animation: vn-badge-pop 320ms cubic-bezier(0.175, 0.885, 0.32, 1.275) both;
+  }
+
   @keyframes vn-enter {
     from { opacity: 0; transform: translateY(0.6rem); }
     to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes vn-badge-enter {
+    from { opacity: 0; transform: translateY(-0.35rem) scale(0.96); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+
+  @keyframes vn-badge-pop {
+    0% { transform: scale(0.5); opacity: 0; }
+    65% { transform: scale(1.2); opacity: 1; }
+    100% { transform: scale(1); }
   }
 
   @keyframes vn-pulse {

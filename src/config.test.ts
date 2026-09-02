@@ -73,3 +73,20 @@ test("shared config never imports frontend theme code (host-neutral boundary)", 
   assert.doesNotMatch(source, /frontend\/theme/);
   assert.doesNotMatch(source, /\.\.\/(frontend|stage|settings|host)\//);
 });
+test("configuration preserves ignoredTags, displayRegexRules, and useNativeCardImages", () => {
+  const config = normalizeConfig({
+    ignoredTags: "status, stats, system",
+    displayRegexRules: "/§([^§]+)§/g => $1",
+    useNativeCardImages: true,
+  });
+  assert.equal(config.ignoredTags, "status, stats, system");
+  assert.equal(config.displayRegexRules, "/§([^§]+)§/g => $1");
+  assert.equal(config.useNativeCardImages, true);
+});
+
+test("configuration defaults ignoredTags, displayRegexRules, and useNativeCardImages", () => {
+  const config = normalizeConfig({});
+  assert.equal(config.ignoredTags, "");
+  assert.equal(config.displayRegexRules, "");
+  assert.equal(config.useNativeCardImages, false);
+});

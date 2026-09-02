@@ -26,10 +26,49 @@ if (!mount) throw new Error("Preview mount is missing.");
 
 const firstScene = sceneDataUrl(["#402b63", "#d77d72"], "Sunset overlook");
 const secondScene = sceneDataUrl(["#07152f", "#31527d"], "Night overlook");
+const rerollScene = sceneDataUrl(["#1e1b4b", "#4338ca"], "Starry ridge");
 const query = new URLSearchParams(location.search);
 const mode = query.get("mode") === "standard" ? "standard" : "cyoa";
 const requestedPreset = query.get("preset");
 const themePreset = isThemePresetId(requestedPreset) ? requestedPreset : "lumiverse";
+
+function simulateGenerationFlow(rerollCount = 1): void {
+  stage.setPhase("waiting-for-response");
+
+  setTimeout(() => {
+    stage.setPhase("planning");
+
+    setTimeout(() => {
+      stage.setAssetProgress({ current: 1, total: 3 });
+
+      setTimeout(() => {
+        stage.setAssetProgress({ current: 2, total: 3 });
+
+        setTimeout(() => {
+          stage.setAssetProgress({ current: 3, total: 3 });
+
+          setTimeout(() => {
+            stage.setAssetProgress(null);
+            stage.loadTurn({
+              mode,
+              paragraphs: [
+                { id: `r${rerollCount}-0`, speaker: "Mira", text: `[Reroll ${rerollCount}] The wind picks up as the constellations emerge in the twilight sky.` },
+                { id: `r${rerollCount}-1`, speaker: "Mira", text: "She looks out over the valley, smiling faintly at the quiet horizon." },
+              ],
+              choices: [
+                { id: "continue-looking", label: "Gaze at the stars", value: "Keep watching the sky with her." },
+                { id: "head-home", label: "Suggest heading back", value: "Let's make our way down before dark." },
+              ],
+            });
+            void stage.setSceneImage({ url: rerollScene, requestId: `reroll-${rerollCount}`, alt: "Starry ridge" });
+          }, 800);
+        }, 800);
+      }, 800);
+    }, 900);
+  }, 1200);
+}
+
+let rerollCounter = 0;
 
 const stage = new VnStage({
   mount,
@@ -46,12 +85,20 @@ const stage = new VnStage({
     }
   },
   onChoice: async (choice) => {
-    stage.setActivity(`Selected: ${choice.label}`);
+    stage.setActivity(`Selected: ${choice.label}`, "success");
   },
   onSubmit: async (text) => {
-    stage.setActivity(`Submitted: ${text}`);
+    stage.setActivity(`Submitted: ${text}`, "loading");
   },
-  onExit: () => stage.setActivity("Exit would restore Lumiverse chat.")
+  onReroll: () => {
+    rerollCounter++;
+    simulateGenerationFlow(rerollCounter);
+  },
+  onSwipe: () => {
+    rerollCounter++;
+    simulateGenerationFlow(rerollCounter);
+  },
+  onExit: () => stage.setActivity("Exit would restore Lumiverse chat.", "warning"),
 });
 
 stage.loadTurn({
@@ -69,4 +116,7 @@ stage.loadTurn({
 });
 void stage.setSceneImage({ url: firstScene, requestId: "sunset-scene", alt: "A sunset overlook" });
 
-Object.assign(globalThis, { __visualNovelPreview: stage });
+Object.assign(globalThis, {
+  __visualNovelPreview: stage,
+  simulateGenerationFlow,
+});

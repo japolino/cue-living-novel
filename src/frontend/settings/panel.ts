@@ -165,6 +165,7 @@ export class VisualNovelSettingsPanel {
           </label>
           <label data-check><input name="autoEnter" type="checkbox" /><span>Enter visual novel mode automatically when a chat opens</span></label>
           <label data-check><input name="generateImages" type="checkbox" /><span>Generate scene images</span></label>
+          <label data-check><input name="useNativeCardImages" type="checkbox" /><span>Use native card images / expressions (disables external image generation)</span></label>
           <label data-check><input name="generateChoices" type="checkbox" /><span>Generate choices when the response has no authored Choice tags</span></label>
         </section>
         <section>
@@ -205,6 +206,17 @@ export class VisualNovelSettingsPanel {
           <label>Planner instructions<textarea name="customPlannerInstructions"></textarea></label>
         </section>
         <section>
+          <h2>Content Filtering & Regex</h2>
+          <label>Ignored tags
+            <input name="ignoredTags" type="text" placeholder="status, stats, system, inventory" />
+            <small>Comma-separated tags to omit from dialogue and image planning (e.g. &lt;status&gt;, [Status]).</small>
+          </label>
+          <label>Display regex rules
+            <textarea name="displayRegexRules" spellcheck="false" placeholder="/§([^§]+)§/g => <em class=&quot;vn-transmission&quot;>$1</em>"></textarea>
+            <small>One rule per line: <code>/pattern/flags =&gt; replacement</code> or <code>pattern =&gt; replacement</code>.</small>
+          </label>
+        </section>
+        <section>
           <h2>Custom CSS</h2>
           <p>Selectors beginning with data-vn are stable. Remote imports and URL fetches are removed.</p>
           <label>Theme CSS<textarea name="customCss" spellcheck="false"></textarea></label>
@@ -241,6 +253,7 @@ export class VisualNovelSettingsPanel {
     control<HTMLSelectElement>(this.root, "sceneImageFit").value = config.sceneImageFit;
     control<HTMLInputElement>(this.root, "autoEnter").checked = config.autoEnter;
     control<HTMLInputElement>(this.root, "generateImages").checked = config.generateImages;
+    control<HTMLInputElement>(this.root, "useNativeCardImages").checked = config.useNativeCardImages;
     control<HTMLInputElement>(this.root, "generateChoices").checked = config.generateChoices;
     control<HTMLInputElement>(this.root, "maxImagesPerTurn").value = String(config.maxImagesPerTurn);
     this.renderConnectionSelect("planner", this.connectionStates.planner, config.parserConnectionId);
@@ -258,6 +271,8 @@ export class VisualNovelSettingsPanel {
     control<HTMLInputElement>(this.root, "promptSuffix").value = config.promptSuffix;
     control<HTMLInputElement>(this.root, "negativePrompt").value = config.negativePrompt;
     control<HTMLTextAreaElement>(this.root, "customPlannerInstructions").value = config.customPlannerInstructions;
+    control<HTMLInputElement>(this.root, "ignoredTags").value = config.ignoredTags;
+    control<HTMLTextAreaElement>(this.root, "displayRegexRules").value = config.displayRegexRules;
     control<HTMLTextAreaElement>(this.root, "customCss").value = config.customCss;
     this.updateImageModelHint();
   }
@@ -284,6 +299,7 @@ export class VisualNovelSettingsPanel {
       sceneImageFit: normalizeSceneImageFit(control<HTMLSelectElement>(this.root, "sceneImageFit").value),
       autoEnter: control<HTMLInputElement>(this.root, "autoEnter").checked,
       generateImages: control<HTMLInputElement>(this.root, "generateImages").checked,
+      useNativeCardImages: control<HTMLInputElement>(this.root, "useNativeCardImages").checked,
       generateChoices: control<HTMLInputElement>(this.root, "generateChoices").checked,
       maxImagesPerTurn: Number(control<HTMLInputElement>(this.root, "maxImagesPerTurn").value),
       parserConnectionId: optional("parserConnectionId"),
@@ -301,6 +317,8 @@ export class VisualNovelSettingsPanel {
       promptSuffix: control<HTMLInputElement>(this.root, "promptSuffix").value,
       negativePrompt: control<HTMLInputElement>(this.root, "negativePrompt").value,
       customPlannerInstructions: control<HTMLTextAreaElement>(this.root, "customPlannerInstructions").value,
+      ignoredTags: control<HTMLInputElement>(this.root, "ignoredTags").value,
+      displayRegexRules: control<HTMLTextAreaElement>(this.root, "displayRegexRules").value,
       customCss: control<HTMLTextAreaElement>(this.root, "customCss").value
     };
   }

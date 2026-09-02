@@ -472,13 +472,22 @@ function resolveSingleCharacter(
   };
 }
 
+export function parseIgnoredTags(raw: string | undefined): string[] {
+  if (!raw) return [];
+  return raw
+    .split(/[,\n]+/)
+    .map((tag) => tag.trim().replace(/^<|>$/g, ""))
+    .filter(Boolean);
+}
+
 export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promise<{
   plan: TurnPlan;
   usedFallback: boolean;
   contextDiagnostics: VisualContextDiagnostics;
   singleCharacter: SingleCharacterState;
 }> {
-  const narrative = prepareNarrative(input.content);
+  const ignoredTags = parseIgnoredTags(input.config.ignoredTags);
+  const narrative = prepareNarrative(input.content, { ignoredTags });
   if (narrative.paragraphs.length === 0) throw new Error("The assistant response does not contain a revealable paragraph.");
 
   const visualContext = await loadVisualContext(spindle, {

@@ -67,19 +67,36 @@ function escapeRegExp(value: string): string {
 function stripIgnoredTags(content: string, tags: readonly string[]): string {
   let output = content;
   for (const rawTag of tags) {
-    const tag = rawTag.trim().replace(/^<|>$/g, "").replace(/^\//, "");
+    const tag = rawTag.trim().replace(/^[<\[]|[>\]]$/g, "").replace(/^\//, "");
     if (!tag) continue;
     const name = escapeRegExp(tag);
     output = output
       .replace(new RegExp(`<${name}\\b[^>]*>[\\s\\S]*?<\\/${name}>`, "gi"), "")
       .replace(new RegExp(`<\\/?${name}\\b[^>]*>`, "gi"), "")
-      .replace(new RegExp(`^\\s*\\[${name}\\b[^\\]]*\\]\\s*$`, "gim"), "");
+      .replace(new RegExp(`\\[${name}\\b.*?\][\\s\\S]*?\\[\\/${name}\\]`, "gi"), "")
+      .replace(new RegExp(`\\[\\/?${name}\\b.*?\]`, "gi"), "");
   }
   return output;
 }
 
+/**
+ * Extract inline card asset references like `<img="asset_name">`,
+ * `<img src="asset_name">`, or `{{img::asset_name}}`.
+ */
+export function extractInlineCardImages(text: string): { text: string; assetNames: string[] } {
+  const assetNames: string[] = [];
+  const INLINE_IMG_REGEX = /<img\s*=\s*["']([^"']+)["']\s*\/?>|<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["'][^>]*?\/?>|\{\{img::([^\}]+)\}\}/gi;
+  const cleaned = text.replace(INLINE_IMG_REGEX, (_match, p1, p2, p3) => {
+    const name = (p1 || p2 || p3 || "").trim();
+    if (name) assetNames.push(name);
+    return "";
+  });
+  return { text: cleaned, assetNames };
+}
 function cleanNarrativeBlock(block: string): string {
-  return block
+  // First strip inline card expression tags so they don't count as narrative lines
+  const { text: withoutInlineImages } = extractInlineCardImages(block);
+  return withoutInlineImages
     .replace(/CARDDATA:.*$/gim, "")
     .replace(/<Update Log\b[\s\S]*?<\/Update Log>/gi, "")
     .split(/\r?\n/)

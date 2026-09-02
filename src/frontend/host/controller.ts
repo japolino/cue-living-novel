@@ -52,11 +52,12 @@ export function sameTurnIdentity(
 
 /**
  * How a received turn should be applied to the stage. Pure so the same-turn
- * guard and the preserveImage:false clearing are testable without a DOM.
+ * guard and load-turn decisions are testable without a DOM.
  *
  * A re-broadcast of the SAME logical turn is applied as "sync at the current
  * cursor" (never reset to paragraph 0); a genuinely different turn is a
- * "load-turn" that clears the previous scene's image.
+ * "load-turn" that resets the narrative cursor while preserving the previous
+ * scene's image until the new turn's scene image is generated and ready.
  */
 export type TurnApplicationDecision =
   | { kind: "none" }
@@ -91,20 +92,38 @@ function replaceAsset(turn: TurnView, asset: AssetView): TurnView {
   return { ...turn, assets };
 }
 
+export function computeAssetProgress(turn: TurnView | null): { current: number; total: number } | null {
+  if (!turn || !turn.assets || turn.assets.length === 0) return null;
+  const total = turn.assets.length;
+  const done = turn.assets.filter(
+    (a) =>
+      a.status === "generated" ||
+      a.status === "browser_ready" ||
+      a.status === "failed" ||
+      a.status === "cancelled",
+  ).length;
+  const inFlight = turn.assets.filter((a) => a.status === "generating" || a.status === "queued").length;
+  if (inFlight > 0) {
+    const current = Math.min(total, done + 1);
+    return { current, total };
+  }
+  return null;
+}
+
 /**
  * The subset of VnStage the controller pushes saved-config presentation onto.
  * Keeping this narrow lets tests exercise the live stage calls without a DOM.
  */
 export type VisualStageThemeTarget = Pick<
   VnStage,
-  "setThemePreset" | "setSceneImageFit" | "setUserCss"
+  "setThemePreset" | "setSceneImageFit" | "setUserCss" | "setDisplayRegexRules"
 >;
 
 /**
  * Push a config's presentation settings onto the stage. Applied on every save
  * and on every `vn_state` / `vn_config` response so the stage always mirrors
- * the persisted config: the active theme preset, the scene-image fit, and
- * the user's custom CSS (which stays the final cascade layer).
+ * the persisted config: the active theme preset, the scene-image fit, the
+ * user's custom CSS (which stays the final cascade layer), and custom display regex rules.
  */
 export function applyVisualConfigToStage(
   stage: VisualStageThemeTarget,
@@ -113,6 +132,7 @@ export function applyVisualConfigToStage(
   stage.setThemePreset(config.themePreset);
   stage.setSceneImageFit(config.sceneImageFit);
   stage.setUserCss(config.customCss);
+  stage.setDisplayRegexRules(config.displayRegexRules);
 }
 
 export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): () => void {
@@ -143,7 +163,27 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     onExit: () => deactivate(),
     onAdvance: (paragraphIndex) => { void syncImageForParagraph(paragraphIndex); },
     onChoice: async (choice: VnChoice) => submit(choice.value),
-    onSubmit: async (content: string) => submit(content)
+    onSubmit: async (content: string) => submit(content),
+    onReroll: () => {
+      const activeChatId = chatId();
+      if (!activeChatId || !turn) return;
+      stage.setPhase("planning");
+      ctx.sendToBackend({
+        type: "vn_retry_turn",
+        chatId: activeChatId,
+        messageId: turn.messageId,
+      });
+    },
+    onSwipe: () => {
+      const activeChatId = chatId();
+      if (!activeChatId || !turn) return;
+      stage.setPhase("planning");
+      ctx.sendToBackend({
+        type: "vn_retry_turn",
+        chatId: activeChatId,
+        messageId: turn.messageId,
+      });
+    },
   });
 
   const action = ctx.ui.registerInputBarAction({
@@ -275,11 +315,13 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
    * Apply an incoming turn delivery. Re-broadcasting the SAME logical turn must
    * not reset the cursor back to paragraph 0 (a GENERATION_ENDED followed by a
    * MESSAGE_EDITED/SWIPE_EDITED/MESSAGE_SWIPED reconcile, or a `vn_retry_turn`,
-   * re-sends the identical turn). A genuinely different turn clears any unrelated
-   * previous-scene image via preserveImage:false.
+   * re-sends the identical turn). A genuinely different turn within the same
+   * chat preserves the previous scene image until the new turn's scene image is
+   * generated, preventing a blank screen between turns.
    */
   function applyTurn(next: TurnView, previous: TurnView | null): void {
     turn = next;
+    stage.setAssetProgress(computeAssetProgress(next));
     const decision = decideTurnApplication(previous, next, stage.getState().currentParagraphIndex, active, stage.getState().paragraphs.length > 0);
     if (decision.kind === "none") return;
     if (decision.kind === "planning") {
@@ -296,6 +338,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     }
     const requestedMode = configRef.current?.mode ?? "standard";
     const mode = requestedMode === "cyoa" && next.choices.length > 0 ? "cyoa" : "standard";
+    const preserveImage = !previous || previous.chatId === next.chatId;
     stage.loadTurn({
       mode,
       paragraphs: next.paragraphs.map((text, index) => ({
@@ -304,7 +347,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
         speaker: next.speaker
       })),
       choices: next.choices.map((choice) => ({ id: choice.id, label: choice.label, value: choice.value })),
-      preserveImage: false
+      preserveImage
     });
     void syncImageForParagraph(0);
   }
@@ -340,6 +383,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     if (type === "vn_asset" && message.type === "vn_asset") {
       if (!turn || turn.chatId !== message.chatId || turn.messageId !== message.messageId) return;
       turn = replaceAsset(turn, message.asset);
+      stage.setAssetProgress(computeAssetProgress(turn));
       const cursor = stage.getState().currentParagraphIndex;
       if (message.asset.paragraphIndex <= cursor) void syncImageForParagraph(cursor);
       return;
@@ -352,6 +396,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       if (message.chatId !== chatId()) return;
       if (message.active) {
         stage.setError(null);
+        stage.setAssetProgress(null);
         stage.setPhase("waiting-for-response");
       } else if (message.error) {
         stage.setError(message.error);

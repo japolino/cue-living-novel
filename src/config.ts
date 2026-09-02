@@ -46,6 +46,9 @@ export type VisualNovelConfig = {
   negativePrompt: string;
   customPlannerInstructions: string;
   customCss: string;
+  ignoredTags: string;
+  displayRegexRules: string;
+  useNativeCardImages: boolean;
 };
 
 export const DEFAULT_CONFIG: VisualNovelConfig = {
@@ -73,6 +76,9 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   negativePrompt: "low quality, blurry, malformed hands, text, subtitles, speech bubble, watermark, logo, frame, border",
   customPlannerInstructions: "",
   customCss: "",
+  ignoredTags: "",
+  displayRegexRules: "",
+  useNativeCardImages: false,
 };
 
 function record(value: unknown): Record<string, unknown> {
@@ -148,6 +154,9 @@ export function normalizeConfig(value: unknown): VisualNovelConfig {
     promptSuffix: retiredLegacySuffix(stringValue(input.promptSuffix, DEFAULT_CONFIG.promptSuffix)),
     negativePrompt: stringValue(input.negativePrompt, DEFAULT_CONFIG.negativePrompt),
     customPlannerInstructions: stringValue(input.customPlannerInstructions, DEFAULT_CONFIG.customPlannerInstructions),
-    customCss: stringValue(input.customCss, DEFAULT_CONFIG.customCss)
+    customCss: stringValue(input.customCss, DEFAULT_CONFIG.customCss),
+    ignoredTags: stringValue(input.ignoredTags, DEFAULT_CONFIG.ignoredTags),
+    displayRegexRules: stringValue(input.displayRegexRules, DEFAULT_CONFIG.displayRegexRules),
+    useNativeCardImages: bool(input.useNativeCardImages, DEFAULT_CONFIG.useNativeCardImages)
   };
 }

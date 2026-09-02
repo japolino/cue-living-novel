@@ -4,7 +4,7 @@ import type { ChatMessageDTO, SpindleAPI } from "lumiverse-spindle-types";
 import { DEFAULT_CONFIG } from "../../config";
 import { ContinuityStateSchema, SceneStateSchema } from "../../shared/contracts";
 import { emptySingleCharacter } from "../core/visual-state";
-import { planTurn } from "./planner";
+import { parseIgnoredTags, planTurn } from "./planner";
 
 const message: ChatMessageDTO & { role: "assistant" } = {
   id: "assistant-1",
@@ -222,4 +222,8 @@ test("maxImagesPerTurn=0 still creates a fallback cue when the sidecar fails", a
   assert.equal(result.usedFallback, true);
   // Unlimited fallback still emits the cue for paragraph 0.
   assert.equal(result.plan.visualCues[0]?.paragraphIndex, 0);
+});
+test("parseIgnoredTags parses comma and newline separated tag names", () => {
+  const result = parseIgnoredTags("status, <stats>, [system]\n inventory");
+  assert.deepEqual(result, ["status", "stats", "[system]", "inventory"]);
 });

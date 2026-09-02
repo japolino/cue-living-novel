@@ -93,3 +93,72 @@ test("load-turn without preserveImage keeps the previous image and resets to par
   assert.equal(state.displayedImage, previous);
   assert.equal(state.currentParagraphIndex, 0);
 });
+
+test("advancing past the last paragraph marks turnFinished and enables reroll prompt", () => {
+  let state = reduceVnStage(createInitialVnStageState(), {
+    type: "load-turn",
+    turn: { mode: "standard", paragraphs },
+  });
+
+  assert.equal(state.turnFinished, false);
+  assert.equal(state.showRerollPrompt, false);
+
+  // Advance to paragraph 1
+  state = reduceVnStage(state, { type: "advance" });
+  assert.equal(state.turnFinished, false);
+
+  // Advance past paragraph 1 -> awaiting-input
+  state = reduceVnStage(state, { type: "advance" });
+  assert.equal(state.phase, "awaiting-input");
+  assert.equal(state.turnFinished, true);
+  assert.equal(state.showRerollPrompt, true);
+});
+
+test("loading a turn with 0 paragraphs flags noValidOutput and enables reroll prompt", () => {
+  const state = reduceVnStage(createInitialVnStageState(), {
+    type: "load-turn",
+    turn: { mode: "standard", paragraphs: [] },
+  });
+
+  assert.equal(state.phase, "awaiting-input");
+  assert.equal(state.noValidOutput, true);
+  assert.equal(state.showRerollPrompt, true);
+  assert.equal(state.turnFinished, false);
+});
+
+test("updating assetProgress updates state and clearing resets it", () => {
+  let state = createInitialVnStageState();
+  state = reduceVnStage(state, {
+    type: "set-asset-progress",
+    progress: { current: 1, total: 3 },
+  });
+  assert.deepEqual(state.assetProgress, { current: 1, total: 3 });
+
+  state = reduceVnStage(state, {
+    type: "set-asset-progress",
+    progress: { current: 2, total: 3 },
+  });
+  assert.deepEqual(state.assetProgress, { current: 2, total: 3 });
+
+  state = reduceVnStage(state, {
+    type: "set-asset-progress",
+    progress: null,
+  });
+  assert.equal(state.assetProgress, null);
+});
+
+test("entering waiting-for-response or planning clears prior turnFinished and assetProgress", () => {
+  let state = createInitialVnStageState({
+    turnFinished: true,
+    showRerollPrompt: true,
+    assetProgress: { current: 3, total: 3 },
+  });
+
+  state = reduceVnStage(state, {
+    type: "set-phase",
+    phase: "waiting-for-response",
+  });
+  assert.equal(state.turnFinished, false);
+  assert.equal(state.showRerollPrompt, false);
+  assert.equal(state.assetProgress, null);
+});

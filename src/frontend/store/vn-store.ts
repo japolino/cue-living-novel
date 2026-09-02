@@ -28,8 +28,13 @@ export interface VnSceneImage {
   requestId: string;
 }
 
+export interface VnAssetProgress {
+  current: number;
+  total: number;
+}
+
 export interface VnActivity {
-  kind: "loading" | "error";
+  kind: "loading" | "error" | "success" | "warning" | "reroll" | "prompt";
   label: string;
 }
 
@@ -46,6 +51,10 @@ export interface VnStageState {
   activity: VnActivity | null;
   error: string | null;
   inputPlaceholder: string;
+  assetProgress: VnAssetProgress | null;
+  turnFinished: boolean;
+  noValidOutput: boolean;
+  showRerollPrompt: boolean;
 }
 
 export interface VnTurnInput {
@@ -64,6 +73,10 @@ export type VnStageAction =
   | { type: "set-phase"; phase: VnPhase }
   | { type: "set-activity"; activity: VnActivity | null }
   | { type: "set-error"; error: string | null }
+  | { type: "set-asset-progress"; progress: VnAssetProgress | null }
+  | { type: "set-turn-finished"; finished: boolean }
+  | { type: "set-no-valid-output"; noValidOutput: boolean }
+  | { type: "set-reroll-prompt"; show: boolean }
   | { type: "submit-started" }
   | { type: "submit-failed"; error: string }
   | { type: "image-requested"; image: VnSceneImage }
@@ -97,6 +110,10 @@ export const createInitialVnStageState = (
   activity: null,
   error: null,
   inputPlaceholder: "What do you do?",
+  assetProgress: null,
+  turnFinished: false,
+  noValidOutput: false,
+  showRerollPrompt: false,
   ...values,
 });
 
@@ -136,10 +153,11 @@ export const reduceVnStage = (
   switch (action.type) {
     case "load-turn": {
       const paragraphs = [...action.turn.paragraphs];
+      const hasNoParagraphs = paragraphs.length === 0;
       return {
         ...state,
         mode: action.turn.mode,
-        phase: paragraphs.length === 0 ? "awaiting-input" : "revealing",
+        phase: hasNoParagraphs ? "awaiting-input" : "revealing",
         paragraphs,
         currentParagraphIndex: 0,
         choices: [...(action.turn.choices ?? [])],
@@ -150,6 +168,10 @@ export const reduceVnStage = (
         activity: null,
         error: null,
         inputPlaceholder: action.turn.inputPlaceholder ?? state.inputPlaceholder,
+        assetProgress: null,
+        turnFinished: false,
+        noValidOutput: hasNoParagraphs,
+        showRerollPrompt: hasNoParagraphs,
       };
     }
 
@@ -164,7 +186,12 @@ export const reduceVnStage = (
         };
       }
 
-      return { ...state, phase: "awaiting-input" };
+      return {
+        ...state,
+        phase: "awaiting-input",
+        turnFinished: true,
+        showRerollPrompt: true,
+      };
     }
 
     case "set-mode":
@@ -173,8 +200,20 @@ export const reduceVnStage = (
     case "set-draft":
       return { ...state, draft: action.draft };
 
-    case "set-phase":
-      return { ...state, phase: action.phase };
+    case "set-phase": {
+      const isResetPhase =
+        action.phase === "waiting-for-response" ||
+        action.phase === "planning" ||
+        action.phase === "submitting";
+      return {
+        ...state,
+        phase: action.phase,
+        turnFinished: isResetPhase ? false : state.turnFinished,
+        noValidOutput: isResetPhase ? false : state.noValidOutput,
+        showRerollPrompt: isResetPhase ? false : state.showRerollPrompt,
+        assetProgress: isResetPhase ? null : state.assetProgress,
+      };
+    }
 
     case "set-activity":
       return { ...state, activity: action.activity };
@@ -186,9 +225,37 @@ export const reduceVnStage = (
         phase: action.error ? "error" : state.phase,
       };
 
+    case "set-asset-progress":
+      return { ...state, assetProgress: action.progress };
+
+    case "set-turn-finished":
+      return {
+        ...state,
+        turnFinished: action.finished,
+        showRerollPrompt: action.finished ? true : state.showRerollPrompt,
+      };
+
+    case "set-no-valid-output":
+      return {
+        ...state,
+        noValidOutput: action.noValidOutput,
+        showRerollPrompt: action.noValidOutput ? true : state.showRerollPrompt,
+      };
+
+    case "set-reroll-prompt":
+      return { ...state, showRerollPrompt: action.show };
+
     case "submit-started":
       if (state.phase !== "awaiting-input") return state;
-      return { ...state, phase: "submitting", error: null };
+      return {
+        ...state,
+        phase: "submitting",
+        error: null,
+        assetProgress: null,
+        turnFinished: false,
+        noValidOutput: false,
+        showRerollPrompt: false,
+      };
 
     case "submit-failed":
       return {
@@ -225,4 +292,3 @@ export const reduceVnStage = (
       return createInitialVnStageState({ displayedImage: state.displayedImage });
   }
 };
-
