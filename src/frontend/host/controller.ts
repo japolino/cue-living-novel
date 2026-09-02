@@ -179,6 +179,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   let active = false;
   const configRef: { current: VisualNovelConfig | null } = { current: null };
   let turn: TurnView | null = null;
+  let pendingNextTurn: TurnView | null = null;
   let overrideHandles: ComponentOverrideHandle[] = [];
   const acknowledgedAssets = new Set<string>();
   let destroyed = false;
@@ -187,9 +188,24 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     mount: app.root,
     themePreset: configRef.current?.themePreset ?? "lumiverse",
     onExit: () => deactivate(),
-    onAdvance: (paragraphIndex) => { void syncImageForParagraph(paragraphIndex); },
-    onChoice: async (choice: VnChoice) => submit(choice.value),
-    onSubmit: async (content: string) => submit(content),
+    onAdvance: (paragraphIndex) => {
+      if (pendingNextTurn) {
+        const next = pendingNextTurn;
+        pendingNextTurn = null;
+        applyTurn(next, turn);
+        return;
+      }
+      void syncImageForParagraph(paragraphIndex);
+    },
+    onChoice: async (choice: VnChoice) => {
+      const raw = choice.value?.trim() ?? "";
+      const isNumeric = /^\s*(?:\d+|choice[_-]?\d+|option\s*\d+)\s*$/i.test(raw);
+      const submission = (!raw || isNumeric) ? choice.label : raw;
+      await handleUserSubmission(submission);
+    },
+    onSubmit: async (content: string) => {
+      await handleUserSubmission(content);
+    },
     onReroll: () => {
       const activeChatId = chatId();
       if (!activeChatId || !turn) return;
@@ -320,6 +336,14 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     ctx.sendToBackend({ type: "vn_submit", chatId: activeChatId, content: trimmed, requestId });
   }
 
+  async function handleUserSubmission(content: string): Promise<void> {
+    const trimmed = content.trim();
+    if (!trimmed) throw new Error("Enter a response first.");
+    const userSpeaker = turn?.userSpeaker || "You";
+    stage.presentUserParagraph(trimmed, userSpeaker);
+    await submit(trimmed);
+  }
+
   async function syncImageForParagraph(paragraphIndex: number): Promise<void> {
     if (!turn) return;
     const asset = selectCurrentImage(turn, paragraphIndex);
@@ -413,7 +437,11 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     }
     if (type === "vn_turn" && message.type === "vn_turn") {
       if (message.turn.chatId !== chatId()) return;
-      applyTurn(message.turn, turn);
+      if (stage.isReadingUserParagraph()) {
+        pendingNextTurn = message.turn;
+      } else {
+        applyTurn(message.turn, turn);
+      }
       return;
     }
     if (type === "vn_asset" && message.type === "vn_asset") {
@@ -433,7 +461,9 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       if (message.active) {
         stage.setError(null);
         stage.setAssetProgress(null);
-        stage.setPhase("waiting-for-response");
+        if (!stage.isReadingUserParagraph()) {
+          stage.setPhase("waiting-for-response");
+        }
       } else if (message.error) {
         stage.setError(message.error);
       }
@@ -455,11 +485,13 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   const unsubAction = action.onClick(toggleVisualNovel);
   const unsubChat = ctx.events.on("CHAT_SWITCHED", () => {
     turn = null;
+    pendingNextTurn = null;
     stage.reset();
     requestState();
   });
   const unsubFork = ctx.events.on("CHAT_FORKED", () => {
     turn = null;
+    pendingNextTurn = null;
     stage.reset();
     requestState();
   });

@@ -26,6 +26,7 @@ export type TurnView = {
   sourceFingerprint: string;
   revision: number;
   speaker: string;
+  userSpeaker?: string;
   paragraphs: string[];
   choices: Array<{ id: string; label: string; value: string }>;
   assets: AssetView[];

@@ -49,11 +49,16 @@ function extractChoices(content: string): { text: string; choices: RawChoice[] }
       for (const line of nonemptyLines) choices.push({ label: line, submission: line });
     } else {
       const label = cleanChoiceLine(body);
-      if (label) choices.push({
-        id: attributes.id?.trim() || undefined,
-        label,
-        submission: (attributes.value ?? attributes.message ?? attributes.prompt ?? label).trim() || label
-      });
+      if (label) {
+        const rawSubmission = (attributes.value ?? attributes.message ?? attributes.prompt ?? "").trim();
+        const isNumeric = /^\s*(?:\d+|choice[_-]?\d+|option\s*\d+)\s*$/i.test(rawSubmission);
+        const submission = (rawSubmission && !isNumeric) ? rawSubmission : label;
+        choices.push({
+          id: attributes.id?.trim() || undefined,
+          label,
+          submission
+        });
+      }
     }
     return "\n\n";
   });

@@ -22,6 +22,7 @@ import {
 export type StoredTurnRecord = {
   schemaVersion: 1;
   speaker: string;
+  userSpeaker?: string;
   status: "planning" | "ready" | "failed" | "cancelled";
   plan: TurnPlan;
   jobs: AssetJob[];

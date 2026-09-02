@@ -484,6 +484,21 @@ export class VnStage {
     this.focus();
   }
 
+  presentUserParagraph(text: string, speaker: string = "You"): void {
+    this.dispatch({
+      type: "present-user-paragraph",
+      paragraph: {
+        id: `user-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        text,
+        speaker,
+      },
+    });
+  }
+
+  isReadingUserParagraph(): boolean {
+    return Boolean(this.state.isUserTurn && this.state.phase === "revealing");
+  }
+
   setPhase(phase: VnPhase): void {
     this.dispatch({ type: "set-phase", phase });
   }

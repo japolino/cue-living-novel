@@ -186,3 +186,29 @@ test("entering waiting-for-response or planning clears prior turnFinished and as
   assert.equal(state.showRerollPrompt, false);
   assert.equal(state.assetProgress, null);
 });
+
+test("present-user-paragraph action appends paragraph, sets phase revealing, and flags isUserTurn", () => {
+  let state = createInitialVnStageState({
+    phase: "awaiting-input",
+    paragraphs: [{ id: "p1", text: "Assistant text", speaker: "Hina" }],
+    currentParagraphIndex: 0,
+    turnFinished: true,
+  });
+
+  state = reduceVnStage(state, {
+    type: "present-user-paragraph",
+    paragraph: { id: "user-1", text: "My response action.", speaker: "Jay" },
+  });
+
+  assert.equal(state.paragraphs.length, 2);
+  assert.equal(state.currentParagraphIndex, 1);
+  assert.equal(state.phase, "revealing");
+  assert.equal(state.isUserTurn, true);
+  assert.equal(state.paragraphs[1]?.speaker, "Jay");
+  assert.equal(state.paragraphs[1]?.text, "My response action.");
+
+  // Advancing past the user paragraph transitions to waiting-for-response
+  state = reduceVnStage(state, { type: "advance" });
+  assert.equal(state.phase, "waiting-for-response");
+  assert.equal(state.isUserTurn, false);
+});

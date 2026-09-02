@@ -291,4 +291,29 @@ Considering options...
     expect(result.plan.visualCues[1]?.poseExpressionId).toBe("lovestruck");
     expect(result.plan.visualCues[2]?.poseExpressionId).toBe("acting_cute");
   });
+
+  test("planner tolerant parse normalizes numeric choice submissions to label", async () => {
+    const { spindle, usedFallback } = spindleWith(JSON.stringify({
+      scenes: [],
+      choices: [
+        { label: "Option 1 label", submission: "1" },
+        { label: "Option 2 label", submission: "2" },
+      ],
+      cues: [{ paragraphIndex: 0, expression: "smirk" }],
+    }));
+    const result = await planTurn(spindle, {
+      chatId: "chat-1",
+      message,
+      content: "Sandra speaks.",
+      previousScene: null,
+      previousContinuity: null,
+      recentMessages: [],
+      config: { ...DEFAULT_CONFIG, mode: "cyoa", generateChoices: true, parserConnectionId: "conn" },
+      singleCharacter: emptySingleCharacter(),
+      characterAppearance: {},
+    });
+    expect(usedFallback()).toBe(false);
+    expect(result.plan.choices[0]?.submission).toBe("Option 1 label");
+    expect(result.plan.choices[1]?.submission).toBe("Option 2 label");
+  });
 });

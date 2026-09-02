@@ -78,4 +78,18 @@ describe("narrative preparation", () => {
       { index: 1, sourceIndex: 3, text: "After status window." },
     ]);
   });
+
+  test("extractChoices rejects numeric attributes.value and preserves actual choice text", () => {
+    const content = 'Some story text.\n\n<Choice id="2" value="2">Step closer and call her bluff</Choice>';
+    const prepared = prepareNarrative(content);
+    expect(prepared.choices).toEqual([
+      {
+        id: "2",
+        label: "Step closer and call her bluff",
+        submission: "Step closer and call her bluff",
+        source: "authored",
+        unlocksAfterParagraph: 0,
+      },
+    ]);
+  });
 });

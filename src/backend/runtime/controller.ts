@@ -71,6 +71,7 @@ export function turnView(record: StoredTurnRecord): TurnView {
     sourceFingerprint: record.plan.key.sourceFingerprint,
     revision: record.plan.key.revision,
     speaker: record.speaker,
+    userSpeaker: record.userSpeaker || "You",
     paragraphs: record.plan.paragraphs.map((paragraph) => paragraph.text),
     choices: record.plan.choices.map((choice) => ({ id: choice.id, label: choice.label, value: choice.submission })),
     assets: record.jobs.map((job) => assetView(record, job)),
@@ -233,9 +234,27 @@ async function processAssistantMessage(
     } else if (config.generateImages) {
       jobs = createAssetJobs(result.plan, config);
     }
+    let userSpeaker = "You";
+    try {
+      const persona = await spindle.personas?.getActive?.(userId);
+      if (persona?.name?.trim()) {
+        userSpeaker = persona.name.trim();
+      }
+    } catch {}
+    if (userSpeaker === "You") {
+      try {
+        const recent = (await spindle.chat.getMessages(chatId) as NormalizedChatMessage[]);
+        const lastUser = [...recent].reverse().find((m) => m.role === "user" || Boolean(m.is_user));
+        if (lastUser?.name?.trim()) {
+          userSpeaker = lastUser.name.trim();
+        }
+      } catch {}
+    }
+
     const record: StoredTurnRecord = {
       schemaVersion: 1,
       speaker: message.name || "Narrator",
+      userSpeaker,
       status: "ready",
       plan: result.plan,
       jobs,

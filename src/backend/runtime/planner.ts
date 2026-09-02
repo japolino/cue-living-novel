@@ -118,7 +118,7 @@ function plannerInstruction(config: VisualNovelConfig): string {
       ? `Generate up to ${config.maxImagesPerTurn} distinct cues spread across key dialogue or action beats in the turn (always include paragraph 0 as the opening cue).`
       : "Generate cues spread across distinct visual or emotional beats (unlimited). Always include paragraph 0.",
     config.mode === "cyoa" && config.generateChoices
-      ? "Return 2 to 4 concise choices if the response does not contain authored Choice tags."
+      ? "choices: If the response does not contain authored Choice tags, return 2 to 4 contextual choices from the user's/persona's perspective. For each choice provide 'label' (a concise button text, e.g. 'Step closer and call her bluff') and 'submission' (a natural, descriptive action or dialogue sentence written in first-person prose from the user's perspective reacting to the scene, e.g. 'I take a slow step toward the desk, meeting her eyes with a quiet smirk. \"Are you really in a position to be making demands, Hina?\"'). NEVER return an index, number, or option code for submission."
       : "Return an empty choices array.",
     "characters must contain EXACTLY ONE entry: the single protagonist. Return name and ONE compact comma-separated line containing ONLY visible physical appearance tags extracted from the card context: age, gender, build, hair, eyes, face, skin, clothing, accessories, and visible distinguishing marks. Never copy markdown headings or labels, personality, psychology, speech, catchphrases, behavior, backstory, scenario, intimate/NSFW notes, macros, or prose sentences. A description that merely repeats the name is invalid. Keep stable traits and never invent appearance that contradicts the card or KNOWN CHARACTERS baseline. Never return a second character.",
     "Shape: {scenes:[{startParagraph,boundary:{claimedNewScene,reason,location,timeOfDay,majorTimeJump,environmentReplacement,forced},environment:{location,timeOfDay,weather,lighting,description,persistentElements},cast,basePrompt,compositionLock}],cues:[{paragraphIndex,expression}],choices:[{label,submission}],characters:[{name,description}]}",
@@ -256,9 +256,15 @@ function normalizeCue(value: unknown): unknown {
 function normalizeChoice(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const record = value as Record<string, unknown>;
+  const label = typeof record.label === "string" ? record.label.trim() : "";
+  let submission = typeof record.submission === "string" ? record.submission.trim() : "";
+  // If submission is empty or numeric/index (e.g. "0", "1", "2", "option 1"):
+  if (!submission || /^\s*(?:\d+|choice[_-]?\d+|option\s*\d+)\s*$/i.test(submission)) {
+    submission = label;
+  }
   return {
-    label: typeof record.label === "string" ? record.label.trim() : "",
-    submission: typeof record.submission === "string" ? record.submission.trim() : ""
+    label,
+    submission
   };
 }
 

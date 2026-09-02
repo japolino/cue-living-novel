@@ -55,6 +55,7 @@ export interface VnStageState {
   turnFinished: boolean;
   noValidOutput: boolean;
   showRerollPrompt: boolean;
+  isUserTurn?: boolean;
 }
 
 export interface VnTurnInput {
@@ -82,6 +83,7 @@ export type VnStageAction =
   | { type: "image-requested"; image: VnSceneImage }
   | { type: "image-ready"; requestId: string }
   | { type: "image-failed"; requestId: string; error: string }
+  | { type: "present-user-paragraph"; paragraph: VnParagraph }
   | { type: "reset" };
 
 export interface VnStageView {
@@ -114,6 +116,7 @@ export const createInitialVnStageState = (
   turnFinished: false,
   noValidOutput: false,
   showRerollPrompt: false,
+  isUserTurn: false,
   ...values,
 });
 
@@ -172,6 +175,7 @@ export const reduceVnStage = (
         turnFinished: false,
         noValidOutput: hasNoParagraphs,
         showRerollPrompt: hasNoParagraphs,
+        isUserTurn: false,
       };
     }
 
@@ -186,11 +190,34 @@ export const reduceVnStage = (
         };
       }
 
+      if (state.isUserTurn) {
+        return {
+          ...state,
+          phase: "waiting-for-response",
+          isUserTurn: false,
+        };
+      }
+
       return {
         ...state,
         phase: "awaiting-input",
         turnFinished: true,
         showRerollPrompt: true,
+      };
+    }
+
+    case "present-user-paragraph": {
+      const paragraphs = [...state.paragraphs, action.paragraph];
+      return {
+        ...state,
+        paragraphs,
+        currentParagraphIndex: paragraphs.length - 1,
+        phase: "revealing",
+        isUserTurn: true,
+        turnFinished: false,
+        noValidOutput: false,
+        showRerollPrompt: false,
+        draft: "",
       };
     }
 
