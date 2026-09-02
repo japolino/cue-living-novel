@@ -1,16 +1,24 @@
 import { describe, expect, test } from "bun:test";
 import type { SpindleAPI } from "lumiverse-spindle-types";
 import {
+  appearanceMigrationMarkerPath,
+  characterAppearancePath,
+  loadCharacterAppearance,
   loadSingleCharacterState,
+  mergeCharacterAppearanceFromState,
+  migrateCharacterAppearanceStates,
   migrateVisualProfilesToSingleCharacter,
+  saveCharacterAppearance,
   saveSingleCharacterState,
   singleCharacterStatePath
 } from "./storage.js";
 import {
   DEFAULT_ENVIRONMENT_DESCRIPTOR,
+  emptySingleCharacter,
   seedSingleCharacter
 } from "../core/visual-state.js";
 import { SINGLE_CHARACTER_SCHEMA_VERSION } from "../../shared/character.js";
+import type { CharacterAppearanceMap } from "../../shared/identity.js";
 
 function storageRuntime(initial: ReadonlyMap<string, unknown> = new Map()): {
   spindle: SpindleAPI;
@@ -163,5 +171,146 @@ describe("saveSingleCharacterState", () => {
     const stored = data.get(singleCharacterStatePath("chat-1")) as Record<string, unknown>;
     // Migrated protagonist wins (freeze), not the attempted tags.
     expect(stored.protagonist).toEqual({ name: "Mira", tags: ["silver hair", "green eyes"] });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Durable global character-appearance map (Inlay state.characterAppearance)
+// ---------------------------------------------------------------------------
+
+function appearanceRuntime(initial: ReadonlyMap<string, unknown> = new Map()): {
+  spindle: SpindleAPI;
+  data: Map<string, unknown>;
+} {
+  const data = new Map(initial);
+  const spindle = {
+    userStorage: {
+      getJson: async (path: string, options: { fallback: unknown }) => data.get(path) ?? options.fallback,
+      setJson: async (path: string, value: unknown) => { data.set(path, value); },
+      list: async (prefix?: string) => [...data.keys()].filter((path) => !prefix || path.startsWith(prefix))
+    }
+  } as unknown as SpindleAPI;
+  return { spindle, data };
+}
+
+describe("saveSingleCharacterState repair semantics", () => {
+  test("repairs a poisoned name-only chat identity when a usable one arrives", async () => {
+    const { spindle, data } = appearanceRuntime(new Map<string, unknown>([
+      [singleCharacterStatePath("chat-1"), {
+        schemaVersion: SINGLE_CHARACTER_SCHEMA_VERSION,
+        protagonist: { name: "Hina", tags: ["Hina"] },
+        environment: DEFAULT_ENVIRONMENT_DESCRIPTOR,
+        updatedAt: new Date(0).toISOString()
+      }]
+    ]));
+    await saveSingleCharacterState(spindle, "chat-1", seedSingleCharacter("Hina", "golden blonde short hair, brilliant red eyes"));
+    const stored = data.get(singleCharacterStatePath("chat-1")) as Record<string, unknown>;
+    expect((stored.protagonist as Record<string, unknown>).tags).toEqual(["golden blonde short hair", "brilliant red eyes"]);
+  });
+
+  test("does not freeze or reject a name-only fallback identity", async () => {
+    const { spindle, data } = appearanceRuntime();
+    await saveSingleCharacterState(spindle, "chat-1", { ...seedSingleCharacter("Mira", ""), protagonist: { name: "Mira", tags: [] } });
+    // Later, the card becomes available; the name-only state must be repairable.
+    await saveSingleCharacterState(spindle, "chat-1", seedSingleCharacter("Mira", "silver hair, green eyes"));
+    const stored = data.get(singleCharacterStatePath("chat-1")) as Record<string, unknown>;
+    expect((stored.protagonist as Record<string, unknown>).tags).toEqual(["silver hair", "green eyes"]);
+  });
+
+  test("keeps a poisoned identity's name but never injects it as an appearance tag", async () => {
+    const { spindle, data } = appearanceRuntime();
+    await saveSingleCharacterState(spindle, "chat-1", seedSingleCharacter("Hina", ""));
+    const stored = data.get(singleCharacterStatePath("chat-1")) as Record<string, unknown>;
+    expect((stored.protagonist as Record<string, unknown>).name).toBe("Hina");
+    expect((stored.protagonist as Record<string, unknown>).tags).toEqual([]);
+  });
+});
+
+describe("durable character appearance map", () => {
+  test("characterAppearancePath is a stable global path", () => {
+    expect(characterAppearancePath()).toBe("character-appearance.json");
+  });
+
+  test("loadCharacterAppearance normalizes name-only/degraded entries out", async () => {
+    const { spindle } = appearanceRuntime(new Map<string, unknown>([
+      [characterAppearancePath(), { Hina: "Hina", Mira: "silver hair, green eyes" }]
+    ]));
+    const map = await loadCharacterAppearance(spindle);
+    expect(map).toEqual({ Mira: "silver hair, green eyes" });
+  });
+
+  test("mergeCharacterAppearanceFromState preserves a good baseline exactly", async () => {
+    const { spindle, data } = appearanceRuntime(new Map<string, unknown>([
+      [characterAppearancePath(), { Hina: "golden blonde short hair, brilliant red eyes" }]
+    ]));
+    // A degraded/inferred and a different usable baseline must NOT overwrite the good one.
+    await mergeCharacterAppearanceFromState(spindle, seedSingleCharacter("Hina", "Hina"));
+    await mergeCharacterAppearanceFromState(spindle, seedSingleCharacter("Hina", "black hair, blue eyes"));
+    const map = data.get(characterAppearancePath()) as CharacterAppearanceMap;
+    expect(map).toEqual({ Hina: "golden blonde short hair, brilliant red eyes" });
+  });
+
+  test("mergeCharacterAppearanceFromState fills a missing baseline and repairs a degraded one", async () => {
+    const emptyRuntime = appearanceRuntime();
+    await mergeCharacterAppearanceFromState(emptyRuntime.spindle, seedSingleCharacter("Hina", "golden blonde short hair, brilliant red eyes"));
+    expect((emptyRuntime.data.get(characterAppearancePath()) as CharacterAppearanceMap)).toEqual({
+      Hina: "golden blonde short hair, brilliant red eyes"
+    });
+
+    const degraded = appearanceRuntime(new Map<string, unknown>([
+      [characterAppearancePath(), { Hina: "Hina" }]
+    ]));
+    await mergeCharacterAppearanceFromState(degraded.spindle, seedSingleCharacter("Hina", "golden blonde short hair, brilliant red eyes"));
+    expect((degraded.data.get(characterAppearancePath()) as CharacterAppearanceMap)).toEqual({
+      Hina: "golden blonde short hair, brilliant red eyes"
+    });
+  });
+});
+
+describe("migrateCharacterAppearanceStates (one-time scan + repair)", () => {
+  test("scans chats and selects the richest usable baseline by name", async () => {
+    const chatA = singleCharacterStatePath("chat-a");
+    const chatB = singleCharacterStatePath("chat-b");
+    const { spindle, data } = appearanceRuntime(new Map<string, unknown>([
+      [chatA, seedSingleCharacter("Hina", "golden blonde short hair, brilliant red eyes, black uniform")],
+      [chatB, seedSingleCharacter("Hina", "golden blonde short hair")]
+    ]));
+    const map = await migrateCharacterAppearanceStates(spindle, {});
+    expect(map).toEqual({ Hina: "golden blonde short hair, brilliant red eyes, black uniform" });
+  });
+
+  test("repairs a poisoned name-only chat state with the richer baseline", async () => {
+    const chatA = singleCharacterStatePath("chat-a");
+    const chatB = singleCharacterStatePath("chat-b");
+    const { spindle, data } = appearanceRuntime(new Map<string, unknown>([
+      [chatA, seedSingleCharacter("Hina", "golden blonde short hair, brilliant red eyes")],
+      [chatB, {
+        schemaVersion: SINGLE_CHARACTER_SCHEMA_VERSION,
+        protagonist: { name: "Hina", tags: ["Hina"] },
+        environment: DEFAULT_ENVIRONMENT_DESCRIPTOR,
+        updatedAt: new Date(0).toISOString()
+      }]
+    ]));
+    await migrateCharacterAppearanceStates(spindle, {});
+    const repaired = data.get(chatB) as Record<string, unknown>;
+    expect((repaired.protagonist as Record<string, unknown>).tags).toEqual(["golden blonde short hair", "brilliant red eyes"]);
+  });
+
+  test("is idempotent and guarded by the migration marker", async () => {
+    const chatA = singleCharacterStatePath("chat-a");
+    const { spindle, data } = appearanceRuntime(new Map<string, unknown>([
+      [chatA, seedSingleCharacter("Hina", "golden blonde short hair, brilliant red eyes")]
+    ]));
+    await migrateCharacterAppearanceStates(spindle, {});
+    expect(data.get(appearanceMigrationMarkerPath())).toBe(true);
+    // Marker set: a subsequent load reads the persisted map and returns promptly.
+    const second = await loadCharacterAppearance(spindle);
+    expect(second).toEqual({ Hina: "golden blonde short hair, brilliant red eyes" });
+  });
+
+  test("saveCharacterAppearance persisted the canonical map without degraded entries", async () => {
+    const { spindle, data } = appearanceRuntime();
+    await saveCharacterAppearance(spindle, { Hina: "Hina", Mira: "silver hair, green eyes" });
+    expect(data.get(characterAppearancePath())).toEqual({ Mira: "silver hair, green eyes" });
   });
 });

@@ -3,6 +3,8 @@ export const VN_THEME_SELECTORS = {
   root: "[data-vn-root]",
   scene: "[data-vn-scene]",
   sceneImage: "[data-vn-scene-image]",
+  ornaments: "[data-vn-ornaments]",
+  ornamentGroup: "[data-vn-ornament-group]",
   statusStack: "[data-vn-status-stack]",
   badge: "[data-vn-badge]",
   narrative: "[data-vn-narrative]",

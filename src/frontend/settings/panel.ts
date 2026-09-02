@@ -147,7 +147,7 @@ export class VisualNovelSettingsPanel {
           <h2>Presentation</h2>
           <div data-row>
             <label>Mode<select name="mode"><option value="standard">Standard input</option><option value="cyoa">CYOA choices</option></select></label>
-            <label>Images per turn<input name="maxImagesPerTurn" type="number" min="0" max="12" step="1" /></label>
+            <label>Images per turn<input name="maxImagesPerTurn" type="number" min="0" max="12" step="1" /><small>0 = unlimited (all distinct cues)</small></label>
           </div>
           <label>Theme style
             <select name="themePreset">${THEME_PRESET_OPTIONS.map(({ value, label }) => `<option value="${value}">${label}</option>`).join("")}</select>

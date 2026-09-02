@@ -3,6 +3,7 @@ import type { VisualNovelConfig } from "../../config.js";
 import { AssetJobSchema, type AssetJob, type SceneState, type TurnPlan, type VisualCue } from "../../shared/contracts.js";
 import { AssetScheduler } from "../core/asset-scheduler.js";
 import { POSE_EXPRESSION_CATALOGUE, poseById } from "../../shared/character.js";
+import { assemblePrompt, normalizeConfig, renderNegativeWithCurrentSelection, renderPrompt, type PromptEntry } from "../inlay-prompt/index.js";
 
 export type AssetUpdateHandler = (jobs: AssetJob[], changed: AssetJob) => Promise<void> | void;
 
@@ -20,27 +21,72 @@ function sceneForCue(plan: TurnPlan, cue: VisualCue): SceneState {
   return scene;
 }
 
-export function compileImagePrompt(config: VisualNovelConfig, scene: SceneState, cue: VisualCue): string {
-  const camera = scene.cameraLock;
+function compilePromptEntry(config: VisualNovelConfig, scene: SceneState, cue: VisualCue): PromptEntry {
+  const compilerConfig = normalizeConfig({
+    promptSyntax: "comfyui",
+    promptStyle: "anima",
+    supplement: true,
+    customPositivePrefix: config.promptPrefix,
+    customPositiveSuffix: config.promptSuffix,
+    customNegative: config.negativePrompt,
+    maxCharacters: 1,
+    perspectiveMode: "dynamic"
+  });
+  const identity = scene.identityPrompt?.trim() ?? "";
+  const identityText = identity.toLowerCase();
+  let label = "girl";
+  let situation = "1girl, solo";
+  if (/\b(?:monster|creature|animal|robot|android|cyborg|demon|alien|beast|machine|ghost|spirit|slime|golem)\b/.test(identityText)) {
+    label = "1other";
+    situation = "1other, solo";
+  } else if (/\b(?:boy|male|man|guy|mustache|beard)\b/.test(identityText)) {
+    label = "boy";
+    situation = "1boy, solo";
+  }
   const pose = poseById(POSE_EXPRESSION_CATALOGUE, cue.poseExpressionId);
-  const identityTags = scene.identityPrompt?.trim();
-  return [
-    config.promptPrefix,
-    identityTags ? `identity: ${identityTags}, solo` : "solo",
-    scene.basePrompt,
-    `camera: ${camera.framing}, ${camera.angle}, ${camera.perspective}, ${camera.lens ?? "natural lens"}`,
-    `composition: ${camera.subjectAnchor}; ${camera.horizon}; ${camera.safeDialogueRegion}; ${scene.compositionLock}`,
-    pose.suffix,
-    config.promptSuffix
-  ].filter(Boolean).join(", ");
+  const timeWeather = [scene.environment.timeOfDay, scene.environment.weather].filter(Boolean).join(" ");
+  return assemblePrompt({
+    environment: {
+      location: [scene.environment.location],
+      timeWeather,
+      lightingMood: scene.environment.lighting ? [scene.environment.lighting] : [],
+      backgroundElements: scene.environment.persistentElements
+    }
+  }, {
+    paragraph: 1,
+    situation,
+    camera: { framing: "upper body", angle: "eye level", perspective: "straight-on", focus: [] },
+    characters: [{ label, identity, expression: pose.suffix, visibleTags: identity }]
+  }, compilerConfig, 1, 1);
 }
 
-export function createAssetJobs(plan: TurnPlan): AssetJob[] {
+export function compileImagePrompt(config: VisualNovelConfig, scene: SceneState, cue: VisualCue): string {
+  const entry = compilePromptEntry(config, scene, cue);
+  return renderPrompt(entry.prompt, "comfyui");
+}
+
+export function compileNegativePrompt(config: VisualNovelConfig, scene: SceneState, cue: VisualCue): string {
+  const entry = compilePromptEntry(config, scene, cue);
+  if (entry.negative) return entry.negative;
+  const compilerConfig = normalizeConfig({
+    promptSyntax: "comfyui",
+    promptStyle: "anima",
+    supplement: true,
+    customPositivePrefix: config.promptPrefix,
+    customPositiveSuffix: config.promptSuffix,
+    customNegative: config.negativePrompt,
+    maxCharacters: 1,
+    perspectiveMode: "dynamic"
+  });
+  return renderNegativeWithCurrentSelection(entry.shotNegative, entry.prompt.format ?? "ordered", compilerConfig);
+}
+
+export function createAssetJobs(plan: TurnPlan, config: VisualNovelConfig): AssetJob[] {
   const now = new Date().toISOString();
   return plan.visualCues.map((cue, index) => {
     const scene = sceneForCue(plan, cue);
     const pose = poseById(POSE_EXPRESSION_CATALOGUE, cue.poseExpressionId);
-    const promptIdentity = `${scene.identityPrompt ?? ""}\0${scene.basePrompt}\0${scene.cameraLock.framing}\0${scene.compositionLock}\0${pose.id}\0${pose.suffix}`;
+    const promptIdentity = `${compileImagePrompt(config, scene, cue)}\0${pose.id}`;
     return AssetJobSchema.parse({
       jobId: cue.assetJobId,
       ownerTurnKey: plan.key,
@@ -104,10 +150,12 @@ export async function generateAssets(
       return scheduler.schedule(job, async (_scheduledJob, jobSignal) => {
         if (signal.aborted) throw abortError(signal);
         const scene = sceneForCue(plan, cue);
+        const prompt = compileImagePrompt(config, scene, cue);
+        const negativePrompt = compileNegativePrompt(config, scene, cue);
         const result = await spindle.imageGen.generate({
           ...(config.imageConnectionId ? { connection_id: config.imageConnectionId } : {}),
-          prompt: compileImagePrompt(config, scene, cue),
-          ...(config.negativePrompt ? { negativePrompt: config.negativePrompt } : {}),
+          prompt,
+          ...(negativePrompt ? { negativePrompt } : {}),
           ...(config.imageModel ? { model: config.imageModel } : {}),
           parameters: config.imageParameters,
           owner_chat_id: plan.key.chatId,

@@ -65,7 +65,8 @@ describe("planner tolerant parse", () => {
       previousContinuity: null,
       recentMessages: [],
       config: { ...DEFAULT_CONFIG, parserConnectionId: "conn" },
-      singleCharacter: emptySingleCharacter()
+      singleCharacter: emptySingleCharacter(),
+      characterAppearance: {}
     });
     expect(usedFallback()).toBe(false);
     expect(result.plan.scenes[0]?.basePrompt).toBe("test place");
@@ -92,7 +93,8 @@ describe("planner tolerant parse", () => {
       previousContinuity: null,
       recentMessages: [],
       config: { ...DEFAULT_CONFIG, parserConnectionId: "conn" },
-      singleCharacter: emptySingleCharacter()
+      singleCharacter: emptySingleCharacter(),
+      characterAppearance: {}
     });
     expect(usedFallback()).toBe(false);
   });

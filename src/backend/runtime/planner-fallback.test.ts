@@ -103,7 +103,8 @@ function plan(
     previousContinuity: null,
     recentMessages: [],
     config: DEFAULT_CONFIG,
-    singleCharacter
+    singleCharacter,
+    characterAppearance: {}
   });
 }
 
@@ -112,17 +113,21 @@ describe("fresh single-character fallback", () => {
     const captured = { systemMessage: "" };
     const result = await plan(spindleFor("fail", captured), emptySingleCharacter());
     expect(result.usedFallback).toBe(true);
-    // Card identity wins over the speaker name fallback: name + card tags, not just "Mira".
+    // Card identity (full description + stable tags) wins over the speaker name
+    // fallback: not just "Mira".
     expect(result.singleCharacter.protagonist.name).toBe("Mira");
-    expect(result.singleCharacter.protagonist.tags).toEqual(["silver hair", "red coat"]);
+    expect(result.singleCharacter.protagonist.tags).toEqual(["silver hair", "green eyes", "red wool coat"]);
     const scene = result.plan.scenes[0]!;
-    expect(scene.identityPrompt).toBe("silver hair, red coat");
+    expect(scene.identityPrompt).toBe("silver hair, green eyes, red wool coat");
     expect(scene.identityPrompt).not.toBe("");
     expect(scene.cast).toEqual(["Mira"]);
     // The prompt is not a bare "solo": it carries a nonempty identity/tag block.
     const cue = result.plan.visualCues[0]!;
     const prompt = compileImagePrompt(DEFAULT_CONFIG, scene, cue);
-    expect(prompt).toContain("identity: silver hair, red coat, solo");
+    expect(prompt).toContain("1girl, solo");
+    expect(prompt).toContain("girl, silver hair, green eyes, red wool coat");
+    expect(prompt).not.toContain("identity:");
+    expect(prompt).not.toContain("Mira");
     expect(prompt).not.toBe("solo");
   });
 
@@ -131,9 +136,9 @@ describe("fresh single-character fallback", () => {
     const result = await plan(spindleFor("emptyCharacters", captured), emptySingleCharacter());
     expect(result.usedFallback).toBe(false);
     expect(result.singleCharacter.protagonist.name).toBe("Mira");
-    expect(result.singleCharacter.protagonist.tags).toEqual(["silver hair", "red coat"]);
+    expect(result.singleCharacter.protagonist.tags).toEqual(["silver hair", "green eyes", "red wool coat"]);
     const scene = result.plan.scenes[0]!;
-    expect(scene.identityPrompt).toBe("silver hair, red coat");
+    expect(scene.identityPrompt).toBe("silver hair, green eyes, red wool coat");
     expect(scene.cast).toEqual(["Mira"]);
   });
 
@@ -164,26 +169,28 @@ describe("fresh single-character fallback", () => {
     expect(success.usedFallback).toBe(false);
     // The frozen card-identity protagonist must win over the planner's new character.
     expect(success.singleCharacter.protagonist.name).toBe("Mira");
-    expect(success.singleCharacter.protagonist.tags).toEqual(["silver hair", "red coat"]);
+    expect(success.singleCharacter.protagonist.tags).toEqual(["silver hair", "green eyes", "red wool coat"]);
     const scene = success.plan.scenes[0]!;
-    expect(scene.identityPrompt).toBe("silver hair, red coat");
+    expect(scene.identityPrompt).toBe("silver hair, green eyes, red wool coat");
     expect(scene.cast).toEqual(["Mira"]);
     // The frozen identity is fed back to the planner as the known-character baseline.
-    expect(capturedSuccess.systemMessage).toContain("Mira: silver hair, red coat");
+    expect(capturedSuccess.systemMessage).toContain("Mira: silver hair, green eyes, red wool coat");
   });
 
-  test("falls back to the speaker name and still emits a nonempty identity block when there is no card", async () => {
+  test("never injects the speaker name as an appearance tag when there is no card", async () => {
     const captured = { systemMessage: "" };
     const result = await plan(spindleFor("fail", captured, { noCard: true }), emptySingleCharacter());
     expect(result.usedFallback).toBe(true);
+    // The name is a memory key only; it never becomes an appearance tag.
     expect(result.singleCharacter.protagonist.name).toBe("Mira");
-    expect(result.singleCharacter.protagonist.tags).toEqual(["Mira"]);
+    expect(result.singleCharacter.protagonist.tags).toEqual([]);
     const scene = result.plan.scenes[0]!;
-    expect(scene.identityPrompt).toBe("Mira");
+    expect(scene.identityPrompt).toBeNull();
     expect(scene.cast).toEqual(["Mira"]);
     const cue = result.plan.visualCues[0]!;
     const prompt = compileImagePrompt(DEFAULT_CONFIG, scene, cue);
-    expect(prompt).toContain("identity: Mira, solo");
+    expect(prompt).not.toContain("identity:");
+    expect(prompt).toContain("solo");
   });
 
   test("uses the literal Protagonist when there is no card and no speaker name", async () => {
@@ -192,9 +199,11 @@ describe("fresh single-character fallback", () => {
     const result = await plan(spindleFor("fail", captured, { noCard: true }), emptySingleCharacter(), unnamed);
     expect(result.usedFallback).toBe(true);
     expect(result.singleCharacter.protagonist.name).toBe("Protagonist");
-    expect(result.singleCharacter.protagonist.tags).toEqual(["Protagonist"]);
+    // No card and no speaker name: the durable fallback is a name-keyed, tag-free
+    // identity, never a name-only appearance tag.
+    expect(result.singleCharacter.protagonist.tags).toEqual([]);
     const scene = result.plan.scenes[0]!;
-    expect(scene.identityPrompt).toBe("Protagonist");
+    expect(scene.identityPrompt).toBeNull();
     expect(scene.cast).toEqual(["Protagonist"]);
   });
 

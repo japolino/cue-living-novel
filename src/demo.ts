@@ -1,4 +1,5 @@
 import { VnStage } from "./frontend/stage/index.js";
+import { isThemePresetId } from "./frontend/theme/presets.js";
 
 function sceneDataUrl(colors: [string, string], label: string): string {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900">
@@ -25,14 +26,18 @@ if (!mount) throw new Error("Preview mount is missing.");
 
 const firstScene = sceneDataUrl(["#402b63", "#d77d72"], "Sunset overlook");
 const secondScene = sceneDataUrl(["#07152f", "#31527d"], "Night overlook");
-const mode = new URLSearchParams(location.search).get("mode") === "standard" ? "standard" : "cyoa";
+const query = new URLSearchParams(location.search);
+const mode = query.get("mode") === "standard" ? "standard" : "cyoa";
+const requestedPreset = query.get("preset");
+const themePreset = isThemePresetId(requestedPreset) ? requestedPreset : "lumiverse";
 
 const stage = new VnStage({
   mount,
-  userCss: `
+  themePreset,
+  userCss: themePreset === "lumiverse" ? `
     [data-vn-dialogue] { border-color: rgba(255, 218, 239, .48); }
     [data-vn-speaker] { letter-spacing: .08em; text-transform: uppercase; }
-  `,
+  ` : "",
   onAdvance: (paragraphIndex) => {
     if (paragraphIndex === 1) {
       window.setTimeout(() => {

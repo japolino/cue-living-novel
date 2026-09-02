@@ -32,9 +32,20 @@ export type VisualContextDiagnostics = {
   errors: string[];
 };
 
+export type StructuredCharacterIdentity = {
+  /** Character display name. */
+  name: string;
+  /** Full character-card description (never discarded). */
+  description: string;
+  /** Stable / curated card appearance tags. */
+  tags: string[];
+};
+
 export type VisualContextSnapshot = {
   plannerContext: string;
   identityPrompt: string;
+  /** Structured, non-lossy character identity (name + full description + stable tags). */
+  characterIdentity: StructuredCharacterIdentity | null;
   diagnostics: VisualContextDiagnostics;
 };
 
@@ -276,9 +287,15 @@ export async function loadVisualContext(
 
   const characterBlock = characterContext(character);
   const personaBlock = personaContext(persona);
+  const characterIdentity = character ? {
+    name: clean(character.name),
+    description: clean(character.description),
+    tags: Array.isArray(character.tags) ? character.tags.map((tag) => clean(tag)).filter(Boolean) : []
+  } : null;
   return {
     plannerContext: [characterBlock, personaBlock, lore].filter(Boolean).join("\n\n"),
     identityPrompt: visualIdentity(character, persona),
+    characterIdentity,
     diagnostics
   };
 }

@@ -41,13 +41,24 @@ test("planner fallback still creates a valid revealable turn and authored choice
     previousContinuity: null,
     recentMessages: [],
     config: { ...DEFAULT_CONFIG, mode: "cyoa" },
-    singleCharacter: emptySingleCharacter()
+    singleCharacter: emptySingleCharacter(),
+    characterAppearance: {}
   });
   assert.equal(result.usedFallback, true);
   assert.deepEqual(result.plan.paragraphs.map((paragraph) => paragraph.text), ["First paragraph.", "Second paragraph."]);
   assert.equal(result.plan.choices[0]?.submission, "We stay.");
   assert.equal(result.plan.scenes[0]?.startParagraph, 0);
   assert.equal(result.plan.visualCues[0]?.paragraphIndex, 0);
+  assert.deepEqual(result.plan.scenes[0]?.cameraLock, {
+    framing: "upper body",
+    angle: "eye level",
+    perspective: "straight-on",
+    lens: null,
+    subjectAnchor: "primary speaking character centered",
+    horizon: "stable horizon at the upper middle third",
+    safeDialogueRegion: "lower quarter free of faces and important objects",
+    aspectRatio: "16:9"
+  });
 });
 
 test("fallback planning reuses the active scene prompt and camera identity", async () => {
@@ -89,7 +100,8 @@ test("fallback planning reuses the active scene prompt and camera identity", asy
     previousContinuity: continuity,
     recentMessages: [],
     config: DEFAULT_CONFIG,
-    singleCharacter: emptySingleCharacter()
+    singleCharacter: emptySingleCharacter(),
+    characterAppearance: {}
   });
   assert.equal(result.plan.scenes[0]?.sceneId, previousScene.sceneId);
   assert.equal(result.plan.scenes[0]?.revision, previousScene.revision);
@@ -98,10 +110,12 @@ test("fallback planning reuses the active scene prompt and camera identity", asy
 });
 
 
-function dedupeSpindle(cues: number[]): SpindleAPI {
+function dedupeSpindle(cues: number[], captured?: { system: string }): SpindleAPI {
   return {
     generate: {
-      raw: async () => ({
+      raw: async (request: any) => {
+        if (captured) captured.system = request.messages?.[0]?.content ?? "";
+        return {
         content: JSON.stringify({
           scenes: [{
             startParagraph: 0,
@@ -130,7 +144,8 @@ function dedupeSpindle(cues: number[]): SpindleAPI {
           choices: [],
           characters: [{ name: "Mira", description: "silver hair, green eyes" }]
         })
-      })
+        };
+      }
     },
     log: { warn() {} }
   } as unknown as SpindleAPI;
@@ -138,7 +153,8 @@ function dedupeSpindle(cues: number[]): SpindleAPI {
 
 test("dedupes same-paragraph cues before the maxImagesPerTurn slice", async () => {
   const content = "First paragraph.\n\nSecond paragraph.";
-  const result = await planTurn(dedupeSpindle([0, 0, 1]), {
+  const captured = { system: "" };
+  const result = await planTurn(dedupeSpindle([0, 0, 1], captured), {
     chatId: "chat-1",
     message: { ...message, content },
     content,
@@ -152,7 +168,8 @@ test("dedupes same-paragraph cues before the maxImagesPerTurn slice", async () =
       includeLorebookContext: false,
       maxImagesPerTurn: 4
     },
-    singleCharacter: emptySingleCharacter()
+    singleCharacter: emptySingleCharacter(),
+    characterAppearance: {}
   });
 
   const indexes = result.plan.visualCues.map((cue) => cue.paragraphIndex);
@@ -161,4 +178,48 @@ test("dedupes same-paragraph cues before the maxImagesPerTurn slice", async () =
   assert.equal(result.plan.visualCues.filter((cue) => cue.paragraphIndex === 0).length, 1);
   assert.equal(result.plan.visualCues[0]?.cueId, result.plan.visualCues[0]?.cueId);
   assert.notEqual(result.plan.visualCues[0]?.assetJobId, result.plan.visualCues[1]?.assetJobId);
+  assert.match(captured.system, /concise comma-separated Danbooru-style scene tags/);
+  assert.match(captured.system, /no camera or composition prose, character names, or character description/);
+});
+
+test("maxImagesPerTurn=0 means unlimited: retains all distinct cues", async () => {
+  const content = "First paragraph.\n\nSecond paragraph.\n\nThird paragraph.";
+  const result = await planTurn(dedupeSpindle([0, 1, 2, 0]), {
+    chatId: "chat-1",
+    message: { ...message, content },
+    content,
+    previousScene: null,
+    previousContinuity: null,
+    recentMessages: [],
+    config: {
+      ...DEFAULT_CONFIG,
+      includeCharacterContext: false,
+      includePersonaContext: false,
+      includeLorebookContext: false,
+      maxImagesPerTurn: 0
+    },
+    singleCharacter: emptySingleCharacter(),
+    characterAppearance: {}
+  });
+
+  // Unlimited: the duplicate paragraph-0 index is still deduped first, then no slice truncates.
+  assert.deepEqual(result.plan.visualCues.map((cue) => cue.paragraphIndex), [0, 1, 2]);
+});
+
+test("maxImagesPerTurn=0 still creates a fallback cue when the sidecar fails", async () => {
+  const content = "First paragraph.\n\nSecond paragraph.";
+  const result = await planTurn(fallbackSpindle(), {
+    chatId: "chat-1",
+    message: { ...message, content },
+    content,
+    previousScene: null,
+    previousContinuity: null,
+    recentMessages: [],
+    config: { ...DEFAULT_CONFIG, maxImagesPerTurn: 0 },
+    singleCharacter: emptySingleCharacter(),
+    characterAppearance: {}
+  });
+  assert.equal(result.usedFallback, true);
+  // Unlimited fallback still emits the cue for paragraph 0.
+  assert.equal(result.plan.visualCues[0]?.paragraphIndex, 0);
 });

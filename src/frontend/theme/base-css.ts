@@ -96,6 +96,32 @@ textarea {
     linear-gradient(0deg, rgba(0, 0, 0, 0.72), transparent 45%);
 }
 
+/*
+ * Shared framework-owned ornament layer. It is a direct child of the root,
+ * sits above the scene and below the narrative/interaction content, never
+ * intercepts clicks, and is invisible to assistive tech. Each preset reveals
+ * only its own group via a scoped rule in its own CSS block.
+ */
+[data-vn-ornaments] {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  overflow: hidden;
+  color: var(--vn-accent);
+}
+
+[data-vn-ornaments] svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Only the active preset's ornament group is shown (see presets.ts). */
+[data-vn-ornament-group] {
+  display: none;
+}
+
 [data-vn-status-stack] {
   position: absolute;
   z-index: 3;
@@ -382,6 +408,72 @@ textarea {
     0%, 100% { transform: translateY(0); }
     50% { transform: translateY(0.22rem); }
   }
+
+  /*
+   * Shared decorative keyframes, referenced by preset CSS. All preset
+   * animation is authored under this same no-preference media query and the
+   * reduced-motion block below zeroes durations/iterations globally.
+   */
+  @keyframes vn-sparkle {
+    0%, 100% { opacity: 0.4; transform: scale(0.8); }
+    50% { opacity: 1; transform: scale(1.15); }
+  }
+
+  @keyframes vn-glow-breathe {
+    0%, 100% { box-shadow: 0 1rem 3rem rgba(80, 45, 10, 0.5), inset 0 0 0 1px rgba(255, 236, 196, 0.08); }
+    50% { box-shadow: 0 1rem 3.4rem rgba(120, 70, 15, 0.6), inset 0 0 0 1px rgba(255, 236, 196, 0.14); }
+  }
+
+  @keyframes vn-chevron-bob {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(0.18rem); }
+  }
+
+  @keyframes vn-console-caret {
+    0%, 49% { opacity: 1; }
+    50%, 100% { opacity: 0; }
+  }
+
+  @keyframes vn-led-blink {
+    0%, 60% { opacity: 1; }
+    61%, 100% { opacity: 0.18; }
+  }
+
+  @keyframes vn-hud-scan {
+    0% { transform: translateY(-8rem); }
+    100% { transform: translateY(110%); }
+  }
+
+  @keyframes vn-noir-sweep {
+    0% { transform: translateX(-130%) skewX(-12deg); }
+    100% { transform: translateX(150%) skewX(-12deg); }
+  }
+
+  @keyframes vn-film-flicker {
+    0%, 100% { opacity: 0.02; }
+    50% { opacity: 0.06; }
+  }
+
+  /*
+   * Ornament micro-motion. Only the active preset's group is displayed, and
+   * these selectors live inside the ornaments layer, so they never animate
+   * page content. data-vn-anim-delay staggers the twinkle.
+   */
+  [data-vn-ornaments] [data-vn-anim="sparkle"] {
+    animation: vn-sparkle 2.4s ease-in-out infinite;
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+
+  [data-vn-ornaments] [data-vn-anim="led"] {
+    animation: vn-led-blink 1.6s steps(1) infinite;
+  }
+
+  [data-vn-anim-delay="0s"] { animation-delay: 0s; }
+  [data-vn-anim-delay="0.6s"] { animation-delay: 0.6s; }
+  [data-vn-anim-delay="1.2s"] { animation-delay: 1.2s; }
+  [data-vn-anim-delay="1.8s"] { animation-delay: 1.8s; }
+  [data-vn-anim-delay="0.3s"] { animation-delay: 0.3s; }
 }
 
 @media (prefers-reduced-motion: reduce) {

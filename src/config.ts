@@ -69,7 +69,7 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   includePersonaContext: true,
   includeLorebookContext: false,
   promptPrefix: "masterpiece, best quality, anime visual novel scene",
-  promptSuffix: "wide composition, centered subject, stable eye-level camera, dialogue-safe lower frame",
+  promptSuffix: "",
   negativePrompt: "low quality, blurry, malformed hands, text, subtitles, speech bubble, watermark, logo, frame, border",
   customPlannerInstructions: "",
   customCss: "",
@@ -107,6 +107,18 @@ function sceneImageFit(value: unknown): VisualNovelSceneImageFit {
     : DEFAULT_CONFIG.sceneImageFit;
 }
 
+
+/**
+ * The pre-1.0 default prompt suffix duplicated camera framing as prose. The
+ * compact Inlay-style camera tags now own framing, so the exact legacy default
+ * is retired to an empty suffix; any user-customized suffix is preserved.
+ */
+const LEGACY_DEFAULT_PROMPT_SUFFIX = "wide composition, centered subject, stable eye-level camera, dialogue-safe lower frame";
+
+function retiredLegacySuffix(value: string): string {
+  return value.trim() === LEGACY_DEFAULT_PROMPT_SUFFIX ? "" : value;
+}
+
 export function normalizeConfig(value: unknown): VisualNovelConfig {
   const input = record(value);
   const themePreset = (THEME_PRESET_IDS as readonly string[]).includes(input.themePreset as string)
@@ -133,7 +145,7 @@ export function normalizeConfig(value: unknown): VisualNovelConfig {
     includePersonaContext: bool(input.includePersonaContext, DEFAULT_CONFIG.includePersonaContext),
     includeLorebookContext: bool(input.includeLorebookContext, DEFAULT_CONFIG.includeLorebookContext),
     promptPrefix: stringValue(input.promptPrefix, DEFAULT_CONFIG.promptPrefix),
-    promptSuffix: stringValue(input.promptSuffix, DEFAULT_CONFIG.promptSuffix),
+    promptSuffix: retiredLegacySuffix(stringValue(input.promptSuffix, DEFAULT_CONFIG.promptSuffix)),
     negativePrompt: stringValue(input.negativePrompt, DEFAULT_CONFIG.negativePrompt),
     customPlannerInstructions: stringValue(input.customPlannerInstructions, DEFAULT_CONFIG.customPlannerInstructions),
     customCss: stringValue(input.customCss, DEFAULT_CONFIG.customCss)

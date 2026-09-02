@@ -8,6 +8,15 @@ import {
   SINGLE_CHARACTER_SCHEMA_VERSION,
   type SingleCharacterState
 } from "../../shared/character.js";
+import {
+  appearanceMapKeyFor,
+  characterAppearanceKey,
+  isUsableIdentity,
+  normalizeCharacterName,
+  splitTags,
+  toUsableTags,
+  type CharacterAppearanceMap
+} from "../../shared/identity.js";
 
 export type StoredTurnRecord = {
   schemaVersion: 1;
@@ -126,19 +135,214 @@ export async function saveSingleCharacterState(
       ...(userOptions(userId) ?? {})
     });
     const existing = migrateVisualProfilesToSingleCharacter(existingRaw);
-    const frozen = existing.protagonist.name.trim() !== ""
-      ? { ...state, protagonist: existing.protagonist }
-      : state;
+    // Freeze only a USEABLE appearance baseline. A poisoned name-only / empty
+    // state is not frozen, so it can be repaired once a richer identity exists.
+    const existingName = normalizeCharacterName(existing.protagonist.name);
+    const existingUsable = isUsableIdentity(existingName, existing.protagonist.tags);
+    const incomingUsable = isUsableIdentity(state.protagonist.name, state.protagonist.tags);
+    let protagonist: SingleCharacterState["protagonist"];
+    if (existingUsable) {
+      protagonist = { name: existing.protagonist.name, tags: toUsableTags(existing.protagonist.name, existing.protagonist.tags) };
+    } else if (incomingUsable) {
+      protagonist = { name: state.protagonist.name, tags: toUsableTags(state.protagonist.name, state.protagonist.tags) };
+    } else {
+      // Neither source carries a real appearance baseline. Keep the existing name
+      // as the memory key, but NEVER inject the name as an appearance tag.
+      const name = existingName || normalizeCharacterName(state.protagonist.name);
+      protagonist = { name, tags: [] };
+    }
     await spindle.userStorage.setJson(path, {
       schemaVersion: SINGLE_CHARACTER_SCHEMA_VERSION,
-      protagonist: frozen.protagonist,
-      environment: frozen.environment,
+      protagonist,
+      environment: state.environment,
       updatedAt: new Date().toISOString()
     }, {
       indent: 2,
       ...(userOptions(userId) ?? {})
     });
   });
+}
+
+/** Path of the durable global character-appearance map (name -> canonical tags). */
+export function characterAppearancePath(): string {
+  return "character-appearance.json";
+}
+
+/** Marker path recording that the one-time chat-state appearance migration ran. */
+export function appearanceMigrationMarkerPath(): string {
+  return "character-appearance-migrated.json";
+}
+
+/** Normalize a raw stored map into usable entries only (never name-only / degraded). */
+function normalizeAppearanceMap(raw: unknown): CharacterAppearanceMap {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const map: CharacterAppearanceMap = {};
+  for (const [name, rawTags] of Object.entries(raw as Record<string, unknown>)) {
+    const cleanName = normalizeCharacterName(name);
+    const tags = typeof rawTags === "string" ? splitTags(rawTags) : [];
+    if (!cleanName || !isUsableIdentity(cleanName, tags)) continue;
+    map[name] = toUsableTags(cleanName, tags).join(", ");
+  }
+  return map;
+}
+
+/**
+ * Load the durable global character-appearance map and run the one-time batch
+ * migration/repair over existing `chats/<id>/visual-state.json` records. Inlay
+ * behavior: a good baseline learned in chat A is reused exactly in chat B.
+ */
+export async function loadCharacterAppearance(
+  spindle: SpindleAPI,
+  userId?: string
+): Promise<CharacterAppearanceMap> {
+  const raw = await spindle.userStorage.getJson<unknown>(characterAppearancePath(), {
+    fallback: {},
+    ...(userOptions(userId) ?? {})
+  });
+  const base = normalizeAppearanceMap(raw);
+  return migrateCharacterAppearanceStates(spindle, base, userId);
+}
+
+/** Persist the global character-appearance map (serialized). */
+export async function saveCharacterAppearance(
+  spindle: SpindleAPI,
+  map: CharacterAppearanceMap,
+  userId?: string
+): Promise<void> {
+  const path = characterAppearancePath();
+  const normalized = normalizeAppearanceMap(map);
+  await serializedWrite(scopedKey(userId, path), () => spindle.userStorage.setJson(path, normalized, {
+    indent: 2,
+    ...(userOptions(userId) ?? {})
+  }));
+}
+
+/**
+ * Merge a resolved single-character identity into the global map. Preserves an
+ * existing usable baseline exactly; only fills missing entries or repairs
+ * degraded (name-only / empty) entries. Names are memory keys, never tags.
+ */
+export async function mergeCharacterAppearanceFromState(
+  spindle: SpindleAPI,
+  state: SingleCharacterState,
+  userId?: string
+): Promise<void> {
+  const name = normalizeCharacterName(state.protagonist.name);
+  const tags = toUsableTags(name, state.protagonist.tags);
+  if (!name || tags.length === 0) return;
+  const path = characterAppearancePath();
+  await serializedWrite(scopedKey(userId, path), async () => {
+    const existingRaw = await spindle.userStorage.getJson<unknown>(path, {
+      fallback: {},
+      ...(userOptions(userId) ?? {})
+    });
+    const existing = normalizeAppearanceMap(existingRaw);
+    const existingKey = appearanceMapKeyFor(existing, name);
+    if (existingKey && isUsableIdentity(name, splitTags(existing[existingKey] ?? ""))) return;
+    if (existingKey) delete existing[existingKey];
+    existing[name] = tags.join(", ");
+    await spindle.userStorage.setJson(path, existing, {
+      indent: 2,
+      ...(userOptions(userId) ?? {})
+    });
+  });
+}
+
+/**
+ * One-time batch migration/repair. Lists every `chats/<id>/visual-state.json`,
+ * selects the richest usable identity per character name, merges it into (and
+ * never degrades) the global map, and repairs poisoned name-only chat states.
+ * Safe to call repeatedly; guarded by a persisted marker.
+ */
+export async function migrateCharacterAppearanceStates(
+  spindle: SpindleAPI,
+  base: CharacterAppearanceMap,
+  userId?: string
+): Promise<CharacterAppearanceMap> {
+  const markerPath = appearanceMigrationMarkerPath();
+  let marked = false;
+  try {
+    marked = await spindle.userStorage.getJson<boolean>(markerPath, {
+      fallback: false,
+      ...(userOptions(userId) ?? {})
+    });
+  } catch {
+    marked = false;
+  }
+  if (marked) return base;
+
+  let chatPaths: string[] = [];
+  if (typeof spindle.userStorage.list === "function") {
+    try {
+      const listed = await spindle.userStorage.list("chats/", userId);
+      chatPaths = (Array.isArray(listed) ? listed : []).filter((file) => file.endsWith("visual-state.json"));
+    } catch {
+      chatPaths = [];
+    }
+  }
+
+  const candidates = new Map<string, { name: string; tags: string[] }>();
+  for (const [name, rawTags] of Object.entries(base)) {
+    const key = characterAppearanceKey(name);
+    const tags = splitTags(rawTags);
+    if (key && isUsableIdentity(name, tags)) candidates.set(key, { name, tags });
+  }
+  const chatStates = new Map<string, SingleCharacterState>();
+  for (const file of chatPaths) {
+    let raw: unknown;
+    try {
+      raw = await spindle.userStorage.getJson<unknown>(file, {
+        fallback: null,
+        ...(userOptions(userId) ?? {})
+      });
+    } catch {
+      continue;
+    }
+    const state = migrateVisualProfilesToSingleCharacter(raw);
+    chatStates.set(file, state);
+    const key = characterAppearanceKey(state.protagonist.name);
+    if (!key || !isUsableIdentity(state.protagonist.name, state.protagonist.tags)) continue;
+    const tags = toUsableTags(state.protagonist.name, state.protagonist.tags);
+    const existing = candidates.get(key);
+    if (!existing || tags.length > existing.tags.length) {
+      candidates.set(key, { name: state.protagonist.name, tags });
+    }
+  }
+
+  const next: CharacterAppearanceMap = {};
+  for (const [, candidate] of candidates) {
+    if (candidate.tags.length) next[candidate.name] = candidate.tags.join(", ");
+  }
+  for (const [name, tags] of Object.entries(base)) {
+    const key = characterAppearanceKey(name);
+    if (!next[key]) next[name] = tags;
+  }
+
+  // Repair poisoned chat states with the richest usable baseline per name.
+  for (const [file, state] of chatStates) {
+    if (isUsableIdentity(state.protagonist.name, state.protagonist.tags)) continue;
+    const key = characterAppearanceKey(state.protagonist.name);
+    const best = candidates.get(key);
+    if (!best || best.tags.length === 0) continue;
+    await serializedWrite(scopedKey(userId, file), () => spindle.userStorage.setJson(file, {
+      schemaVersion: SINGLE_CHARACTER_SCHEMA_VERSION,
+      protagonist: { name: best.name, tags: [...best.tags] },
+      environment: state.environment,
+      updatedAt: new Date().toISOString()
+    }, {
+      indent: 2,
+      ...(userOptions(userId) ?? {})
+    }));
+  }
+
+  if (JSON.stringify(next) !== JSON.stringify(base)) {
+    await saveCharacterAppearance(spindle, next, userId);
+  }
+  await serializedWrite(scopedKey(userId, markerPath), () => spindle.userStorage.setJson(markerPath, true, {
+    indent: 2,
+    ...(userOptions(userId) ?? {})
+  }));
+  return next;
 }
 
 export async function loadConfig(spindle: SpindleAPI, userId?: string): Promise<VisualNovelConfig> {

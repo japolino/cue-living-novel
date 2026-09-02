@@ -93,7 +93,8 @@ describe("identity propagation", () => {
       previousContinuity: null,
       recentMessages: [],
       config: { ...DEFAULT_CONFIG, parserConnectionId: "conn-parser" },
-      singleCharacter: emptySingleCharacter()
+      singleCharacter: emptySingleCharacter(),
+      characterAppearance: {}
     });
     const scene = result.plan.scenes[0]!;
     const cue = result.plan.visualCues[0]!;
@@ -120,7 +121,10 @@ describe("identity propagation", () => {
     expect(cue.poseExpressionId).toBeString();
     // Exactly one protagonist, centered, deterministic catalogue pose suffix, and no free-form visual delta.
     const prompt = compileImagePrompt(DEFAULT_CONFIG, scene, cue);
-    expect(prompt).toContain("identity: silver hair, green eyes, red wool coat, solo");
+    expect(prompt).toContain("1girl, solo");
+    expect(prompt).toContain("girl, silver hair, green eyes, red wool coat");
+    expect(prompt).not.toContain("identity:");
+    expect(prompt).not.toContain("Mira");
     expect(prompt).toContain("solo");
     // The identity tags appear exactly once.
     expect(prompt.split("silver hair").length - 1).toBe(1);
@@ -142,7 +146,8 @@ describe("identity propagation", () => {
       previousContinuity: null,
       recentMessages: [],
       config: DEFAULT_CONFIG,
-      singleCharacter: seedSingleCharacter("Mira", "brown hair, violet eyes")
+      singleCharacter: seedSingleCharacter("Mira", "brown hair, violet eyes"),
+      characterAppearance: {}
     });
     // Frozen identity is preserved exactly; the planner's described tags do not overwrite it.
     expect(result.singleCharacter.protagonist.name).toBe("Mira");

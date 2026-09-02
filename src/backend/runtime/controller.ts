@@ -17,10 +17,12 @@ import { createAssetJobs, generateAssets } from "./images.js";
 import { fingerprintForMessage, planTurn } from "./planner.js";
 import { loadConnectionCatalog } from "./connections.js";
 import {
+  loadCharacterAppearance,
   loadChatState,
   loadConfig,
   loadSingleCharacterState,
   loadTurnRecord,
+  mergeCharacterAppearanceFromState,
   saveChatState,
   saveSingleCharacterState,
   saveTurnRecord,
@@ -196,6 +198,7 @@ async function processAssistantMessage(
     const config = await loadConfig(spindle, userId);
     const chatState = await loadChatState(spindle, chatId, userId);
     const singleCharacter = await loadSingleCharacterState(spindle, chatId, userId);
+    const characterAppearance = await loadCharacterAppearance(spindle, userId);
     const messages = await spindle.chat.getMessages(chatId) as NormalizedChatMessage[];
     const result = await planTurn(spindle, {
       chatId,
@@ -206,11 +209,13 @@ async function processAssistantMessage(
       recentMessages: messages.slice(-config.includeRecentMessages),
       config,
       singleCharacter,
+      characterAppearance,
       ...(userId ? { userId } : {})
     });
     if (operation.controller.signal.aborted) return;
     await saveSingleCharacterState(spindle, chatId, result.singleCharacter, userId);
-    const jobs = config.generateImages ? createAssetJobs(result.plan) : [];
+    await mergeCharacterAppearanceFromState(spindle, result.singleCharacter, userId);
+    const jobs = config.generateImages ? createAssetJobs(result.plan, config) : [];
     const record: StoredTurnRecord = {
       schemaVersion: 1,
       speaker: message.name || "Narrator",

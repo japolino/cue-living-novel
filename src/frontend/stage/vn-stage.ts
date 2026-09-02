@@ -16,6 +16,7 @@ import type {
 import {
   applyVnUserCss,
   VN_BASE_CSS,
+  VN_ORNAMENT_LAYER_MARKUP,
   VN_OUTER_CSS,
   THEME_PRESET_CSS,
   THEME_STYLE_LAYER_ATTRIBUTE,
@@ -57,6 +58,8 @@ const THEME_MARKUP = `
       <img data-vn-scene-image data-vn-empty="true" alt="" />
       <div data-vn-scrim></div>
     </div>
+
+    ${VN_ORNAMENT_LAYER_MARKUP}
 
     <div data-vn-status-stack aria-live="polite" aria-atomic="false"></div>
     <div data-vn-empty-state>

@@ -62,6 +62,41 @@ describe("preset CSS map", () => {
   });
 });
 
+
+describe("authored preset signatures", () => {
+  test("each preset reveals only its own ornament group and stays local-only", () => {
+    for (const id of EXPECTED_PRESETS) {
+      const css = THEME_PRESET_CSS[id];
+      expect(css).toContain(`[data-vn-ornament-group][data-vn-preset="${id}"]`);
+      expect(css.toLowerCase()).not.toContain("url(");
+      expect(css.toLowerCase()).not.toContain("@import");
+      expect(css.toLowerCase()).not.toContain("http");
+    }
+  });
+
+  test("golden-hour uses a dark smoked plate with two keylines", () => {
+    const css = THEME_PRESET_CSS["golden-hour"];
+    const dialogueRule = css.match(/\[data-vn-dialogue\] \{[\s\S]*?\}/)?.[0] ?? "";
+    expect(dialogueRule).toMatch(/background:.*rgba\((?:1[0-9]|2[0-9]|3[0-9]),/);
+    expect(dialogueRule).not.toMatch(/background:[^;]*(?:ivory|white|#fff)/i);
+    expect(dialogueRule).toContain("border:");
+    expect(dialogueRule).toContain("outline:");
+  });
+
+  test("boxed-console carries a scanline treatment", () => {
+    expect(THEME_PRESET_CSS["boxed-console"]).toContain("repeating-linear-gradient");
+  });
+
+  test("paper-novel carries the oxblood seal accent", () => {
+    expect(THEME_PRESET_CSS["paper-novel"].toLowerCase()).toContain("#8a2f23");
+  });
+
+  test("midnight-noir carries a scene letterbox gradient", () => {
+    const css = THEME_PRESET_CSS["midnight-noir"];
+    expect(css).toMatch(/\[data-vn-scene\]::after[\s\S]*?linear-gradient\(180deg/);
+  });
+});
+
 describe("isThemePresetId", () => {
   test("accepts exactly the canonical ids", () => {
     for (const id of EXPECTED_PRESETS) {
