@@ -14,7 +14,8 @@
     "build": "bun run typecheck:build && bun build ./src/backend.ts ./src/frontend.ts --outdir ./dist --target browser --format esm",
     "build:demo": "bun build ./src/demo.ts --outfile ./demo/demo.js --target browser --format esm",
     "serve:demo": "bun run build:demo && bunx serve ./demo -l 4173",
-    "verify": "bun run test && bun run typecheck && bun run build"
+    "verify": "bun run test && bun run typecheck && bun run build",
+    "pack:audio": "bun run ./scripts/pack-audio.ts"
   },
   "dependencies": {
     "zod": "^4.4.3"
