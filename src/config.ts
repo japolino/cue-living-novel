@@ -49,6 +49,9 @@ export type VisualNovelConfig = {
   ignoredTags: string;
   displayRegexRules: string;
   useNativeCardImages: boolean;
+  textSpeed: number;
+  autoPlayDelay: number;
+  skipMode: "read" | "all";
 };
 
 export const DEFAULT_CONFIG: VisualNovelConfig = {
@@ -79,6 +82,9 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   ignoredTags: "",
   displayRegexRules: "",
   useNativeCardImages: false,
+  textSpeed: 20,
+  autoPlayDelay: 2000,
+  skipMode: "read",
 };
 
 function record(value: unknown): Record<string, unknown> {
@@ -157,6 +163,9 @@ export function normalizeConfig(value: unknown): VisualNovelConfig {
     customCss: stringValue(input.customCss, DEFAULT_CONFIG.customCss),
     ignoredTags: stringValue(input.ignoredTags, DEFAULT_CONFIG.ignoredTags),
     displayRegexRules: stringValue(input.displayRegexRules, DEFAULT_CONFIG.displayRegexRules),
-    useNativeCardImages: bool(input.useNativeCardImages, DEFAULT_CONFIG.useNativeCardImages)
+    useNativeCardImages: bool(input.useNativeCardImages, DEFAULT_CONFIG.useNativeCardImages),
+    textSpeed: integer(input.textSpeed, 0, 100, DEFAULT_CONFIG.textSpeed),
+    autoPlayDelay: integer(input.autoPlayDelay, 500, 10000, DEFAULT_CONFIG.autoPlayDelay),
+    skipMode: input.skipMode === "all" ? "all" : "read"
   };
 }

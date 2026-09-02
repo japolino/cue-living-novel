@@ -51,6 +51,9 @@ const baseConfig: VisualNovelConfig = {
   ignoredTags: "",
   displayRegexRules: "",
   useNativeCardImages: false,
+  textSpeed: 20,
+  autoPlayDelay: 2000,
+  skipMode: "read",
 };
 
 describe("applyVisualConfigToStage (live controller config application)", () => {

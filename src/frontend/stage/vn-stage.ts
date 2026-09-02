@@ -1,4 +1,5 @@
 import {
+  escapeHtml,
   formatDialogueText,
   parseCustomRegexRules,
   type CustomRegexRule,
@@ -53,6 +54,9 @@ export interface VnStageOptions extends VnStageCallbacks {
   sceneImageFit?: VisualNovelSceneImageFit;
   /** Visual theme preset applied to the stage root. Defaults to "lumiverse". */
   themePreset?: VisualNovelThemePreset;
+  textSpeed?: number;
+  autoPlayDelay?: number;
+  skipMode?: "read" | "all";
 }
 
 export interface VnSceneImageRequest {
@@ -77,6 +81,11 @@ const THEME_MARKUP = `
 
     <section data-vn-narrative hidden aria-label="Dialogue">
       <div data-vn-dialogue>
+        <nav data-vn-controls aria-label="Dialogue controls">
+          <button data-vn-control="log" type="button" aria-label="History Log">Log</button>
+          <button data-vn-control="auto" type="button" aria-label="Toggle auto play">Auto</button>
+          <button data-vn-control="skip" type="button" aria-label="Toggle fast forward">Skip</button>
+        </nav>
         <span data-vn-speaker hidden></span>
         <p data-vn-dialogue-text aria-live="polite" aria-atomic="true"></p>
         <span data-vn-progress></span>
@@ -96,6 +105,14 @@ const THEME_MARKUP = `
         <button data-vn-submit type="submit">Send</button>
       </form>
     </section>
+
+    <div data-vn-backlog hidden aria-modal="true" role="dialog" aria-label="Dialogue history">
+      <div data-vn-backlog-header>
+        <h3 data-vn-backlog-title>History Log</h3>
+        <button data-vn-backlog-close type="button" aria-label="Close history log">✕</button>
+      </div>
+      <div data-vn-backlog-content tabindex="0"></div>
+    </div>
   </main>
 `;
 
@@ -224,10 +241,30 @@ export class VnStage {
   private readonly input: HTMLTextAreaElement;
   private readonly submitButton: HTMLButtonElement;
   private readonly exitButton: HTMLButtonElement;
+  private readonly logButton: HTMLButtonElement;
+  private readonly autoButton: HTMLButtonElement;
+  private readonly skipButton: HTMLButtonElement;
+  private readonly backlogModal: HTMLElement;
+  private readonly backlogClose: HTMLButtonElement;
+  private readonly backlogContent: HTMLElement;
   private readonly createImage: VnImageFactory | undefined;
   private imageRequestSequence = 0;
   private destroyed = false;
   private customRegexRules: CustomRegexRule[] = [];
+  private textSpeed = 20;
+  private autoPlayDelay = 2000;
+  private skipMode: "read" | "all" = "read";
+  private isAutoPlay = false;
+  private isSkipping = false;
+  private isBacklogOpen = false;
+  private isTyping = false;
+  private typewriterTimer: ReturnType<typeof setInterval> | null = null;
+  private autoPlayTimer: ReturnType<typeof setTimeout> | null = null;
+  private skipTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly readParagraphIds = new Set<string>();
+  private readonly backlogEntries: Array<{ speaker?: string | undefined; text: string; formatted: string }> = [];
+  private activeTextNodes: Array<{ node: Text; fullText: string }> = [];
+  private currentRenderedParagraphId = "";
 
   constructor(options: VnStageOptions) {
     this.state = options.initialState ?? createInitialVnStageState();
@@ -304,6 +341,16 @@ export class VnStage {
     this.inputForm = queryRequired(this.themeRoot, "[data-vn-input-form]");
     this.input = queryRequired(this.themeRoot, "[data-vn-input]");
     this.submitButton = queryRequired(this.themeRoot, "[data-vn-submit]");
+    this.logButton = queryRequired(this.themeRoot, "[data-vn-control='log']");
+    this.autoButton = queryRequired(this.themeRoot, "[data-vn-control='auto']");
+    this.skipButton = queryRequired(this.themeRoot, "[data-vn-control='skip']");
+    this.backlogModal = queryRequired(this.themeRoot, "[data-vn-backlog]");
+    this.backlogClose = queryRequired(this.themeRoot, "[data-vn-backlog-close]");
+    this.backlogContent = queryRequired(this.themeRoot, "[data-vn-backlog-content]");
+
+    if (typeof options.textSpeed === "number") this.setTextSpeed(options.textSpeed);
+    if (typeof options.autoPlayDelay === "number") this.setAutoPlayDelay(options.autoPlayDelay);
+    if (options.skipMode) this.setSkipMode(options.skipMode);
 
     this.bindEvents();
     this.render(null);
@@ -330,6 +377,81 @@ export class VnStage {
     this.renderDialogueContent();
   }
 
+  setTextSpeed(speed: number): void {
+    this.textSpeed = Math.max(0, Math.min(100, Math.round(speed)));
+  }
+
+  setAutoPlayDelay(delay: number): void {
+    this.autoPlayDelay = Math.max(500, Math.min(10000, Math.round(delay)));
+  }
+
+  setSkipMode(mode: "read" | "all"): void {
+    this.skipMode = mode === "all" ? "all" : "read";
+  }
+
+  toggleAutoPlay(force?: boolean): void {
+    if (this.destroyed) return;
+    this.isAutoPlay = force !== undefined ? force : !this.isAutoPlay;
+    if (this.isAutoPlay) {
+      this.isSkipping = false;
+      this.clearSkipTimer();
+      this.updateControlButtons();
+      if (!this.isTyping) {
+        this.onTextRenderFinished();
+      }
+    } else {
+      this.clearAutoPlayTimer();
+      this.updateControlButtons();
+    }
+  }
+
+  toggleSkip(force?: boolean): void {
+    if (this.destroyed) return;
+    this.isSkipping = force !== undefined ? force : !this.isSkipping;
+    if (this.isSkipping) {
+      this.isAutoPlay = false;
+      this.clearAutoPlayTimer();
+      this.updateControlButtons();
+      if (this.isTyping) {
+        this.completeTypewriter();
+      } else {
+        this.scheduleSkipAdvance();
+      }
+    } else {
+      this.clearSkipTimer();
+      this.updateControlButtons();
+    }
+  }
+
+  openBacklog(): void {
+    if (this.destroyed) return;
+    this.isBacklogOpen = true;
+    this.backlogModal.hidden = false;
+    this.backlogContent.innerHTML = this.backlogEntries
+      .map(
+        (entry) => `
+        <div data-vn-backlog-item>
+          ${entry.speaker ? `<span data-vn-backlog-speaker>${escapeHtml(entry.speaker)}</span>` : ""}
+          <p data-vn-backlog-text>${entry.formatted}</p>
+        </div>
+      `,
+      )
+      .join("");
+    this.backlogContent.scrollTop = this.backlogContent.scrollHeight;
+  }
+
+  closeBacklog(): void {
+    if (this.destroyed) return;
+    this.isBacklogOpen = false;
+    this.backlogModal.hidden = true;
+    this.root.focus({ preventScroll: true });
+  }
+
+  private updateControlButtons(): void {
+    this.autoButton.dataset.vnActive = String(this.isAutoPlay);
+    this.skipButton.dataset.vnActive = String(this.isSkipping);
+  }
+
   setSceneImageFit(fit: VisualNovelSceneImageFit): void {
     this.sceneImage.dataset.vnSceneImageFit = fit;
   }
@@ -348,6 +470,12 @@ export class VnStage {
   }
 
   reset(): void {
+    this.clearAllTimers();
+    this.isAutoPlay = false;
+    this.isSkipping = false;
+    this.isTyping = false;
+    this.currentRenderedParagraphId = "";
+    this.updateControlButtons();
     this.dispatch({ type: "reset" });
   }
 
@@ -430,6 +558,7 @@ export class VnStage {
   }
 
   destroy(): void {
+    this.clearAllTimers();
     if (this.destroyed) return;
     this.destroyed = true;
     this.host.remove();
@@ -442,13 +571,69 @@ export class VnStage {
       this.advance();
     });
 
+    this.logButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      this.openBacklog();
+    });
+
+    this.autoButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      this.toggleAutoPlay();
+    });
+
+    this.skipButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      this.toggleSkip();
+    });
+
+    this.backlogClose.addEventListener("click", (event) => {
+      event.stopPropagation();
+      this.closeBacklog();
+    });
+
+    this.backlogModal.addEventListener("click", (event) => {
+      if (event.target === this.backlogModal) {
+        this.closeBacklog();
+      }
+    });
+
+    this.root.addEventListener("wheel", (event) => {
+      if (this.isBacklogOpen) return;
+      if (event.deltaY < -30) {
+        this.openBacklog();
+      }
+    }, { passive: true });
+
     this.root.addEventListener("click", (event) => {
+      if (this.isBacklogOpen) return;
       if (!isInteractiveTarget(event.target)) this.advance();
     });
 
     this.root.addEventListener("keydown", (event) => {
       if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+      if (this.isBacklogOpen) {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          this.closeBacklog();
+        }
+        return;
+      }
       if (isInteractiveTarget(event.target)) return;
+      if (event.key === "l" || event.key === "L") {
+        event.preventDefault();
+        this.openBacklog();
+        return;
+      }
+      if (event.key === "a" || event.key === "A") {
+        event.preventDefault();
+        this.toggleAutoPlay();
+        return;
+      }
+      if (event.key === "s" || event.key === "S") {
+        event.preventDefault();
+        this.toggleSkip();
+        return;
+      }
       if (event.key !== "Enter" && event.key !== " " && event.key !== "ArrowRight") return;
 
       event.preventDefault();
@@ -489,6 +674,15 @@ export class VnStage {
   }
 
   private advance(): void {
+    if (this.isBacklogOpen) return;
+    if (this.isTyping) {
+      this.completeTypewriter();
+      return;
+    }
+    if (this.isAutoPlay) {
+      this.clearAutoPlayTimer();
+    }
+
     const before = this.state;
     const view = selectVnStageView(before);
     if (!view.canAdvance) return;
@@ -584,12 +778,178 @@ export class VnStage {
     }
   }
 
+  private clearAllTimers(): void {
+    this.clearTypewriter();
+    this.clearAutoPlayTimer();
+    this.clearSkipTimer();
+  }
+
+  private clearTypewriter(): void {
+    if (this.typewriterTimer !== null) {
+      clearInterval(this.typewriterTimer);
+      this.typewriterTimer = null;
+    }
+  }
+
+  private clearAutoPlayTimer(): void {
+    if (this.autoPlayTimer !== null) {
+      clearTimeout(this.autoPlayTimer);
+      this.autoPlayTimer = null;
+    }
+  }
+
+  private clearSkipTimer(): void {
+    if (this.skipTimer !== null) {
+      clearTimeout(this.skipTimer);
+      this.skipTimer = null;
+    }
+  }
+
+  private recordBacklogAndRead(
+    id: string,
+    speaker: string | undefined,
+    text: string,
+    formatted: string,
+  ): void {
+    this.readParagraphIds.add(id);
+    const last = this.backlogEntries[this.backlogEntries.length - 1];
+    if (!last || last.text !== text || last.speaker !== speaker) {
+      this.backlogEntries.push({ speaker, text, formatted });
+    }
+  }
+
+  private completeTypewriter(): void {
+    this.clearTypewriter();
+    if (this.activeTextNodes.length > 0) {
+      for (const item of this.activeTextNodes) {
+        item.node.textContent = item.fullText;
+      }
+      this.activeTextNodes = [];
+    }
+    this.isTyping = false;
+    this.onTextRenderFinished();
+  }
+
+  private onTextRenderFinished(): void {
+    if (this.destroyed) return;
+    if (this.isSkipping) {
+      this.scheduleSkipAdvance();
+    } else if (this.isAutoPlay) {
+      const view = selectVnStageView(this.state);
+      if (view.canAdvance) {
+        const textLen = view.paragraph?.text.length ?? 0;
+        const delay = Math.max(this.autoPlayDelay, textLen * 30);
+        this.clearAutoPlayTimer();
+        this.autoPlayTimer = setTimeout(() => {
+          if (!this.destroyed && this.isAutoPlay) {
+            this.advance();
+          }
+        }, delay);
+      }
+    }
+  }
+
+  private scheduleSkipAdvance(): void {
+    this.clearSkipTimer();
+    if (!this.isSkipping) return;
+    const view = selectVnStageView(this.state);
+    if (!view.canAdvance) {
+      this.isSkipping = false;
+      this.updateControlButtons();
+      return;
+    }
+    if (this.skipMode === "read") {
+      const nextIdx = this.state.currentParagraphIndex + 1;
+      const nextPara = this.state.paragraphs[nextIdx];
+      if (nextPara && !this.readParagraphIds.has(nextPara.id)) {
+        this.isSkipping = false;
+        this.updateControlButtons();
+        return;
+      }
+    }
+    this.skipTimer = setTimeout(() => {
+      if (this.destroyed || !this.isSkipping) return;
+      this.advance();
+    }, 60);
+  }
+
+  private startTypewriter(formatted: string): void {
+    this.clearTypewriter();
+    this.dialogueText.innerHTML = formatted;
+
+    if (typeof document.createTreeWalker !== "function") {
+      this.isTyping = false;
+      this.onTextRenderFinished();
+      return;
+    }
+
+    const filter = typeof NodeFilter !== "undefined" ? NodeFilter.SHOW_TEXT : 4;
+    const walker = document.createTreeWalker(this.dialogueText, filter);
+    const textNodes: Array<{ node: Text; fullText: string }> = [];
+    let node: Node | null;
+    while ((node = walker.nextNode())) {
+      textNodes.push({ node: node as Text, fullText: node.textContent ?? "" });
+    }
+
+    if (textNodes.length === 0 || textNodes.every((t) => !t.fullText)) {
+      this.isTyping = false;
+      this.onTextRenderFinished();
+      return;
+    }
+
+    this.activeTextNodes = textNodes;
+    for (const item of textNodes) {
+      item.node.textContent = "";
+    }
+
+    this.isTyping = true;
+    let nodeIdx = 0;
+    let charIdx = 0;
+    this.typewriterTimer = setInterval(() => {
+      if (this.destroyed) {
+        this.clearTypewriter();
+        return;
+      }
+      if (nodeIdx >= textNodes.length) {
+        this.completeTypewriter();
+        return;
+      }
+      const current = textNodes[nodeIdx]!;
+      if (charIdx < current.fullText.length) {
+        current.node.textContent += current.fullText[charIdx++];
+      } else {
+        nodeIdx++;
+        charIdx = 0;
+      }
+    }, this.textSpeed);
+  }
+
   private renderDialogueContent(): void {
     const view = selectVnStageView(this.state);
-    const paragraphText = view.paragraph?.text ?? "";
-    const formatted = formatDialogueText(paragraphText, this.customRegexRules);
-    if (this.dialogueText.innerHTML !== formatted) {
+    const paragraph = view.paragraph;
+    if (!paragraph) {
+      this.clearTypewriter();
+      this.dialogueText.innerHTML = "";
+      this.currentRenderedParagraphId = "";
+      return;
+    }
+    const formatted = formatDialogueText(paragraph.text, this.customRegexRules);
+    if (
+      this.currentRenderedParagraphId === paragraph.id &&
+      this.dialogueText.innerHTML === formatted
+    ) {
+      return;
+    }
+    this.currentRenderedParagraphId = paragraph.id;
+    this.recordBacklogAndRead(paragraph.id, paragraph.speaker, paragraph.text, formatted);
+
+    if (this.textSpeed <= 0 || this.isSkipping) {
+      this.clearTypewriter();
       this.dialogueText.innerHTML = formatted;
+      this.isTyping = false;
+      this.onTextRenderFinished();
+    } else {
+      this.startTypewriter(formatted);
     }
   }
 

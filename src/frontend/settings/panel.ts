@@ -199,6 +199,26 @@ export class VisualNovelSettingsPanel {
           <label data-check><input name="debugLogging" type="checkbox" /><span>Write planner fallback details to the Lumiverse log</span></label>
         </section>
         <section>
+          <h2>Text &amp; Dialogue Flow</h2>
+          <div data-row>
+            <label>Text typing speed (ms/char)
+              <input name="textSpeed" type="number" min="0" max="100" step="5" />
+              <small>0 = instant reveal, 20 = default typewriter speed.</small>
+            </label>
+            <label>Auto-play delay (ms)
+              <input name="autoPlayDelay" type="number" min="500" max="10000" step="250" />
+              <small>Base pause after text finishes before advancing automatically.</small>
+            </label>
+          </div>
+          <label>Skip mode
+            <select name="skipMode">
+              <option value="read">Skip read only (pauses on unread text)</option>
+              <option value="all">Skip all (fast forwards continuously)</option>
+            </select>
+            <small>Behavior when fast forward Skip is toggled.</small>
+          </label>
+        </section>
+        <section>
           <h2>Prompt</h2>
           <label>Positive prefix<input name="promptPrefix" type="text" /></label>
           <label>Positive suffix<input name="promptSuffix" type="text" /></label>
@@ -256,6 +276,9 @@ export class VisualNovelSettingsPanel {
     control<HTMLInputElement>(this.root, "useNativeCardImages").checked = config.useNativeCardImages;
     control<HTMLInputElement>(this.root, "generateChoices").checked = config.generateChoices;
     control<HTMLInputElement>(this.root, "maxImagesPerTurn").value = String(config.maxImagesPerTurn);
+    control<HTMLInputElement>(this.root, "textSpeed").value = String(config.textSpeed);
+    control<HTMLInputElement>(this.root, "autoPlayDelay").value = String(config.autoPlayDelay);
+    control<HTMLSelectElement>(this.root, "skipMode").value = config.skipMode;
     this.renderConnectionSelect("planner", this.connectionStates.planner, config.parserConnectionId);
     this.renderConnectionSelect("image", this.connectionStates.image, config.imageConnectionId);
     control<HTMLInputElement>(this.root, "imageModel").value = config.imageModel;
@@ -302,6 +325,9 @@ export class VisualNovelSettingsPanel {
       useNativeCardImages: control<HTMLInputElement>(this.root, "useNativeCardImages").checked,
       generateChoices: control<HTMLInputElement>(this.root, "generateChoices").checked,
       maxImagesPerTurn: Number(control<HTMLInputElement>(this.root, "maxImagesPerTurn").value),
+      textSpeed: Number(control<HTMLInputElement>(this.root, "textSpeed").value),
+      autoPlayDelay: Number(control<HTMLInputElement>(this.root, "autoPlayDelay").value),
+      skipMode: control<HTMLSelectElement>(this.root, "skipMode").value === "all" ? "all" : "read",
       parserConnectionId: optional("parserConnectionId"),
       imageConnectionId: optional("imageConnectionId"),
       imageModel: control<HTMLInputElement>(this.root, "imageModel").value.trim(),

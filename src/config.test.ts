@@ -90,3 +90,21 @@ test("configuration defaults ignoredTags, displayRegexRules, and useNativeCardIm
   assert.equal(config.displayRegexRules, "");
   assert.equal(config.useNativeCardImages, false);
 });
+
+test("configuration preserves textSpeed, autoPlayDelay, and skipMode", () => {
+  const config = normalizeConfig({
+    textSpeed: 35,
+    autoPlayDelay: 3500,
+    skipMode: "all",
+  });
+  assert.equal(config.textSpeed, 35);
+  assert.equal(config.autoPlayDelay, 3500);
+  assert.equal(config.skipMode, "all");
+});
+
+test("configuration defaults textSpeed, autoPlayDelay, and skipMode", () => {
+  const config = normalizeConfig({});
+  assert.equal(config.textSpeed, 20);
+  assert.equal(config.autoPlayDelay, 2000);
+  assert.equal(config.skipMode, "read");
+});

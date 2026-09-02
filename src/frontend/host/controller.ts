@@ -135,13 +135,18 @@ export function computeAssetProgress(turn: TurnView | null): { current: number; 
 export type VisualStageThemeTarget = Pick<
   VnStage,
   "setThemePreset" | "setSceneImageFit" | "setUserCss" | "setDisplayRegexRules"
->;
+> & {
+  setTextSpeed?: (speed: number) => void;
+  setAutoPlayDelay?: (delay: number) => void;
+  setSkipMode?: (mode: "read" | "all") => void;
+};
 
 /**
  * Push a config's presentation settings onto the stage. Applied on every save
  * and on every `vn_state` / `vn_config` response so the stage always mirrors
  * the persisted config: the active theme preset, the scene-image fit, the
- * user's custom CSS (which stays the final cascade layer), and custom display regex rules.
+ * user's custom CSS (which stays the final cascade layer), custom display regex rules,
+ * and dialogue flow parameters (typewriter speed, auto-play delay, skip mode).
  */
 export function applyVisualConfigToStage(
   stage: VisualStageThemeTarget,
@@ -151,6 +156,9 @@ export function applyVisualConfigToStage(
   stage.setSceneImageFit(config.sceneImageFit);
   stage.setUserCss(config.customCss);
   stage.setDisplayRegexRules(config.displayRegexRules);
+  stage.setTextSpeed?.(config.textSpeed);
+  stage.setAutoPlayDelay?.(config.autoPlayDelay);
+  stage.setSkipMode?.(config.skipMode);
 }
 
 export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): () => void {
