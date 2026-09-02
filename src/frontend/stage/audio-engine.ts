@@ -52,12 +52,25 @@ export function createMockAudioPlayer(src: string): AudioPlayerElement {
   };
 }
 
+export function formatAudioUrl(src: string): string {
+  const trimmed = src.trim();
+  if (!trimmed) return "";
+  if (/^[a-zA-Z]:[\\/]/.test(trimmed)) {
+    return `file:///${trimmed.replace(/\\/g, "/")}`;
+  }
+  if (trimmed.startsWith("/") && !trimmed.startsWith("//") && !trimmed.startsWith("/api/")) {
+    return `file://${trimmed}`;
+  }
+  return trimmed;
+}
+
 function defaultAudioFactory(src: string): AudioPlayerElement {
+  const formatted = formatAudioUrl(src);
   if (typeof Audio !== "undefined") {
-    const audio = new Audio(src);
+    const audio = new Audio(formatted);
     return audio as unknown as AudioPlayerElement;
   }
-  return createMockAudioPlayer(src);
+  return createMockAudioPlayer(formatted);
 }
 
 export interface AudioEngineOptions {

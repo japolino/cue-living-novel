@@ -157,3 +157,12 @@ describe("AudioEngine", () => {
     expect(engine.getCurrentBgm()).toBeNull();
   });
 });
+
+  test("formatAudioUrl converts Windows and POSIX absolute paths to file:// URLs", () => {
+    const { formatAudioUrl } = require("./audio-engine.js");
+    expect(formatAudioUrl("C:\\Users\\music\\track.mp3")).toBe("file:///C:/Users/music/track.mp3");
+    expect(formatAudioUrl("D:/sound/hit.wav")).toBe("file:///D:/sound/hit.wav");
+    expect(formatAudioUrl("/home/user/bgm.ogg")).toBe("file:///home/user/bgm.ogg");
+    expect(formatAudioUrl("https://example.com/stream.mp3")).toBe("https://example.com/stream.mp3");
+    expect(formatAudioUrl("/api/v1/audio/123")).toBe("/api/v1/audio/123");
+  });
