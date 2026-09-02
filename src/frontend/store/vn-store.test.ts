@@ -66,3 +66,30 @@ test("CYOA choices remain hidden while paragraphs are revealing", () => {
   state = reduceVnStage(state, { type: "advance" });
   assert.equal(selectVnStageView(state).showChoices, true);
 });
+
+
+test("load-turn with preserveImage:false clears the previous scene image", () => {
+  const previous = { url: "old.webp", alt: "Old scene", requestId: "old" };
+  let state = createInitialVnStageState({ displayedImage: previous, currentParagraphIndex: 2 });
+
+  state = reduceVnStage(state, {
+    type: "load-turn",
+    turn: { mode: "standard", paragraphs, preserveImage: false },
+  });
+
+  assert.equal(state.displayedImage, null);
+  assert.equal(state.currentParagraphIndex, 0);
+});
+
+test("load-turn without preserveImage keeps the previous image and resets to paragraph 0", () => {
+  const previous = { url: "old.webp", alt: "Old scene", requestId: "old" };
+  let state = createInitialVnStageState({ displayedImage: previous });
+
+  state = reduceVnStage(state, {
+    type: "load-turn",
+    turn: { mode: "standard", paragraphs },
+  });
+
+  assert.equal(state.displayedImage, previous);
+  assert.equal(state.currentParagraphIndex, 0);
+});

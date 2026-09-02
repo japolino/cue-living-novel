@@ -15,14 +15,73 @@ function messageType(value: unknown): string {
     : "";
 }
 
-function currentImage(turn: TurnView, paragraphIndex: number): AssetView | null {
+/**
+ * Choose the image currently visible for a paragraph cursor.
+ *
+ * Pure and deterministic: among ready assets with `paragraphIndex <= cursor`,
+ * pick the highest paragraph; when several share that paragraph, the FIRST one
+ * in the turn's asset order wins (a stable tie) rather than the last. Previously
+ * the `>=` comparison let the last asset at a shared paragraph win, so an asset
+ * arriving later (or two distinct same-paragraph cues) could flip the background
+ * with the cursor frozen.
+ */
+export function selectCurrentImage(turn: TurnView, paragraphIndex: number): AssetView | null {
   let match: AssetView | null = null;
   for (const asset of turn.assets) {
     if (asset.status !== "generated" && asset.status !== "browser_ready") continue;
     if (!asset.imageUrl || asset.paragraphIndex > paragraphIndex) continue;
-    if (!match || asset.paragraphIndex >= match.paragraphIndex) match = asset;
+    if (!match || asset.paragraphIndex > match.paragraphIndex) match = asset;
   }
   return match;
+}
+
+/**
+ * Whether two turn deliveries refer to the same logical turn. Used to guard
+ * against a re-broadcast of the same turn (a GENERATION_ENDED followed by a
+ * MESSAGE_EDITED/SWIPE_EDITED/MESSAGE_SWIPED reconcile, or a `vn_retry_turn`)
+ * resetting the paragraph cursor back to paragraph 0.
+ */
+export function sameTurnIdentity(
+  left: Pick<TurnView, "chatId" | "messageId" | "sourceFingerprint">,
+  right: Pick<TurnView, "chatId" | "messageId" | "sourceFingerprint">,
+): boolean {
+  return left.chatId === right.chatId
+    && left.messageId === right.messageId
+    && left.sourceFingerprint === right.sourceFingerprint;
+}
+
+/**
+ * How a received turn should be applied to the stage. Pure so the same-turn
+ * guard and the preserveImage:false clearing are testable without a DOM.
+ *
+ * A re-broadcast of the SAME logical turn is applied as "sync at the current
+ * cursor" (never reset to paragraph 0); a genuinely different turn is a
+ * "load-turn" that clears the previous scene's image.
+ */
+export type TurnApplicationDecision =
+  | { kind: "none" }
+  | { kind: "planning" }
+  | { kind: "error"; error: string }
+  | { kind: "same-turn"; paragraphIndex: number }
+  | { kind: "load-turn" };
+
+export function decideTurnApplication(
+  previous: TurnView | null,
+  next: TurnView,
+  cursor: number,
+  active: boolean,
+  hasLoadedTurn: boolean,
+): TurnApplicationDecision {
+  if (!active) return { kind: "none" };
+  if (next.status === "planning") return { kind: "planning" };
+  if (next.status === "failed") return { kind: "error", error: next.error ?? "Visual planning failed." };
+  // Only treat a re-broadcast as the same turn when the stage is actually showing
+  // it. A vn_state that arrives while inactive records the turn but never loads
+  // the paragraphs, so the first active delivery still needs a real load-turn.
+  if (previous && hasLoadedTurn && sameTurnIdentity(previous, next)) {
+    return { kind: "same-turn", paragraphIndex: cursor };
+  }
+  return { kind: "load-turn" };
 }
 
 function replaceAsset(turn: TurnView, asset: AssetView): TurnView {
@@ -30,6 +89,30 @@ function replaceAsset(turn: TurnView, asset: AssetView): TurnView {
     ? turn.assets.map((entry) => entry.cueId === asset.cueId ? asset : entry)
     : [...turn.assets, asset];
   return { ...turn, assets };
+}
+
+/**
+ * The subset of VnStage the controller pushes saved-config presentation onto.
+ * Keeping this narrow lets tests exercise the live stage calls without a DOM.
+ */
+export type VisualStageThemeTarget = Pick<
+  VnStage,
+  "setThemePreset" | "setSceneImageFit" | "setUserCss"
+>;
+
+/**
+ * Push a config's presentation settings onto the stage. Applied on every save
+ * and on every `vn_state` / `vn_config` response so the stage always mirrors
+ * the persisted config: the active theme preset, the scene-image fit, and
+ * the user's custom CSS (which stays the final cascade layer).
+ */
+export function applyVisualConfigToStage(
+  stage: VisualStageThemeTarget,
+  config: VisualNovelConfig,
+): void {
+  stage.setThemePreset(config.themePreset);
+  stage.setSceneImageFit(config.sceneImageFit);
+  stage.setUserCss(config.customCss);
 }
 
 export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): () => void {
@@ -48,7 +131,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   app.setVisible(false);
 
   let active = false;
-  let config: VisualNovelConfig | null = null;
+  const configRef: { current: VisualNovelConfig | null } = { current: null };
   let turn: TurnView | null = null;
   let overrideHandles: ComponentOverrideHandle[] = [];
   const acknowledgedAssets = new Set<string>();
@@ -56,6 +139,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
 
   const stage = new VnStage({
     mount: app.root,
+    themePreset: configRef.current?.themePreset ?? "lumiverse",
     onExit: () => deactivate(),
     onAdvance: (paragraphIndex) => { void syncImageForParagraph(paragraphIndex); },
     onChoice: async (choice: VnChoice) => submit(choice.value),
@@ -85,10 +169,12 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     onOpenPreview: () => activate(),
     onRefreshConnections: () => requestConnectionCatalog(),
     onSave: (patch) => {
-      if (config) {
-        config = { ...config, ...patch };
-        stage.setUserCss(config.customCss);
-        settingsPanel?.setConfig(config);
+      const current = configRef.current;
+      if (current) {
+        const next = { ...current, ...patch };
+        configRef.current = next;
+        applyVisualConfigToStage(stage, next);
+        settingsPanel?.setConfig(next);
       }
       ctx.sendToBackend({ type: "vn_set_config", patch, chatId: chatId() });
     }
@@ -165,7 +251,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
 
   async function syncImageForParagraph(paragraphIndex: number): Promise<void> {
     if (!turn) return;
-    const asset = currentImage(turn, paragraphIndex);
+    const asset = selectCurrentImage(turn, paragraphIndex);
     if (!asset?.imageUrl) return;
     const loaded = await stage.setSceneImage({
       url: asset.imageUrl,
@@ -185,18 +271,30 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     });
   }
 
-  function loadTurn(next: TurnView): void {
+  /**
+   * Apply an incoming turn delivery. Re-broadcasting the SAME logical turn must
+   * not reset the cursor back to paragraph 0 (a GENERATION_ENDED followed by a
+   * MESSAGE_EDITED/SWIPE_EDITED/MESSAGE_SWIPED reconcile, or a `vn_retry_turn`,
+   * re-sends the identical turn). A genuinely different turn clears any unrelated
+   * previous-scene image via preserveImage:false.
+   */
+  function applyTurn(next: TurnView, previous: TurnView | null): void {
     turn = next;
-    if (!active) return;
-    if (next.status === "planning") {
+    const decision = decideTurnApplication(previous, next, stage.getState().currentParagraphIndex, active, stage.getState().paragraphs.length > 0);
+    if (decision.kind === "none") return;
+    if (decision.kind === "planning") {
       stage.setPhase("planning");
       return;
     }
-    if (next.status === "failed") {
-      stage.setError(next.error ?? "Visual planning failed.");
+    if (decision.kind === "error") {
+      stage.setError(decision.error);
       return;
     }
-    const requestedMode = config?.mode ?? "standard";
+    if (decision.kind === "same-turn") {
+      void syncImageForParagraph(decision.paragraphIndex);
+      return;
+    }
+    const requestedMode = configRef.current?.mode ?? "standard";
     const mode = requestedMode === "cyoa" && next.choices.length > 0 ? "cyoa" : "standard";
     stage.loadTurn({
       mode,
@@ -206,7 +304,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
         speaker: next.speaker
       })),
       choices: next.choices.map((choice) => ({ id: choice.id, label: choice.label, value: choice.value })),
-      preserveImage: true
+      preserveImage: false
     });
     void syncImageForParagraph(0);
   }
@@ -220,22 +318,23 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       return;
     }
     if (type === "vn_state" && message.type === "vn_state") {
-      config = message.config;
-      stage.setUserCss(config.customCss);
-      settingsPanel?.setConfig(config);
-      if (config.autoEnter && !active) activate();
-      if (message.turn) loadTurn(message.turn);
+      configRef.current = message.config;
+      applyVisualConfigToStage(stage, configRef.current);
+      settingsPanel?.setConfig(configRef.current);
+      if (configRef.current?.autoEnter && !active) activate();
+      if (message.turn) applyTurn(message.turn, turn);
       else if (active) stage.setPhase("idle");
       return;
     }
     if (type === "vn_config" && message.type === "vn_config") {
-      config = message.config;
-      stage.setUserCss(config.customCss);
-      settingsPanel?.setConfig(config);
+      configRef.current = message.config;
+      applyVisualConfigToStage(stage, configRef.current);
+      settingsPanel?.setConfig(configRef.current);
       return;
     }
     if (type === "vn_turn" && message.type === "vn_turn") {
-      if (message.turn.chatId === chatId()) loadTurn(message.turn);
+      if (message.turn.chatId !== chatId()) return;
+      applyTurn(message.turn, turn);
       return;
     }
     if (type === "vn_asset" && message.type === "vn_asset") {

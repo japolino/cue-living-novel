@@ -1,4 +1,11 @@
-import { DEFAULT_CONFIG, type VisualNovelConfig } from "../../config.js";
+import {
+  DEFAULT_CONFIG,
+  SCENE_IMAGE_FITS,
+  THEME_PRESET_IDS,
+  type VisualNovelConfig,
+  type VisualNovelSceneImageFit,
+  type VisualNovelThemePreset,
+} from "../../config.js";
 
 export type SettingsPanelOptions = {
   mount: HTMLElement;
@@ -89,6 +96,36 @@ function jsonObject(value: string, label: string): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
+function normalizeSceneImageFit(value: string): VisualNovelSceneImageFit {
+  return (SCENE_IMAGE_FITS as readonly string[]).includes(value)
+    ? value as VisualNovelSceneImageFit
+    : DEFAULT_CONFIG.sceneImageFit;
+}
+
+function normalizeThemePreset(value: string): VisualNovelThemePreset {
+  return (THEME_PRESET_IDS as readonly string[]).includes(value)
+    ? value as VisualNovelThemePreset
+    : DEFAULT_CONFIG.themePreset;
+}
+
+/**
+ * Human-readable labels for each built-in theme preset. The order of `values`
+ * always mirrors the canonical `THEME_PRESET_IDS`, so the settings selector
+ * and the preset CSS map can never drift apart.
+ */
+export const THEME_PRESET_LABELS: Record<VisualNovelThemePreset, string> = {
+  lumiverse: "Lumiverse (host default)",
+  "golden-hour": "Golden hour",
+  "boxed-console": "Boxed console",
+  "paper-novel": "Paper novel",
+  "midnight-noir": "Midnight noir",
+};
+
+export const THEME_PRESET_OPTIONS: ReadonlyArray<{
+  value: VisualNovelThemePreset;
+  label: string;
+}> = THEME_PRESET_IDS.map((value) => ({ value, label: THEME_PRESET_LABELS[value] }));
+
 export class VisualNovelSettingsPanel {
   private readonly host: HTMLElement;
   private readonly root: ShadowRoot;
@@ -112,6 +149,20 @@ export class VisualNovelSettingsPanel {
             <label>Mode<select name="mode"><option value="standard">Standard input</option><option value="cyoa">CYOA choices</option></select></label>
             <label>Images per turn<input name="maxImagesPerTurn" type="number" min="0" max="12" step="1" /></label>
           </div>
+          <label>Theme style
+            <select name="themePreset">${THEME_PRESET_OPTIONS.map(({ value, label }) => `<option value="${value}">${label}</option>`).join("")}</select>
+            <small>Predefined look for the stage. Custom CSS below is always applied on top.</small>
+          </label>
+          <label>Scene image fit
+            <select name="sceneImageFit">
+              <option value="cover">Cover (crop to fill)</option>
+              <option value="contain">Contain (fit with letterboxing)</option>
+              <option value="fill">Stretch (distort to fill)</option>
+              <option value="none">Original size (intrinsic)</option>
+              <option value="scale-down">Scale down (intrinsic unless too large)</option>
+            </select>
+            <small>How the scene image fills the stage.</small>
+          </label>
           <label data-check><input name="autoEnter" type="checkbox" /><span>Enter visual novel mode automatically when a chat opens</span></label>
           <label data-check><input name="generateImages" type="checkbox" /><span>Generate scene images</span></label>
           <label data-check><input name="generateChoices" type="checkbox" /><span>Generate choices when the response has no authored Choice tags</span></label>
@@ -186,6 +237,8 @@ export class VisualNovelSettingsPanel {
 
   setConfig(config: VisualNovelConfig): void {
     control<HTMLSelectElement>(this.root, "mode").value = config.mode;
+    control<HTMLSelectElement>(this.root, "themePreset").value = config.themePreset;
+    control<HTMLSelectElement>(this.root, "sceneImageFit").value = config.sceneImageFit;
     control<HTMLInputElement>(this.root, "autoEnter").checked = config.autoEnter;
     control<HTMLInputElement>(this.root, "generateImages").checked = config.generateImages;
     control<HTMLInputElement>(this.root, "generateChoices").checked = config.generateChoices;
@@ -227,6 +280,8 @@ export class VisualNovelSettingsPanel {
     const optional = (name: string): string | null => control<HTMLInputElement | HTMLSelectElement>(this.root, name).value.trim() || null;
     return {
       mode: control<HTMLSelectElement>(this.root, "mode").value === "cyoa" ? "cyoa" : "standard",
+      themePreset: normalizeThemePreset(control<HTMLSelectElement>(this.root, "themePreset").value),
+      sceneImageFit: normalizeSceneImageFit(control<HTMLSelectElement>(this.root, "sceneImageFit").value),
       autoEnter: control<HTMLInputElement>(this.root, "autoEnter").checked,
       generateImages: control<HTMLInputElement>(this.root, "generateImages").checked,
       generateChoices: control<HTMLInputElement>(this.root, "generateChoices").checked,

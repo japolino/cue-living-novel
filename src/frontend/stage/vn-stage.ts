@@ -9,10 +9,18 @@ import {
   type VnStageState,
   type VnTurnInput,
 } from "../store";
+import type {
+  VisualNovelSceneImageFit,
+  VisualNovelThemePreset,
+} from "../../config.js";
 import {
   applyVnUserCss,
   VN_BASE_CSS,
   VN_OUTER_CSS,
+  THEME_PRESET_CSS,
+  THEME_STYLE_LAYER_ATTRIBUTE,
+  THEME_STYLE_LAYER_ORDER,
+  type ThemeStyleLayer,
 } from "../theme";
 import {
   preloadAndDecodeVnImage,
@@ -32,6 +40,9 @@ export interface VnStageOptions extends VnStageCallbacks {
   userCss?: string;
   createImage?: VnImageFactory;
   exitLabel?: string;
+  sceneImageFit?: VisualNovelSceneImageFit;
+  /** Visual theme preset applied to the stage root. Defaults to "lumiverse". */
+  themePreset?: VisualNovelThemePreset;
 }
 
 export interface VnSceneImageRequest {
@@ -111,6 +122,8 @@ export class VnStage {
   private state: VnStageState;
   private readonly callbacks: VnStageCallbacks;
   private readonly host: HTMLDivElement;
+  private readonly shadow: ShadowRoot;
+  private readonly presetStyle: HTMLStyleElement;
   private readonly outerRoot: ShadowRoot;
   private readonly themeRoot: ShadowRoot;
   private readonly userStyle: HTMLStyleElement;
@@ -140,7 +153,8 @@ export class VnStage {
 
     this.host = document.createElement("div");
     this.host.setAttribute("data-vn-stage-host", "");
-    this.outerRoot = this.host.attachShadow({ mode: "open" });
+    this.shadow = this.host.attachShadow({ mode: "open" });
+    this.outerRoot = this.shadow;
 
     const outerStyle = document.createElement("style");
     outerStyle.textContent = VN_OUTER_CSS;
@@ -152,15 +166,34 @@ export class VnStage {
     this.themeRoot = themeHost.attachShadow({ mode: "open" });
 
     const baseStyle = document.createElement("style");
-    baseStyle.setAttribute("data-vn-base-css", "");
+    baseStyle.setAttribute(THEME_STYLE_LAYER_ATTRIBUTE.base, "");
     baseStyle.textContent = VN_BASE_CSS;
+
+    this.presetStyle = document.createElement("style");
+    this.presetStyle.setAttribute(THEME_STYLE_LAYER_ATTRIBUTE.preset, "");
+
     this.userStyle = document.createElement("style");
-    this.userStyle.setAttribute("data-vn-user-css", "");
+    this.userStyle.setAttribute(THEME_STYLE_LAYER_ATTRIBUTE.user, "");
     applyVnUserCss(this.userStyle, options.userCss);
+
+    /**
+     * The theme shadow root layers its styles in the reference order from
+     * THEME_STYLE_LAYER_ORDER: base -> preset -> user. The preset element is
+     * created inert here and filled in by applyThemePreset, and the user layer
+     * is always appended last so custom CSS stays the final cascade layer.
+     */
+    const layers: Record<ThemeStyleLayer, HTMLStyleElement> = {
+      base: baseStyle,
+      preset: this.presetStyle,
+      user: this.userStyle,
+    };
 
     const content = document.createElement("div");
     content.innerHTML = THEME_MARKUP;
-    this.themeRoot.append(baseStyle, this.userStyle, ...Array.from(content.childNodes));
+    this.themeRoot.append(
+      ...THEME_STYLE_LAYER_ORDER.map((layer) => layers[layer]),
+      ...Array.from(content.childNodes),
+    );
 
     this.exitButton = document.createElement("button");
     this.exitButton.type = "button";
@@ -173,7 +206,9 @@ export class VnStage {
     options.mount.append(this.host);
 
     this.root = queryRequired(this.themeRoot, "[data-vn-root]");
+    this.applyThemePreset(options.themePreset ?? "lumiverse");
     this.sceneImage = queryRequired(this.themeRoot, "[data-vn-scene-image]");
+    this.setSceneImageFit(options.sceneImageFit ?? "cover");
     this.statusStack = queryRequired(this.themeRoot, "[data-vn-status-stack]");
     this.emptyState = queryRequired(this.themeRoot, "[data-vn-empty-state]");
     this.narrative = queryRequired(this.themeRoot, "[data-vn-narrative]");
@@ -205,6 +240,23 @@ export class VnStage {
 
   setUserCss(css: string): void {
     applyVnUserCss(this.userStyle, css);
+  }
+
+  setSceneImageFit(fit: VisualNovelSceneImageFit): void {
+    this.sceneImage.dataset.vnSceneImageFit = fit;
+  }
+
+  /**
+   * Apply a built-in theme preset. Safe to call repeatedly; the latest
+   * preset wins and the style element is reused.
+   */
+  setThemePreset(preset: VisualNovelThemePreset): void {
+    this.applyThemePreset(preset);
+  }
+
+  private applyThemePreset(preset: VisualNovelThemePreset): void {
+    this.presetStyle.textContent = THEME_PRESET_CSS[preset] ?? "";
+    this.root.dataset.vnPreset = preset;
   }
 
   loadTurn(turn: VnTurnInput): void {

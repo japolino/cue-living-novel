@@ -410,6 +410,14 @@ export function registerVisualNovelBackend(spindle: SpindleAPI): void {
     });
   });
   spindle.on("GENERATION_STARTED", (payload, userId) => {
+    // A new generation is starting (a user message was submitted). Drop any
+    // ownership of the previous turn's assets so queued old-turn ComfyUI calls
+    // cannot start and running completions cannot persist/send, then abort the
+    // current asset batch. The new turn's ownership is re-established when it is
+    // actually planned (processAssistantMessage -> activeTurnKeys.set).
+    const key = runtimeKey(userId, payload.chatId);
+    activeTurnKeys.delete(key);
+    assetControllers.get(key)?.abort("A new generation started before this turn's assets settled.");
     spindle.sendToFrontend({ type: "vn_generation", chatId: payload.chatId, active: true }, userId);
   });
   spindle.on("GENERATION_ENDED", (payload, userId) => {
@@ -443,5 +451,5 @@ export function registerVisualNovelBackend(spindle: SpindleAPI): void {
       spindle.sendToFrontend({ type: "vn_error", ...(chatId ? { chatId } : {}), operation: payload.type, error: errorText(error) }, userId);
     });
   });
-  spindle.log.info("Visual Novel Preview loaded.");
+  spindle.log.info("Cue — Living Novel loaded.");
 }

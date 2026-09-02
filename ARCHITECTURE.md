@@ -1,4 +1,4 @@
-# Visual Novel Preview architecture
+# Cue — Living Novel architecture
 
 ## Viability decision
 
@@ -54,7 +54,7 @@ Lumiverse staging host
 | `src/frontend/stage` | framework-free full-screen VN renderer, accessibility, keyboard input, image swaps |
 | `src/frontend/store` | deterministic paragraph, acknowledgement, choice, and input gating |
 | `src/frontend/settings` | Lumiverse settings surface |
-| `src/frontend/theme` | stable `data-vn-*` selectors, base theme, CSS isolation, network-fetch stripping |
+| `src/frontend/theme` | stable `data-vn-*` selectors, base theme, scene-image fit attribute, CSS isolation, network-fetch stripping |
 | `src/backend/runtime/controller.ts` | host event handling, submission reconciliation, active-turn ownership, single-character load/save |
 | `src/backend/runtime/planner.ts` | sidecar request, fallback plan, fixed camera, exactly-one-protagonist scene/cue/choice construction, deterministic pose assignment |
 | `src/backend/runtime/images.ts` | deterministic prompt compilation, image generation, per-provider asset scheduling, asset updates |
@@ -101,6 +101,24 @@ If an image is late, the previous decoded image remains visible. If an obsolete 
 The current paragraph is readable before any response control appears. Each click or supported key advances one paragraph. The final paragraph needs its own acknowledgement. Only then does the stage reveal either generated/authored choices or the typed composer.
 
 Choices are presentation metadata. Selecting one submits its configured value as a normal user message. Standard input does the same with typed text. Both routes attach a unique request ID. If Lumiverse writes the user message but fails while starting generation, the backend checks chat history before reporting the failure and never retries the same request blindly.
+
+## Scene image fit
+
+The rendered scene image obeys a user-selectable fit preset persisted in `config.json`. `VnStage` writes a `data-vn-scene-image-fit` attribute on the scene image element whenever the saved config changes, and the base theme maps each value to the matching CSS `object-fit` (cover, contain, fill, none, scale-down). Cover stays the backward-compatible default, `object-position` remains centered, and the fit is driven from config rather than user-supplied custom CSS, so it applies inside the shadow DOM regardless of theme.
+
+## Theme presets
+
+The stage ships exactly five built-in visual presets: **Lumiverse**, **Golden hour**, **Boxed console**, **Paper novel**, and **Midnight noir**. Their ids are the single canonical, host-neutral `THEME_PRESET_IDS` tuple and the derived `VisualNovelThemePreset` type, both declared in `src/config.ts` so the shared config module never imports frontend or browser code. `src/frontend/theme/presets.ts` only supplies the CSS payload (`THEME_PRESET_CSS`) keyed by those ids; the settings selector (`THEME_PRESET_OPTIONS`) and the config normalizer consume the same tuple, so the three can never drift. The removed experimental `retro-crt` id is gone everywhere.
+
+Inside the nested theme shadow root the style layers are appended in a fixed cascade order, made explicit by `THEME_STYLE_LAYER_ORDER` (`src/frontend/theme/style-layers.ts`):
+
+1. `base` — the platform `VN_BASE_CSS` (stable `data-vn-*` selectors, the scene-image fit mapping, and default `--vn-*` values).
+2. `preset` — exactly one scoped block from `THEME_PRESET_CSS`, selected by `data-vn-preset="<id>"`. The preset *style element* lives in `themeRoot`, after base and before user CSS, and never in the outer safety root.
+3. `user` — the sanitized custom-CSS layer. It is always last, so a user rule of equal specificity wins over a preset rule.
+
+The `Lumiverse` preset maps the VN custom properties onto the real host tokens the Lumiverse page exposes — `--lumiverse-text`, `--lumiverse-text-muted`, `--lumiverse-primary` (accent), `--lumiverse-card-bg` (card), `--lumiverse-border`, `--lumiverse-font-family`, and `--lumiverse-*` key-control tokens (`primary-contrast`, `fill-medium`, `bg-elevated`) — each with a hard fallback so a host that does not export a token still renders the original default look.
+
+The frontend controller applies the whole presentation config (theme preset, scene-image fit, custom CSS) on every save and on every `vn_state` / `vn_config` response through a single `applyVisualConfigToStage` helper, always from the *merged* config, so a saved patch never leaves the stage on stale values. The Exit control stays in the outer safety root, unreachable by any preset or user CSS.
 
 ## Scene model
 

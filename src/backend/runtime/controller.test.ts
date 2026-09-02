@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { SpindleAPI } from "lumiverse-spindle-types";
 import { TurnPlanSchema, type AssetJob } from "../../shared/contracts.js";
-import { markAssetReady, sendState, turnView } from "./controller.js";
+import { markAssetReady, registerVisualNovelBackend, sendState, turnView } from "./controller.js";
 import { chatStatePath, singleCharacterStatePath, turnPath, type StoredChatState, type StoredTurnRecord } from "./storage.js";
 import { seedSingleCharacter } from "../core/visual-state.js";
 import { SINGLE_CHARACTER_SCHEMA_VERSION } from "../../shared/character.js";
@@ -281,5 +281,139 @@ describe("single-character planning flow", () => {
     // The stored turn is returned as-is; the planner is never invoked again.
     expect(runtime.sent[0]).toMatchObject({ type: "vn_state", chatId: "chat", turn: { messageId: "message" } });
     expect(runtime.generateCalls()).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GENERATION_STARTED abort / ownership invalidation
+// ---------------------------------------------------------------------------
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+async function waitFor(condition: () => boolean, timeoutMs = 2000): Promise<void> {
+  const start = Date.now();
+  while (!condition()) {
+    if (Date.now() - start > timeoutMs) throw new Error("Timed out waiting for condition");
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+const generationContent = "First paragraph.\n\nSecond paragraph.";
+
+function generationPayload(cues: number[]) {
+  return {
+    scenes: [{
+      startParagraph: 0,
+      boundary: { claimedNewScene: true, reason: "initial", location: "Observatory", timeOfDay: "night", majorTimeJump: false, environmentReplacement: false, forced: false },
+      environment: { location: "Observatory", timeOfDay: "night", weather: null, lighting: "lantern light", description: "An old observatory", persistentElements: ["brass telescope"] },
+      cast: ["Mira"],
+      basePrompt: "old observatory, brass telescope",
+      compositionLock: "Mira centered"
+    }],
+    cues: cues.map((paragraphIndex) => ({ paragraphIndex })),
+    choices: [],
+    characters: [{ name: "Mira", description: "silver hair, green eyes" }]
+  };
+}
+
+function generationFixture() {
+  const handlers = new Map<string, Array<(...args: unknown[]) => void>>();
+  const data = new Map<string, unknown>();
+  const sent: unknown[] = [];
+  const gates: Array<{ resolve: (value: { imageId: string; imageUrl?: string | null }) => void; reject: (reason?: unknown) => void }> = [];
+  data.set("config.json", {
+    generateImages: true,
+    maxImagesPerTurn: 2,
+    imageConcurrency: 1,
+    includeCharacterContext: false,
+    includePersonaContext: false,
+    includeLorebookContext: false
+  });
+  const spindle = {
+    on: (event: string, handler: (...args: unknown[]) => void) => {
+      const list = handlers.get(event) ?? [];
+      list.push(handler);
+      handlers.set(event, list);
+    },
+    onFrontendMessage: () => {},
+    userStorage: {
+      getJson: async (path: string, options: { fallback: unknown }) => data.get(path) ?? options.fallback,
+      setJson: async (path: string, value: unknown) => { data.set(path, value); }
+    },
+    chat: {
+      getMessages: async () => [{
+        id: "assistant-1",
+        content: generationContent,
+        is_user: false,
+        name: "Mira",
+        chat_id: "chat",
+        index_in_chat: 1,
+        send_date: 1,
+        swipe_id: 0,
+        swipes: [generationContent],
+        swipe_dates: [1],
+        extra: {},
+        parent_message_id: "user-1",
+        branch_id: null,
+        created_at: 1
+      }]
+    },
+    generate: {
+      raw: async () => ({ content: JSON.stringify(generationPayload([0, 1])) })
+    },
+    imageGen: {
+      generate: async () => {
+        const gate = deferred<{ imageId: string; imageUrl?: string | null }>();
+        gates.push(gate);
+        return gate.promise;
+      }
+    },
+    sendToFrontend: (message: unknown) => { sent.push(message); },
+    log: { warn() {}, error() {}, info() {} }
+  } as unknown as SpindleAPI;
+  const fire = (event: string, ...args: unknown[]) => {
+    for (const handler of handlers.get(event) ?? []) handler(...args);
+  };
+  const assetStatuses = (): string[] => (sent as Array<Record<string, unknown>>)
+    .filter((message) => message.type === "vn_asset")
+    .map((message) => (message.asset as Record<string, unknown>).status as string);
+  return { spindle, fire, data, sent, gates, assetStatuses };
+}
+
+describe("GENERATION_STARTED abort and ownership invalidation", () => {
+  test("without GENERATION_STARTED a completion is still accepted", async () => {
+    const { spindle, fire, gates, assetStatuses } = generationFixture();
+    registerVisualNovelBackend(spindle);
+    fire("GENERATION_ENDED", { chatId: "chat", messageId: "assistant-1", content: generationContent });
+    await waitFor(() => gates.length >= 1);
+    gates[0]!.resolve({ imageId: "image-0", imageUrl: "/api/v1/images/image-0" });
+    await waitFor(() => assetStatuses().includes("generated"));
+    expect(assetStatuses()).toContain("generated");
+  });
+
+  test("aborts the asset controller and invalidates ownership so a running completion cannot persist/send", async () => {
+    const { spindle, fire, gates, sent, assetStatuses } = generationFixture();
+    registerVisualNovelBackend(spindle);
+    fire("GENERATION_ENDED", { chatId: "chat", messageId: "assistant-1", content: generationContent });
+    // The first job is running (its image call is in flight).
+    await waitFor(() => gates.length >= 1);
+    await waitFor(() => assetStatuses().includes("generating"));
+    // A new generation starts (user submitted a new message): abort + invalidate ownership.
+    fire("GENERATION_STARTED", { chatId: "chat" });
+    // Let any late completion try to land.
+    gates[0]!.resolve({ imageId: "image-0", imageUrl: "/api/v1/images/image-0" });
+    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    // The running completion must NOT be surfaced as a vn_asset "generated".
+    expect(assetStatuses()).not.toContain("generated");
+    // The queued second job never started: the image provider saw exactly one call.
+    expect(gates.length).toBe(1);
   });
 });

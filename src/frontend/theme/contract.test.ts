@@ -20,6 +20,20 @@ test("the documented custom properties have base values", () => {
   }
 });
 
+test("scene image fit stays centered and defaults to a backward-compatible cover", () => {
+  assert.match(
+    VN_BASE_CSS,
+    /\[data-vn-scene-image\]\s*\{[\s\S]*?object-fit:\s*cover;[\s\S]*?object-position:\s*center center;/,
+  );
+
+  for (const fit of ["contain", "fill", "none", "scale-down"]) {
+    assert.match(
+      VN_BASE_CSS,
+      new RegExp(`\\[data-vn-scene-image\\]\\[data-vn-scene-image-fit="${fit}"\\]\\s*\\{[^}]*object-fit:\\s*${fit};`),
+    );
+  }
+});
+
 test("custom CSS removes remote imports and URL fetches", () => {
   const result = sanitizeVnUserCss(`@im/**/port "https://example.com/theme.css";\n[data-vn-root] { background: u\\72l(https://example.com/pixel); color: white; }`);
   assert.doesNotMatch(result, /@import|example\.com/);

@@ -62,6 +62,27 @@ textarea {
   -webkit-user-drag: none;
 }
 
+/*
+ * User-selectable scene-image fit. The stage sets data-vn-scene-image-fit on
+ * the image element whenever the saved config changes, so object-fit always
+ * reflects the persisted setting (cover is the backward-compatible default).
+ */
+[data-vn-scene-image][data-vn-scene-image-fit="contain"] {
+  object-fit: contain;
+}
+
+[data-vn-scene-image][data-vn-scene-image-fit="fill"] {
+  object-fit: fill;
+}
+
+[data-vn-scene-image][data-vn-scene-image-fit="none"] {
+  object-fit: none;
+}
+
+[data-vn-scene-image][data-vn-scene-image-fit="scale-down"] {
+  object-fit: scale-down;
+}
+
 [data-vn-scene-image][data-vn-empty="true"] {
   opacity: 0;
 }

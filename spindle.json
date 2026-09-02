@@ -1,6 +1,6 @@
 {
-  "version": "0.1.0",
-  "name": "Visual Novel Preview",
+  "version": "1.0.0-beta.1",
+  "name": "Cue — Living Novel",
   "identifier": "visual_novel_preview",
   "author": "Prolix",
   "description": "A full-screen visual-novel presentation for Lumiverse with paragraph reveal, choices, custom input, scene continuity, and generated scene art.",

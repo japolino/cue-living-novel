@@ -1,9 +1,32 @@
 export type VisualNovelMode = "standard" | "cyoa";
 
+export const SCENE_IMAGE_FITS = ["cover", "contain", "fill", "none", "scale-down"] as const;
+export type VisualNovelSceneImageFit = (typeof SCENE_IMAGE_FITS)[number];
+
+/**
+ * The canonical, host-neutral set of built-in visual-novel theme presets.
+ *
+ * These identifiers are the single source of truth shared by the backend config
+ * normalization (src/config.ts), the frontend preset CSS map, and the stage /
+ * settings wiring. They deliberately live here — not in the frontend `theme`
+ * module — so the shared config never imports browser or frontend code.
+ */
+export const THEME_PRESET_IDS = [
+  "lumiverse",
+  "golden-hour",
+  "boxed-console",
+  "paper-novel",
+  "midnight-noir",
+] as const;
+
+export type VisualNovelThemePreset = (typeof THEME_PRESET_IDS)[number];
+
 export type VisualNovelConfig = {
+  themePreset: VisualNovelThemePreset;
   enabled: boolean;
   autoEnter: boolean;
   mode: VisualNovelMode;
+  sceneImageFit: VisualNovelSceneImageFit;
   debugLogging: boolean;
   generateImages: boolean;
   generateChoices: boolean;
@@ -26,9 +49,11 @@ export type VisualNovelConfig = {
 };
 
 export const DEFAULT_CONFIG: VisualNovelConfig = {
+  themePreset: "lumiverse",
   enabled: true,
   autoEnter: false,
   mode: "standard",
+  sceneImageFit: "cover",
   debugLogging: false,
   generateImages: true,
   generateChoices: true,
@@ -76,12 +101,23 @@ function integer(value: unknown, minimum: number, maximum: number, fallback: num
     : fallback;
 }
 
+function sceneImageFit(value: unknown): VisualNovelSceneImageFit {
+  return typeof value === "string" && (SCENE_IMAGE_FITS as readonly string[]).includes(value)
+    ? value as VisualNovelSceneImageFit
+    : DEFAULT_CONFIG.sceneImageFit;
+}
+
 export function normalizeConfig(value: unknown): VisualNovelConfig {
   const input = record(value);
+  const themePreset = (THEME_PRESET_IDS as readonly string[]).includes(input.themePreset as string)
+    ? input.themePreset as VisualNovelThemePreset
+    : "lumiverse";
   return {
+    themePreset,
     enabled: bool(input.enabled, DEFAULT_CONFIG.enabled),
     autoEnter: bool(input.autoEnter, DEFAULT_CONFIG.autoEnter),
     mode: input.mode === "cyoa" ? "cyoa" : "standard",
+    sceneImageFit: sceneImageFit(input.sceneImageFit),
     debugLogging: bool(input.debugLogging, DEFAULT_CONFIG.debugLogging),
     generateImages: bool(input.generateImages, DEFAULT_CONFIG.generateImages),
     generateChoices: bool(input.generateChoices, DEFAULT_CONFIG.generateChoices),

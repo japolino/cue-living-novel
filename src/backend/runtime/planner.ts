@@ -493,9 +493,20 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
     previous = scene;
   }
 
-  const cues = planner.cues
+  // Dedupe cues by paragraph index so each visible paragraph maps to at most one
+  // image. Duplicate cues at the same paragraph produce identical prompts and
+  // the asset scheduler would reuse the first job, leaking the second as a
+  // permanently-queued job. First occurrence (in sorted order) wins.
+  const seenParagraphs = new Set<number>();
+  const distinctCues = planner.cues
     .filter((cue) => cue.paragraphIndex < narrative.paragraphs.length)
     .sort((left, right) => left.paragraphIndex - right.paragraphIndex)
+    .filter((cue) => {
+      if (seenParagraphs.has(cue.paragraphIndex)) return false;
+      seenParagraphs.add(cue.paragraphIndex);
+      return true;
+    });
+  const cues = distinctCues
     .slice(0, input.config.maxImagesPerTurn)
     .map((cue, index) => {
       const scene = sceneForParagraph(scenes, cue.paragraphIndex);

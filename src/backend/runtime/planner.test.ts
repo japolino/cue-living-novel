@@ -96,3 +96,69 @@ test("fallback planning reuses the active scene prompt and camera identity", asy
   assert.equal(result.plan.scenes[0]?.basePrompt, previousScene.basePrompt);
   assert.equal(result.plan.scenes[0]?.activeAssetId, previousScene.activeAssetId);
 });
+
+
+function dedupeSpindle(cues: number[]): SpindleAPI {
+  return {
+    generate: {
+      raw: async () => ({
+        content: JSON.stringify({
+          scenes: [{
+            startParagraph: 0,
+            boundary: {
+              claimedNewScene: true,
+              reason: "initial",
+              location: "Observatory",
+              timeOfDay: "night",
+              majorTimeJump: false,
+              environmentReplacement: false,
+              forced: false
+            },
+            environment: {
+              location: "Observatory",
+              timeOfDay: "night",
+              weather: null,
+              lighting: "lantern light",
+              description: "An old observatory",
+              persistentElements: ["brass telescope"]
+            },
+            cast: ["Mira"],
+            basePrompt: "old observatory, brass telescope",
+            compositionLock: "Mira centered"
+          }],
+          cues: cues.map((paragraphIndex) => ({ paragraphIndex })),
+          choices: [],
+          characters: [{ name: "Mira", description: "silver hair, green eyes" }]
+        })
+      })
+    },
+    log: { warn() {} }
+  } as unknown as SpindleAPI;
+}
+
+test("dedupes same-paragraph cues before the maxImagesPerTurn slice", async () => {
+  const content = "First paragraph.\n\nSecond paragraph.";
+  const result = await planTurn(dedupeSpindle([0, 0, 1]), {
+    chatId: "chat-1",
+    message: { ...message, content },
+    content,
+    previousScene: null,
+    previousContinuity: null,
+    recentMessages: [],
+    config: {
+      ...DEFAULT_CONFIG,
+      includeCharacterContext: false,
+      includePersonaContext: false,
+      includeLorebookContext: false,
+      maxImagesPerTurn: 4
+    },
+    singleCharacter: emptySingleCharacter()
+  });
+
+  const indexes = result.plan.visualCues.map((cue) => cue.paragraphIndex);
+  assert.deepEqual(indexes, [0, 1]);
+  // Exactly one cue/job for paragraph 0: no leaked, permanently-queued second job.
+  assert.equal(result.plan.visualCues.filter((cue) => cue.paragraphIndex === 0).length, 1);
+  assert.equal(result.plan.visualCues[0]?.cueId, result.plan.visualCues[0]?.cueId);
+  assert.notEqual(result.plan.visualCues[0]?.assetJobId, result.plan.visualCues[1]?.assetJobId);
+});

@@ -2,7 +2,7 @@
 
 Cue is a Lumiverse extension that turns a chat into a living visual novel. It replaces the native message and input surfaces only while VN mode is active. Canonical chat messages remain the source of truth.
 
-> The project was previously named *Visual Novel Preview*; the extension display name and install identifier still reflect that history.
+> The project was previously named *Visual Novel Preview*. Its install identifier remains `visual_novel_preview` so existing installations upgrade in place.
 
 The preview includes:
 
@@ -16,7 +16,7 @@ The preview includes:
 - fixed 16:9 camera scene planning and explicit scene-boundary checks
 - swipe, edit, delete, duplicate-submit, and stale-image reconciliation
 - per-user and per-chat persisted continuity
-- a settings tab and shadow-DOM custom CSS contract
+- a settings tab, a user-selectable scene-image fit (Cover / Contain / Stretch / Original size / Scale down), five built-in theme presets (Lumiverse, Golden hour, Boxed console, Paper novel, Midnight noir), and a shadow-DOM custom CSS contract that is always the final styling layer
 - an always-accessible Exit control that restores native Lumiverse
 
 It targets Lumiverse staging `1.1.6`, audited at commit `33dfa9ee62999fa3e2567066ed5cdadf61635323`, and `lumiverse-spindle-types` `0.6.23`.
@@ -54,7 +54,7 @@ Copy this directory, including `dist`, into:
 data\extensions\visual_novel_preview\repo
 ```
 
-Enable the extension and grant its requested permissions in Lumiverse. Enter from **Visual novel** in the chat header, or **Composer Extras → Open visual novel**. The settings tab controls connections, generation limits, planning context, prompts, and theme CSS.
+Enable the extension and grant its requested permissions in Lumiverse. Enter from **Visual novel** in the chat header, or **Composer Extras → Open visual novel**. The settings tab controls connections, generation limits, planning context, prompts, scene-image fit, the visual-novel theme preset, and the custom CSS layer.
 
 Opening an existing chat bootstraps its latest assistant reply automatically. A new empty chat needs its first normal assistant reply before there is anything to present.
 
