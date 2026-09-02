@@ -36,7 +36,7 @@ function spindleWith(payload: unknown): { spindle: SpindleAPI; usedFallback: () 
         get: async () => ({ id: "conn", name: "P", provider: "openai", model: "gpt", is_default: true, api_url: "", preset_id: null, has_api_key: true, metadata: {}, reasoning_bindings: null }),
         list: async () => []
       },
-      generate: { raw: async () => ({ content: JSON.stringify(payload) }) },
+      generate: { raw: async () => ({ content: typeof payload === "string" ? payload : JSON.stringify(payload) }) },
       log: { warn: () => { fallback = true; } }
     } as unknown as SpindleAPI
   };
@@ -170,5 +170,95 @@ describe("planner tolerant parse", () => {
     expect(usedFallback()).toBe(false);
     expect(result.plan.scenes[0]?.environment.location).toBe("Courtyard");
     expect(result.plan.visualCues.length).toBe(2);
+  });
+
+  test("parses output containing markdown thought fence followed by json fence", async () => {
+    const rawContent = `\`\`\`thought
+I need to plan 5 cues for this scene.
+\`\`\`
+\`\`\`json
+{
+  "scenes": [{ "startParagraph": 0, "environment": { "location": "Garden" } }],
+  "cues": [{ "paragraphIndex": 0 }, { "paragraphIndex": 1 }],
+  "characters": []
+}
+\`\`\``;
+    const { spindle, usedFallback } = spindleWith(rawContent);
+    const result = await planTurn(spindle, {
+      chatId: "chat-1",
+      message: { ...message, content: "P0.\n\nP1." },
+      content: "P0.\n\nP1.",
+      previousScene: null,
+      previousContinuity: null,
+      recentMessages: [],
+      config: { ...DEFAULT_CONFIG, maxImagesPerTurn: 2, parserConnectionId: "conn" },
+      singleCharacter: emptySingleCharacter(),
+      characterAppearance: {}
+    });
+    expect(usedFallback()).toBe(false);
+    expect(result.plan.scenes[0]?.environment.location).toBe("Garden");
+    expect(result.plan.visualCues.length).toBe(2);
+  });
+
+  test("parses output with <thought> tags and trailing commas", async () => {
+    const rawContent = `<thought>
+Considering options...
+</thought>
+{
+  "scenes": [{ "startParagraph": 0, "environment": { "location": "Bazaar" }, }],
+  "cues": [{ "paragraphIndex": 0 },],
+  "characters": [],
+}`;
+    const { spindle, usedFallback } = spindleWith(rawContent);
+    const result = await planTurn(spindle, {
+      chatId: "chat-1",
+      message: { ...message, content: "P0." },
+      content: "P0.",
+      previousScene: null,
+      previousContinuity: null,
+      recentMessages: [],
+      config: { ...DEFAULT_CONFIG, maxImagesPerTurn: 1, parserConnectionId: "conn" },
+      singleCharacter: emptySingleCharacter(),
+      characterAppearance: {}
+    });
+    expect(usedFallback()).toBe(false);
+    expect(result.plan.scenes[0]?.environment.location).toBe("Bazaar");
+  });
+
+  test("extracts content from provider response shapes like { text } or { choices }", async () => {
+    const spindle: any = {
+      chats: { get: async () => ({ character_id: "character-1" }) },
+      characters: { get: async () => ({ id: "character-1", name: "Sandra", description: "", tags: [], extensions: {} }) },
+      personas: { getActive: async () => null },
+      connections: { get: async () => ({ id: "conn", is_default: true }), list: async () => [] },
+      generate: {
+        raw: async () => ({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  scenes: [{ startParagraph: 0, environment: { location: "Palace" } }],
+                  cues: [{ paragraphIndex: 0 }]
+                })
+              }
+            }
+          ]
+        })
+      },
+      log: { warn: () => {} }
+    };
+    const result = await planTurn(spindle, {
+      chatId: "chat-1",
+      message: { ...message, content: "P0." },
+      content: "P0.",
+      previousScene: null,
+      previousContinuity: null,
+      recentMessages: [],
+      config: { ...DEFAULT_CONFIG, maxImagesPerTurn: 1, parserConnectionId: "conn" },
+      singleCharacter: emptySingleCharacter(),
+      characterAppearance: {}
+    });
+    expect(result.usedFallback).toBe(false);
+    expect(result.plan.scenes[0]?.environment.location).toBe("Palace");
   });
 });

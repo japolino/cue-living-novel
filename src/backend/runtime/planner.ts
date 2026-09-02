@@ -329,17 +329,149 @@ function normalizePlannerOutput(value: unknown): unknown {
   };
 }
 
-function jsonObject(content: string): unknown {
-  const fenced = content.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
-  const candidate = (fenced ?? content).trim();
-  try {
-    return JSON.parse(candidate);
-  } catch {
-    const start = candidate.indexOf("{");
-    const end = candidate.lastIndexOf("}");
-    if (start < 0 || end <= start) throw new Error("The visual planner did not return a JSON object.");
-    return JSON.parse(candidate.slice(start, end + 1));
+function balanceJson(candidate: string): string {
+  const openBrackets: string[] = [];
+  let inString = false;
+  let escape = false;
+
+  for (let i = 0; i < candidate.length; i++) {
+    const ch = candidate[i]!;
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escape = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (!inString) {
+      if (ch === "{" || ch === "[") {
+        openBrackets.push(ch);
+      } else if (ch === "}") {
+        if (openBrackets.length > 0 && openBrackets[openBrackets.length - 1] === "{") {
+          openBrackets.pop();
+        }
+      } else if (ch === "]") {
+        if (openBrackets.length > 0 && openBrackets[openBrackets.length - 1] === "[") {
+          openBrackets.pop();
+        }
+      }
+    }
   }
+
+  let suffix = "";
+  for (let i = openBrackets.length - 1; i >= 0; i--) {
+    const b = openBrackets[i]!;
+    suffix += b === "{" ? "}" : "]";
+  }
+  return candidate + suffix;
+}
+
+function tryParseJson(text: string): unknown | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    // Try stripping trailing commas before closing braces/brackets
+    try {
+      const withoutTrailingCommas = trimmed.replace(/,\s*([\}\]])/g, "$1");
+      return JSON.parse(withoutTrailingCommas);
+    } catch {
+      // Try balancing unclosed braces/brackets
+      try {
+        const balanced = balanceJson(trimmed).replace(/,\s*([\}\]])/g, "$1");
+        return JSON.parse(balanced);
+      } catch {
+        return null;
+      }
+    }
+  }
+}
+
+function jsonObject(content: unknown): unknown {
+  if (content !== null && typeof content === "object") {
+    return content;
+  }
+  if (typeof content !== "string") {
+    throw new Error("The visual planner did not return a JSON object.");
+  }
+
+  // 1. Strip thinking blocks like <thought>...</thought> or <thinking>...</thinking>
+  const stripped = content.replace(/<(?:thought|thinking)\b[\s\S]*?<\/(?:thought|thinking)>/gi, "").trim();
+
+  // 2. Look for ```json ... ``` code fence specifically
+  const jsonFencedMatches = stripped.matchAll(/```json\s*([\s\S]*?)(?:```|$)/gi);
+  for (const match of jsonFencedMatches) {
+    const body = match[1]?.trim();
+    if (body) {
+      const parsed = tryParseJson(body);
+      if (parsed && typeof parsed === "object") return parsed;
+      const start = body.indexOf("{");
+      const end = body.lastIndexOf("}");
+      if (start >= 0 && end > start) {
+        const inner = tryParseJson(body.slice(start, end + 1));
+        if (inner && typeof inner === "object") return inner;
+      }
+    }
+  }
+
+  // 3. Look for any ``` ... ``` code fence that contains '{'
+  const anyFencedMatches = stripped.matchAll(/```(?:\w+)?\s*([\s\S]*?)(?:```|$)/gi);
+  for (const match of anyFencedMatches) {
+    const body = match[1]?.trim();
+    if (body && body.includes("{")) {
+      const parsed = tryParseJson(body);
+      if (parsed && typeof parsed === "object") return parsed;
+      const start = body.indexOf("{");
+      const end = body.lastIndexOf("}");
+      if (start >= 0 && end > start) {
+        const inner = tryParseJson(body.slice(start, end + 1));
+        if (inner && typeof inner === "object") return inner;
+      }
+    }
+  }
+
+  // 4. Try parsing the whole stripped content directly
+  const directParsed = tryParseJson(stripped);
+  if (directParsed && typeof directParsed === "object") return directParsed;
+
+  // 5. Find the first '{' and last '}' in the whole content
+  const start = stripped.indexOf("{");
+  const end = stripped.lastIndexOf("}");
+  if (start >= 0) {
+    const candidate = end > start ? stripped.slice(start, end + 1) : stripped.slice(start);
+    const parsed = tryParseJson(candidate);
+    if (parsed && typeof parsed === "object") return parsed;
+  }
+
+  throw new Error("The visual planner did not return a JSON object.");
+}
+
+function extractResponseContent(response: unknown): unknown {
+  if (typeof response === "string") return response;
+  if (!response || typeof response !== "object") return undefined;
+  const record = response as Record<string, unknown>;
+  if (typeof record.content === "string") return record.content;
+  if (typeof record.text === "string") return record.text;
+  if (record.message && typeof record.message === "object" && typeof (record.message as Record<string, unknown>).content === "string") {
+    return (record.message as Record<string, unknown>).content;
+  }
+  if (Array.isArray(record.choices) && record.choices[0] && typeof record.choices[0] === "object") {
+    const firstChoice = record.choices[0] as Record<string, unknown>;
+    if (firstChoice.message && typeof firstChoice.message === "object" && typeof (firstChoice.message as Record<string, unknown>).content === "string") {
+      return (firstChoice.message as Record<string, unknown>).content;
+    }
+    if (typeof firstChoice.text === "string") return firstChoice.text;
+  }
+  if (Array.isArray(record.scenes) || Array.isArray(record.cues) || Array.isArray(record.visualCues)) {
+    return record;
+  }
+  return undefined;
 }
 
 async function requestPlannerOutput(
@@ -382,11 +514,9 @@ async function requestPlannerOutput(
     reasoning: { source: "off" },
     ...(input.userId ? { userId: input.userId } : {})
   });
-  const content = response !== null && typeof response === "object"
-    ? (response as { content?: unknown }).content
-    : undefined;
-  if (typeof content !== "string") throw new Error("The visual planner returned no text content.");
-  return PlannerOutputSchema.parse(normalizePlannerOutput(jsonObject(content)));
+  const rawContent = extractResponseContent(response);
+  if (rawContent === undefined) throw new Error("The visual planner returned no text content.");
+  return PlannerOutputSchema.parse(normalizePlannerOutput(jsonObject(rawContent)));
 }
 
 function fallbackPlanner(input: PlanTurnInput, paragraphCount: number): z.infer<typeof PlannerOutputSchema> {
