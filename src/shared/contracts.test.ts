@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { AssetJobSchema, TurnKeySchema, TurnPlanSchema, VisualCueSchema, type ContinuityState, type TurnPlan } from "./contracts.js";
+import { AssetJobSchema, SceneStateSchema, TurnKeySchema, TurnPlanSchema, VisualCueSchema, type ContinuityState, type TurnPlan } from "./contracts.js";
 import { validateTurnPlan } from "../backend/core/turn-plan.js";
 
 const continuity: ContinuityState = { revision: 0, characters: {}, facts: {} };
@@ -201,5 +201,35 @@ describe("VisualCueSchema effect (additive)", () => {
 
   test("rejects invalid effect values", () => {
     expect(() => VisualCueSchema.parse({ ...base, effect: "barrel_roll" })).toThrow();
+  });
+});
+
+
+describe("VisualCueSchema and SceneStateSchema character and attire (additive)", () => {
+  test("VisualCueSchema accepts optional character and attire fields", () => {
+    const cue = {
+      cueId: "cue-1",
+      paragraphIndex: 0,
+      sceneId: "scene-1",
+      sceneRevision: 0,
+      kind: "flattened_scene" as const,
+      character: "Lyra",
+      attire: "swimsuit",
+      assetJobId: "job-1",
+    };
+    const parsed = VisualCueSchema.parse(cue);
+    expect(parsed.character).toBe("Lyra");
+    expect(parsed.attire).toBe("swimsuit");
+  });
+
+  test("SceneStateSchema accepts optional character and attire fields", () => {
+    const s = {
+      ...plan().scenes[0],
+      character: "Lyra",
+      attire: "armor",
+    };
+    const parsed = SceneStateSchema.parse(s);
+    expect(parsed.character).toBe("Lyra");
+    expect(parsed.attire).toBe("armor");
   });
 });

@@ -132,4 +132,41 @@ describe("distillVisualTags", () => {
     expect(distillVisualTags("18-year-old petite Japanese girl, golden blonde short hair, brilliant red eyes, black sailor uniform"))
       .toEqual(["18-year-old petite Japanese girl", "golden blonde short hair", "brilliant red eyes", "black sailor uniform"]);
   });
+
+  test("distillVisualTags extracts monster girl and furry fields (species, ears, tail, horns, wings, fur)", () => {
+    const card = `
+# Character Profile: Vespera
+Species: Demon girl
+Ears: pointy elf ears
+Horns: two black curved horns
+Wings: large bat wings
+Tail: spade demon tail
+Hair: crimson red waist-length hair
+Eyes: glowing golden eyes
+Clothing: leather gothic dress, spiked choker
+`;
+    const tags = distillVisualTags(card);
+    expect(tags).toContain("pointy elf ears");
+    expect(tags).toContain("two black curved horns");
+    expect(tags).toContain("large bat wings");
+    expect(tags).toContain("spade demon tail");
+    expect(tags).toContain("crimson red waist-length hair");
+    expect(tags).toContain("glowing golden eyes");
+    expect(tags).toContain("leather gothic dress");
+  });
+
+  test("distillVisualTags extracts anthro / furry features", () => {
+    const card = `
+Species: Snow Leopard
+Race: Anthro / Furry
+Features: feline muzzle, spotted white fur, furry paws, long bushy tail
+Hair: short white hair
+Eyes: ice blue eyes
+Attire: sleeveless martial arts gi, fingerless gloves
+`;
+    const tags = distillVisualTags(card);
+    expect(tags).toContain("short white hair");
+    expect(tags).toContain("ice blue eyes");
+    expect(tags).toContain("sleeveless martial arts gi");
+  });
 });

@@ -112,7 +112,9 @@ export const SceneStateSchema = z.object({
   cameraLock: CameraLockSchema,
   compositionLock: TextSchema,
   activeAssetId: IdentifierSchema.nullable().default(null),
-  priorSceneId: IdentifierSchema.nullable().default(null)
+  priorSceneId: IdentifierSchema.nullable().default(null),
+  character: TextSchema.nullable().optional(),
+  attire: TextSchema.nullable().optional()
 }).strict();
 export type SceneState = z.infer<typeof SceneStateSchema>;
 
@@ -154,6 +156,8 @@ export const VisualCueSchema = z.object({
   action: z.string().trim().nullable().default(null),
   expression: z.string().trim().nullable().default(null),
   poseExpressionId: z.string().trim().optional(),
+  character: z.string().trim().nullable().optional(),
+  attire: z.string().trim().nullable().optional(),
   effect: StageEffectSchema.optional(),
   promptDelta: z.string().trim().default(""),
   assetJobId: IdentifierSchema,

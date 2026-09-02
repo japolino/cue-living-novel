@@ -32,16 +32,25 @@ function compilePromptEntry(config: VisualNovelConfig, scene: SceneState, cue: V
     maxCharacters: 1,
     perspectiveMode: "dynamic"
   });
-  const identity = scene.identityPrompt?.trim() ?? "";
+  let identity = scene.identityPrompt?.trim() ?? "";
+  const attire = cue.attire || scene.attire;
+  if (attire && identity) {
+    identity = applyAttireOverride(identity, attire);
+  }
   const identityText = identity.toLowerCase();
+  const isFemale = /\b(?:girl|woman|female|lady|maid|sister|mother|daughter|gal)\b/i.test(identityText);
+  const isMale = /\b(?:boy|man|male|guy|gentleman|brother|father|son|mustache|beard)\b/i.test(identityText);
   let label = "girl";
   let situation = "1girl, solo";
-  if (/\b(?:monster|creature|animal|robot|android|cyborg|demon|alien|beast|machine|ghost|spirit|slime|golem)\b/.test(identityText)) {
-    label = "1other";
-    situation = "1other, solo";
-  } else if (/\b(?:boy|male|man|guy|mustache|beard)\b/.test(identityText)) {
+  if (isFemale && !isMale) {
+    label = "girl";
+    situation = "1girl, solo";
+  } else if (isMale && !isFemale) {
     label = "boy";
     situation = "1boy, solo";
+  } else if (/\b(?:creature|monster|animal|robot|android|cyborg|machine|golem|inanimate)\b/i.test(identityText)) {
+    label = "1other";
+    situation = "1other, solo";
   }
   const pose = poseById(POSE_EXPRESSION_CATALOGUE, cue.poseExpressionId);
   const timeWeather = [scene.environment.timeOfDay, scene.environment.weather].filter(Boolean).join(" ");
@@ -177,4 +186,14 @@ export async function generateAssets(
     signal.removeEventListener("abort", abort);
     unsubscribe();
   }
+}const CLOTHING_TAG_REGEX = /\b(?:clothes|clothing|attire|outfit|uniform|dress|skirt|shirt|blouse|sweater|cardigan|jacket|coat|hoodie|vest|suit|robe|kimono|yukata|hanfu|gi|pants|trousers|jeans|shorts|leggings|tights|pantyhose|socks?|stockings?|shoes?|boots?|sneakers?|heels?|sandals?|gloves?|hat|cap|hood|scarf|tie|ribbon|bow|collar|apron|swimsuit|bikini|pajamas?|leotard|bodysuit|armor|armour|cloak|cape)\b/i;
+
+export function applyAttireOverride(baseIdentity: string, newAttire: string): string {
+  const trimmedAttire = newAttire.trim();
+  if (!trimmedAttire) return baseIdentity;
+  const tags = baseIdentity.split(",").map((t) => t.trim()).filter(Boolean);
+  const physicalTags = tags.filter((tag) => !CLOTHING_TAG_REGEX.test(tag));
+  return [...physicalTags, trimmedAttire].join(", ");
 }
+
+

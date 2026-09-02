@@ -312,3 +312,62 @@ test("planner includes audio catalog in prompt instructions and preserves return
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+
+test("planner supports multi-character cast resolution and attire overrides", async () => {
+  const spindle: SpindleAPI = {
+    generate: {
+      raw: async () => ({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                scenes: [
+                  {
+                    startParagraph: 0,
+                    boundary: { claimedNewScene: false, reason: "none", location: "Garden", timeOfDay: "day", majorTimeJump: false, environmentReplacement: false, forced: false },
+                    environment: { location: "Garden", timeOfDay: "day", weather: "sunny", lighting: "sunlight", description: "A garden", persistentElements: [] },
+                    cast: ["Lyra"],
+                    character: "Lyra",
+                    attire: "white sundress, straw hat",
+                    basePrompt: "blooming garden, sunny day",
+                    compositionLock: "centered"
+                  }
+                ],
+                cues: [
+                  { paragraphIndex: 0, expression: "smile", character: "Lyra", attire: "white sundress, straw hat" }
+                ],
+                choices: [],
+                characters: [
+                  { name: "Lyra", description: "elf girl, pointy elf ears, emerald eyes, silver hair, white sundress" }
+                ]
+              })
+            }
+          }
+        ]
+      })
+    },
+    log: { warn() {} }
+  } as unknown as SpindleAPI;
+
+  const result = await planTurn(spindle, {
+    chatId: "chat",
+    message: { ...message, name: "Lyra", content: "Lyra smiles in the garden." },
+    content: "Lyra smiles in the garden.",
+    previousScene: null,
+    previousContinuity: null,
+    recentMessages: [],
+    config: { ...DEFAULT_CONFIG, parserConnectionId: "parser" },
+    singleCharacter: emptySingleCharacter(),
+    characterAppearance: {
+      "Lyra": "elf girl, pointy elf ears, silver hair, emerald eyes, green tunic, leather boots",
+      "Hina": "golden blonde hair, red eyes, sailor uniform"
+    }
+  });
+
+  assert.equal(result.plan.scenes[0]?.character, "Lyra");
+  assert.equal(result.plan.scenes[0]?.attire, "white sundress, straw hat");
+  assert.equal(result.plan.scenes[0]?.identityPrompt, "elf girl, pointy elf ears, silver hair, emerald eyes, green tunic, leather boots");
+  assert.equal(result.plan.visualCues[0]?.character, "Lyra");
+  assert.equal(result.plan.visualCues[0]?.attire, "white sundress, straw hat");
+});

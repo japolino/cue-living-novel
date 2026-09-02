@@ -167,4 +167,49 @@ describe("createAssetJobs promptFingerprint", () => {
     const withDelta = createAssetJobs(plan([{ ...cue("smile"), promptDelta: "a completely different free-form delta" }]), DEFAULT_CONFIG)[0]!.promptFingerprint;
     expect(withEmpty).toBe(withDelta);
   });
+
+  test("classifies monster girls and furry females as 1girl, solo", () => {
+    const demonGirl = {
+      ...scene,
+      identityPrompt: "demon girl, red horns, black wings, fangs, gothic black dress"
+    };
+    const compiled = compileImagePrompt(DEFAULT_CONFIG, demonGirl, cue("smile"));
+    expect(compiled).toContain("1girl, solo");
+    expect(compiled).not.toContain("1other");
+
+    const wolfGirl = {
+      ...scene,
+      identityPrompt: "wolf girl, fluffy wolf ears, wolf tail, school uniform"
+    };
+    const compiledWolf = compileImagePrompt(DEFAULT_CONFIG, wolfGirl, cue("smile"));
+    expect(compiledWolf).toContain("1girl, solo");
+    expect(compiledWolf).not.toContain("1other");
+  });
+
+  test("classifies male anthro/furry as 1boy, solo", () => {
+    const wolfMan = {
+      ...scene,
+      identityPrompt: "anthro wolf male warrior, gray fur, muscular build, leather vest"
+    };
+    const compiled = compileImagePrompt(DEFAULT_CONFIG, wolfMan, cue("smile"));
+    expect(compiled).toContain("1boy, solo");
+  });
+
+  test("applies attire override to replace clothing while keeping permanent features", () => {
+    const character = {
+      ...scene,
+      identityPrompt: "golden blonde short hair, red eyes, cat ears, black sailor uniform, pleated skirt"
+    };
+    const cueWithAttire: VisualCue = {
+      ...cue("smile"),
+      attire: "white sundress, straw hat"
+    };
+    const compiled = compileImagePrompt(DEFAULT_CONFIG, character, cueWithAttire);
+    expect(compiled).toContain("golden blonde short hair");
+    expect(compiled).toContain("red eyes");
+    expect(compiled).toContain("cat ears");
+    expect(compiled).toContain("white sundress");
+    expect(compiled).toContain("straw hat");
+    expect(compiled).not.toContain("black sailor uniform");
+  });
 });

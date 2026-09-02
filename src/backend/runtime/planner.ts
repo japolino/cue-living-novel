@@ -22,6 +22,7 @@ import { POSE_EXPRESSION_CATALOGUE, selectPoseExpression, type SingleCharacterSt
 import {
   appearanceMapKeyFor,
   buildCanonicalIdentity,
+  characterAppearanceKey,
   distillVisualTags,
   isUsableIdentity,
   normalizeCharacterName,
@@ -38,6 +39,8 @@ const PlannerSceneSchema = z.object({
   boundary: SceneBoundaryProposalSchema,
   environment: SceneEnvironmentSchema,
   cast: z.array(z.string().trim().min(1)).default([]),
+  character: z.string().trim().nullable().optional(),
+  attire: z.string().trim().nullable().optional(),
   basePrompt: z.string().trim().min(1),
   compositionLock: z.string().trim().min(1).default("Character centered with clear negative space behind the dialogue window.")
 }).strict();
@@ -46,6 +49,8 @@ const PlannerCueSchema = z.object({
   paragraphIndex: z.number().int().nonnegative(),
   action: z.string().trim().nullable().optional(),
   expression: z.string().trim().nullable().optional(),
+  character: z.string().trim().nullable().optional(),
+  attire: z.string().trim().nullable().optional(),
   promptDelta: z.string().trim().optional(),
   bgm: z.string().trim().nullable().optional(),
   sfx: z.string().trim().nullable().optional()
@@ -140,9 +145,11 @@ function plannerInstruction(config: VisualNovelConfig): string {
     config.mode === "cyoa" && config.generateChoices
       ? "choices: If the response does not contain authored Choice tags, return 2 to 4 contextual choices from the user's/persona's perspective. For each choice provide 'label' (a concise button text, e.g. 'Step closer and call her bluff') and 'submission' (a natural, descriptive action or dialogue sentence written in first-person prose from the user's perspective reacting to the scene, e.g. 'I take a slow step toward the desk, meeting her eyes with a quiet smirk. \"Are you really in a position to be making demands, Hina?\"'). NEVER return an index, number, or option code for submission."
       : "Return an empty choices array.",
-    "characters must contain EXACTLY ONE entry: the single protagonist. Return name and ONE compact comma-separated line containing ONLY visible physical appearance tags extracted from the card context: age, gender, build, hair, eyes, face, skin, clothing, accessories, and visible distinguishing marks. Never copy markdown headings or labels, personality, psychology, speech, catchphrases, behavior, backstory, scenario, intimate/NSFW notes, macros, or prose sentences. A description that merely repeats the name is invalid. Keep stable traits and never invent appearance that contradicts the card or KNOWN CHARACTERS baseline. Never return a second character.",
+    "characters: Return name and ONE compact comma-separated line containing physical appearance tags. Capture permanent physical traits including species/race (e.g. elf, demon, catgirl, kitsune, furry, anthro, monster girl) and non-human anatomy (e.g. animal ears, horns, tail, wings, fangs, scales, fur, paws, claws). A description that merely repeats the name is invalid. Keep stable traits and never invent appearance that contradicts the card or KNOWN CHARACTERS baseline.",
+    "cast & active character: If multiple characters are present or in a scenario card, set 'character' on the scene or cue to the active speaking or focused character.",
+    "attire: If the active character changes clothes (e.g. swimsuit, pajamas, armor, sundress, uniform), specify the new outfit tags in 'attire'; otherwise null.",
         hasAudio ? audioInstructions.join("\n") : "",
-    `Shape: {scenes:[{startParagraph,boundary:{claimedNewScene,reason,location,timeOfDay,majorTimeJump,environmentReplacement,forced},environment:{location,timeOfDay,weather,lighting,description,persistentElements},cast,basePrompt,compositionLock}],cues:[{paragraphIndex,expression${hasAudio ? ",bgm?,sfx?" : ""}}],choices:[{label,submission}],characters:[{name,description}]}`,
+    `Shape: {scenes:[{startParagraph,boundary:{claimedNewScene,reason,location,timeOfDay,majorTimeJump,environmentReplacement,forced},environment:{location,timeOfDay,weather,lighting,description,persistentElements},cast,character?,attire?,basePrompt,compositionLock}],cues:[{paragraphIndex,expression,character?,attire?${hasAudio ? ",bgm?,sfx?" : ""}}],choices:[{label,submission}],characters:[{name,description}]}`,
     config.customPlannerInstructions ? config.customPlannerInstructions.trim() : ""
   ].filter(Boolean).join("\n");
 }
@@ -249,6 +256,8 @@ function normalizeScene(value: unknown): unknown {
     cast: Array.isArray(record.cast)
       ? record.cast.map((item) => typeof item === "string" ? item.trim() : String(item)).filter(Boolean)
       : [],
+    character: typeof record.character === "string" ? record.character.trim() : null,
+    attire: typeof record.attire === "string" ? record.attire.trim() : null,
     basePrompt: typeof record.basePrompt === "string" && record.basePrompt.trim() ? record.basePrompt.trim() : "a visual novel scene",
     compositionLock: typeof record.compositionLock === "string" ? record.compositionLock.trim() : "Character centered with clear negative space behind the dialogue window."
   };
@@ -268,6 +277,8 @@ function normalizeCue(value: unknown): unknown {
     paragraphIndex: Math.max(0, Math.floor(rawPIdx)),
     action: typeof record.action === "string" ? record.action.trim() : null,
     expression: typeof record.expression === "string" ? record.expression.trim() : null,
+    character: typeof record.character === "string" ? record.character.trim() : null,
+    attire: typeof record.attire === "string" ? record.attire.trim() : null,
     promptDelta: typeof record.promptDelta === "string"
       ? record.promptDelta.trim()
       : (typeof record.prompt_delta === "string" ? record.prompt_delta.trim() : ""),
@@ -637,8 +648,22 @@ function knownCharacterBlock(input: PlanTurnInput, visualContext: VisualContextS
     const card = buildCardIdentity(visualContext);
     if (card && isUsableIdentity(card.name, card.tags)) tags = card.tags;
   }
-  const header = "KNOWN CHARACTERS (authoritative visual baseline; exactly one protagonist; only change a tag on a real visible change):";
-  return tags.length ? `${header}\n${name}: ${tags.join(", ")}` : header;
+  const lines: string[] = [];
+  if (tags.length > 0) {
+    lines.push(`${name}: ${tags.join(", ")}`);
+  }
+
+  // Include any other known characters from characterAppearance map
+  for (const [otherName, otherTags] of Object.entries(input.characterAppearance)) {
+    if (name && characterAppearanceKey(otherName) === characterAppearanceKey(name)) continue;
+    const cleanTags = toUsableTags(otherName, splitTags(otherTags));
+    if (cleanTags.length > 0) {
+      lines.push(`${otherName}: ${cleanTags.join(", ")}`);
+    }
+  }
+
+  const header = "KNOWN CHARACTERS (authoritative visual baseline; only change a tag on a real story-directed change):";
+  return lines.length ? `${header}\n${lines.join("\n")}` : header;
 }
 
 function buildCardIdentity(visualContext: VisualContextSnapshot): { name: string; tags: string[] } | null {
@@ -779,7 +804,17 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
     const decision = decideSceneBoundary(previous, proposal.boundary);
     if (scenes.length > 0 && !decision.startsNewScene) continue;
     const reusedScene = previous !== null && !decision.startsNewScene ? previous : null;
-    const sceneCast: string[] = protagonistName ? [protagonistName] : [];
+    const activeChar = proposal.character || (proposal.cast && proposal.cast[0]) || protagonistName;
+    let sceneIdentity = identityBlock;
+    if (activeChar && characterAppearanceKey(activeChar) !== characterAppearanceKey(protagonistName)) {
+      const globalKey = appearanceMapKeyFor(input.characterAppearance, activeChar);
+      if (globalKey && input.characterAppearance[globalKey]) {
+        sceneIdentity = input.characterAppearance[globalKey];
+      }
+    }
+    const sceneCast: string[] = proposal.cast && proposal.cast.length > 0
+      ? proposal.cast
+      : (activeChar ? [activeChar] : (protagonistName ? [protagonistName] : []));
     const sceneRevision = reusedScene ? reusedScene.revision : (previous?.revision ?? 0) + 1;
     const sceneId = reusedScene ? reusedScene.sceneId : id("scene", `${key.sourceFingerprint}:${proposal.startParagraph}:${proposal.environment.location}`);
     const scene = SceneStateSchema.parse({
@@ -788,9 +823,11 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
       startParagraph: proposal.startParagraph,
       environment: reusedScene ? reusedScene.environment : proposal.environment,
       cast: sceneCast,
+      character: activeChar || null,
+      attire: proposal.attire || null,
       continuity,
       basePrompt: reusedScene ? reusedScene.basePrompt : proposal.basePrompt,
-      identityPrompt: identityBlock || null,
+      identityPrompt: sceneIdentity || null,
       cameraLock: FIXED_CAMERA,
       compositionLock: reusedScene ? reusedScene.compositionLock : proposal.compositionLock,
       activeAssetId: reusedScene ? reusedScene.activeAssetId : null,
@@ -829,6 +866,8 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
         action: null,
         expression: null,
         poseExpressionId: pose.id,
+        character: cue.character || scene.character || undefined,
+        attire: cue.attire || scene.attire || undefined,
         promptDelta: "",
         assetJobId: id("asset", `${sourceFingerprint}:${cue.paragraphIndex}:${index}`),
         ...(cue.bgm ? { bgm: cue.bgm } : {}),
