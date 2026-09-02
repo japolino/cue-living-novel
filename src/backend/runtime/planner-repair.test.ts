@@ -261,4 +261,34 @@ Considering options...
     expect(result.usedFallback).toBe(false);
     expect(result.plan.scenes[0]?.environment.location).toBe("Palace");
   });
+
+  test("assigns poseExpressionId from planner cue.expression matching 80종 catalog", async () => {
+    const multiContent = "P0.\n\nP1.\n\nP2.";
+    const { spindle, usedFallback } = spindleWith({
+      scenes: [{ startParagraph: 0, environment: { location: "Balcony" } }],
+      cues: [
+        { paragraphIndex: 0, expression: "smirk" },
+        { paragraphIndex: 1, expression: "lovestruck" },
+        { paragraphIndex: 2, expression: "acting cute" }
+      ],
+      choices: [],
+      characters: [{ name: "Sandra", description: "silver hair" }]
+    });
+    const result = await planTurn(spindle, {
+      chatId: "chat-1",
+      message: { ...message, content: multiContent },
+      content: multiContent,
+      previousScene: null,
+      previousContinuity: null,
+      recentMessages: [],
+      config: { ...DEFAULT_CONFIG, maxImagesPerTurn: 3, parserConnectionId: "conn" },
+      singleCharacter: emptySingleCharacter(),
+      characterAppearance: {}
+    });
+    expect(usedFallback()).toBe(false);
+    expect(result.plan.visualCues.length).toBe(3);
+    expect(result.plan.visualCues[0]?.poseExpressionId).toBe("smirk");
+    expect(result.plan.visualCues[1]?.poseExpressionId).toBe("lovestruck");
+    expect(result.plan.visualCues[2]?.poseExpressionId).toBe("acting_cute");
+  });
 });

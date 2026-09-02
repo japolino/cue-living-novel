@@ -113,7 +113,7 @@ function plannerInstruction(config: VisualNovelConfig): string {
     "Keep the camera fixed at eye level with the protagonist centered and the lower quarter clear for dialogue UI.",
     "EXACTLY ONE protagonist is visible in every frame. Never depict a second character, a crowd, a bystander, or any other person. The protagonist is always the single centered subject.",
     "basePrompt must be concise comma-separated Danbooru-style scene tags for persistent location, time, weather, lighting, and background elements. Include no camera or composition prose, character names, or character description. The protagonist's appearance belongs only in the single characters entry.",
-    "cues selects paragraph indexes where illustration updates should occur.",
+    "cues selects paragraph indexes where illustration updates should occur. For each cue, select an expression from the expression catalogue matching the protagonist's emotional or physical reaction at that moment: [idle, speak, smile, smirk, laugh, think, sad, angry, surprise, wave, shy, listen, pouting, teary_pouting, nervous, nervous_pouting, blushing_shyly, full_face_blush, lovestruck, aroused, lustful, excited, joyful, giggling, happy_smiling, happy_tears, playful_winking, bored, confused, curious, depressed, determined, disappointed, disgusted, embarrassed, enraged, exhausted, flustered, forced_smiling, guilty, indifferent, jealous, melancholic, relieved, scared, seductive_smiling, serious, shocked, sleepy, smug, suspicious, taunting, thinking, worried, acting_cute, acting_coy, admiring, cozy].",
     config.maxImagesPerTurn > 0
       ? `Generate up to ${config.maxImagesPerTurn} distinct cues spread across key dialogue or action beats in the turn (always include paragraph 0 as the opening cue).`
       : "Generate cues spread across distinct visual or emotional beats (unlimited). Always include paragraph 0.",
@@ -121,7 +121,7 @@ function plannerInstruction(config: VisualNovelConfig): string {
       ? "Return 2 to 4 concise choices if the response does not contain authored Choice tags."
       : "Return an empty choices array.",
     "characters must contain EXACTLY ONE entry: the single protagonist. Return name and ONE compact comma-separated line containing ONLY visible physical appearance tags extracted from the card context: age, gender, build, hair, eyes, face, skin, clothing, accessories, and visible distinguishing marks. Never copy markdown headings or labels, personality, psychology, speech, catchphrases, behavior, backstory, scenario, intimate/NSFW notes, macros, or prose sentences. A description that merely repeats the name is invalid. Keep stable traits and never invent appearance that contradicts the card or KNOWN CHARACTERS baseline. Never return a second character.",
-    "Shape: {scenes:[{startParagraph,boundary:{claimedNewScene,reason,location,timeOfDay,majorTimeJump,environmentReplacement,forced},environment:{location,timeOfDay,weather,lighting,description,persistentElements},cast,basePrompt,compositionLock}],cues:[{paragraphIndex}],choices:[{label,submission}],characters:[{name,description}]}",
+    "Shape: {scenes:[{startParagraph,boundary:{claimedNewScene,reason,location,timeOfDay,majorTimeJump,environmentReplacement,forced},environment:{location,timeOfDay,weather,lighting,description,persistentElements},cast,basePrompt,compositionLock}],cues:[{paragraphIndex,expression}],choices:[{label,submission}],characters:[{name,description}]}",
     config.customPlannerInstructions ? config.customPlannerInstructions.trim() : ""
   ].filter(Boolean).join("\n");
 }
@@ -790,7 +790,7 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
     .map((cue, index) => {
       const scene = sceneForParagraph(scenes, cue.paragraphIndex);
       const paragraph = narrative.paragraphs.find((candidate) => candidate.index === cue.paragraphIndex);
-      const pose = selectPoseExpression(POSE_EXPRESSION_CATALOGUE, cue.paragraphIndex, paragraph?.text ?? "");
+      const pose = selectPoseExpression(POSE_EXPRESSION_CATALOGUE, cue.paragraphIndex, paragraph?.text ?? "", cue.expression);
       return VisualCueSchema.parse({
         cueId: id("cue", `${sourceFingerprint}:${cue.paragraphIndex}:${index}`),
         paragraphIndex: cue.paragraphIndex,

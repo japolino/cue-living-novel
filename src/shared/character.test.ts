@@ -14,7 +14,7 @@ describe("POSE_EXPRESSION_CATALOGUE integrity", () => {
     expect(POSE_EXPRESSION_CATALOGUE.length).toBeGreaterThan(0);
   });
 
-  test("is bounded at <= 16 entries", () => {
+  test("is bounded at <= 128 entries", () => {
     expect(POSE_EXPRESSION_CATALOGUE.length).toBeLessThanOrEqual(POSE_EXPRESSION_CATALOGUE_MAX_SIZE);
   });
 
@@ -85,7 +85,21 @@ describe("selectPoseExpression", () => {
     const empty: readonly PoseExpressionDefinition[] = [];
     expect(selectPoseExpression(empty, 0, "hello").id).toBe("idle");
   });
+
+  test("prefers explicitly requested expression from planner over keyword or index", () => {
+    // text says laugh, but preferred expression is sad
+    const selected = selectPoseExpression(catalogue, 0, "They laugh together.", "sad");
+    expect(selected.id).toBe("sad");
+
+    // partial or space-separated names match
+    const smirk = selectPoseExpression(catalogue, 0, "Neutral text", "smirk");
+    expect(smirk.id).toBe("smirk");
+
+    const actingCute = selectPoseExpression(catalogue, 0, "Neutral text", "acting cute");
+    expect(actingCute.id).toBe("acting_cute");
+  });
 });
+
 
 describe("poseById", () => {
   test("resolves a known id", () => {
