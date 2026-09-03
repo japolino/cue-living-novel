@@ -84,7 +84,7 @@ function stripIgnoredTags(content: string, tags: readonly string[]): string {
   return output;
 }
 
-const INLINE_IMG_REGEX = /<img\s*=\s*["']([^"']+)["']\s*\/?>|<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["'][^>]*?\/?>|\{\{img::([^\}]+)\}\}/gi;
+const INLINE_IMG_REGEX = /<img\s*=\s*["']([^"']+)["']\s*\/?>|<img\s*=\s*([^\s"'>][^\s>]*?)[\s>]|<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["'][^>]*?\/?>|\{\{img::([^\}]+)\}\}/gi;
 
 /**
  * Extract inline card asset references like `<img="asset_name">`,
@@ -92,8 +92,8 @@ const INLINE_IMG_REGEX = /<img\s*=\s*["']([^"']+)["']\s*\/?>|<img\b[^>]*?\bsrc\s
  */
 export function extractInlineCardImages(text: string): { text: string; assetNames: string[] } {
   const assetNames: string[] = [];
-  const cleaned = text.replace(INLINE_IMG_REGEX, (_match, p1, p2, p3) => {
-    const name = (p1 || p2 || p3 || "").trim();
+  const cleaned = text.replace(INLINE_IMG_REGEX, (_match, p1, p2, p3, p4) => {
+    const name = (p1 || p2 || p3 || p4 || "").trim();
     if (name) assetNames.push(name);
     return "";
   });
@@ -109,24 +109,34 @@ export function extractInlineCardImagesWithParagraphs(
 ): Array<{ name: string; paragraphIndex: number }> {
   const blocks = splitBlocks(content);
   const sourceToPara = new Map<number, number>();
-  for (const p of paragraphs) {
-    sourceToPara.set(p.sourceIndex, p.index);
+  for (const paragraph of paragraphs) {
+    sourceToPara.set(paragraph.sourceIndex, paragraph.index);
   }
 
   const results: Array<{ name: string; paragraphIndex: number }> = [];
   let lastKnownParaIndex = 0;
+  let sawParagraph = false;
 
   for (const block of blocks) {
-    if (sourceToPara.has(block.sourceIndex)) {
-      lastKnownParaIndex = sourceToPara.get(block.sourceIndex)!;
+    const mapped = sourceToPara.get(block.sourceIndex);
+    if (mapped !== undefined) {
+      lastKnownParaIndex = mapped;
+      sawParagraph = true;
     }
-    const pIndex = lastKnownParaIndex;
 
-    const matches = block.text.matchAll(INLINE_IMG_REGEX);
+    const matches = [...block.text.matchAll(INLINE_IMG_REGEX)];
+    if (matches.length === 0) continue;
+
+    // An inline image marker depicts the preceding paragraph (the dialogue or
+    // narration line it annotates). If the block produced no visible paragraph
+    // (e.g. a standalone `<img=...>` line), fall back to the last paragraph we
+    // have seen, which is still the line the expression belongs to.
+    const paragraphIndex = sawParagraph ? lastKnownParaIndex : 0;
+
     for (const match of matches) {
-      const name = (match[1] || match[2] || match[3] || "").trim();
+      const name = (match[1] || match[2] || match[3] || match[4] || "").trim();
       if (name) {
-        results.push({ name, paragraphIndex: pIndex });
+        results.push({ name, paragraphIndex });
       }
     }
   }

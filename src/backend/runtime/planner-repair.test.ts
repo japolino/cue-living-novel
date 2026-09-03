@@ -316,4 +316,34 @@ Considering options...
     expect(result.plan.choices[0]?.submission).toBe("Option 1 label");
     expect(result.plan.choices[1]?.submission).toBe("Option 2 label");
   });
+
+test("planner tolerant parse recovers choices in alternate (choice/option/text) shapes", async () => {
+  const { spindle, usedFallback } = spindleWith(JSON.stringify({
+    scenes: [],
+    choices: [
+      { choice: "Step closer", response: "I step closer." },
+      { option: "Walk away", value: "I walk away." },
+      { text: "Say nothing", description: "I stay silent." },
+    ],
+    cues: [{ paragraphIndex: 0, expression: "smirk" }],
+  }));
+  const result = await planTurn(spindle, {
+    chatId: "chat-1",
+    message,
+    content: "Sandra speaks.",
+    previousScene: null,
+    previousContinuity: null,
+    recentMessages: [],
+    config: { ...DEFAULT_CONFIG, mode: "cyoa", generateChoices: true, parserConnectionId: "conn" },
+    singleCharacter: emptySingleCharacter(),
+    characterAppearance: {},
+  });
+  expect(usedFallback()).toBe(false);
+  expect(result.plan.choices.map((c) => [c.label, c.submission])).toEqual([
+    ["Step closer", "I step closer."],
+    ["Walk away", "I walk away."],
+    ["Say nothing", "I stay silent."],
+  ]);
+});
+
 });

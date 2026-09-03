@@ -290,9 +290,19 @@ function normalizeCue(value: unknown): unknown {
 function normalizeChoice(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const record = value as Record<string, unknown>;
-  const label = typeof record.label === "string" ? record.label.trim() : "";
-  let submission = typeof record.submission === "string" ? record.submission.trim() : "";
-  // If submission is empty or numeric/index (e.g. "0", "1", "2", "option 1"):
+  const firstString = (...keys: string[]): string => {
+    for (const key of keys) {
+      const candidate = record[key];
+      if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+    }
+    return "";
+  };
+  // Prefer canonical fields, then fall back to common alternative names models
+  // use (choice/option/text for the label; response/description/detail for the
+  // submission). This keeps a planner that drifts from the exact schema from
+  // silently producing zero choices in CYOA mode.
+  const label = firstString("label", "choice", "option", "text", "title", "name");
+  let submission = firstString("submission", "response", "description", "detail", "message", "value");
   if (!submission || /^\s*(?:\d+|choice[_-]?\d+|option\s*\d+)\s*$/i.test(submission)) {
     submission = label;
   }
@@ -744,6 +754,46 @@ export function parseIgnoredTags(raw: string | undefined): string[] {
     .filter(Boolean);
 }
 
+
+/**
+ * Resolve common Lumiverse display macros that appear in greeting text
+ * (e.g. `{{user}}`, `{{persona}}`, `{{char}}`, `{{character}}`) so the visual
+ * novel viewer never shows a raw macro. The normal chat UI resolves these at
+ * render time; the VN stage renders the raw stored text, so we resolve them
+ * during planning.
+ */
+async function resolveDisplayMacros(
+  spindle: SpindleAPI,
+  input: PlanTurnInput,
+  content: string,
+): Promise<string> {
+  if (!content.includes("{{")) return content;
+
+  let userDisplay = "";
+  try {
+    const persona = await spindle.personas?.getActive?.(input.userId);
+    if (persona?.name?.trim()) userDisplay = persona.name.trim();
+  } catch {
+    // Non-fatal: fall through to the persona-less default below.
+  }
+  if (!userDisplay) {
+    const lastUser = [...input.recentMessages].reverse().find((m) => m.is_user);
+    if (lastUser?.name?.trim()) userDisplay = lastUser.name.trim();
+  }
+  if (!userDisplay) userDisplay = "You";
+
+  const characterName = (input.message.name || "").trim() || "???";
+  const replacements: Array<[RegExp, string]> = [
+    [/\{\{\s*(?:user|persona)\s*\}\}/gi, userDisplay],
+    [/\{\{\s*(?:char|character)\s*\}\}/gi, characterName],
+  ];
+  let resolved = content;
+  for (const [pattern, replacement] of replacements) {
+    resolved = resolved.replace(pattern, replacement);
+  }
+  return resolved;
+}
+
 export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promise<{
   plan: TurnPlan;
   usedFallback: boolean;
@@ -751,7 +801,8 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
   singleCharacter: SingleCharacterState;
 }> {
   const ignoredTags = parseIgnoredTags(input.config.ignoredTags);
-  const narrative = prepareNarrative(input.content, { ignoredTags });
+  const resolvedContent = await resolveDisplayMacros(spindle, input, input.content);
+  const narrative = prepareNarrative(resolvedContent, { ignoredTags });
   if (narrative.paragraphs.length === 0) throw new Error("The assistant response does not contain a revealable paragraph.");
 
   const visualContext = await loadVisualContext(spindle, {

@@ -369,3 +369,48 @@ test("planner supports multi-character cast resolution and attire overrides", as
   assert.equal(result.plan.visualCues[0]?.character, "Lyra");
   assert.equal(result.plan.visualCues[0]?.attire, "white sundress, straw hat");
 });
+
+
+test("planTurn resolves {{user}}/{{char}} display macros in narrative paragraphs", async () => {
+  const spindle: SpindleAPI = {
+    generate: {
+      raw: async () => ({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              scenes: [{
+                startParagraph: 0,
+                boundary: { claimedNewScene: true, reason: "initial", location: "Street", timeOfDay: "evening", majorTimeJump: false, environmentReplacement: false, forced: false },
+                environment: { location: "Street", timeOfDay: "evening", weather: "windy", lighting: "dusk", description: "A street at dusk", persistentElements: [] },
+                cast: ["Hina"],
+                basePrompt: "street, dusk",
+                compositionLock: "Hina centered"
+              }]
+            }),
+            cues: [{ paragraphIndex: 0, expression: "smile" }],
+            choices: [],
+            characters: [{ name: "Hina", description: "silver hair, green eyes" }]
+          }
+        }]
+      })
+    },
+    personas: {
+      getActive: async () => ({ name: "Jay", id: "p", title: "", description: "", image_id: null, attached_world_book_id: null, folder: "", is_default: false, metadata: {}, created_at: 0, updated_at: 0 }),
+    },
+    log: { warn() {} }
+  } as unknown as SpindleAPI;
+
+  const result = await planTurn(spindle, {
+    chatId: "chat-1",
+    message: { ...message, name: "Hina", content: "Hi {{user}}." },
+    content: "{{char}} looks at {{user}}. 'Hello, {{user}}.'",
+    previousScene: null,
+    previousContinuity: null,
+    recentMessages: [{ name: "User", content: "", is_user: true }],
+    config: DEFAULT_CONFIG,
+    singleCharacter: emptySingleCharacter(),
+    characterAppearance: {}
+  });
+
+  assert.equal(result.plan.paragraphs[0]!.text, "Hina looks at Jay. 'Hello, Jay.'");
+});

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { extractInlineCardImages, prepareNarrative } from "./paragraphs.js";
+import { extractInlineCardImages, extractInlineCardImagesWithParagraphs, prepareNarrative } from "./paragraphs.js";
 
 describe("narrative preparation", () => {
   test("keeps paragraph source indexes after removing metadata", () => {
@@ -46,6 +46,21 @@ describe("narrative preparation", () => {
     const extracted = extractInlineCardImages(raw);
     expect(extracted.assetNames).toEqual(["neeko_excited", "neeko_smug", "neeko_neutral"]);
     expect(extracted.text).toBe("Look at this:  and  with ");
+  });
+
+
+  test("extractInlineCardImages supports unquoted img=expression tags", () => {
+    const raw = 'An expression: <img=neeko_curious> and quoted <img="neeko_happy">';
+    const extracted = extractInlineCardImages(raw);
+    expect(extracted.assetNames).toEqual(["neeko_curious", "neeko_happy"]);
+    expect(extracted.text).toBe("An expression:  and quoted ");
+  });
+
+  test("extractInlineCardImagesWithParagraphs maps unquoted and pipe-caption markers", () => {
+    const content = 'She smiles.\n\n<img=neeko_curious> | <"😏:Hi">\n\nThen she looks away.';
+    const prepared = prepareNarrative(content);
+    const images = extractInlineCardImagesWithParagraphs(content, prepared.paragraphs);
+    expect(images).toEqual([{ name: "neeko_curious", paragraphIndex: 0 }]);
   });
 
   test("prepareNarrative strips inline card images from paragraphs", () => {
