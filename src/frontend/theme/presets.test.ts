@@ -91,9 +91,11 @@ describe("authored preset signatures", () => {
     expect(THEME_PRESET_CSS["paper-novel"].toLowerCase()).toContain("#8a2f23");
   });
 
-  test("midnight-noir carries a scene letterbox gradient", () => {
+  test("midnight-noir keeps its scene treatment without opaque image-obscuring bands", () => {
     const css = THEME_PRESET_CSS["midnight-noir"];
     expect(css).toMatch(/\[data-vn-scene\]::after[\s\S]*?linear-gradient\(180deg/);
+    expect(css).toContain("rgba(2, 4, 10, 0.34)");
+    expect(css).not.toMatch(/rgba\(2, 4, 10, 0\.9[46]\)/);
   });
 });
 

@@ -334,7 +334,7 @@ const MIDNIGHT_NOIR_CSS = `
 [data-vn-root][data-vn-preset="midnight-noir"] [data-vn-scene]::after {
   position: absolute;
   inset: 0;
-  background: linear-gradient(180deg, rgba(2, 4, 10, 0.94) 0 8%, transparent 8% 88%, rgba(2, 4, 10, 0.96) 88% 100%), radial-gradient(ellipse at center, transparent 38%, rgba(2, 5, 13, 0.62) 100%);
+  background: linear-gradient(180deg, rgba(2, 4, 10, 0.18) 0%, transparent 18% 76%, rgba(2, 4, 10, 0.34) 100%), radial-gradient(ellipse at center, transparent 62%, rgba(2, 5, 13, 0.22) 100%);
   content: "";
   pointer-events: none;
 }
