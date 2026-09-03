@@ -324,24 +324,38 @@ button[data-vn-badge]:active {
 [data-vn-dialogue] {
   position: relative;
   width: var(--vn-dialogue-width);
-  min-height: 9rem;
-  padding: 1.6rem 4rem 1.55rem 1.7rem;
+  min-height: 8.5rem;
+  padding: 1.6rem 4rem 1.45rem 1.8rem;
   border: 1px solid var(--vn-dialogue-border);
-  border-radius: 1.1rem;
+  border-radius: 1rem;
   background: var(--vn-dialogue-bg);
-  box-shadow: 0 1rem 3rem rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(1rem);
+  box-shadow: 0 0.75rem 2.5rem rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(1.2rem) saturate(1.15);
   pointer-events: auto;
 }
 
 [data-vn-speaker] {
-  display: block;
-  margin: 0 0 0.55rem;
+  position: absolute;
+  top: -1.35rem;
+  left: 1.8rem;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  padding: 0.32rem 1.25rem;
+  border: 1px solid var(--vn-dialogue-border);
+  border-radius: 0.55rem;
+  background: var(--vn-dialogue-bg);
   color: var(--vn-accent);
   font-size: 0.95rem;
   font-weight: 750;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(1.2rem);
+}
+
+[data-vn-speaker][hidden] {
+  display: none !important;
 }
 
 [data-vn-dialogue-text] {
@@ -863,11 +877,11 @@ button[data-vn-badge]:active {
  */
 [data-vn-controls] {
   position: absolute;
-  top: -2.3rem;
-  right: 0.5rem;
+  top: -1.35rem;
+  right: 1.5rem;
   display: flex;
   align-items: center;
-  gap: 0.45rem;
+  gap: 0.35rem;
   z-index: 5;
   user-select: none;
 }
@@ -876,19 +890,19 @@ button[data-vn-badge]:active {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 0.35rem;
-  padding: 0.28rem 0.68rem;
+  gap: 0.3rem;
+  padding: 0.25rem 0.65rem;
   border: 1px solid rgba(255, 255, 255, 0.22);
-  border-radius: 999px;
-  background: rgba(14, 16, 26, 0.78);
+  border-radius: 0.5rem;
+  background: rgba(14, 16, 26, 0.85);
   color: var(--vn-muted-text);
   font-size: 0.75rem;
   font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  text-transform: none;
   cursor: pointer;
-  box-shadow: 0 0.15rem 0.6rem rgba(0, 0, 0, 0.25);
-  backdrop-filter: blur(0.5rem);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(0.8rem);
   transition: all 140ms ease;
 }
 
