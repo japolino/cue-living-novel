@@ -865,82 +865,92 @@ const LITERATURE_CLUB_CSS = `
   --vn-accent: #e8507c;
   --vn-text: #ffffff;
   --vn-muted-text: rgba(255, 235, 245, 0.85);
-  --vn-dialogue-bg: rgba(255, 180, 204, 0.94);
-  --vn-dialogue-border: #ffffff;
+  --vn-dialogue-bg: linear-gradient(to bottom, rgba(255, 150, 197, 0.94) 0%, rgba(250, 146, 193, 0.86) 45%, rgba(229, 140, 184, 0.64) 100%);
+  --vn-dialogue-border: #ffd9ea;
   --vn-dialogue-width: min(74rem, calc(100vw - 2.5rem));
-  --vn-font-family: "Comfortaa", "Nunito", "Trebuchet MS", "Comic Sans MS", ui-rounded, sans-serif;
-  --vn-dialogue-font-size: clamp(1.15rem, 1.25vw + 0.82rem, 1.52rem);
+  --vn-font-family: "Comic Sans MS", "Comfortaa", "Nunito", "Trebuchet MS", ui-rounded, sans-serif;
+  --vn-dialogue-font-size: clamp(1.12rem, 1.2vw + 0.8rem, 1.46rem);
   --vn-transition-duration: 260ms;
 }
 [data-vn-root][data-vn-preset="literature-club"] [data-vn-ornament-group][data-vn-preset="literature-club"] { display: block; }
 [data-vn-root][data-vn-preset="literature-club"] [data-vn-dialogue] {
   position: relative;
-  min-height: 8.5rem;
-  padding: 1.6rem 3.8rem 1.45rem 2.6rem;
-  border: 3.5px solid #ffffff;
-  border-radius: 0.95rem;
-  background-color: rgba(255, 180, 204, 0.94);
-  background-image: radial-gradient(circle, rgba(255, 255, 255, 0.45) 28%, transparent 30%);
-  background-size: 1.5rem 1.5rem;
-  box-shadow: 0 8px 30px rgba(232, 80, 124, 0.38), inset 0 2px 0 rgba(255, 255, 255, 0.85);
-  backdrop-filter: blur(0.8rem);
+  min-height: 9rem;
+  padding: 1.55rem 3.6rem 2.35rem 2.3rem;
+  border: 3px solid #ffd9ea;
+  border-radius: 0.9rem;
+  background-image: radial-gradient(circle, rgba(234, 108, 163, 0.28) 33%, transparent 36%), linear-gradient(to bottom, rgba(255, 150, 197, 0.94) 0%, rgba(250, 146, 193, 0.86) 45%, rgba(229, 140, 184, 0.64) 100%);
+  background-size: 2.8rem 2.8rem, 100% 100%;
+  box-shadow: 0 6px 24px rgba(150, 60, 95, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(0.2rem);
 }
 [data-vn-root][data-vn-preset="literature-club"] [data-vn-speaker] {
   position: absolute;
-  top: -1.35rem;
-  left: 2rem;
+  top: -2.6rem;
+  left: 1.4rem;
   z-index: 4;
   display: inline-flex;
   align-items: center;
-  padding: 0.28rem 1.5rem;
-  border: 2.5px solid #ffffff;
-  border-radius: 0.75rem;
-  background: linear-gradient(180deg, #ffffff 0%, #fff2f6 100%);
-  color: #ba3864;
+  padding: 0.3rem 1.45rem 0.34rem;
+  border: 2.5px solid #ffe7f1;
+  border-radius: 0.7rem;
+  background: linear-gradient(180deg, #ffdcea 0%, #ffb9d5 55%, #ffa9cb 100%);
+  color: #ffffff;
+  font-family: "Comic Sans MS", "Comfortaa", ui-rounded, sans-serif;
   font-weight: 800;
-  font-size: 1.25rem;
+  font-size: 1.3rem;
   letter-spacing: 0.02em;
-  box-shadow: 0 4px 14px rgba(232, 80, 124, 0.32), inset 0 1px 0 #ffffff;
+  text-transform: none;
+  text-shadow: 0 1.5px 2px #c4577f, 1.5px 0 2px #c4577f, 0 -1.5px 2px #c4577f, -1.5px 0 2px #c4577f, 0 2px 3px rgba(150, 60, 95, 0.55);
+  box-shadow: 0 4px 12px rgba(150, 60, 95, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.9);
 }
 [data-vn-root][data-vn-preset="literature-club"] [data-vn-dialogue-text] {
   color: #ffffff;
-  font-weight: 600;
-  line-height: 1.62;
-  text-shadow: 0 1.5px 2px rgba(95, 40, 65, 0.95), 1.5px 0 2px rgba(95, 40, 65, 0.95), 0 -1.5px 2px rgba(95, 40, 65, 0.95), -1.5px 0 2px rgba(95, 40, 65, 0.95);
+  font-family: "Comic Sans MS", "Comfortaa", "Trebuchet MS", ui-rounded, sans-serif;
+  font-weight: 700;
+  line-height: 1.55;
+  text-shadow: 0 1.5px 2px rgba(97, 58, 78, 0.95), 1.5px 0 2px rgba(97, 58, 78, 0.95), 0 -1.5px 2px rgba(97, 58, 78, 0.95), -1.5px 0 2px rgba(97, 58, 78, 0.95);
 }
 [data-vn-root][data-vn-preset="literature-club"] [data-vn-controls] {
-  top: -1.35rem;
-  right: 1.8rem;
-  gap: 0.35rem;
+  top: auto;
+  right: auto;
+  bottom: 0.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  gap: 1.05rem;
 }
 [data-vn-root][data-vn-preset="literature-club"] [data-vn-control] {
-  padding: 0.22rem 0.65rem;
-  border: 2px solid #ffffff;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.92);
-  color: #ba3864;
+  padding: 0.1rem 0.2rem;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: #6a2b3e;
   font-family: var(--vn-font-family);
-  font-size: 0.72rem;
-  font-weight: 750;
+  font-size: 0.82rem;
+  font-weight: 700;
   text-transform: none;
   letter-spacing: 0.02em;
-  box-shadow: 0 2px 8px rgba(232, 80, 124, 0.25);
+  box-shadow: none;
+  backdrop-filter: none;
 }
 [data-vn-root][data-vn-preset="literature-club"] [data-vn-control]:hover {
-  background: #ffffff;
-  color: #e8507c;
-  box-shadow: 0 3px 12px rgba(232, 80, 124, 0.4);
+  background: transparent;
+  color: #ffffff;
+  box-shadow: none;
+  text-shadow: 0 1px 2px rgba(150, 60, 95, 0.6);
 }
 [data-vn-root][data-vn-preset="literature-club"] [data-vn-control][data-vn-active="true"] {
-  background: #e8507c;
-  color: #ffffff;
-  border-color: #ffffff;
-  box-shadow: 0 0 14px rgba(232, 80, 124, 0.6);
+  background: transparent;
+  color: #e8507c;
+  border: none;
+  box-shadow: none;
+  text-shadow: 0 1px 1px rgba(255, 255, 255, 0.55);
 }
 [data-vn-root][data-vn-preset="literature-club"] [data-vn-continue] {
   position: absolute;
-  right: 1.2rem;
-  bottom: 0.9rem;
+  right: 1.05rem;
+  bottom: 0.75rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -953,7 +963,7 @@ const LITERATURE_CLUB_CSS = `
   color: #ffffff;
   cursor: pointer;
   box-shadow: none;
-  filter: drop-shadow(0 2px 4px rgba(232, 80, 124, 0.6));
+  filter: drop-shadow(0 1px 2px rgba(150, 60, 95, 0.7));
   transition: transform 160ms ease, opacity 160ms ease;
 }
 [data-vn-root][data-vn-preset="literature-club"] [data-vn-continue]::before {
@@ -963,17 +973,15 @@ const LITERATURE_CLUB_CSS = `
 [data-vn-root][data-vn-preset="literature-club"] [data-vn-continue]::after {
   content: "▶";
   color: #ffffff;
-  font-size: 1.45rem;
+  font-size: 1.1rem;
   line-height: 1;
 }
 [data-vn-root][data-vn-preset="literature-club"] [data-vn-continue]:hover {
-  transform: scale(1.2);
+  transform: scale(1.15);
   color: #ffe4ec;
 }
 [data-vn-root][data-vn-preset="literature-club"] [data-vn-progress] {
-  color: rgba(255, 255, 255, 0.7);
-  font-size: 0.75rem;
-  text-shadow: 0 1px 2px rgba(95, 40, 65, 0.8);
+  display: none;
 }
 [data-vn-root][data-vn-preset="literature-club"] [data-vn-auto-ring] .vn-auto-track {
   stroke: rgba(255, 255, 255, 0.35);
@@ -981,6 +989,7 @@ const LITERATURE_CLUB_CSS = `
 [data-vn-root][data-vn-preset="literature-club"] [data-vn-auto-ring] .vn-auto-bar {
   stroke: #ffffff;
 }
+
 [data-vn-root][data-vn-preset="literature-club"] [data-vn-choice] {
   border: 2.5px solid #ffffff;
   border-radius: 1rem;

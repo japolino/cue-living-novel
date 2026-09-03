@@ -119,11 +119,19 @@ describe("authored preset signatures", () => {
     expect(css).toContain("content: none !important");
   });
 
-  test("literature-club carries candy-pink polka dot dialogue and pill speaker", () => {
+  test("literature-club matches the DDLC reference textbox treatment", () => {
     const css = THEME_PRESET_CSS["literature-club"];
+    const dialogueRule = css.match(/\[data-vn-dialogue\] \{[\s\S]*?\}/)?.[0] ?? "";
+    const speakerRule = css.match(/\[data-vn-speaker\] \{[\s\S]*?\}/)?.[0] ?? "";
+    const controlsRule = css.match(/\[data-vn-controls\] \{[\s\S]*?\}/)?.[0] ?? "";
     expect(css).toContain("radial-gradient");
     expect(css).toContain("#e8507c");
-    expect(css).toContain("[data-vn-speaker]");
+    expect(dialogueRule).toContain("linear-gradient(to bottom, rgba(255, 150, 197, 0.94)");
+    expect(dialogueRule).toContain("rgba(229, 140, 184, 0.64) 100%");
+    expect(speakerRule).toContain("color: #ffffff");
+    expect(speakerRule).toContain("text-shadow");
+    expect(controlsRule).toContain("left: 50%");
+    expect(controlsRule).toContain("transform: translateX(-50%)");
     expect(css).toContain("[data-vn-control]");
     expect(css).toContain("[data-vn-badge]");
   });
