@@ -306,6 +306,10 @@ test("planner includes audio catalog in prompt instructions and preserves return
     // Check plan visual cues preserve bgm & sfx
     assert.equal(result.plan.visualCues[0]?.bgm, "romantic_theme");
     assert.equal(result.plan.visualCues[1]?.sfx, "sword_slash");
+    // Audio cues are decoupled from image cues and present in the plan.
+    assert.equal(result.plan.audioCues?.length, 2);
+    assert.equal(result.plan.audioCues?.[0]?.bgm, "romantic_theme");
+    assert.equal(result.plan.audioCues?.[1]?.sfx, "sword_slash");
   } finally {
     clearAudioCatalogCache();
   }
@@ -413,4 +417,69 @@ test("planTurn resolves {{user}}/{{char}} display macros in narrative paragraphs
   });
 
   assert.equal(result.plan.paragraphs[0]!.text, "Hina looks at Jay. 'Hello, Jay.'");
+});
+
+test("audio cues survive the maxImagesPerTurn image-cue limit", async () => {
+  const { clearAudioCatalogCache, scanAudioCatalog } = await import("./audio-catalog");
+  const files: Record<string, Uint8Array> = {
+    "audio/bgm/romantic_theme.mp3": new TextEncoder().encode("dummy"),
+    "audio/sfx/sword_slash.wav": new TextEncoder().encode("dummy"),
+  };
+  const content = "First line.\n\nSecond.\n\nThird.\n\nFourth.\n\nFifth.\n\nSixth.";
+  const spindle: SpindleAPI = {
+    storage: {
+      list: async () => ["bgm/romantic_theme.mp3", "sfx/sword_slash.wav"],
+      readBinary: async (path: string) => files[path] ?? new Uint8Array(),
+    },
+    generate: {
+      raw: async () => ({
+        content: JSON.stringify({
+          scenes: [{
+            startParagraph: 0,
+            boundary: { claimedNewScene: true, reason: "initial", location: "Garden", timeOfDay: "afternoon", majorTimeJump: false, environmentReplacement: false, forced: false },
+            environment: { location: "Garden", timeOfDay: "afternoon", weather: null, lighting: "sunlight", description: "A flower garden", persistentElements: [] },
+            cast: ["Mira"],
+            basePrompt: "flower garden, sunlight",
+            compositionLock: "Mira centered"
+          }],
+          cues: [
+            { paragraphIndex: 0, expression: "smile", bgm: "romantic_theme", sfx: null },
+            { paragraphIndex: 1, expression: "surprise", sfx: null },
+            { paragraphIndex: 2, expression: "surprise", sfx: null },
+            { paragraphIndex: 3, expression: "surprise", sfx: null },
+            { paragraphIndex: 4, expression: "surprise", sfx: null },
+            { paragraphIndex: 5, expression: "surprise", sfx: "sword_slash" }
+          ],
+          choices: [],
+          characters: [{ name: "Mira", description: "silver hair, green eyes" }]
+        })
+      })
+    },
+    log: { warn() {}, error() {} }
+  } as unknown as SpindleAPI;
+
+  await scanAudioCatalog(spindle, "audio");
+  try {
+    const result = await planTurn(spindle, {
+      chatId: "chat-1",
+      message: { ...message, name: "Mira", content },
+      content,
+      previousScene: null,
+      previousContinuity: null,
+      recentMessages: [],
+      config: { ...DEFAULT_CONFIG, maxImagesPerTurn: 3 },
+      singleCharacter: emptySingleCharacter(),
+      characterAppearance: {}
+    });
+    // Only 3 image cues survive the limit...
+    assert.equal(result.plan.visualCues.length, 3);
+    // ...but both audio cues (p0 bgm and p5 sfx) are retained independently.
+    assert.equal(result.plan.audioCues.length, 2);
+    assert.equal(result.plan.audioCues[0]?.paragraphIndex, 0);
+    assert.equal(result.plan.audioCues[0]?.bgm, "romantic_theme");
+    assert.equal(result.plan.audioCues[1]?.paragraphIndex, 5);
+    assert.equal(result.plan.audioCues[1]?.sfx, "sword_slash");
+  } finally {
+    clearAudioCatalogCache();
+  }
 });

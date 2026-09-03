@@ -229,12 +229,20 @@ export type AssetJob = z.infer<typeof AssetJobSchema>;
 
 export const PlanningStatusSchema = z.enum(["planned", "partial", "failed"]);
 
+export const AudioCueSchema = z.object({
+  paragraphIndex: NonNegativeIntegerSchema,
+  bgm: z.string().trim().nullable().default(null),
+  sfx: z.string().trim().nullable().default(null)
+}).strict();
+export type AudioCue = z.infer<typeof AudioCueSchema>;
+
 export const TurnPlanSchema = z.object({
   schemaVersion: z.literal(1),
   key: TurnKeySchema,
   paragraphs: z.array(ParagraphSchema).min(1),
   scenes: z.array(SceneStateSchema).min(1),
   visualCues: z.array(VisualCueSchema).default([]),
+  audioCues: z.array(AudioCueSchema).default([]),
   choices: z.array(ChoiceSchema).default([]),
   initialContinuity: ContinuityStateSchema,
   continuityDeltas: z.array(IndexedContinuityDeltaSchema).default([]),

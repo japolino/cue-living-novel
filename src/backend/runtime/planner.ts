@@ -2,6 +2,7 @@ import type { ChatMessageDTO, SpindleAPI } from "lumiverse-spindle-types";
 import { z } from "zod";
 import type { VisualNovelConfig } from "../../config.js";
 import {
+  AudioCueSchema,
   CameraLockSchema,
   ChoiceSchema,
   ContinuityStateSchema,
@@ -936,6 +937,24 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
       });
     });
 
+  // Audio is decoupled from image cues: every cue the planner assigns audio to
+  // becomes an audio cue regardless of maxImagesPerTurn or the one-image-per-
+  // paragraph dedupe. Frames without a visible narrative paragraph still map to
+  // the nearest preceding paragraph so the cue stays attached to a location.
+  const audioCues = planner.cues
+    .filter((cue) => Boolean(cue.bgm || cue.sfx))
+    .map((cue) => {
+      let pIndex = cue.paragraphIndex;
+      if (pIndex >= narrative.paragraphs.length) {
+        pIndex = Math.max(0, narrative.paragraphs.length - 1);
+      }
+      return AudioCueSchema.parse({
+        paragraphIndex: pIndex,
+        bgm: cue.bgm || null,
+        sfx: cue.sfx || null
+      });
+    });
+
   const finalParagraph = narrative.paragraphs.length - 1;
   const choices = narrative.choices.length > 0
     ? narrative.choices
@@ -953,6 +972,7 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
     paragraphs: narrative.paragraphs,
     scenes,
     visualCues: cues,
+    audioCues,
     choices,
     initialContinuity: continuity,
     continuityDeltas: [],

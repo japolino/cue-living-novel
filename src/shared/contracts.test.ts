@@ -58,6 +58,7 @@ function plan(): TurnPlan {
       promptDelta: "Mira turns",
       assetJobId: "job"
     }],
+    audioCues: [],
     choices: [{ id: "continue", label: "Continue", submission: "Continue.", source: "authored", unlocksAfterParagraph: 1 }],
     initialContinuity: continuity,
     continuityDeltas: [],

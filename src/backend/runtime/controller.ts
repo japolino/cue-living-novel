@@ -65,13 +65,18 @@ function assetView(record: StoredTurnRecord, job: StoredTurnRecord["jobs"][numbe
 
 export function turnView(record: StoredTurnRecord): TurnView {
   const swipe = record.plan.key.swipeId;
-  const audioCues = record.plan.visualCues
-    .filter((cue) => Boolean(cue.bgm || cue.sfx))
-    .map((cue) => ({
-      paragraphIndex: cue.paragraphIndex,
-      ...(cue.bgm ? { bgm: cue.bgm, bgmUrl: resolveAudioUrl(cue.bgm) } : {}),
-      ...(cue.sfx ? { sfx: cue.sfx, sfxUrl: resolveAudioUrl(cue.sfx) } : {}),
-    }));
+  // Prefer the dedicated audio cue list (added so audio survives the image-cue
+  // limit); fall back to bgm/sfx on visual cues for turns planned before this
+  // field existed.
+  const toAudioView = (cue: { paragraphIndex: number; bgm?: string | null | undefined; sfx?: string | null | undefined }) => ({
+    paragraphIndex: cue.paragraphIndex,
+    ...(cue.bgm ? { bgm: cue.bgm, bgmUrl: resolveAudioUrl(cue.bgm) } : {}),
+    ...(cue.sfx ? { sfx: cue.sfx, sfxUrl: resolveAudioUrl(cue.sfx) } : {}),
+  });
+  const audioCues = (record.plan.audioCues?.length
+    ? record.plan.audioCues
+    : record.plan.visualCues.filter((cue) => Boolean(cue.bgm || cue.sfx))
+  ).map(toAudioView);
 
   return {
     chatId: record.plan.key.chatId,
