@@ -47,10 +47,10 @@ test("scene image fit preserves every supported mode and rejects unknown ones", 
 });
 
 
-test("the host-neutral preset id list is exactly the five supported presets", () => {
+test("the host-neutral preset id list is exactly the seven supported presets", () => {
   assert.deepEqual(
     [...THEME_PRESET_IDS],
-    ["lumiverse", "golden-hour", "boxed-console", "paper-novel", "midnight-noir"],
+    ["lumiverse", "golden-hour", "boxed-console", "paper-novel", "midnight-noir", "yamaku-classic", "literature-club"],
   );
   assert.equal(DEFAULT_CONFIG.themePreset, "lumiverse");
 });

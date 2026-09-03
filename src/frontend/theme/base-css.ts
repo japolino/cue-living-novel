@@ -206,7 +206,13 @@ textarea {
 
 [data-vn-badge-icon="spinner"] {
   color: var(--vn-accent);
-  animation: vn-spin 800ms linear infinite;
+  animation: vn-spin-smooth 1.15s cubic-bezier(0.45, 0.05, 0.15, 0.95) infinite;
+  transform-origin: center;
+}
+
+[data-vn-badge-icon="spinner"] .vn-spinner-head {
+  animation: vn-spinner-dash 1.35s ease-in-out infinite;
+  transform-origin: center;
 }
 
 [data-vn-badge-icon="image"] {
@@ -527,6 +533,30 @@ button[data-vn-badge]:active {
 
 @keyframes vn-spin {
   to { transform: rotate(1turn); }
+}
+
+@keyframes vn-spin-smooth {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes vn-spinner-dash {
+  0% {
+    stroke-dasharray: 4 52;
+    stroke-dashoffset: 0;
+  }
+  50% {
+    stroke-dasharray: 38 18;
+    stroke-dashoffset: -10;
+  }
+  100% {
+    stroke-dasharray: 4 52;
+    stroke-dashoffset: -56.55;
+  }
 }
 
 @media (max-width: 640px) {

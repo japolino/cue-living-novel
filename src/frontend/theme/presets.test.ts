@@ -16,10 +16,12 @@ const EXPECTED_PRESETS = [
   "boxed-console",
   "paper-novel",
   "midnight-noir",
+  "yamaku-classic",
+  "literature-club",
 ] as const;
 
 describe("canonical theme preset ids", () => {
-  test("exposes exactly the five supported presets, in order", () => {
+  test("exposes exactly the seven supported presets, in order", () => {
     expect(THEME_PRESET_IDS).toEqual(EXPECTED_PRESETS);
   });
 
@@ -96,6 +98,24 @@ describe("authored preset signatures", () => {
     expect(css).toMatch(/\[data-vn-scene\]::after[\s\S]*?linear-gradient\(180deg/);
     expect(css).toContain("rgba(2, 4, 10, 0.34)");
     expect(css).not.toMatch(/rgba\(2, 4, 10, 0\.9[46]\)/);
+  });
+
+  test("yamaku-classic carries dark smoky acrylic and rose-pink accents", () => {
+    const css = THEME_PRESET_CSS["yamaku-classic"];
+    expect(css).toContain("#5c4331");
+    expect(css).toContain("#ff6b8b");
+    expect(css).toContain("[data-vn-control]");
+    expect(css).toContain("[data-vn-badge]");
+    expect(css).toContain("[data-vn-backlog]");
+  });
+
+  test("literature-club carries candy-pink polka dot dialogue and pill speaker", () => {
+    const css = THEME_PRESET_CSS["literature-club"];
+    expect(css).toContain("radial-gradient");
+    expect(css).toContain("#e8507c");
+    expect(css).toContain("[data-vn-speaker]");
+    expect(css).toContain("[data-vn-control]");
+    expect(css).toContain("[data-vn-badge]");
   });
 });
 

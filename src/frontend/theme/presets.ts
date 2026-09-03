@@ -52,6 +52,31 @@ const LUMIVERSE_CSS = `
 @media (prefers-reduced-motion: no-preference) {
   [data-vn-root][data-vn-preset="lumiverse"] [data-vn-continue] { transition: box-shadow 180ms ease, border-color 180ms ease; }
 }
+[data-vn-root][data-vn-preset="lumiverse"] [data-vn-control] {
+  border-color: var(--lumiverse-border, rgba(255, 255, 255, 0.28));
+  background: var(--lumiverse-fill-medium, rgba(20, 16, 32, 0.78));
+  color: var(--vn-muted-text);
+  font-family: var(--vn-font-family);
+}
+[data-vn-root][data-vn-preset="lumiverse"] [data-vn-control]:hover {
+  border-color: var(--lumiverse-primary, #d8a8ff);
+  color: var(--vn-text);
+}
+[data-vn-root][data-vn-preset="lumiverse"] [data-vn-control][data-vn-active="true"] {
+  background: var(--lumiverse-primary, #d8a8ff);
+  color: #0b0714;
+  border-color: var(--lumiverse-primary, #d8a8ff);
+  box-shadow: 0 0 0.75rem rgba(216, 168, 255, 0.5);
+}
+[data-vn-root][data-vn-preset="lumiverse"] [data-vn-badge] {
+  border-color: var(--lumiverse-border, rgba(255, 255, 255, 0.3));
+  background: rgba(18, 14, 28, 0.85);
+  font-family: var(--vn-font-family);
+}
+[data-vn-root][data-vn-preset="lumiverse"] [data-vn-backlog] {
+  background: rgba(10, 8, 18, 0.94);
+  font-family: var(--vn-font-family);
+}
 `;
 
 /* golden-hour — afternoon light through smoked glass */
@@ -204,6 +229,47 @@ const GOLDEN_HOUR_CSS = `
   [data-vn-root][data-vn-preset="golden-hour"] [data-vn-choice]::before { transition: transform 600ms ease; }
   [data-vn-root][data-vn-preset="golden-hour"] [data-vn-choice]:hover:not(:disabled)::before { transform: translateX(120%); }
 }
+[data-vn-root][data-vn-preset="golden-hour"] [data-vn-control] {
+  border: 1px solid rgba(226, 176, 106, 0.45);
+  background: rgba(32, 22, 14, 0.84);
+  color: #f7ce8b;
+  font-family: var(--vn-font-family);
+  box-shadow: 0 0.15rem 0.6rem rgba(30, 15, 5, 0.4);
+}
+[data-vn-root][data-vn-preset="golden-hour"] [data-vn-control]:hover {
+  border-color: #f7ce8b;
+  background: rgba(48, 32, 20, 0.94);
+  color: #fff8eb;
+}
+[data-vn-root][data-vn-preset="golden-hour"] [data-vn-control][data-vn-active="true"] {
+  background: #e2b06a;
+  color: #1a1006;
+  border-color: #f7ce8b;
+  box-shadow: 0 0 0.85rem rgba(226, 176, 106, 0.6);
+}
+[data-vn-root][data-vn-preset="golden-hour"] [data-vn-badge] {
+  border: 1px solid rgba(226, 176, 106, 0.55);
+  background: linear-gradient(135deg, rgba(38, 26, 16, 0.9), rgba(20, 14, 8, 0.94));
+  color: #fff6e2;
+  box-shadow: 0 0.2rem 0.8rem rgba(50, 25, 10, 0.35);
+  font-family: var(--vn-font-family);
+}
+[data-vn-root][data-vn-preset="golden-hour"] [data-vn-badge-icon="spinner"] {
+  color: #e2b06a;
+}
+[data-vn-root][data-vn-preset="golden-hour"] [data-vn-backlog] {
+  background: rgba(18, 12, 8, 0.95);
+  color: #fff6e2;
+  font-family: var(--vn-font-family);
+}
+[data-vn-root][data-vn-preset="golden-hour"] [data-vn-backlog-title] {
+  color: #e2b06a;
+}
+[data-vn-root][data-vn-preset="golden-hour"] [data-vn-backlog-close] {
+  border: 1px solid rgba(226, 176, 106, 0.5);
+  background: rgba(36, 25, 16, 0.85);
+  color: #f7ce8b;
+}
 `;
 
 /* boxed-console — segmented phosphor hardware HUD */
@@ -261,6 +327,53 @@ const BOXED_CONSOLE_CSS = `
   [data-vn-root][data-vn-preset="boxed-console"] [data-vn-speaker]::after { animation: vn-console-caret 1s steps(1) infinite; }
   [data-vn-root][data-vn-preset="boxed-console"] [data-vn-choice] { transition: border-color 120ms steps(2), box-shadow 120ms steps(2); }
 }
+[data-vn-root][data-vn-preset="boxed-console"] [data-vn-control] {
+  border: 1px solid #16a34a;
+  border-radius: 0;
+  background: #020803;
+  color: #4ade80;
+  font-family: var(--vn-font-family);
+  letter-spacing: 0.08em;
+}
+[data-vn-root][data-vn-preset="boxed-console"] [data-vn-control]:hover {
+  border-color: #4ade80;
+  background: #0f2e17;
+  color: #86efac;
+}
+[data-vn-root][data-vn-preset="boxed-console"] [data-vn-control][data-vn-active="true"] {
+  background: #22c55e;
+  color: #020803;
+  border-color: #22c55e;
+  box-shadow: 0 0 10px #22c55e;
+  font-weight: 700;
+}
+[data-vn-root][data-vn-preset="boxed-console"] [data-vn-badge] {
+  border: 1px solid #22c55e;
+  border-radius: 0;
+  background: #020803;
+  color: #86efac;
+  font-family: var(--vn-font-family);
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.25);
+}
+[data-vn-root][data-vn-preset="boxed-console"] [data-vn-badge-icon="spinner"] {
+  color: #4ade80;
+}
+[data-vn-root][data-vn-preset="boxed-console"] [data-vn-backlog] {
+  background: #020803;
+  color: #86efac;
+  font-family: var(--vn-font-family);
+  border: 2px solid #22c55e;
+}
+[data-vn-root][data-vn-preset="boxed-console"] [data-vn-backlog-title] {
+  color: #4ade80;
+  letter-spacing: 0.1em;
+}
+[data-vn-root][data-vn-preset="boxed-console"] [data-vn-backlog-close] {
+  border: 1px solid #22c55e;
+  border-radius: 0;
+  background: #0f2e17;
+  color: #86efac;
+}
 `;
 
 /* paper-novel — aged letterpress page */
@@ -316,6 +429,52 @@ const PAPER_NOVEL_CSS = `
   [data-vn-root][data-vn-preset="paper-novel"] [data-vn-choice]::after { transition: transform 260ms ease; }
   [data-vn-root][data-vn-preset="paper-novel"] [data-vn-choice]:hover:not(:disabled)::after { transform: scaleX(1); }
 }
+[data-vn-root][data-vn-preset="paper-novel"] [data-vn-control] {
+  border: 1px solid #c2b59b;
+  border-radius: 0.35rem;
+  background: #f4eee2;
+  color: #605043;
+  font-family: var(--vn-font-family);
+  box-shadow: 0 1px 3px rgba(45, 35, 25, 0.12);
+}
+[data-vn-root][data-vn-preset="paper-novel"] [data-vn-control]:hover {
+  border-color: #8a2f23;
+  background: #ebe0cb;
+  color: #8a2f23;
+}
+[data-vn-root][data-vn-preset="paper-novel"] [data-vn-control][data-vn-active="true"] {
+  background: #8a2f23;
+  color: #fbf5e8;
+  border-color: #8a2f23;
+  box-shadow: 0 2px 6px rgba(138, 47, 35, 0.3);
+}
+[data-vn-root][data-vn-preset="paper-novel"] [data-vn-badge] {
+  border: 1px solid #b8ab8e;
+  border-radius: 0.4rem;
+  background: #f8f3e8;
+  color: #2b221a;
+  font-family: var(--vn-font-family);
+  box-shadow: 0 2px 8px rgba(50, 40, 30, 0.12);
+}
+[data-vn-root][data-vn-preset="paper-novel"] [data-vn-badge-icon="spinner"] {
+  color: #8a2f23;
+}
+[data-vn-root][data-vn-preset="paper-novel"] [data-vn-backlog] {
+  background: #fbf6ec;
+  color: #2b221a;
+  font-family: var(--vn-font-family);
+  border: 4px double #8a2f23;
+}
+[data-vn-root][data-vn-preset="paper-novel"] [data-vn-backlog-title] {
+  color: #8a2f23;
+  font-family: var(--vn-font-family);
+}
+[data-vn-root][data-vn-preset="paper-novel"] [data-vn-backlog-close] {
+  border: 1px solid #c2b59b;
+  border-radius: 0.35rem;
+  background: #ebe0cb;
+  color: #8a2f23;
+}
 `;
 
 /* midnight-noir — cinema marquee and art-deco geometry */
@@ -366,6 +525,299 @@ const MIDNIGHT_NOIR_CSS = `
   [data-vn-root][data-vn-preset="midnight-noir"] [data-vn-dialogue]::after { animation: vn-noir-sweep 2.2s ease-out 280ms 1; }
   [data-vn-root][data-vn-preset="midnight-noir"] [data-vn-choice] { transition: border-color 180ms ease, background 180ms ease; }
 }
+[data-vn-root][data-vn-preset="midnight-noir"] [data-vn-control] {
+  border: 1px solid rgba(217, 164, 65, 0.4);
+  border-radius: 0;
+  background: rgba(10, 15, 28, 0.9);
+  color: #f3efe5;
+  font-family: var(--vn-font-family);
+  letter-spacing: 0.08em;
+}
+[data-vn-root][data-vn-preset="midnight-noir"] [data-vn-control]:hover {
+  border-color: #efc76e;
+  background: rgba(24, 32, 50, 0.95);
+  color: #fff8e8;
+}
+[data-vn-root][data-vn-preset="midnight-noir"] [data-vn-control][data-vn-active="true"] {
+  background: #d9a441;
+  color: #090b10;
+  border-color: #efc76e;
+  box-shadow: 0 0 12px rgba(217, 164, 65, 0.5);
+}
+[data-vn-root][data-vn-preset="midnight-noir"] [data-vn-badge] {
+  border: 1px solid rgba(217, 164, 65, 0.45);
+  border-radius: 0;
+  background: rgba(8, 12, 22, 0.92);
+  color: #f3efe5;
+  font-family: var(--vn-font-family);
+  box-shadow: inset 0 0 0 2px #050810, 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+[data-vn-root][data-vn-preset="midnight-noir"] [data-vn-badge-icon="spinner"] {
+  color: #d9a441;
+}
+[data-vn-root][data-vn-preset="midnight-noir"] [data-vn-backlog] {
+  background: rgba(6, 9, 17, 0.96);
+  color: #f3efe5;
+  font-family: var(--vn-font-family);
+}
+[data-vn-root][data-vn-preset="midnight-noir"] [data-vn-backlog-title] {
+  color: #d9a441;
+}
+[data-vn-root][data-vn-preset="midnight-noir"] [data-vn-backlog-close] {
+  border: 1px solid rgba(217, 164, 65, 0.5);
+  border-radius: 0;
+  background: rgba(20, 26, 40, 0.9);
+  color: #efc76e;
+}
+`;
+
+/* yamaku-classic — nostalgic school romance visual novel (Katawa Shoujo style) */
+const YAMAKU_CLASSIC_CSS = `
+[data-vn-root][data-vn-preset="yamaku-classic"] {
+  --vn-accent: #ff6b8b;
+  --vn-text: #ffffff;
+  --vn-muted-text: rgba(255, 235, 240, 0.82);
+  --vn-dialogue-bg: linear-gradient(180deg, rgba(24, 18, 16, 0.88), rgba(12, 9, 8, 0.94));
+  --vn-dialogue-border: #5c4331;
+  --vn-dialogue-width: min(72rem, calc(100vw - 3rem));
+  --vn-font-family: "Trebuchet MS", "Lucida Grande", "Segoe UI", system-ui, sans-serif;
+  --vn-dialogue-font-size: clamp(1.05rem, 1.15vw + 0.78rem, 1.42rem);
+  --vn-transition-duration: 280ms;
+}
+[data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-ornament-group][data-vn-preset="yamaku-classic"] { display: block; }
+[data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-dialogue] {
+  min-height: 10.5rem;
+  padding: 2.2rem 3.8rem 1.8rem 2.8rem;
+  border: 2px solid #5c4331;
+  border-radius: 0.4rem;
+  background: linear-gradient(180deg, rgba(26, 20, 18, 0.88), rgba(13, 10, 9, 0.95));
+  box-shadow: inset 0 0 0 1px #8c674b, 0 1rem 3rem rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(0.8rem);
+}
+[data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-speaker] {
+  color: #ff6b8b;
+  font-weight: 700;
+  font-size: 1.25rem;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+  letter-spacing: 0.03em;
+}
+[data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-dialogue-text] {
+  color: #ffffff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);
+  line-height: 1.68;
+}
+[data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-continue] {
+  border: none;
+  background: transparent;
+  color: #ff6b8b;
+  font-size: 1.3rem;
+  transform-origin: center;
+  transition: transform 160ms ease, opacity 160ms ease;
+}
+[data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-continue]::after {
+  content: "➔";
+  font-weight: 900;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.8));
+}
+[data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-continue]:hover {
+  transform: translateX(3px);
+  color: #ff94ab;
+}
+[data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-control] {
+  border: 1.5px solid #6b4c35;
+  border-radius: 0.35rem;
+  background: rgba(28, 22, 19, 0.88);
+  color: #d7c8b8;
+  font-family: var(--vn-font-family);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+[data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-control]:hover {
+  border-color: #ff6b8b;
+  color: #ffffff;
+  background: rgba(45, 35, 30, 0.96);
+}
+[data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-control][data-vn-active="true"] {
+  background: #ff6b8b;
+  color: #1a0f13;
+  border-color: #ff6b8b;
+  box-shadow: 0 0 10px rgba(255, 107, 139, 0.55);
+}
+[data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-choice] {
+  border: 1.5px solid #73533d;
+  border-radius: 0.4rem;
+  background: rgba(26, 20, 18, 0.94);
+  color: #f7ede3;
+  box-shadow: inset 0 0 0 1px rgba(140, 103, 75, 0.35), 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+[data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-choice]:hover:not(:disabled) {
+  border-color: #ff6b8b;
+  background: rgba(45, 32, 28, 0.98);
+  color: #ffffff;
+}
+[data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-badge] {
+  border: 1.5px solid #6b4c35;
+  border-radius: 0.4rem;
+  background: linear-gradient(135deg, rgba(28, 22, 19, 0.92), rgba(16, 12, 11, 0.95));
+  color: #ffffff;
+  font-family: var(--vn-font-family);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+}
+[data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-badge-icon="spinner"] {
+  color: #ff6b8b;
+}
+[data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-backlog] {
+  background: rgba(18, 14, 12, 0.96);
+  color: #ffffff;
+  font-family: var(--vn-font-family);
+}
+[data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-backlog-title] {
+  color: #ff6b8b;
+}
+[data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-backlog-close] {
+  border: 1.5px solid #6b4c35;
+  border-radius: 0.35rem;
+  background: rgba(36, 26, 22, 0.85);
+  color: #ff6b8b;
+}
+`;
+
+/* literature-club — pastel candy pop (Doki Doki Literature Club style) */
+const LITERATURE_CLUB_CSS = `
+[data-vn-root][data-vn-preset="literature-club"] {
+  --vn-accent: #e8507c;
+  --vn-text: #44162e;
+  --vn-muted-text: rgba(68, 22, 46, 0.75);
+  --vn-dialogue-bg: rgba(255, 182, 206, 0.92);
+  --vn-dialogue-border: #ffffff;
+  --vn-dialogue-width: min(72rem, calc(100vw - 3rem));
+  --vn-font-family: "Comfortaa", "Nunito", "Comic Sans MS", "Trebuchet MS", ui-rounded, sans-serif;
+  --vn-dialogue-font-size: clamp(1.1rem, 1.2vw + 0.8rem, 1.46rem);
+  --vn-transition-duration: 260ms;
+}
+[data-vn-root][data-vn-preset="literature-club"] [data-vn-ornament-group][data-vn-preset="literature-club"] { display: block; }
+[data-vn-root][data-vn-preset="literature-club"] [data-vn-dialogue] {
+  min-height: 11rem;
+  padding: 2.6rem 3.8rem 2rem 3rem;
+  border: 3.5px solid #ffffff;
+  border-radius: 1.35rem;
+  background-color: rgba(255, 182, 206, 0.92);
+  background-image: radial-gradient(circle, rgba(255, 255, 255, 0.5) 28%, transparent 29%);
+  background-size: 1.6rem 1.6rem;
+  box-shadow: 0 0.8rem 2.8rem rgba(232, 80, 124, 0.42), inset 0 2px 0 rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(0.9rem);
+}
+[data-vn-root][data-vn-preset="literature-club"] [data-vn-speaker] {
+  position: absolute;
+  top: -1.4rem;
+  left: 2.2rem;
+  display: inline-flex;
+  align-items: center;
+  padding: 0.32rem 1.4rem;
+  border: 2.5px solid #ffa0bc;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #c43868;
+  font-weight: 800;
+  font-size: 1.2rem;
+  box-shadow: 0 3px 12px rgba(232, 80, 124, 0.35);
+  letter-spacing: 0.02em;
+}
+[data-vn-root][data-vn-preset="literature-club"] [data-vn-dialogue-text] {
+  color: #44162e;
+  font-weight: 600;
+  line-height: 1.68;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+[data-vn-root][data-vn-preset="literature-club"] [data-vn-continue] {
+  border: none;
+  background: transparent;
+  color: #ffffff;
+  font-size: 1.5rem;
+  filter: drop-shadow(0 2px 4px rgba(232, 80, 124, 0.6));
+}
+[data-vn-root][data-vn-preset="literature-club"] [data-vn-continue]::after {
+  content: "▶";
+}
+[data-vn-root][data-vn-preset="literature-club"] [data-vn-continue]:hover {
+  transform: scale(1.18);
+  color: #ffe4ec;
+}
+[data-vn-root][data-vn-preset="literature-club"] [data-vn-control] {
+  border: 2px solid #ffffff;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.82);
+  color: #bb3864;
+  font-family: var(--vn-font-family);
+  font-weight: 700;
+  text-transform: none;
+  letter-spacing: 0.02em;
+  box-shadow: 0 2px 8px rgba(232, 80, 124, 0.25);
+}
+[data-vn-root][data-vn-preset="literature-club"] [data-vn-control]:hover {
+  background: #ffffff;
+  color: #e8507c;
+  box-shadow: 0 3px 12px rgba(232, 80, 124, 0.4);
+}
+[data-vn-root][data-vn-preset="literature-club"] [data-vn-control][data-vn-active="true"] {
+  background: #e8507c;
+  color: #ffffff;
+  border-color: #ffffff;
+  box-shadow: 0 0 14px rgba(232, 80, 124, 0.6);
+}
+[data-vn-root][data-vn-preset="literature-club"] [data-vn-auto-ring] .vn-auto-track {
+  stroke: rgba(255, 255, 255, 0.35);
+}
+[data-vn-root][data-vn-preset="literature-club"] [data-vn-auto-ring] .vn-auto-bar {
+  stroke: #ffffff;
+}
+[data-vn-root][data-vn-preset="literature-club"] [data-vn-choice] {
+  border: 2.5px solid #ffa0bc;
+  border-radius: 1.1rem;
+  background: rgba(255, 255, 255, 0.94);
+  color: #7a1f44;
+  font-weight: 700;
+  box-shadow: 0 4px 14px rgba(232, 80, 124, 0.25);
+}
+[data-vn-root][data-vn-preset="literature-club"] [data-vn-choice]:hover:not(:disabled) {
+  border-color: #e8507c;
+  background: #ffffff;
+  color: #e8507c;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(232, 80, 124, 0.4);
+}
+[data-vn-root][data-vn-preset="literature-club"] [data-vn-badge] {
+  border: 2.5px solid #ffffff;
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(255, 240, 246, 0.96), rgba(255, 215, 230, 0.96));
+  color: #9d244f;
+  font-family: var(--vn-font-family);
+  font-weight: 700;
+  box-shadow: 0 4px 14px rgba(232, 80, 124, 0.32);
+}
+[data-vn-root][data-vn-preset="literature-club"] [data-vn-badge-icon="spinner"] {
+  color: #e8507c;
+}
+[data-vn-root][data-vn-preset="literature-club"] [data-vn-backlog] {
+  background: rgba(255, 242, 247, 0.96);
+  background-image: radial-gradient(circle, rgba(232, 80, 124, 0.16) 20%, transparent 20%);
+  background-size: 1.5rem 1.5rem;
+  color: #44162e;
+  border: 4px solid #ffffff;
+  border-radius: 1.5rem;
+  box-shadow: 0 1rem 3rem rgba(232, 80, 124, 0.35);
+  font-family: var(--vn-font-family);
+}
+[data-vn-root][data-vn-preset="literature-club"] [data-vn-backlog-title] {
+  color: #c43868;
+  font-weight: 800;
+}
+[data-vn-root][data-vn-preset="literature-club"] [data-vn-backlog-close] {
+  border: 2px solid #ffa0bc;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #c43868;
+  font-weight: 700;
+}
 `;
 
 export const THEME_PRESET_CSS: Record<ThemePresetId, string> = {
@@ -374,6 +826,8 @@ export const THEME_PRESET_CSS: Record<ThemePresetId, string> = {
   "boxed-console": BOXED_CONSOLE_CSS,
   "paper-novel": PAPER_NOVEL_CSS,
   "midnight-noir": MIDNIGHT_NOIR_CSS,
+  "yamaku-classic": YAMAKU_CLASSIC_CSS,
+  "literature-club": LITERATURE_CLUB_CSS,
 };
 
 export const isThemePresetId = (value: unknown): value is ThemePresetId =>

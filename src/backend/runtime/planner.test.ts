@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { ChatMessageDTO, SpindleAPI } from "lumiverse-spindle-types";
+import type { ChatMessageDTO, PersonaDTO, SpindleAPI } from "lumiverse-spindle-types";
 import { DEFAULT_CONFIG } from "../../config";
 import { ContinuityStateSchema, SceneStateSchema } from "../../shared/contracts";
 import { emptySingleCharacter } from "../core/visual-state";
@@ -482,4 +482,66 @@ test("audio cues survive the maxImagesPerTurn image-cue limit", async () => {
   } finally {
     clearAudioCatalogCache();
   }
+});
+
+test("planTurn ignores user persona character attribution and prevents assigning user expression to companion", async () => {
+  const content = "Mira sits across from you.\n\nYou yawn and mutter that you want to go to sleep.";
+  const persona: PersonaDTO = {
+    id: "persona-1",
+    name: "Jay",
+    title: "Traveler",
+    description: "A sleepy traveler",
+    image_id: null,
+    attached_world_book_id: null,
+    folder: "",
+    is_default: true,
+    metadata: {},
+    created_at: 1,
+    updated_at: 1
+  };
+  const spindle: SpindleAPI = {
+    generate: {
+      raw: async () => ({
+        content: JSON.stringify({
+          scenes: [{
+            startParagraph: 0,
+            boundary: { claimedNewScene: true, reason: "initial", location: "Bedroom", timeOfDay: "night", majorTimeJump: false, environmentReplacement: false, forced: false },
+            environment: { location: "Bedroom", timeOfDay: "night", weather: null, lighting: "dim", description: "A bedroom", persistentElements: [] },
+            cast: ["Mira", "Jay"],
+            basePrompt: "bedroom, night",
+            compositionLock: "Mira centered"
+          }],
+          cues: [
+            { paragraphIndex: 0, character: "Mira", expression: "smile" },
+            { paragraphIndex: 1, character: "Jay", expression: "sleepy" }
+          ],
+          choices: [],
+          characters: [{ name: "Mira", description: "silver hair" }]
+        })
+      })
+    },
+    personas: {
+      getActive: async () => persona
+    },
+    log: { warn() {}, error() {} }
+  } as unknown as SpindleAPI;
+
+  const result = await planTurn(spindle, {
+    chatId: "chat-1",
+    message: { ...message, name: "Mira", content },
+    content,
+    previousScene: null,
+    previousContinuity: null,
+    recentMessages: [],
+    config: DEFAULT_CONFIG,
+    singleCharacter: emptySingleCharacter(),
+    characterAppearance: {}
+  });
+
+  // Scene cast must not contain Jay
+  assert.ok(!result.plan.scenes[0]!.cast.includes("Jay"));
+  // Cue 1 must not depict Jay
+  assert.notEqual(result.plan.visualCues[1]?.character, "Jay");
+  // Cue 1 must not inherit the user's sleepy expression
+  assert.notEqual(result.plan.visualCues[1]?.poseExpressionId, "sleepy");
 });

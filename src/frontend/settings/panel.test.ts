@@ -6,7 +6,7 @@ import { THEME_PRESET_LABELS, THEME_PRESET_OPTIONS } from "./panel";
 describe("theme preset settings options", () => {
   test("the selector exposes exactly the canonical five presets", () => {
     expect(THEME_PRESET_OPTIONS.map(({ value }) => value)).toEqual([...THEME_PRESET_IDS]);
-    expect(THEME_PRESET_OPTIONS.length).toBe(5);
+    expect(THEME_PRESET_OPTIONS.length).toBe(7);
   });
 
   test("every option carries a non-empty, distinct label", () => {

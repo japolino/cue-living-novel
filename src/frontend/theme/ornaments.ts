@@ -188,6 +188,29 @@ export const VN_ORNAMENT_GROUPS: Record<VisualNovelThemePreset, string> = {
     <!-- one small 4-point sparkle, subtle -->
     <g transform="translate(1504 552) scale(0.9)" fill="currentColor" stroke="none" opacity="0.5"><g data-vn-anim="sparkle"><path d="M 0 -12 L 2.6 -2.6 L 12 0 L 2.6 2.6 L 0 12 L -2.6 2.6 L -12 0 L -2.6 -2.6 Z"/></g></g>
   </g>`,
+  "yamaku-classic": `<g data-vn-ornament-group="" data-vn-preset="yamaku-classic" aria-hidden="true" focusable="false" vector-effect="non-scaling-stroke" fill="none" stroke="currentColor">
+    <!-- Warm classic corner framing brackets -->
+    <g stroke="currentColor" stroke-width="1.8" opacity="0.45">
+      <path d="M 64 104 L 64 64 L 104 64"/>
+      <path d="M 1496 64 L 1536 64 L 1536 104"/>
+      <path d="M 1536 796 L 1536 836 L 1496 836"/>
+      <path d="M 104 836 L 64 836 L 64 796"/>
+    </g>
+    <!-- delicate warm diamond mark near dialogue plate -->
+    <g transform="translate(1506 564) scale(0.8)" fill="currentColor" stroke="none" opacity="0.4"><path d="M 0 -8 L 8 0 L 0 8 L -8 0 Z"/></g>
+  </g>`,
+  "literature-club": `<g data-vn-ornament-group="" data-vn-preset="literature-club" aria-hidden="true" focusable="false" vector-effect="non-scaling-stroke" fill="currentColor" stroke="none">
+    <!-- Sweet floating hearts -->
+    <g opacity="0.38" transform="translate(84 94) scale(1.1)">
+      <path d="M 0 -4 C -4 -12 -14 -8 -14 0 C -14 7 0 14 0 16 C 0 14 14 7 14 0 C 14 -8 4 -12 0 -4 Z"/>
+    </g>
+    <g opacity="0.32" transform="translate(1516 114) scale(0.85)">
+      <path d="M 0 -4 C -4 -12 -14 -8 -14 0 C -14 7 0 14 0 16 C 0 14 14 7 14 0 C 14 -8 4 -12 0 -4 Z"/>
+    </g>
+    <g opacity="0.28" transform="translate(1504 574) scale(0.95)">
+      <path d="M 0 -4 C -4 -12 -14 -8 -14 0 C -14 7 0 14 0 16 C 0 14 14 7 14 0 C 14 -8 4 -12 0 -4 Z"/>
+    </g>
+  </g>`,
 };
 
 const INDENT = "\n        ";

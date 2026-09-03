@@ -70,8 +70,8 @@ export function turnView(record: StoredTurnRecord): TurnView {
   // field existed.
   const toAudioView = (cue: { paragraphIndex: number; bgm?: string | null | undefined; sfx?: string | null | undefined }) => ({
     paragraphIndex: cue.paragraphIndex,
-    ...(cue.bgm ? { bgm: cue.bgm, bgmUrl: resolveAudioUrl(cue.bgm) } : {}),
-    ...(cue.sfx ? { sfx: cue.sfx, sfxUrl: resolveAudioUrl(cue.sfx) } : {}),
+    ...(cue.bgm ? { bgm: cue.bgm, bgmUrl: resolveAudioUrl(cue.bgm, "bgm") } : {}),
+    ...(cue.sfx ? { sfx: cue.sfx, sfxUrl: resolveAudioUrl(cue.sfx, "sfx") } : {}),
   });
   const audioCues = (record.plan.audioCues?.length
     ? record.plan.audioCues

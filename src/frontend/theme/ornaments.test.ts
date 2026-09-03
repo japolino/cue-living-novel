@@ -6,7 +6,7 @@ import { VN_ORNAMENT_GROUPS, VN_ORNAMENT_LAYER_MARKUP } from "./ornaments";
 describe("framework ornament markup", () => {
   test("has exactly one group for each canonical preset", () => {
     expect(Object.keys(VN_ORNAMENT_GROUPS).sort()).toEqual([...THEME_PRESET_IDS].sort());
-    expect(Object.keys(VN_ORNAMENT_GROUPS)).toHaveLength(5);
+    expect(Object.keys(VN_ORNAMENT_GROUPS)).toHaveLength(7);
     for (const id of THEME_PRESET_IDS) {
       expect(VN_ORNAMENT_GROUPS[id].trim()).toStartWith("<g ");
       expect(VN_ORNAMENT_GROUPS[id]).toContain(`data-vn-preset="${id}"`);

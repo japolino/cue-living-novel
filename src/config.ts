@@ -17,6 +17,8 @@ export const THEME_PRESET_IDS = [
   "boxed-console",
   "paper-novel",
   "midnight-noir",
+  "yamaku-classic",
+  "literature-club",
 ] as const;
 
 export type VisualNovelThemePreset = (typeof THEME_PRESET_IDS)[number];

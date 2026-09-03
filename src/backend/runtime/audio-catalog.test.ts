@@ -100,4 +100,36 @@ describe("audio-catalog scoped storage scanner & cache", () => {
     const failing = { storage: { list: async () => { throw new Error("denied"); } } } as unknown as SpindleAPI;
     expect((await scanAudioCatalog(failing, "audio")).all).toEqual([]);
   });
+
+  test("finds entries via normalized titles and semantic mood/action tags", async () => {
+    const spindleWithMoods = storageSpindle({
+      "audio/bgm/1_At_home（希望）.ogg": "dummy",
+      "audio/bgm/2_Tango_Romantic.ogg": "dummy",
+      "audio/sfx/1_door_close.wav": "dummy",
+    });
+    await scanAudioCatalog(spindleWithMoods, "audio");
+    // Normalized title match ignoring numeric prefix and Japanese parens
+    expect(findAudioEntry("At home")?.name).toBe("1_At_home（希望）");
+    // Semantic tag matches
+    expect(findAudioEntry("romantic", "bgm")?.name).toBe("2_Tango_Romantic");
+    expect(findAudioEntry("door", "sfx")?.name).toBe("1_door_close");
+    clearAudioCatalogCache();
+  });
+
+  test("integrates pack.json metadata when present", async () => {
+    const packJson = JSON.stringify({
+      tracks: {
+        bgm: [{ id: "bgm_home", name: "Cozy Home", file: "bgm/track1.ogg", tags: ["peaceful", "daily"] }]
+      }
+    });
+    const spindleWithPack = storageSpindle({
+      "audio/pack.json": packJson,
+      "audio/bgm/track1.ogg": "dummy",
+    });
+    await scanAudioCatalog(spindleWithPack, "audio");
+    const entry = findAudioEntry("peaceful", "bgm");
+    expect(entry?.name).toBe("Cozy Home");
+    expect(entry?.tags).toContain("peaceful");
+    clearAudioCatalogCache();
+  });
 });

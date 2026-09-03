@@ -46,6 +46,8 @@ export type VisualContextSnapshot = {
   identityPrompt: string;
   /** Structured, non-lossy character identity (name + full description + stable tags). */
   characterIdentity: StructuredCharacterIdentity | null;
+  /** Structured user persona identity (name + title + description). */
+  personaIdentity?: { name: string; title: string; description: string } | null;
   diagnostics: VisualContextDiagnostics;
 };
 
@@ -292,10 +294,16 @@ export async function loadVisualContext(
     description: clean(character.description),
     tags: Array.isArray(character.tags) ? character.tags.map((tag) => clean(tag)).filter(Boolean) : []
   } : null;
+  const personaIdentity = persona ? {
+    name: clean(persona.name),
+    title: clean(persona.title),
+    description: clean(persona.description)
+  } : null;
   return {
     plannerContext: [characterBlock, personaBlock, lore].filter(Boolean).join("\n\n"),
     identityPrompt: visualIdentity(character, persona),
     characterIdentity,
+    personaIdentity,
     diagnostics
   };
 }

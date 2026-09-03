@@ -181,8 +181,8 @@ function createBadgeIconSvg(icon: "spinner" | "image" | "check" | "alert" | "rer
     case "spinner": {
       svg.setAttribute("fill", "none");
       svg.innerHTML = `
-        <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2.5" opacity="0.25"/>
-        <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="24 36"/>
+        <circle class="vn-spinner-track" cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2.5" opacity="0.25"/>
+        <circle class="vn-spinner-head" cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="24 36"/>
       `;
       break;
     }
@@ -1313,7 +1313,7 @@ export class VnStage {
       badges.push({
         kind: "image",
         label: `Generating images ${this.state.assetProgress.current}/${this.state.assetProgress.total}`,
-        icon: "image",
+        icon: "spinner",
       });
     } else if (this.state.pendingImage) {
       badges.push({ kind: "loading", label: "Loading scene image", icon: "spinner" });

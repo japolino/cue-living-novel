@@ -122,6 +122,8 @@ export const THEME_PRESET_LABELS: Record<VisualNovelThemePreset, string> = {
   "boxed-console": "Boxed console",
   "paper-novel": "Paper novel",
   "midnight-noir": "Midnight noir",
+  "yamaku-classic": "Yamaku classic (sentimental)",
+  "literature-club": "Literature club (pastel pop)",
 };
 
 export const THEME_PRESET_OPTIONS: ReadonlyArray<{
