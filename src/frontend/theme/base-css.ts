@@ -46,6 +46,9 @@ textarea {
   position: absolute;
   inset: 0;
   overflow: hidden;
+  /* Establish a stacking context so the readability scrim (z-index 3) stays
+     beneath the dialogue box (z-index 2) instead of painting over it. */
+  isolation: isolate;
   background:
     radial-gradient(circle at 50% 35%, rgba(73, 58, 91, 0.55), transparent 48%),
     #08090d;

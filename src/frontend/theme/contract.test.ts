@@ -39,3 +39,14 @@ test("custom CSS removes remote imports and URL fetches", () => {
   assert.doesNotMatch(result, /@import|example\.com/);
   assert.match(result, /color: white/);
 });
+
+test("the readability scrim is contained under the dialogue box so it never paints over text", () => {
+  // data-vn-scene must establish its own stacking context so the scrim's
+  // z-index (3) is bounded inside the scene layer, keeping the dialogue
+  // (z-index 2) above it in every theme.
+  assert.match(
+    VN_BASE_CSS,
+    /\[data-vn-scene\]\s*\{[\s\S]*?isolation:\s*isolate;/,
+  );
+});
+
