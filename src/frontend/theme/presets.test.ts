@@ -100,9 +100,19 @@ describe("authored preset signatures", () => {
     expect(css).not.toMatch(/rgba\(2, 4, 10, 0\.9[46]\)/);
   });
 
-  test("yamaku-classic carries dark smoky acrylic and rose-pink accents", () => {
+  test("yamaku-classic matches the reference's bottom-dark transparency and unboxed speaker", () => {
     const css = THEME_PRESET_CSS["yamaku-classic"];
-    expect(css).toContain("#ff7396");
+    const dialogueRule = css.match(/\[data-vn-dialogue\] \{[\s\S]*?\}/)?.[0] ?? "";
+    const speakerRule = css.match(/\[data-vn-speaker\] \{[\s\S]*?\}/)?.[0] ?? "";
+    expect(css).toContain("#ff7095");
+    expect(dialogueRule).toContain("linear-gradient(to top");
+    expect(dialogueRule).toContain("rgba(20, 17, 15, 0.88) 0%");
+    expect(dialogueRule).toContain("rgba(28, 24, 20, 0.45) 100%");
+    expect(dialogueRule).toContain("outline: none");
+    expect(dialogueRule).toContain("backdrop-filter: none");
+    expect(speakerRule).toContain("background: transparent");
+    expect(speakerRule).toContain("border: none");
+    expect(speakerRule).toContain("text-transform: none");
     expect(css).toContain("[data-vn-control]");
     expect(css).toContain("[data-vn-badge]");
     expect(css).toContain("[data-vn-backlog]");

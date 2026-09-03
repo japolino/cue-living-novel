@@ -678,85 +678,116 @@ const MIDNIGHT_NOIR_CSS = `
 /* yamaku-classic — nostalgic school romance visual novel (Katawa Shoujo style) */
 const YAMAKU_CLASSIC_CSS = `
 [data-vn-root][data-vn-preset="yamaku-classic"] {
-  --vn-accent: #ff7396;
+  --vn-accent: #ff7095;
   --vn-text: #ffffff;
-  --vn-muted-text: rgba(255, 235, 240, 0.82);
-  --vn-dialogue-bg: rgba(30, 26, 23, 0.88);
-  --vn-dialogue-border: rgba(195, 182, 168, 0.75);
-  --vn-dialogue-width: min(78rem, calc(100vw - 2.5rem));
-  --vn-font-family: "Trebuchet MS", "Lucida Grande", "Segoe UI", system-ui, sans-serif;
-  --vn-dialogue-font-size: clamp(1.1rem, 1.2vw + 0.8rem, 1.48rem);
+  --vn-muted-text: rgba(255, 255, 255, 0.72);
+  --vn-dialogue-bg: linear-gradient(to top, rgba(20, 17, 15, 0.88) 0%, rgba(25, 22, 19, 0.7) 50%, rgba(28, 24, 20, 0.45) 100%);
+  --vn-dialogue-border: rgba(175, 160, 145, 0.7);
+  --vn-dialogue-width: min(78rem, calc(100vw - 1.8rem));
+  --vn-font-family: "Segoe Print", "Comic Sans MS", "Trebuchet MS", cursive;
+  --vn-dialogue-font-size: clamp(1.18rem, 1.25vw + 0.75rem, 1.58rem);
   --vn-transition-duration: 280ms;
 }
 [data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-ornament-group][data-vn-preset="yamaku-classic"] { display: block; }
+[data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-narrative] {
+  padding-right: max(0.9rem, env(safe-area-inset-right));
+  padding-bottom: max(1.25rem, env(safe-area-inset-bottom));
+  padding-left: max(0.9rem, env(safe-area-inset-left));
+}
 [data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-dialogue] {
   position: relative;
-  min-height: 8.5rem;
-  padding: 1.55rem 3.8rem 1.45rem 2.4rem;
-  border: 1px solid rgba(195, 182, 168, 0.75);
-  outline: 1px solid rgba(75, 65, 55, 0.65);
-  outline-offset: -3px;
+  overflow: visible;
+  min-height: 9rem;
+  padding: 1.15rem 3.8rem 1.35rem 1.15rem;
+  border: 1px solid rgba(175, 160, 145, 0.7);
+  outline: none;
   border-radius: 0;
-  background: linear-gradient(180deg, rgba(36, 31, 27, 0.9) 0%, rgba(24, 20, 17, 0.94) 100%);
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.72), inset 0 1px 0 rgba(255, 255, 255, 0.1);
-  backdrop-filter: blur(0.75rem);
+  background: linear-gradient(to bottom, rgba(255, 255, 255, 0.04) 0, transparent 2px), linear-gradient(to top, rgba(20, 17, 15, 0.88) 0%, rgba(25, 22, 19, 0.7) 50%, rgba(28, 24, 20, 0.45) 100%);
+  box-shadow: 0 0.65rem 1.8rem rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+[data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-dialogue]::before {
+  position: absolute;
+  z-index: 0;
+  right: -1px;
+  bottom: 100%;
+  left: -1px;
+  height: 3.5rem;
+  background: linear-gradient(to top, rgba(18, 15, 12, 0.5) 0%, rgba(24, 21, 18, 0.22) 58%, transparent 100%);
+  content: "";
+  pointer-events: none;
 }
 [data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-speaker] {
   position: absolute;
-  top: -1.35rem;
-  left: 2rem;
-  z-index: 4;
-  display: inline-flex;
-  align-items: center;
-  padding: 0.28rem 1.4rem;
-  border: 1px solid rgba(195, 182, 168, 0.85);
-  border-bottom: none;
+  top: -2.75rem;
+  left: 0.15rem;
+  z-index: 5;
+  display: inline-block;
+  padding: 0;
+  border: none;
   border-radius: 0;
-  background: rgba(28, 24, 20, 0.96);
-  box-shadow: 0 -3px 10px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.15);
-  color: #ff7396;
-  font-weight: 750;
-  font-size: 1.25rem;
-  letter-spacing: 0.03em;
-  text-shadow: 0 1px 2px #000, 1px 0 2px #000, 0 -1px 2px #000, -1px 0 2px #000, 1px 1px 3px rgba(0, 0, 0, 0.9);
+  background: transparent;
+  box-shadow: none;
+  color: #ff7095;
+  font-family: "Segoe Print", "Comic Sans MS", cursive;
+  font-size: 1.45rem;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0;
+  text-transform: none;
+  text-shadow: 0 1px 2px #000, 1px 0 2px #000, 0 -1px 2px #000, -1px 0 2px #000, 0 2px 4px rgba(0, 0, 0, 0.9);
+  backdrop-filter: none;
 }
 [data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-dialogue-text] {
+  position: relative;
+  z-index: 1;
   color: #ffffff;
-  font-weight: 500;
-  line-height: 1.62;
-  text-shadow: 0 1px 2px #000, 1px 0 2px #000, 0 -1px 2px #000, -1px 0 2px #000;
+  font-family: "Comic Sans MS", "Segoe Print", "Trebuchet MS", cursive;
+  font-weight: 600;
+  line-height: 1.52;
+  letter-spacing: 0.005em;
+  text-shadow: 0 1px 2px #000, 1px 0 2px #000, 0 -1px 2px #000, -1px 0 2px #000, 0 2px 3px rgba(0, 0, 0, 0.9);
 }
 [data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-controls] {
-  top: -1.35rem;
-  right: 2rem;
-  gap: 0.35rem;
+  top: -2.55rem;
+  right: 0.5rem;
+  z-index: 5;
+  gap: 0.2rem;
 }
 [data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-control] {
-  padding: 0.22rem 0.65rem;
-  border: 1px solid rgba(195, 182, 168, 0.55);
-  border-bottom: none;
+  padding: 0.18rem 0.52rem;
+  border: 1px solid rgba(226, 221, 211, 0.28);
   border-radius: 0;
-  background: rgba(28, 24, 20, 0.94);
-  color: #d7c8b8;
-  font-family: var(--vn-font-family);
-  font-size: 0.72rem;
-  box-shadow: 0 -2px 6px rgba(0, 0, 0, 0.35);
+  background: rgba(18, 15, 12, 0.28);
+  color: rgba(255, 255, 255, 0.68);
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  box-shadow: none;
+  backdrop-filter: none;
+  opacity: 0.55;
 }
 [data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-control]:hover {
-  border-color: #ff7396;
+  border-color: rgba(255, 112, 149, 0.72);
   color: #ffffff;
-  background: rgba(48, 36, 30, 0.98);
+  background: rgba(32, 24, 21, 0.58);
+  opacity: 1;
 }
 [data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-control][data-vn-active="true"] {
-  background: #ff7396;
-  color: #1a0f13;
-  border-color: #ff7396;
-  box-shadow: 0 0 10px rgba(255, 115, 150, 0.55);
+  background: rgba(255, 112, 149, 0.82);
+  color: #190e12;
+  border-color: rgba(255, 220, 229, 0.75);
+  box-shadow: 0 0 8px rgba(255, 112, 149, 0.35);
+  opacity: 1;
 }
 [data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-continue] {
   position: absolute;
-  right: 1.2rem;
-  bottom: 0.9rem;
+  z-index: 2;
+  right: 1.15rem;
+  bottom: 0.85rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -769,7 +800,7 @@ const YAMAKU_CLASSIC_CSS = `
   color: #ffffff;
   cursor: pointer;
   box-shadow: none;
-  transition: transform 160ms ease, opacity 160ms ease;
+  transition: opacity 160ms ease;
 }
 [data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-continue]::before {
   content: none !important;
@@ -778,18 +809,17 @@ const YAMAKU_CLASSIC_CSS = `
 [data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-continue]::after {
   content: "➔";
   color: #ffffff;
-  font-size: 1.4rem;
+  font-family: "Segoe UI Symbol", "Arial Unicode MS", sans-serif;
+  font-size: 1.6rem;
   font-weight: 900;
   line-height: 1;
   filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.95)) drop-shadow(0 0 2px #000);
 }
 [data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-continue]:hover {
-  transform: translateX(3px);
   color: #ff94ab;
 }
 [data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-progress] {
-  color: rgba(255, 255, 255, 0.45);
-  font-size: 0.75rem;
+  display: none;
 }
 [data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-choice] {
   border: 1px solid rgba(195, 182, 168, 0.6);
