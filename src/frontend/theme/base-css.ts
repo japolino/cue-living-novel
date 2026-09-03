@@ -428,12 +428,11 @@ button[data-vn-badge]:active {
   opacity: 1;
   pointer-events: auto;
   transform: translateY(0);
+  animation: vn-continue-bob 1.3s ease-in-out infinite;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  [data-vn-continue][data-vn-ready="true"]:not(:hover) {
-    animation: vn-continue-bob 1.5s ease-in-out infinite;
-  }
+[data-vn-continue][data-vn-ready="true"]:hover {
+  animation: none;
 }
 
 @keyframes vn-continue-bob {
@@ -441,7 +440,7 @@ button[data-vn-badge]:active {
     transform: translateY(0);
   }
   50% {
-    transform: translateY(-4px);
+    transform: translateY(-5px);
   }
 }
 
