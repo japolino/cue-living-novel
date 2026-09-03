@@ -810,6 +810,16 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
       const globalKey = appearanceMapKeyFor(input.characterAppearance, activeChar);
       if (globalKey && input.characterAppearance[globalKey]) {
         sceneIdentity = input.characterAppearance[globalKey];
+      } else {
+        const matchingPlannerChar = planner.characters.find(
+          (c) => characterAppearanceKey(c.name) === characterAppearanceKey(activeChar)
+        );
+        if (matchingPlannerChar) {
+          const distilled = distillVisualTags(matchingPlannerChar.description);
+          if (distilled.length > 0) {
+            sceneIdentity = distilled.join(", ");
+          }
+        }
       }
     }
     const sceneCast: string[] = proposal.cast && proposal.cast.length > 0

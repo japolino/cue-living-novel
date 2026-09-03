@@ -38,8 +38,8 @@ function compilePromptEntry(config: VisualNovelConfig, scene: SceneState, cue: V
     identity = applyAttireOverride(identity, attire);
   }
   const identityText = identity.toLowerCase();
-  const isFemale = /\b(?:girl|woman|female|lady|maid|sister|mother|daughter|gal)\b/i.test(identityText);
-  const isMale = /\b(?:boy|man|male|guy|gentleman|brother|father|son|mustache|beard)\b/i.test(identityText);
+  const isFemale = /\b(?:1girl|girl|woman|female|lady|maid|sister|mother|daughter|gal|tomboy)\b/i.test(identityText);
+  const isMale = /\b(?:1boy|boy|man|male|guy|gentleman|brother|father|son|mustache|beard)\b/i.test(identityText);
   let label = "girl";
   let situation = "1girl, solo";
   if (isFemale && !isMale) {
@@ -48,7 +48,7 @@ function compilePromptEntry(config: VisualNovelConfig, scene: SceneState, cue: V
   } else if (isMale && !isFemale) {
     label = "boy";
     situation = "1boy, solo";
-  } else if (/\b(?:creature|monster|animal|robot|android|cyborg|machine|golem|inanimate)\b/i.test(identityText)) {
+  } else if (/\b(?:1other|creature|monster|animal|robot|android|cyborg|machine|golem|inanimate)\b/i.test(identityText)) {
     label = "1other";
     situation = "1other, solo";
   }
