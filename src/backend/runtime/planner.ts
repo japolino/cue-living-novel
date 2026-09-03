@@ -387,26 +387,75 @@ function normalizePlannerOutput(value: unknown): unknown {
   };
 }
 
-function balanceJson(candidate: string): string {
-  const openBrackets: string[] = [];
+function stripReasoningBlocks(text: string): string {
+  // 1. Strip all closed reasoning / thinking tags (think, thought, thinking, reasoning, reflection, plan)
+  let cleaned = text.replace(/<(?:think|thought|thinking|reasoning|reflection|plan)\b[\s\S]*?<\/(?:think|thought|thinking|reasoning|reflection|plan)>/gi, "");
+  // 2. Strip unclosed leading reasoning tags if cut off before closing tag
+  cleaned = cleaned.replace(/^\s*<(?:think|thought|thinking|reasoning|reflection|plan)\b[\s\S]*?(?=```|\{)/gi, "");
+  return cleaned.trim();
+}
+
+function repairJsonString(candidate: string): string {
+  // Strip single-line comments //... outside URLs and block comments /*...*/
+  let text = candidate
+    .replace(/(?<!:)\/\/.*$/gm, "")
+    .replace(/\/\*[\s\S]*?\*\//g, "");
+
+  // Convert python literals: True -> true, False -> false, None -> null
+  text = text
+    .replace(/\bTrue\b/g, "true")
+    .replace(/\bFalse\b/g, "false")
+    .replace(/\bNone\b/g, "null");
+
+  // Single-quoted keys: {'foo': 1} -> {"foo": 1}
+  text = text.replace(/'([a-zA-Z0-9_\-\s]+)'\s*:/g, '"$1":');
+
+  // Unquoted property keys: e.g. { scenes: [] } or , cues: [] -> { "scenes": [] }
+  text = text.replace(/([{\[,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:/g, '$1"$2":');
+
+  // Remove invalid JSON escape sequences like \' -> '
+  text = text.replace(/\\'/g, "'");
+  // Strip trailing commas before } or ]
+  text = text.replace(/,\s*([\}\]])/g, "$1");
+
+  // Character walk to fix unescaped raw newlines/tabs inside strings, unescaped inner quotes, and balance brackets
+  const chars: string[] = [];
   let inString = false;
   let escape = false;
+  const openBrackets: string[] = [];
 
-  for (let i = 0; i < candidate.length; i++) {
-    const ch = candidate[i]!;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
     if (escape) {
+      chars.push(ch);
       escape = false;
       continue;
     }
     if (ch === "\\") {
+      chars.push(ch);
       escape = true;
       continue;
     }
     if (ch === '"') {
+      if (inString) {
+        // Lookahead: If inside string, check if this quote is followed by structural delimiter
+        const rest = text.slice(i + 1).trimStart();
+        if (rest && !/^[,\}\]\:\n\r]/.test(rest)) {
+          // Unescaped inner quote inside string! Escape it.
+          chars.push('\\"');
+          continue;
+        }
+      }
       inString = !inString;
+      chars.push(ch);
       continue;
     }
-    if (!inString) {
+    if (inString) {
+      if (ch === "\n") chars.push("\\n");
+      else if (ch === "\r") chars.push("\\r");
+      else if (ch === "\t") chars.push("\\t");
+      else chars.push(ch);
+    } else {
       if (ch === "{" || ch === "[") {
         openBrackets.push(ch);
       } else if (ch === "}") {
@@ -418,15 +467,23 @@ function balanceJson(candidate: string): string {
           openBrackets.pop();
         }
       }
+      chars.push(ch);
     }
   }
 
-  let suffix = "";
-  for (let i = openBrackets.length - 1; i >= 0; i--) {
-    const b = openBrackets[i]!;
-    suffix += b === "{" ? "}" : "]";
+  let repaired = chars.join("").trimEnd();
+  // If ended in trailing comma before cutoff, remove it
+  repaired = repaired.replace(/,\s*$/, "");
+  // If ended inside an open string, close the string
+  if (inString) {
+    repaired += '"';
   }
-  return candidate + suffix;
+  // Balance any remaining open brackets in reverse order
+  for (let i = openBrackets.length - 1; i >= 0; i--) {
+    repaired += openBrackets[i] === "{" ? "}" : "]";
+  }
+  // Final pass for trailing commas before closing braces
+  return repaired.replace(/,\s*([\}\]])/g, "$1");
 }
 
 function tryParseJson(text: string): unknown | null {
@@ -435,15 +492,15 @@ function tryParseJson(text: string): unknown | null {
   try {
     return JSON.parse(trimmed);
   } catch {
-    // Try stripping trailing commas before closing braces/brackets
+    // 1. Try stripping trailing commas before closing braces/brackets
     try {
       const withoutTrailingCommas = trimmed.replace(/,\s*([\}\]])/g, "$1");
       return JSON.parse(withoutTrailingCommas);
     } catch {
-      // Try balancing unclosed braces/brackets
+      // 2. Try deep JSON repair (comments, unescaped quotes, unquoted keys, python literals, unescaped control chars, balanced brackets)
       try {
-        const balanced = balanceJson(trimmed).replace(/,\s*([\}\]])/g, "$1");
-        return JSON.parse(balanced);
+        const repaired = repairJsonString(trimmed);
+        return JSON.parse(repaired);
       } catch {
         return null;
       }
@@ -459,8 +516,8 @@ function jsonObject(content: unknown): unknown {
     throw new Error("The visual planner did not return a JSON object.");
   }
 
-  // 1. Strip thinking blocks like <thought>...</thought> or <thinking>...</thinking>
-  const stripped = content.replace(/<(?:thought|thinking)\b[\s\S]*?<\/(?:thought|thinking)>/gi, "").trim();
+  // 1. Strip thinking blocks like <think>...</think>, <thought>...</thought>, etc.
+  const stripped = stripReasoningBlocks(content);
 
   // 2. Look for ```json ... ``` code fence specifically
   const jsonFencedMatches = stripped.matchAll(/```json\s*([\s\S]*?)(?:```|$)/gi);
@@ -507,7 +564,9 @@ function jsonObject(content: unknown): unknown {
     if (parsed && typeof parsed === "object") return parsed;
   }
 
-  throw new Error("The visual planner did not return a JSON object.");
+  // 6. If all fails, provide a truncated excerpt in the error message for debugging
+  const preview = stripped.length > 200 ? `${stripped.slice(0, 197)}...` : stripped;
+  throw new Error(`The visual planner did not return a JSON object. Raw content: "${preview}"`);
 }
 
 function extractResponseContent(response: unknown): unknown {
@@ -539,6 +598,27 @@ async function requestPlannerOutput(
   visualContext: VisualContextSnapshot,
   connection: ResolvedPlannerConnection | null
 ): Promise<z.infer<typeof PlannerOutputSchema>> {
+  const defaultParameters: Record<string, unknown> = {
+    max_tokens: 10000
+  };
+  const provider = connection?.provider?.toLowerCase();
+  if (provider === "google") {
+    defaultParameters.responseMimeType = "application/json";
+  } else if (
+    provider === "openai" ||
+    provider === "custom" ||
+    provider === "openrouter" ||
+    provider === "deepseek" ||
+    provider === "moonshot" ||
+    provider === "cerebras"
+  ) {
+    defaultParameters.response_format = { type: "json_object" };
+  }
+  const parameters = {
+    ...defaultParameters,
+    ...input.config.parserParameters
+  };
+
   const response = await spindle.generate.raw({
     type: "raw",
     messages: [
@@ -568,7 +648,7 @@ async function requestPlannerOutput(
     ...(connection
       ? { provider: connection.provider, model: connection.model, connection_id: connection.id }
       : {}),
-    parameters: input.config.parserParameters,
+    parameters,
     reasoning: { source: "off" },
     ...(input.userId ? { userId: input.userId } : {})
   });

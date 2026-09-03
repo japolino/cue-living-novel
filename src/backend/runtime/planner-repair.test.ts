@@ -346,4 +346,109 @@ test("planner tolerant parse recovers choices in alternate (choice/option/text) 
   ]);
 });
 
+  test("recovers planner output with unescaped dialogue quotes in choices submission", async () => {
+    const rawContent = `{\n  "scenes": [{ "startParagraph": 0, "environment": { "location": "Park" } }],\n  "cues": [{ "paragraphIndex": 0 }],\n  "choices": [{\n    "label": "Ask about cats",\n    "submission": "I turn to them and say "Wait, who are you two?" with surprise."\n  }],\n  "characters": []\n}`;
+    const { spindle, usedFallback } = spindleWith(rawContent);
+    const result = await planTurn(spindle, {
+      chatId: "chat-1",
+      message: { ...message, content: "P0." },
+      content: "P0.",
+      previousScene: null,
+      previousContinuity: null,
+      recentMessages: [],
+      config: { ...DEFAULT_CONFIG, mode: "cyoa", generateChoices: true, maxImagesPerTurn: 1, parserConnectionId: "conn" },
+      singleCharacter: emptySingleCharacter(),
+      characterAppearance: {}
+    });
+    expect(usedFallback()).toBe(false);
+    expect(result.plan.choices[0]?.submission).toContain("Wait, who are you two?");
+  });
+
+  test("recovers planner output with unescaped raw newlines in character description", async () => {
+    const rawContent = `{\n  "scenes": [{ "startParagraph": 0, "environment": { "location": "Park" } }],\n  "cues": [{ "paragraphIndex": 0 }],\n  "choices": [],\n  "characters": [{\n    "name": "Catgirl",\n    "description": "tall catgirl,\nsporty dolphin shorts"\n  }]\n}`;
+    const { spindle, usedFallback } = spindleWith(rawContent);
+    const result = await planTurn(spindle, {
+      chatId: "chat-1",
+      message: { ...message, content: "P0." },
+      content: "P0.",
+      previousScene: null,
+      previousContinuity: null,
+      recentMessages: [],
+      config: { ...DEFAULT_CONFIG, maxImagesPerTurn: 1, parserConnectionId: "conn" },
+      singleCharacter: emptySingleCharacter(),
+      characterAppearance: {}
+    });
+    expect(usedFallback()).toBe(false);
+  });
+
+  test("recovers planner output containing DeepSeek/Qwen <think> reasoning blocks", async () => {
+    const rawContent = `<think>\nWe should plan a park scene with {scenes: []} and two cat girls.\n</think>\n\`\`\`json\n{\n  "scenes": [{ "startParagraph": 0, "environment": { "location": "Municipal park" } }],\n  "cues": [{ "paragraphIndex": 0 }],\n  "choices": [],\n  "characters": []\n}\n\`\`\``;
+    const { spindle, usedFallback } = spindleWith(rawContent);
+    const result = await planTurn(spindle, {
+      chatId: "chat-1",
+      message: { ...message, content: "P0." },
+      content: "P0.",
+      previousScene: null,
+      previousContinuity: null,
+      recentMessages: [],
+      config: { ...DEFAULT_CONFIG, maxImagesPerTurn: 1, parserConnectionId: "conn" },
+      singleCharacter: emptySingleCharacter(),
+      characterAppearance: {}
+    });
+    expect(usedFallback()).toBe(false);
+    expect(result.plan.scenes[0]?.environment.location).toBe("Municipal park");
+  });
+
+  test("recovers truncated planner output cut off mid-string without fallback", async () => {
+    const rawContent = `{"scenes":[{"startParagraph":0,"environment":{"location":"Stairwell"},"basePrompt":"1girl, looking at viewer, sitting on the steps`;
+    const { spindle, usedFallback } = spindleWith(rawContent);
+    const result = await planTurn(spindle, {
+      chatId: "chat-1",
+      message: { ...message, content: "P0." },
+      content: "P0.",
+      previousScene: null,
+      previousContinuity: null,
+      recentMessages: [],
+      config: { ...DEFAULT_CONFIG, maxImagesPerTurn: 1, parserConnectionId: "conn" },
+      singleCharacter: emptySingleCharacter(),
+      characterAppearance: {}
+    });
+    expect(usedFallback()).toBe(false);
+    expect(result.plan.scenes[0]?.environment.location).toBe("Stairwell");
+  });
+
+  test("passes default max_tokens 10000 and JSON structured output format to planner generation", async () => {
+    let capturedParams: any = null;
+    const spindle: any = {
+      chats: { get: async () => ({ character_id: "character-1" }) },
+      characters: { get: async () => ({ id: "character-1", name: "Sandra", description: "", tags: [], extensions: {} }) },
+      personas: { getActive: async () => null },
+      connections: {
+        get: async () => ({ id: "conn", provider: "google", model: "gemini-3.5-flash-lite", is_default: true }),
+        list: async () => []
+      },
+      generate: {
+        raw: async (req: any) => {
+          capturedParams = req.parameters;
+          return { content: JSON.stringify({ scenes: [{ startParagraph: 0, environment: { location: "Park" } }], cues: [{ paragraphIndex: 0 }] }) };
+        }
+      },
+      log: { warn: () => {} }
+    };
+    const result = await planTurn(spindle, {
+      chatId: "chat-1",
+      message: { ...message, content: "P0." },
+      content: "P0.",
+      previousScene: null,
+      previousContinuity: null,
+      recentMessages: [],
+      config: { ...DEFAULT_CONFIG, maxImagesPerTurn: 1, parserConnectionId: "conn" },
+      singleCharacter: emptySingleCharacter(),
+      characterAppearance: {}
+    });
+    expect(result.usedFallback).toBe(false);
+    expect(capturedParams?.max_tokens).toBe(10000);
+    expect(capturedParams?.responseMimeType).toBe("application/json");
+  });
+
 });
