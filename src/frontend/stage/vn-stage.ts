@@ -500,6 +500,14 @@ export class VnStage {
     }
   }
 
+  private updateContinueButton(): void {
+    const view = selectVnStageView(this.state);
+    const canAdvance = view.canAdvance;
+    const isReady = canAdvance && !this.isTyping;
+    this.continueButton.hidden = !canAdvance;
+    this.continueButton.dataset.vnReady = String(isReady);
+  }
+
   setSceneImageFit(fit: VisualNovelSceneImageFit): void {
     for (const img of this.sceneImages) {
       img.dataset.vnSceneImageFit = fit;
@@ -529,6 +537,7 @@ export class VnStage {
     this.currentRenderedParagraphId = "";
     this.currentRenderedFormatted = "";
     this.updateControlButtons();
+    this.updateContinueButton();
     this.dispatch({ type: "reset" });
   }
 
@@ -1063,7 +1072,7 @@ export class VnStage {
       ? `${view.paragraphNumber} / ${view.paragraphCount}`
       : "";
     if (this.progress.textContent !== progress) this.progress.textContent = progress;
-    this.continueButton.hidden = !view.canAdvance;
+    this.updateContinueButton();
 
     this.renderStatus();
     this.renderInteraction(view.showChoices, view.showStandardInput, view.isBusy);
@@ -1172,6 +1181,7 @@ export class VnStage {
       this.activeTextNodes = [];
     }
     this.isTyping = false;
+    this.updateContinueButton();
     this.onTextRenderFinished();
   }
 
@@ -1220,6 +1230,7 @@ export class VnStage {
 
     if (typeof document.createTreeWalker !== "function") {
       this.isTyping = false;
+      this.updateContinueButton();
       this.onTextRenderFinished();
       return;
     }
@@ -1234,6 +1245,7 @@ export class VnStage {
 
     if (textNodes.length === 0 || textNodes.every((t) => !t.fullText)) {
       this.isTyping = false;
+      this.updateContinueButton();
       this.onTextRenderFinished();
       return;
     }
@@ -1244,6 +1256,7 @@ export class VnStage {
     }
 
     this.isTyping = true;
+    this.updateContinueButton();
     let nodeIdx = 0;
     let charIdx = 0;
     this.typewriterTimer = setInterval(() => {
@@ -1297,6 +1310,7 @@ export class VnStage {
       this.clearTypewriter();
       this.dialogueText.innerHTML = formatted;
       this.isTyping = false;
+      this.updateContinueButton();
       this.onTextRenderFinished();
     } else {
       this.startTypewriter(formatted);

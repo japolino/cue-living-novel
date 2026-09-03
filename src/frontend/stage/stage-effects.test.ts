@@ -457,4 +457,26 @@ describe("VnStage visual effects & transitions", () => {
     // renderDialogueContent should NOT overwrite dialogueEl.innerHTML back to start or formatted!
     expect(dialogueEl.innerHTML).toBe("Hel");
   });
+
+  test("continue button pops out with data-vn-ready='true' only after text is finished typing", () => {
+    const stage = new VnStage({ mount });
+    const turn: VnTurnInput = {
+      mode: "standard",
+      paragraphs: [{ id: "p1", text: "Hello world paragraph." }],
+    };
+    stage.loadTurn(turn);
+    const contBtn = (stage as any).continueButton as MockNode;
+
+    // After loading with instant text (or completed typing), button is ready
+    expect(contBtn.dataset.vnReady).toBe("true");
+
+    // While typing is simulated as active
+    (stage as any).isTyping = true;
+    (stage as any).updateContinueButton();
+    expect(contBtn.dataset.vnReady).toBe("false");
+
+    // When typing completes, button is marked ready
+    (stage as any).completeTypewriter();
+    expect(contBtn.dataset.vnReady).toBe("true");
+  });
 });

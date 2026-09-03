@@ -414,10 +414,35 @@ button[data-vn-badge]:active {
   background: rgba(255, 255, 255, 0.1);
   color: var(--vn-text);
   cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(6px);
+  transition: opacity 240ms ease, transform 240ms cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
 
 [data-vn-continue]::before {
   content: "\u25bc";
+}
+
+[data-vn-continue][data-vn-ready="true"] {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  [data-vn-continue][data-vn-ready="true"]:not(:hover) {
+    animation: vn-continue-bob 1.5s ease-in-out infinite;
+  }
+}
+
+@keyframes vn-continue-bob {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
 }
 
 [data-vn-continue]:focus-visible,
