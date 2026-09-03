@@ -89,3 +89,21 @@ test("strips dangerous attributes like onmouseover from font or span", () => {
   assert.doesNotMatch(result, /onmouseover/);
   assert.match(result, /<font color="red">danger<\/font>/);
 });
+
+test("strips markdown formatting when stripMarkdown is requested", () => {
+  const input = "*I stretch, a languid motion.* **Time**: Wednesday\nHello **world**!";
+  const result = formatDialogueText(input, [], { stripMarkdown: true });
+  assert.equal(result, "I stretch, a languid motion. Hello world!");
+});
+
+test("forces dialogue quotes on spoken dialogue lines when forceQuotes is requested", () => {
+  const input = "W-What kind?!";
+  const result = formatDialogueText(input, [], { forceQuotes: true, hasSpeaker: true });
+  assert.equal(result, '"W-What kind?!"');
+});
+
+test("preserves existing quotes when forceQuotes is requested", () => {
+  const input = '"Already quoted!"';
+  const result = formatDialogueText(input, [], { forceQuotes: true, hasSpeaker: true });
+  assert.equal(result, '"Already quoted!"');
+});

@@ -206,12 +206,12 @@ textarea {
 
 [data-vn-badge-icon="spinner"] {
   color: var(--vn-accent);
-  animation: vn-spin-smooth 1.15s cubic-bezier(0.45, 0.05, 0.15, 0.95) infinite;
+  animation: vn-spin 1.4s linear infinite;
   transform-origin: center;
 }
 
 [data-vn-badge-icon="spinner"] .vn-spinner-head {
-  animation: vn-spinner-dash 1.35s ease-in-out infinite;
+  animation: vn-spinner-dash 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
   transform-origin: center;
 }
 
@@ -546,15 +546,15 @@ button[data-vn-badge]:active {
 
 @keyframes vn-spinner-dash {
   0% {
-    stroke-dasharray: 4 52;
+    stroke-dasharray: 1 55;
     stroke-dashoffset: 0;
   }
   50% {
-    stroke-dasharray: 38 18;
-    stroke-dashoffset: -10;
+    stroke-dasharray: 40 16;
+    stroke-dashoffset: -12;
   }
   100% {
-    stroke-dasharray: 4 52;
+    stroke-dasharray: 1 55;
     stroke-dashoffset: -56.55;
   }
 }
@@ -801,15 +801,7 @@ button[data-vn-badge]:active {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    scroll-behavior: auto !important;
-    animation-duration: 0.001ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.001ms !important;
-  }
-
+  /* Suppress disorienting vestibular camera motion effects while preserving UI loading spinners and timers */
   .vn-shake,
   [data-vn-shake],
   [data-vn-root].vn-shake,

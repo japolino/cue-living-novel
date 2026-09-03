@@ -185,9 +185,56 @@ function sanitizeAndRestoreAllowedHtml(escapedText: string): string {
  * 4. Parse markdown syntax (**bold**, *italic*, _italic_, ~~strike~~, `code`)
  * 5. Sanitize and allow safe HTML tags (<font>, <span>, <em>, etc.)
  */
+export type DialogueFormatOptions = {
+  stripMarkdown?: boolean;
+  forceQuotes?: boolean;
+  hasSpeaker?: boolean;
+};
+
+function stripMarkdown(text: string): string {
+  // Strip metadata tags like **Time**: ..., **Location**: ...
+  let md = text
+    .replace(/(?:\*\*|__)?(?:Time|Location|Costume|Scene|Date|Setting)(?:\*\*)?\s*:[^\n]*(?:\r?\n|$)/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  // 1. Triple formatting (bold + italic)
+  md = md
+    .replace(/\*\*\*([^\s*](?:[\s\S]*?[^\s*])?)\*\*\*/g, "$1")
+    .replace(/(^|[^\w])___([^\s_](?:[\s\S]*?[^\s_])?)___(?=[^\w]|$)/g, "$1$2")
+    .replace(/\*\*_(.+?)_\*\*/g, "$1")
+    .replace(/__\*(.+?)\*__/g, "$1");
+
+  // 2. Bold (**text** or __text__)
+  md = md
+    .replace(/\*\*([^\s*](?:[\s\S]*?[^\s*])?)\*\*/g, "$1")
+    .replace(/(^|[^\w])__([^\s_](?:[\s\S]*?[^\s_])?)__(?=[^\w]|$)/g, "$1$2");
+
+  // 3. Italic (*text* or _text_)
+  md = md
+    .replace(/\*([^\s*](?:[\s\S]*?[^\s*])?)\*/g, "$1")
+    .replace(/(^|[^\w])_([^\s_](?:[\s\S]*?[^\s_])?)_(?=[^\w]|$)/g, "$1$2");
+
+  // 4. Strikethrough (~~text~~)
+  md = md.replace(/~~([^\s~](?:[\s\S]*?[^\s~])?)~~/g, "$1");
+
+  // 5. Inline code (`text`)
+  md = md.replace(/`([^`]+)`/g, "$1");
+
+  return md;
+}
+
+function applyDialogueQuotes(text: string, hasSpeaker: boolean): string {
+  const trimmed = text.trim();
+  if (!trimmed || !hasSpeaker) return text;
+  if (/[“"”「」]/.test(trimmed)) return text;
+  return `"${trimmed}"`;
+}
+
 export function formatDialogueText(
   rawText: string,
   regexRules: CustomRegexRule[] = [],
+  options: DialogueFormatOptions = {},
 ): string {
   if (!rawText) return "";
 
@@ -209,11 +256,21 @@ export function formatDialogueText(
   // 3. Escape HTML special characters
   let formatted = escapeHtml(text);
 
-  // 4. Parse markdown syntax
-  formatted = parseMarkdown(formatted);
+  // 4. Parse or strip markdown syntax
+  if (options.stripMarkdown) {
+    formatted = stripMarkdown(formatted);
+  } else {
+    formatted = parseMarkdown(formatted);
+  }
 
-  // 5. Restore sanitized safe tags
+  // 5. Apply quotes if necessary for spoken dialogue
+  if (options.forceQuotes) {
+    formatted = applyDialogueQuotes(formatted, Boolean(options.hasSpeaker));
+  }
+
+  // 6. Restore sanitized safe tags
   formatted = sanitizeAndRestoreAllowedHtml(formatted);
 
   return formatted;
 }
+

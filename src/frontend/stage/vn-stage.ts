@@ -1123,13 +1123,16 @@ export class VnStage {
 
     if (this.autoBar) {
       const circumference = 37.7;
-      this.autoBar.style.transition = "none";
-      this.autoBar.style.strokeDashoffset = String(circumference);
-      if (typeof this.autoBar.getBoundingClientRect === "function") {
-        void this.autoBar.getBoundingClientRect();
-      }
-      this.autoBar.style.transition = `stroke-dashoffset ${delayMs}ms linear`;
-      this.autoBar.style.strokeDashoffset = "0";
+      const bar = this.autoBar;
+      bar.style.transition = "none";
+      bar.style.strokeDashoffset = String(circumference);
+      // Wait for next animation frame so the browser commits the full circumference before animating to 0
+      requestAnimationFrame(() => {
+        if (!this.destroyed && this.isAutoPlay && bar) {
+          bar.style.transition = `stroke-dashoffset ${delayMs}ms linear`;
+          bar.style.strokeDashoffset = "0";
+        }
+      });
     }
 
     this.autoPlayTimer = setTimeout(() => {
@@ -1272,7 +1275,13 @@ export class VnStage {
       this.currentRenderedFormatted = "";
       return;
     }
-    const formatted = formatDialogueText(paragraph.text, this.customRegexRules);
+    const currentPreset = this.root.dataset.vnPreset;
+    const shouldStripMarkdown = currentPreset === "literature-club" || currentPreset === "yamaku-classic";
+    const formatted = formatDialogueText(paragraph.text, this.customRegexRules, {
+      stripMarkdown: shouldStripMarkdown,
+      forceQuotes: shouldStripMarkdown,
+      hasSpeaker: Boolean(paragraph.speaker && paragraph.speaker.trim())
+    });
     if (
       this.currentRenderedParagraphId === paragraph.id &&
       this.currentRenderedFormatted === formatted
@@ -1368,6 +1377,26 @@ export class VnStage {
     }
     if (this.state.error) {
       badges.push({ kind: "error", label: this.state.error, icon: "alert" });
+    }
+
+    // Reconcile status badges in-place if structure matches to prevent restarting spinner/dash animations
+    const currentElements = Array.from(this.statusStack.children) as HTMLElement[];
+    const canReconcile = currentElements.length === badges.length &&
+      currentElements.every((el, i) => {
+        const b = badges[i]!;
+        const hasInteractiveMatch = Boolean(b.interactive) === (el.tagName.toLowerCase() === "button");
+        const hasKindMatch = el.dataset.vnBadgeKind === b.kind;
+        const iconEl = el.querySelector("[data-vn-badge-icon]");
+        const hasIconMatch = (iconEl?.getAttribute("data-vn-badge-icon") ?? undefined) === b.icon;
+        return hasInteractiveMatch && hasKindMatch && hasIconMatch;
+      });
+
+    if (canReconcile) {
+      currentElements.forEach((el, i) => {
+        const textSpan = el.querySelector("span:not([data-vn-badge-icon])") ?? el.lastChild;
+        if (textSpan) textSpan.textContent = badges[i]!.label;
+      });
+      return;
     }
 
     this.statusStack.replaceChildren(

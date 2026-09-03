@@ -102,11 +102,11 @@ describe("authored preset signatures", () => {
 
   test("yamaku-classic carries dark smoky acrylic and rose-pink accents", () => {
     const css = THEME_PRESET_CSS["yamaku-classic"];
-    expect(css).toContain("#5c4331");
-    expect(css).toContain("#ff6b8b");
+    expect(css).toContain("#ff7396");
     expect(css).toContain("[data-vn-control]");
     expect(css).toContain("[data-vn-badge]");
     expect(css).toContain("[data-vn-backlog]");
+    expect(css).toContain("content: none !important");
   });
 
   test("literature-club carries candy-pink polka dot dialogue and pill speaker", () => {
