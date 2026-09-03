@@ -436,4 +436,25 @@ describe("VnStage visual effects & transitions", () => {
     stage.loadTurn(turn);
     expect(root.classList.contains("vn-shake")).toBe(true);
   });
+
+    test("renderDialogueContent does not restart rendering when state or progress updates occur", () => {
+    const stage = new VnStage({ mount });
+    const turn: VnTurnInput = {
+      mode: "standard",
+      paragraphs: [{ id: "p1", text: "Hello world paragraph." }],
+    };
+    stage.loadTurn(turn);
+    const dialogueEl = (stage as any).dialogueText as MockNode;
+    expect(dialogueEl.innerHTML).toBe("Hello world paragraph.");
+
+    // Simulate typing in progress by altering innerHTML
+    dialogueEl.innerHTML = "Hel";
+
+    // Trigger an asset progress update (which invokes render())
+    stage.setAssetProgress({ current: 1, total: 3 });
+
+    // With the fix, because paragraph.id and formatted text did not change,
+    // renderDialogueContent should NOT overwrite dialogueEl.innerHTML back to start or formatted!
+    expect(dialogueEl.innerHTML).toBe("Hel");
+  });
 });

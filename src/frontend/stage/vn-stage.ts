@@ -303,6 +303,7 @@ export class VnStage {
   private readonly backlogEntries: Array<{ speaker?: string | undefined; text: string; formatted: string }> = [];
   private activeTextNodes: Array<{ node: Text; fullText: string }> = [];
   private currentRenderedParagraphId = "";
+  private currentRenderedFormatted = "";
 
   constructor(options: VnStageOptions) {
     this.state = options.initialState ?? createInitialVnStageState();
@@ -526,6 +527,7 @@ export class VnStage {
     this.isSkipping = false;
     this.isTyping = false;
     this.currentRenderedParagraphId = "";
+    this.currentRenderedFormatted = "";
     this.updateControlButtons();
     this.dispatch({ type: "reset" });
   }
@@ -1267,16 +1269,18 @@ export class VnStage {
       this.clearTypewriter();
       this.dialogueText.innerHTML = "";
       this.currentRenderedParagraphId = "";
+      this.currentRenderedFormatted = "";
       return;
     }
     const formatted = formatDialogueText(paragraph.text, this.customRegexRules);
     if (
       this.currentRenderedParagraphId === paragraph.id &&
-      this.dialogueText.innerHTML === formatted
+      this.currentRenderedFormatted === formatted
     ) {
       return;
     }
     this.currentRenderedParagraphId = paragraph.id;
+    this.currentRenderedFormatted = formatted;
     this.recordBacklogAndRead(paragraph.id, paragraph.speaker, paragraph.text, formatted);
     this.triggerParagraphEffects(paragraph);
 
