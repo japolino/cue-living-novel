@@ -224,9 +224,9 @@ export class VisualNovelSettingsPanel {
         </section>
         <section>
           <h2>Audio &amp; Atmosphere</h2>
-          <label>Audio directory
-            <input name="audioDirectory" type="text" placeholder="/path/to/audio or C:\\audio" />
-            <small>Local directory scanned recursively for BGM and SFX (.mp3, .ogg, .wav, .m4a, .flac).</small>
+          <label>Audio storage prefix
+            <input name="audioDirectory" type="text" placeholder="audio" />
+            <small>Folder inside the extension's scoped Lumiverse storage, scanned recursively for BGM and SFX.</small>
           </label>
           <div data-actions>
             <button type="button" data-scan-audio>Scan Audio</button>

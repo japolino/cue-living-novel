@@ -395,7 +395,7 @@ async function handleFrontendMessage(spindle: SpindleAPI, request: FrontendReque
     case "vn_set_config": {
       const config = await updateConfig(spindle, request.patch, userId);
       if (request.patch.audioDirectory !== undefined) {
-        void scanAudioCatalog(config.audioDirectory);
+        void scanAudioCatalog(spindle, config.audioDirectory);
       }
       spindle.sendToFrontend({ type: "vn_config", config }, userId);
       return;
@@ -403,7 +403,7 @@ async function handleFrontendMessage(spindle: SpindleAPI, request: FrontendReque
     case "vn_scan_audio": {
       const config = await loadConfig(spindle, userId);
       const dir = request.directory?.trim() || config.audioDirectory;
-      const catalog = await scanAudioCatalog(dir);
+      const catalog = await scanAudioCatalog(spindle, dir);
       spindle.sendToFrontend({
         type: "vn_audio_scanned",
         bgmCount: catalog.bgm.length,
@@ -519,7 +519,7 @@ export function registerVisualNovelBackend(spindle: SpindleAPI): void {
     });
   });
   void loadConfig(spindle).then((cfg) => {
-    if (cfg.audioDirectory) void scanAudioCatalog(cfg.audioDirectory);
+    void scanAudioCatalog(spindle, cfg.audioDirectory || "audio");
   }).catch(() => {});
   spindle.log.info("Cue — Living Novel loaded.");
 }

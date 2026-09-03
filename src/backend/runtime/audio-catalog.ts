@@ -1,5 +1,4 @@
-import { readdir, stat } from "node:fs/promises";
-import path from "node:path";
+import type { SpindleAPI } from "lumiverse-spindle-types";
 
 export type AudioCategory = "bgm" | "sfx";
 
@@ -23,278 +22,202 @@ export const SUPPORTED_AUDIO_EXTENSIONS = [".mp3", ".ogg", ".wav", ".m4a", ".fla
 const AUDIO_EXT_SET = new Set<string>(SUPPORTED_AUDIO_EXTENSIONS);
 
 const BGM_KEYWORDS = new Set([
-  "bgm",
-  "music",
-  "ost",
-  "soundtrack",
-  "theme",
-  "song",
-  "melody",
-  "instrumental",
-  "background",
-  "ambient",
-  "ambience",
+  "bgm", "music", "ost", "soundtrack", "theme", "song", "melody",
+  "instrumental", "background", "ambient", "ambience",
 ]);
 
 const SFX_KEYWORDS = new Set([
-  "sfx",
-  "sound",
-  "effect",
-  "effects",
-  "se",
-  "foley",
-  "hit",
-  "impact",
-  "step",
-  "footstep",
-  "click",
-  "whoosh",
-  "woosh",
-  "blast",
-  "explosion",
-  "ui",
-  "chime",
-  "bell",
-  "beep",
-  "punch",
-  "slash",
-  "door",
-  "creak",
-  "gunshot",
+  "sfx", "sound", "effect", "effects", "se", "foley", "hit", "impact",
+  "step", "footstep", "click", "whoosh", "woosh", "blast", "explosion",
+  "ui", "chime", "bell", "beep", "punch", "slash", "door", "creak", "gunshot",
 ]);
 
-const NOISE_TOKENS = new Set([
-  "audio",
-  "track",
-  "sound",
-  "file",
-  "media",
-  "lumiverse",
-  "preview",
-]);
+const NOISE_TOKENS = new Set(["audio", "track", "sound", "file", "media", "lumiverse", "preview"]);
 
-/**
- * Split text into lowercase tokens on whitespace, underscores, hyphens, dots,
- * slashes, and camelCase transitions.
- */
-export function tokenizeText(input: string): string[] {
-  // Split on camelCase transitions first
-  const decamel = input.replace(/([a-z0-9])([A-Z])/g, "$1 $2");
-  // Split on punctuation, separators, and spaces
-  const rawTokens = decamel.toLowerCase().split(/[^a-z0-9]+/);
-  return rawTokens.filter((token) => token.length > 0);
+function normalizedPath(input: string): string {
+  return input.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/{2,}/g, "/");
+}
+
+function extensionOf(input: string): string {
+  const name = normalizedPath(input).split("/").at(-1) ?? "";
+  const dot = name.lastIndexOf(".");
+  return dot >= 0 ? name.slice(dot).toLowerCase() : "";
+}
+
+function stemOf(input: string): string {
+  const name = normalizedPath(input).split("/").at(-1) ?? "";
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? name.slice(0, dot) : name;
+}
+
+function joinStoragePath(prefix: string, relativePath: string): string {
+  return [prefix.replace(/^\/+|\/+$/g, ""), relativePath.replace(/^\/+/, "")]
+    .filter(Boolean)
+    .join("/");
 }
 
 /**
- * Categorize an audio file into 'bgm' or 'sfx' based on directory and file name keywords.
+ * Lumiverse extensions cannot access arbitrary host paths. Audio lives under
+ * the extension's scoped storage root. Absolute legacy values fall back to the
+ * conventional `audio/` storage prefix.
  */
-export function categorizeAudioFile(filePath: string, relativePath: string): AudioCategory {
-  const normRel = relativePath.replace(/\\/g, "/");
+export function normalizeAudioStoragePrefix(input: string): string {
+  const value = normalizedPath(input.trim()).replace(/^\/+|\/+$/g, "");
+  if (!value || /^[A-Za-z]:\//.test(normalizedPath(input.trim())) || input.trim().startsWith("/")) {
+    return "audio";
+  }
+  if (value.split("/").some((part) => part === "..")) return "audio";
+  return value;
+}
+
+export function tokenizeText(input: string): string[] {
+  const decamel = input.replace(/([a-z0-9])([A-Z])/g, "$1 $2");
+  return decamel.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+}
+
+export function categorizeAudioFile(_filePath: string, relativePath: string): AudioCategory {
+  const normRel = normalizedPath(relativePath);
   const segments = normRel.split("/").filter(Boolean);
-  const dirSegments = segments.slice(0, -1);
-  const fileName = path.parse(normRel).name;
-
-  const dirTokens = dirSegments.flatMap(tokenizeText);
-  const fileTokens = tokenizeText(fileName);
-
-  // Check explicit filename indicators first if high confidence
-  const fileHasSfx = fileTokens.some((t) => SFX_KEYWORDS.has(t));
-  const fileHasBgm = fileTokens.some((t) => BGM_KEYWORDS.has(t));
-
+  const dirTokens = segments.slice(0, -1).flatMap(tokenizeText);
+  const fileTokens = tokenizeText(stemOf(normRel));
+  const fileHasSfx = fileTokens.some((token) => SFX_KEYWORDS.has(token));
+  const fileHasBgm = fileTokens.some((token) => BGM_KEYWORDS.has(token));
   if (fileHasSfx && !fileHasBgm) return "sfx";
   if (fileHasBgm && !fileHasSfx) return "bgm";
-
-  // Check directory tokens
-  const dirHasSfx = dirTokens.some((t) => SFX_KEYWORDS.has(t));
-  const dirHasBgm = dirTokens.some((t) => BGM_KEYWORDS.has(t));
-
+  const dirHasSfx = dirTokens.some((token) => SFX_KEYWORDS.has(token));
+  const dirHasBgm = dirTokens.some((token) => BGM_KEYWORDS.has(token));
   if (dirHasSfx && !dirHasBgm) return "sfx";
   if (dirHasBgm && !dirHasSfx) return "bgm";
-
-  // If both or neither match, check filename again or default to bgm
-  if (fileHasSfx) return "sfx";
-  return "bgm";
+  return fileHasSfx ? "sfx" : "bgm";
 }
 
-/**
- * Extract semantic tags from an audio file's relative path, directory names, and file name.
- */
 export function extractAudioTags(relativePath: string, category: AudioCategory): string[] {
-  const normRel = relativePath.replace(/\\/g, "/");
-  const fileName = path.parse(normRel).name;
+  const normRel = normalizedPath(relativePath);
   const segments = normRel.split("/").filter(Boolean);
-  const dirSegments = segments.slice(0, -1);
-
-  const tokens = [...dirSegments, fileName].flatMap(tokenizeText);
-  const tags = new Set<string>();
-
-  tags.add(category);
-
+  const tokens = [...segments.slice(0, -1), stemOf(normRel)].flatMap(tokenizeText);
+  const tags = new Set<string>([category]);
   for (const token of tokens) {
-    if (token.length < 2) continue;
-    if (/^\d+$/.test(token)) continue; // ignore pure numbers like 01, 02
-    if (NOISE_TOKENS.has(token)) continue;
+    if (token.length < 2 || /^\d+$/.test(token) || NOISE_TOKENS.has(token)) continue;
     if (category === "sfx" && (token === "sfx" || token === "se")) continue;
     if (category === "bgm" && (token === "bgm" || token === "ost")) continue;
     tags.add(token);
   }
+  return [...tags].sort();
+}
 
-  return Array.from(tags).sort();
+function mimeForExtension(extension: string): string {
+  switch (extension) {
+    case ".mp3": return "audio/mpeg";
+    case ".ogg": return "audio/ogg";
+    case ".wav": return "audio/wav";
+    case ".m4a": return "audio/mp4";
+    case ".flac": return "audio/flac";
+    default: return "application/octet-stream";
+  }
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  const parts: string[] = [];
+  const chunk: string[] = [];
+  for (let index = 0; index < bytes.length; index += 3) {
+    const first = bytes[index] ?? 0;
+    const second = bytes[index + 1] ?? 0;
+    const third = bytes[index + 2] ?? 0;
+    const packed = (first << 16) | (second << 8) | third;
+    chunk.push(
+      alphabet[(packed >>> 18) & 63]!,
+      alphabet[(packed >>> 12) & 63]!,
+      index + 1 < bytes.length ? alphabet[(packed >>> 6) & 63]! : "=",
+      index + 2 < bytes.length ? alphabet[packed & 63]! : "=",
+    );
+    if (chunk.length >= 8192) {
+      parts.push(chunk.join(""));
+      chunk.length = 0;
+    }
+  }
+  if (chunk.length > 0) parts.push(chunk.join(""));
+  return parts.join("");
 }
 
 let cachedCatalog: AudioCatalog = { bgm: [], sfx: [], all: [] };
-let cachedDirectory: string = "";
+let cachedPrefix = "";
 
 /**
- * Recursively find all files in directory.
+ * Scan audio files through Lumiverse's scoped storage API. No host filesystem
+ * module or Bun.file access is used. The binary is converted to a browser-safe
+ * data URL once during catalog creation.
  */
-async function collectFiles(currentDir: string): Promise<string[]> {
-  const results: string[] = [];
+export async function scanAudioCatalog(spindle: SpindleAPI, requestedPrefix = "audio"): Promise<AudioCatalog> {
+  const prefix = normalizeAudioStoragePrefix(requestedPrefix);
+  if (cachedPrefix === prefix && cachedCatalog.all.length > 0) return cachedCatalog;
+
+  let files: string[];
   try {
-    const entries = await readdir(currentDir, { withFileTypes: true });
-    for (const entry of entries) {
-      const fullPath = path.join(currentDir, entry.name);
-      if (entry.isDirectory()) {
-        const subFiles = await collectFiles(fullPath);
-        results.push(...subFiles);
-      } else if (entry.isFile()) {
-        results.push(fullPath);
-      }
-    }
+    files = await spindle.storage.list(prefix);
   } catch {
-    // If directory cannot be read, return what we have so far without crashing
-  }
-  return results;
-}
-
-/**
- * Recursively scan directory for audio files, categorize them into BGM/SFX,
- * extract tags, and cache in memory.
- */
-export async function scanAudioCatalog(dir: string): Promise<AudioCatalog> {
-  const trimmedDir = dir ? dir.trim() : "";
-  if (!trimmedDir) {
     cachedCatalog = { bgm: [], sfx: [], all: [] };
-    cachedDirectory = "";
+    cachedPrefix = prefix;
     return cachedCatalog;
   }
 
-  try {
-    const dirStat = await stat(trimmedDir);
-    if (!dirStat.isDirectory()) {
-      cachedCatalog = { bgm: [], sfx: [], all: [] };
-      cachedDirectory = trimmedDir;
-      return cachedCatalog;
-    }
-  } catch {
-    cachedCatalog = { bgm: [], sfx: [], all: [] };
-    cachedDirectory = trimmedDir;
-    return cachedCatalog;
-  }
-
-  const allFiles = await collectFiles(trimmedDir);
   const entries: AudioCatalogEntry[] = [];
-
-  for (const fullPath of allFiles) {
-    const ext = path.extname(fullPath).toLowerCase();
-    if (!AUDIO_EXT_SET.has(ext)) continue;
-
-    const relativePath = path.relative(trimmedDir, fullPath).replace(/\\/g, "/");
-    const parsed = path.parse(relativePath);
-    const name = parsed.name;
-    const id = relativePath.replace(/\.[^.]+$/, "");
-
-    const category = categorizeAudioFile(fullPath, relativePath);
-    const tags = extractAudioTags(relativePath, category);
-
-    entries.push({
-      id,
-      name,
-      filePath: fullPath,
-      relativePath,
-      category,
-      tags,
-      url: fullPath,
-    });
+  for (const listedPath of files) {
+    const relativePath = normalizedPath(listedPath);
+    const extension = extensionOf(relativePath);
+    if (!AUDIO_EXT_SET.has(extension)) continue;
+    const storagePath = joinStoragePath(prefix, relativePath);
+    try {
+      const bytes = await spindle.storage.readBinary(storagePath);
+      const category = categorizeAudioFile(storagePath, relativePath);
+      entries.push({
+        id: relativePath.replace(/\.[^.]+$/, ""),
+        name: stemOf(relativePath),
+        filePath: storagePath,
+        relativePath,
+        category,
+        tags: extractAudioTags(relativePath, category),
+        url: `data:${mimeForExtension(extension)};base64,${bytesToBase64(bytes)}`,
+      });
+    } catch {
+      // A single unreadable file must not prevent the rest of the pack loading.
+    }
   }
 
-  // Sort deterministically by id
-  entries.sort((a, b) => a.id.localeCompare(b.id));
-
-  const bgm = entries.filter((e) => e.category === "bgm");
-  const sfx = entries.filter((e) => e.category === "sfx");
-
-  cachedCatalog = { bgm, sfx, all: entries };
-  cachedDirectory = trimmedDir;
-
+  entries.sort((left, right) => left.id.localeCompare(right.id));
+  cachedCatalog = {
+    bgm: entries.filter((entry) => entry.category === "bgm"),
+    sfx: entries.filter((entry) => entry.category === "sfx"),
+    all: entries,
+  };
+  cachedPrefix = prefix;
   return cachedCatalog;
 }
 
-/**
- * Return currently cached audio catalog.
- */
 export function getAudioCatalog(): AudioCatalog {
   return cachedCatalog;
 }
 
-/**
- * Clear in-memory catalog cache.
- */
 export function clearAudioCatalogCache(): void {
   cachedCatalog = { bgm: [], sfx: [], all: [] };
-  cachedDirectory = "";
+  cachedPrefix = "";
 }
 
-/**
- * Find an entry in the catalog by exact id, name, or relative path (case-insensitive).
- */
 export function findAudioEntry(query: string): AudioCatalogEntry | null {
-  if (!query) return null;
-  const normalized = query.trim().toLowerCase();
-  const normalizedWithoutExt = normalized.replace(/\.[a-z0-9]+$/i, "");
-
-  // 1. Check exact id match
-  for (const entry of cachedCatalog.all) {
-    if (entry.id.toLowerCase() === normalized || entry.id.toLowerCase() === normalizedWithoutExt) {
-      return entry;
-    }
-  }
-
-  // 2. Check name match
-  for (const entry of cachedCatalog.all) {
-    if (entry.name.toLowerCase() === normalized || entry.name.toLowerCase() === normalizedWithoutExt) {
-      return entry;
-    }
-  }
-
-  // 3. Check relative path match
-  for (const entry of cachedCatalog.all) {
-    if (entry.relativePath.toLowerCase() === normalized) {
-      return entry;
-    }
-  }
-
-  return null;
+  const normalized = normalizedPath(query.trim()).toLowerCase();
+  const withoutExtension = normalized.replace(/\.[a-z0-9]+$/i, "");
+  return cachedCatalog.all.find((entry) => {
+    return entry.id.toLowerCase() === normalized
+      || entry.id.toLowerCase() === withoutExtension
+      || entry.name.toLowerCase() === normalized
+      || entry.name.toLowerCase() === withoutExtension
+      || entry.relativePath.toLowerCase() === normalized;
+  }) ?? null;
 }
 
-/**
- * Resolve an audio URL or file path for a given audio identifier or path.
- */
 export function resolveAudioUrl(query: string): string | null {
   if (!query) return null;
   const entry = findAudioEntry(query);
-  if (entry) return entry.filePath;
-
-  // If already an absolute path, URL, or data URI, return as-is
-  if (
-    query.startsWith("http:") ||
-    query.startsWith("https:") ||
-    query.startsWith("data:") ||
-    query.startsWith("file:") ||
-    path.isAbsolute(query)
-  ) {
-    return query;
-  }
-
-  return null;
+  if (entry?.url) return entry.url;
+  return /^(?:https?:|data:|blob:)/i.test(query) ? query : null;
 }

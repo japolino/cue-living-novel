@@ -230,20 +230,17 @@ test("parseIgnoredTags parses comma and newline separated tag names", () => {
 
 test("planner includes audio catalog in prompt instructions and preserves returned audio cues", async () => {
   const { clearAudioCatalogCache, scanAudioCatalog } = await import("./audio-catalog");
-  const { mkdir, rm, writeFile } = await import("node:fs/promises");
-  const path = await import("node:path");
-  const os = await import("node:os");
-
-  const tempDir = path.join(os.tmpdir(), `planner-audio-${Date.now()}`);
-  await mkdir(path.join(tempDir, "bgm"), { recursive: true });
-  await mkdir(path.join(tempDir, "sfx"), { recursive: true });
-  await writeFile(path.join(tempDir, "bgm", "romantic_theme.mp3"), "dummy");
-  await writeFile(path.join(tempDir, "sfx", "sword_slash.wav"), "dummy");
-
-  await scanAudioCatalog(tempDir);
+  const files: Record<string, Uint8Array> = {
+    "audio/bgm/romantic_theme.mp3": new TextEncoder().encode("dummy"),
+    "audio/sfx/sword_slash.wav": new TextEncoder().encode("dummy"),
+  };
 
   const captured = { system: "" };
   const spindleWithAudio: SpindleAPI = {
+    storage: {
+      list: async () => ["bgm/romantic_theme.mp3", "sfx/sword_slash.wav"],
+      readBinary: async (path: string) => files[path] ?? new Uint8Array(),
+    },
     generate: {
       raw: async (request: any) => {
         captured.system = request.messages?.[0]?.content ?? "";
@@ -285,6 +282,8 @@ test("planner includes audio catalog in prompt instructions and preserves return
     log: { warn() {} }
   } as unknown as SpindleAPI;
 
+  await scanAudioCatalog(spindleWithAudio, "audio");
+
   try {
     const content = "First line in the garden.\n\nA sudden sound.";
     const result = await planTurn(spindleWithAudio, {
@@ -309,7 +308,6 @@ test("planner includes audio catalog in prompt instructions and preserves return
     assert.equal(result.plan.visualCues[1]?.sfx, "sword_slash");
   } finally {
     clearAudioCatalogCache();
-    await rm(tempDir, { recursive: true, force: true });
   }
 });
 
