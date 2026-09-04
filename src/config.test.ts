@@ -149,3 +149,27 @@ test("configuration clamps bgmVolume and sfxVolume to [0, 1]", () => {
   assert.equal(invalid.bgmVolume, 0.7);
   assert.equal(invalid.sfxVolume, 0.8);
 });
+
+test("prompt presets normalize to safe named entries", () => {
+  const config = normalizeConfig({
+    promptPresets: [
+      { id: "a", name: "Soft anime", positive: "soft shading", negative: "harsh light" },
+      { id: "a", name: "Duplicate id" },
+      { id: "", name: "No id" },
+      { id: "b", name: "  " },
+      { id: "c", name: "Minimal" },
+      "garbage",
+      null
+    ]
+  });
+  assert.deepEqual(config.promptPresets, [
+    { id: "a", name: "Soft anime", positive: "soft shading", negative: "harsh light" },
+    { id: "c", name: "Minimal", positive: "", negative: "" }
+  ]);
+});
+
+test("prompt presets default to an empty list", () => {
+  assert.deepEqual(DEFAULT_CONFIG.promptPresets, []);
+  assert.deepEqual(normalizeConfig({}).promptPresets, []);
+  assert.deepEqual(normalizeConfig({ promptPresets: "nope" }).promptPresets, []);
+});

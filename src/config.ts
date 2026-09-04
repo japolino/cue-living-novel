@@ -23,6 +23,14 @@ export const THEME_PRESET_IDS = [
 
 export type VisualNovelThemePreset = (typeof THEME_PRESET_IDS)[number];
 
+/** A named prompt preset: a positive (prefix) and a negative block. */
+export type VisualNovelPromptPreset = {
+  id: string;
+  name: string;
+  positive: string;
+  negative: string;
+};
+
 export type VisualNovelConfig = {
   themePreset: VisualNovelThemePreset;
   enabled: boolean;
@@ -31,6 +39,8 @@ export type VisualNovelConfig = {
   sceneImageFit: VisualNovelSceneImageFit;
   debugLogging: boolean;
   generateImages: boolean;
+  /** Anchor each character's appearance to their captured reference portrait. */
+  referenceAnchoring: boolean;
   generateChoices: boolean;
   parserConnectionId: string | null;
   parserParameters: Record<string, unknown>;
@@ -46,6 +56,7 @@ export type VisualNovelConfig = {
   promptPrefix: string;
   promptSuffix: string;
   negativePrompt: string;
+  promptPresets: VisualNovelPromptPreset[];
   customPlannerInstructions: string;
   customCss: string;
   ignoredTags: string;
@@ -67,6 +78,7 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   sceneImageFit: "cover",
   debugLogging: false,
   generateImages: true,
+  referenceAnchoring: true,
   generateChoices: true,
   parserConnectionId: null,
   parserParameters: {},
@@ -82,6 +94,7 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   promptPrefix: "masterpiece, best quality, anime visual novel scene",
   promptSuffix: "",
   negativePrompt: "low quality, blurry, malformed hands, text, subtitles, speech bubble, watermark, logo, frame, border",
+  promptPresets: [],
   customPlannerInstructions: "",
   customCss: "",
   ignoredTags: "",
@@ -129,6 +142,28 @@ function integer(value: unknown, minimum: number, maximum: number, fallback: num
     : fallback;
 }
 
+function promptPresetList(value: unknown): VisualNovelPromptPreset[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const presets: VisualNovelPromptPreset[] = [];
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const record = raw as Record<string, unknown>;
+    const id = typeof record.id === "string" ? record.id.trim() : "";
+    const name = typeof record.name === "string" ? record.name.trim() : "";
+    if (!id || !name || seen.has(id)) continue;
+    seen.add(id);
+    presets.push({
+      id,
+      name,
+      positive: typeof record.positive === "string" ? record.positive : "",
+      negative: typeof record.negative === "string" ? record.negative : ""
+    });
+    if (presets.length >= 32) break;
+  }
+  return presets;
+}
+
 function sceneImageFit(value: unknown): VisualNovelSceneImageFit {
   return typeof value === "string" && (SCENE_IMAGE_FITS as readonly string[]).includes(value)
     ? value as VisualNovelSceneImageFit
@@ -160,6 +195,7 @@ export function normalizeConfig(value: unknown): VisualNovelConfig {
     sceneImageFit: sceneImageFit(input.sceneImageFit),
     debugLogging: bool(input.debugLogging, DEFAULT_CONFIG.debugLogging),
     generateImages: bool(input.generateImages, DEFAULT_CONFIG.generateImages),
+    referenceAnchoring: bool(input.referenceAnchoring, DEFAULT_CONFIG.referenceAnchoring),
     generateChoices: bool(input.generateChoices, DEFAULT_CONFIG.generateChoices),
     parserConnectionId: nullableString(input.parserConnectionId),
     parserParameters: record(input.parserParameters),
@@ -175,6 +211,7 @@ export function normalizeConfig(value: unknown): VisualNovelConfig {
     promptPrefix: stringValue(input.promptPrefix, DEFAULT_CONFIG.promptPrefix),
     promptSuffix: retiredLegacySuffix(stringValue(input.promptSuffix, DEFAULT_CONFIG.promptSuffix)),
     negativePrompt: stringValue(input.negativePrompt, DEFAULT_CONFIG.negativePrompt),
+    promptPresets: promptPresetList(input.promptPresets),
     customPlannerInstructions: stringValue(input.customPlannerInstructions, DEFAULT_CONFIG.customPlannerInstructions),
     customCss: stringValue(input.customCss, DEFAULT_CONFIG.customCss),
     ignoredTags: stringValue(input.ignoredTags, DEFAULT_CONFIG.ignoredTags),

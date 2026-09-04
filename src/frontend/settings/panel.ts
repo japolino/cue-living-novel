@@ -3,6 +3,7 @@ import {
   SCENE_IMAGE_FITS,
   THEME_PRESET_IDS,
   type VisualNovelConfig,
+  type VisualNovelPromptPreset,
   type VisualNovelSceneImageFit,
   type VisualNovelThemePreset,
 } from "../../config.js";
@@ -62,9 +63,15 @@ export function buildConnectionSelectOptions(
 const PANEL_CSS = `
 :host { display: block; color: var(--lumiverse-text, #f5f5f7); font: 14px/1.5 var(--lumiverse-font-family, system-ui, sans-serif); }
 * { box-sizing: border-box; }
-form { display: grid; gap: 1rem; max-width: 54rem; padding: 1rem; }
-section { display: grid; gap: .8rem; padding: 1rem; border: 1px solid var(--lumiverse-border, rgba(255,255,255,.16)); border-radius: .85rem; background: var(--lumiverse-card-bg, rgba(255,255,255,.035)); }
-h2 { margin: 0; font-size: 1rem; }
+form { display: grid; gap: .85rem; max-width: 54rem; padding: 1rem 1rem 0; }
+details[data-section] { border: 1px solid var(--lumiverse-border, rgba(255,255,255,.16)); border-radius: .85rem; background: var(--lumiverse-card-bg, rgba(255,255,255,.035)); }
+details[data-section] > summary { list-style: none; display: flex; align-items: center; gap: .55rem; padding: .8rem 1rem; font-size: 1rem; font-weight: 750; cursor: pointer; user-select: none; border-radius: .85rem; }
+details[data-section] > summary::-webkit-details-marker { display: none; }
+details[data-section] > summary::before { content: "\\25B8"; font-size: .8em; color: var(--lumiverse-primary, #a986ff); transition: transform .15s ease; }
+details[data-section][open] > summary::before { transform: rotate(90deg); }
+details[data-section] > summary:hover { background: var(--lumiverse-fill-medium, rgba(255,255,255,.06)); }
+details[data-section] > summary > small { margin-left: auto; font-weight: 400; text-align: right; }
+[data-section-body] { display: grid; gap: .8rem; padding: .2rem 1rem 1rem; }
 p { margin: 0; color: var(--lumiverse-text-muted, rgba(255,255,255,.68)); }
 label { display: grid; gap: .35rem; font-weight: 650; }
 label[data-check] { grid-template-columns: auto 1fr; align-items: center; font-weight: 500; }
@@ -76,11 +83,20 @@ input[type="range"] { width: 100%; accent-color: var(--lumiverse-primary, #a986f
 input[type="text"], input[type="number"], select, textarea { width: 100%; padding: .65rem .75rem; border: 1px solid var(--lumiverse-border, rgba(255,255,255,.2)); border-radius: .55rem; background: var(--lumiverse-bg-elevated, #171822); color: inherit; }
 textarea { min-height: 10rem; resize: vertical; font-family: var(--lumiverse-font-mono, ui-monospace, monospace); font-size: .82rem; }
 [data-row] { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .8rem; }
+[data-preset-row] { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto auto; gap: .5rem; align-items: center; }
+[data-preset-row] button { white-space: nowrap; }
+@media (max-width: 620px) { [data-preset-row] { grid-template-columns: 1fr 1fr; } }
 [data-actions] { display: flex; flex-wrap: wrap; gap: .65rem; }
 button { min-height: 2.5rem; padding: .55rem 1rem; border: 1px solid var(--lumiverse-border, rgba(255,255,255,.24)); border-radius: 999px; background: var(--lumiverse-fill-medium, rgba(255,255,255,.1)); color: inherit; cursor: pointer; }
 button[type="submit"] { border-color: var(--lumiverse-primary, #a986ff); background: var(--lumiverse-primary, #a986ff); color: var(--lumiverse-primary-contrast, #121018); font-weight: 750; }
-[data-status] { min-height: 1.4em; }
-@media (max-width: 620px) { [data-row] { grid-template-columns: 1fr; } form { padding: .65rem; } }
+button[type="submit"][data-dirty] { box-shadow: 0 0 0 3px color-mix(in srgb, var(--lumiverse-primary, #a986ff) 40%, transparent); }
+button[data-reset][data-confirming] { border-color: var(--lumiverse-danger, #ff8ca0); color: var(--lumiverse-danger, #ff8ca0); background: transparent; }
+[data-actionbar] { position: sticky; bottom: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: .65rem; margin: 0 -1rem; padding: .8rem 1rem; background: var(--lumiverse-bg-elevated, #171822); border-top: 1px solid var(--lumiverse-border, rgba(255,255,255,.16)); box-shadow: 0 -8px 20px rgba(0,0,0,.3); }
+[data-actionbar] [data-status] { margin: 0 0 0 auto; min-height: 0; text-align: right; }
+[data-status][data-kind="saved"] { color: var(--lumiverse-success, #8ce8b0); }
+[data-status][data-kind="dirty"] { color: var(--lumiverse-warning, #ffd08a); }
+[data-status][data-kind="error"] { color: var(--lumiverse-danger, #ff8ca0); }
+@media (max-width: 620px) { [data-row] { grid-template-columns: 1fr; } form { padding: .65rem .65rem 0; } [data-actionbar] { margin: 0 -.65rem; padding: .7rem .65rem; } }
 `;
 
 function control<T extends HTMLElement>(root: ParentNode, name: string): T {
@@ -138,6 +154,9 @@ export class VisualNovelSettingsPanel {
   private readonly status: HTMLElement;
   private readonly audioStatus: HTMLElement | null;
   private readonly options: SettingsPanelOptions;
+  private dirty = false;
+  private statusTimer: ReturnType<typeof setTimeout> | null = null;
+  private resetTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: SettingsPanelOptions) {
     this.options = options;
@@ -149,126 +168,155 @@ export class VisualNovelSettingsPanel {
     const body = document.createElement("div");
     body.innerHTML = `
       <form>
-        <section>
-          <h2>Presentation</h2>
-          <div data-row>
-            <label>Mode<select name="mode"><option value="standard">Standard input</option><option value="cyoa">CYOA choices</option></select></label>
-            <label>Images per turn<input name="maxImagesPerTurn" type="number" min="0" max="12" step="1" /><small>0 = unlimited (all distinct cues)</small></label>
-          </div>
-          <label>Theme style
-            <select name="themePreset">${THEME_PRESET_OPTIONS.map(({ value, label }) => `<option value="${value}">${label}</option>`).join("")}</select>
-            <small>Predefined look for the stage. Custom CSS below is always applied on top.</small>
-          </label>
-          <label>Scene image fit
-            <select name="sceneImageFit">
-              <option value="cover">Cover (crop to fill)</option>
-              <option value="contain">Contain (fit with letterboxing)</option>
-              <option value="fill">Stretch (distort to fill)</option>
-              <option value="none">Original size (intrinsic)</option>
-              <option value="scale-down">Scale down (intrinsic unless too large)</option>
-            </select>
-            <small>How the scene image fills the stage.</small>
-          </label>
-          <label data-check><input name="autoEnter" type="checkbox" /><span>Enter visual novel mode automatically when a chat opens</span></label>
-          <label data-check><input name="generateImages" type="checkbox" /><span>Generate scene images</span></label>
-          <label data-check><input name="useNativeCardImages" type="checkbox" /><span>Use native card images / expressions (disables external image generation)</span></label>
-          <label data-check><input name="generateChoices" type="checkbox" /><span>Generate choices when the response has no authored Choice tags</span></label>
-        </section>
-        <section>
-          <h2>Generation connections</h2>
-          <p>Choose a saved Lumiverse connection or follow the host default.</p>
-          <label>Planner connection
-            <select name="parserConnectionId"><option value="">Lumiverse default</option></select>
-            <small data-connection-status="planner" role="status"></small>
-          </label>
-          <label>Image connection
-            <select name="imageConnectionId"><option value="">Lumiverse default</option></select>
-            <small data-connection-status="image" role="status"></small>
-          </label>
-          <div data-actions><button type="button" data-refresh-connections>Refresh connections</button></div>
-          <label>Image model override
-            <input name="imageModel" type="text" placeholder="Use the selected connection model" />
-            <small data-image-model-hint>Leave blank to use the model configured on the selected image connection.</small>
-          </label>
-          <label>Image concurrency<input name="imageConcurrency" type="number" min="1" max="6" step="1" /></label>
-          <div data-row>
-            <label>Planner parameters<textarea name="parserParameters" spellcheck="false"></textarea></label>
-            <label>Image parameters<textarea name="imageParameters" spellcheck="false"></textarea></label>
-          </div>
-        </section>
-        <section>
-          <h2>Planning context</h2>
-          <label>Recent messages<input name="includeRecentMessages" type="number" min="0" max="30" step="1" /></label>
-          <label data-check><input name="includeCharacterContext" type="checkbox" /><span>Include character-card context</span></label>
-          <label data-check><input name="includePersonaContext" type="checkbox" /><span>Include active persona context</span></label>
-          <label data-check><input name="includeLorebookContext" type="checkbox" /><span>Include activated lorebook context</span></label>
-          <label data-check><input name="debugLogging" type="checkbox" /><span>Write planner fallback details to the Lumiverse log</span></label>
-        </section>
-        <section>
-          <h2>Text &amp; Dialogue Flow</h2>
-          <div data-row>
-            <label>Text typing speed (ms/char)
-              <input name="textSpeed" type="number" min="0" max="100" step="5" />
-              <small>0 = instant reveal, 20 = default typewriter speed.</small>
+        <details data-section open>
+          <summary>Presentation</summary>
+          <div data-section-body>
+            <div data-row>
+              <label>Mode<select name="mode"><option value="standard">Standard input</option><option value="cyoa">CYOA choices</option></select></label>
+              <label>Images per turn<input name="maxImagesPerTurn" type="number" min="0" max="12" step="1" /><small>0 = unlimited (all distinct cues)</small></label>
+            </div>
+            <label>Theme style
+              <select name="themePreset">${THEME_PRESET_OPTIONS.map(({ value, label }) => `<option value="${value}">${label}</option>`).join("")}</select>
+              <small>Predefined look for the stage. Custom CSS below is always applied on top.</small>
             </label>
-            <label>Auto-play delay (ms)
-              <input name="autoPlayDelay" type="number" min="500" max="10000" step="250" />
-              <small>Base pause after text finishes before advancing automatically.</small>
+            <label>Scene image fit
+              <select name="sceneImageFit">
+                <option value="cover">Cover (crop to fill)</option>
+                <option value="contain">Contain (fit with letterboxing)</option>
+                <option value="fill">Stretch (distort to fill)</option>
+                <option value="none">Original size (intrinsic)</option>
+                <option value="scale-down">Scale down (intrinsic unless too large)</option>
+              </select>
+              <small>How the scene image fills the stage.</small>
             </label>
+            <label data-check><input name="autoEnter" type="checkbox" /><span>Enter visual novel mode automatically when a chat opens</span></label>
+            <label data-check><input name="generateImages" type="checkbox" /><span>Generate scene images</span></label>
+            <label data-check><input name="referenceAnchoring" type="checkbox" /><span>Character reference anchoring (reuse each character's first portrait as an identity reference for later images)</span></label>
+            <label data-check><input name="useNativeCardImages" type="checkbox" /><span>Use native card images / expressions (disables external image generation)</span></label>
+            <label data-check><input name="generateChoices" type="checkbox" /><span>Generate choices when the response has no authored Choice tags</span></label>
           </div>
-          <label>Skip mode
-            <select name="skipMode">
-              <option value="read">Skip read only (pauses on unread text)</option>
-              <option value="all">Skip all (fast forwards continuously)</option>
-            </select>
-            <small>Behavior when fast forward Skip is toggled.</small>
-          </label>
-        </section>
-        <section>
-          <h2>Audio &amp; Atmosphere</h2>
-          <label>Audio storage prefix
-            <input name="audioDirectory" type="text" placeholder="audio" />
-            <small>Folder inside the extension's scoped Lumiverse storage, scanned recursively for BGM and SFX.</small>
-          </label>
-          <div data-actions>
-            <button type="button" data-scan-audio>Scan Audio</button>
-            <small data-audio-status role="status"></small>
-          </div>
-          <div data-row>
-            <label>BGM volume (<span data-bgm-val>70%</span>)
-              <input name="bgmVolume" type="range" min="0" max="1" step="0.05" />
+        </details>
+        <details data-section open>
+          <summary>Generation connections</summary>
+          <div data-section-body>
+            <p>Choose a saved Lumiverse connection or follow the host default.</p>
+            <label>Planner connection
+              <select name="parserConnectionId"><option value="">Lumiverse default</option></select>
+              <small data-connection-status="planner" role="status"></small>
             </label>
-            <label>SFX volume (<span data-sfx-val>80%</span>)
-              <input name="sfxVolume" type="range" min="0" max="1" step="0.05" />
+            <label>Image connection
+              <select name="imageConnectionId"><option value="">Lumiverse default</option></select>
+              <small data-connection-status="image" role="status"></small>
+            </label>
+            <div data-actions><button type="button" data-refresh-connections>Refresh connections</button></div>
+            <label>Image model override
+              <input name="imageModel" type="text" placeholder="Use the selected connection model" />
+              <small data-image-model-hint>Leave blank to use the model configured on the selected image connection.</small>
+            </label>
+            <label>Image concurrency<input name="imageConcurrency" type="number" min="1" max="6" step="1" /></label>
+            <div data-row>
+              <label>Planner parameters<textarea name="parserParameters" spellcheck="false"></textarea></label>
+              <label>Image parameters<textarea name="imageParameters" spellcheck="false"></textarea></label>
+            </div>
+          </div>
+        </details>
+        <details data-section>
+          <summary>Planning context</summary>
+          <div data-section-body>
+            <label>Recent messages<input name="includeRecentMessages" type="number" min="0" max="30" step="1" /></label>
+            <label data-check><input name="includeCharacterContext" type="checkbox" /><span>Include character-card context</span></label>
+            <label data-check><input name="includePersonaContext" type="checkbox" /><span>Include active persona context</span></label>
+            <label data-check><input name="includeLorebookContext" type="checkbox" /><span>Include activated lorebook context</span></label>
+            <label data-check><input name="debugLogging" type="checkbox" /><span>Verbose debug logging (host events, planning, assets, anchoring) to the Lumiverse log and browser console</span></label>
+          </div>
+        </details>
+        <details data-section>
+          <summary>Text &amp; Dialogue Flow</summary>
+          <div data-section-body>
+            <div data-row>
+              <label>Text typing speed (ms/char)
+                <input name="textSpeed" type="number" min="0" max="100" step="5" />
+                <small>0 = instant reveal, 20 = default typewriter speed.</small>
+              </label>
+              <label>Auto-play delay (ms)
+                <input name="autoPlayDelay" type="number" min="500" max="10000" step="250" />
+                <small>Base pause after text finishes before advancing automatically.</small>
+              </label>
+            </div>
+            <label>Skip mode
+              <select name="skipMode">
+                <option value="read">Skip read only (pauses on unread text)</option>
+                <option value="all">Skip all (fast forwards continuously)</option>
+              </select>
+              <small>Behavior when fast forward Skip is toggled.</small>
             </label>
           </div>
-        </section>
-
-        <section>
-          <h2>Prompt</h2>
-          <label>Positive prefix<input name="promptPrefix" type="text" /></label>
-          <label>Positive suffix<input name="promptSuffix" type="text" /></label>
-          <label>Negative prompt<input name="negativePrompt" type="text" /></label>
-          <label>Planner instructions<textarea name="customPlannerInstructions"></textarea></label>
-        </section>
-        <section>
-          <h2>Content Filtering & Regex</h2>
-          <label>Ignored tags
-            <input name="ignoredTags" type="text" placeholder="status, stats, system, inventory" />
-            <small>Comma-separated tags to omit from dialogue and image planning (e.g. &lt;status&gt;, [Status]).</small>
-          </label>
-          <label>Display regex rules
-            <textarea name="displayRegexRules" spellcheck="false" placeholder="/§([^§]+)§/g => <em class=&quot;vn-transmission&quot;>$1</em>"></textarea>
-            <small>One rule per line: <code>/pattern/flags =&gt; replacement</code> or <code>pattern =&gt; replacement</code>.</small>
-          </label>
-        </section>
-        <section>
-          <h2>Custom CSS</h2>
-          <p>Selectors beginning with data-vn are stable. Remote imports and URL fetches are removed.</p>
-          <label>Theme CSS<textarea name="customCss" spellcheck="false"></textarea></label>
-        </section>
-        <div data-actions><button type="submit">Save settings</button><button type="button" data-open-preview>Open preview</button><button type="button" data-reset>Reset defaults</button></div>
-        <p data-status role="status" aria-live="polite"></p>
+        </details>
+        <details data-section>
+          <summary>Audio &amp; Atmosphere</summary>
+          <div data-section-body>
+            <label>Audio storage prefix
+              <input name="audioDirectory" type="text" placeholder="audio" />
+              <small>Folder inside the extension's scoped Lumiverse storage, scanned recursively for BGM and SFX.</small>
+            </label>
+            <div data-actions>
+              <button type="button" data-scan-audio>Scan Audio</button>
+              <small data-audio-status role="status"></small>
+            </div>
+            <div data-row>
+              <label>BGM volume (<span data-bgm-val>70%</span>)
+                <input name="bgmVolume" type="range" min="0" max="1" step="0.05" />
+              </label>
+              <label>SFX volume (<span data-sfx-val>80%</span>)
+                <input name="sfxVolume" type="range" min="0" max="1" step="0.05" />
+              </label>
+            </div>
+          </div>
+        </details>
+        <details data-section>
+          <summary>Prompt</summary>
+          <div data-section-body>
+            <label>Preset
+              <div data-preset-row>
+                <select name="promptPresetSelect"><option value="">Custom (no preset)</option></select>
+                <input name="promptPresetName" type="text" placeholder="Preset name" />
+                <button type="button" data-preset-save>Save preset</button>
+                <button type="button" data-preset-delete>Delete</button>
+              </div>
+              <small>Selecting a preset fills the positive and negative fields below. "Save preset" stores the current fields under the name.</small>
+            </label>
+            <label>Positive prefix<input name="promptPrefix" type="text" /></label>
+            <label>Positive suffix<input name="promptSuffix" type="text" /></label>
+            <label>Negative prompt<input name="negativePrompt" type="text" /></label>
+            <label>Planner instructions<textarea name="customPlannerInstructions"></textarea></label>
+          </div>
+        </details>
+        <details data-section>
+          <summary>Content Filtering &amp; Regex</summary>
+          <div data-section-body>
+            <label>Ignored tags
+              <input name="ignoredTags" type="text" placeholder="status, stats, system, inventory" />
+              <small>Comma-separated tags to omit from dialogue and image planning (e.g. &lt;status&gt;, [Status]).</small>
+            </label>
+            <label>Display regex rules
+              <textarea name="displayRegexRules" spellcheck="false" placeholder="/§([^§]+)§/g => <em class=&quot;vn-transmission&quot;>$1</em>"></textarea>
+              <small>One rule per line: <code>/pattern/flags =&gt; replacement</code> or <code>pattern =&gt; replacement</code>.</small>
+            </label>
+          </div>
+        </details>
+        <details data-section>
+          <summary>Custom CSS</summary>
+          <div data-section-body>
+            <p>Selectors beginning with data-vn are stable. Remote imports and URL fetches are removed.</p>
+            <label>Theme CSS<textarea name="customCss" spellcheck="false"></textarea></label>
+          </div>
+        </details>
+        <div data-actionbar>
+          <button type="submit" data-save>Save settings</button>
+          <button type="button" data-open-preview>Open preview</button>
+          <button type="button" data-reset>Reset defaults</button>
+          <span data-status role="status" aria-live="polite"></span>
+        </div>
       </form>`;
     this.root.append(style, ...Array.from(body.childNodes));
     options.mount.append(this.host);
@@ -306,19 +354,141 @@ export class VisualNovelSettingsPanel {
       event.preventDefault();
       try {
         this.options.onSave(this.read());
-        this.status.textContent = "Settings saved.";
+        this.markClean();
+        this.setStatus("Settings saved.", "saved", 3000);
       } catch (error) {
-        this.status.textContent = error instanceof Error ? error.message : String(error);
+        this.setStatus(error instanceof Error ? error.message : String(error), "error");
+      }
+    });
+    // Any manual edit flags unsaved changes next to the always-visible Save button.
+    const markDirty = () => this.markDirty();
+    this.form.addEventListener("input", markDirty);
+    this.form.addEventListener("change", markDirty);
+    // Ctrl+S / Cmd+S saves from anywhere inside the panel.
+    this.form.addEventListener("keydown", (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        this.form.requestSubmit();
       }
     });
     this.root.querySelector("[data-open-preview]")?.addEventListener("click", () => options.onOpenPreview());
     this.root.querySelector("[data-refresh-connections]")?.addEventListener("click", () => options.onRefreshConnections());
-    control<HTMLSelectElement>(this.root, "imageConnectionId").addEventListener("change", () => this.updateImageModelHint());
-    this.root.querySelector("[data-reset]")?.addEventListener("click", () => {
+    control<HTMLSelectElement>(this.root, "imageConnectionId").addEventListener("change", (e) => {
+      this.selectedConnectionIds.image = (e.target as HTMLSelectElement).value || null;
+      this.updateImageModelHint();
+    });
+    control<HTMLSelectElement>(this.root, "parserConnectionId").addEventListener("change", (e) => {
+      this.selectedConnectionIds.planner = (e.target as HTMLSelectElement).value || null;
+    });
+    // Reset is destructive (it immediately saves the defaults), so it needs a
+    // second confirming click within four seconds.
+    const resetButton = this.root.querySelector<HTMLButtonElement>("[data-reset]");
+    resetButton?.addEventListener("click", () => {
+      if (!resetButton.hasAttribute("data-confirming")) {
+        resetButton.setAttribute("data-confirming", "");
+        resetButton.textContent = "Confirm reset?";
+        this.setStatus("Click again to reset every setting to its default.", "dirty");
+        if (this.resetTimer) clearTimeout(this.resetTimer);
+        this.resetTimer = setTimeout(() => {
+          resetButton.removeAttribute("data-confirming");
+          resetButton.textContent = "Reset defaults";
+          this.setStatus("", "idle");
+        }, 4000);
+        return;
+      }
+      if (this.resetTimer) clearTimeout(this.resetTimer);
+      resetButton.removeAttribute("data-confirming");
+      resetButton.textContent = "Reset defaults";
       this.setConfig(DEFAULT_CONFIG);
       this.options.onSave(DEFAULT_CONFIG);
-      this.status.textContent = "Defaults restored.";
+      this.markClean();
+      this.setStatus("Defaults restored.", "saved", 3000);
     });
+
+    // Prompt presets: selecting fills the fields; save/delete persist instantly.
+    const presetSelect = control<HTMLSelectElement>(this.root, "promptPresetSelect");
+    const presetName = control<HTMLInputElement>(this.root, "promptPresetName");
+    presetSelect.addEventListener("change", () => {
+      const preset = this.promptPresets.find((candidate) => candidate.id === presetSelect.value);
+      if (!preset) return;
+      control<HTMLInputElement>(this.root, "promptPrefix").value = preset.positive;
+      control<HTMLInputElement>(this.root, "negativePrompt").value = preset.negative;
+      presetName.value = preset.name;
+      this.markDirty();
+    });
+    this.root.querySelector("[data-preset-save]")?.addEventListener("click", () => {
+      const name = presetName.value.trim();
+      if (!name) {
+        this.setStatus("Give the preset a name first.", "error");
+        return;
+      }
+      const positive = control<HTMLInputElement>(this.root, "promptPrefix").value;
+      const negative = control<HTMLInputElement>(this.root, "negativePrompt").value;
+      const existing = this.promptPresets.find((candidate) => candidate.name.toLowerCase() === name.toLowerCase());
+      let id: string;
+      if (existing) {
+        existing.name = name;
+        existing.positive = positive;
+        existing.negative = negative;
+        id = existing.id;
+      } else {
+        id = `preset-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+        this.promptPresets.push({ id, name, positive, negative });
+      }
+      this.renderPromptPresetOptions(id);
+      try {
+        this.options.onSave({ promptPresets: this.promptPresets.map((preset) => ({ ...preset })) });
+        this.setStatus(`Preset "${name}" ${existing ? "updated" : "saved"}.`, "saved", 3000);
+      } catch (error) {
+        this.setStatus(error instanceof Error ? error.message : String(error), "error");
+      }
+    });
+    this.root.querySelector("[data-preset-delete]")?.addEventListener("click", () => {
+      const selected = this.promptPresets.find((candidate) => candidate.id === presetSelect.value);
+      if (!selected) {
+        this.setStatus("Select a preset to delete.", "error");
+        return;
+      }
+      this.promptPresets = this.promptPresets.filter((candidate) => candidate.id !== selected.id);
+      this.renderPromptPresetOptions("");
+      presetName.value = "";
+      try {
+        this.options.onSave({ promptPresets: this.promptPresets.map((preset) => ({ ...preset })) });
+        this.setStatus(`Preset "${selected.name}" deleted.`, "saved", 3000);
+      } catch (error) {
+        this.setStatus(error instanceof Error ? error.message : String(error), "error");
+      }
+    });
+  }
+
+  private markDirty(): void {
+    if (this.dirty) return;
+    this.dirty = true;
+    this.root.querySelector("[data-save]")?.setAttribute("data-dirty", "");
+    this.setStatus("Unsaved changes", "dirty");
+  }
+
+  private markClean(): void {
+    this.dirty = false;
+    this.root.querySelector("[data-save]")?.removeAttribute("data-dirty");
+  }
+
+  private setStatus(text: string, kind: "idle" | "saved" | "dirty" | "error", clearAfterMs?: number): void {
+    if (this.statusTimer) {
+      clearTimeout(this.statusTimer);
+      this.statusTimer = null;
+    }
+    this.status.textContent = text;
+    this.status.dataset.kind = kind;
+    if (clearAfterMs) {
+      this.statusTimer = setTimeout(() => {
+        // Do not clobber a dirty notice that appeared after saving.
+        if (this.status.dataset.kind === kind) {
+          this.status.textContent = this.dirty ? "Unsaved changes" : "";
+          this.status.dataset.kind = this.dirty ? "dirty" : "idle";
+        }
+      }, clearAfterMs);
+    }
   }
 
   setAudioStatus(message: string): void {
@@ -331,6 +501,7 @@ export class VisualNovelSettingsPanel {
     control<HTMLSelectElement>(this.root, "sceneImageFit").value = config.sceneImageFit;
     control<HTMLInputElement>(this.root, "autoEnter").checked = config.autoEnter;
     control<HTMLInputElement>(this.root, "generateImages").checked = config.generateImages;
+    control<HTMLInputElement>(this.root, "referenceAnchoring").checked = config.referenceAnchoring;
     control<HTMLInputElement>(this.root, "useNativeCardImages").checked = config.useNativeCardImages;
     control<HTMLInputElement>(this.root, "generateChoices").checked = config.generateChoices;
     control<HTMLInputElement>(this.root, "maxImagesPerTurn").value = String(config.maxImagesPerTurn);
@@ -344,6 +515,8 @@ export class VisualNovelSettingsPanel {
     const sfxLabel = this.root.querySelector<HTMLElement>("[data-sfx-val]");
     if (bgmLabel) bgmLabel.textContent = `${Math.round(config.bgmVolume * 100)}%`;
     if (sfxLabel) sfxLabel.textContent = `${Math.round(config.sfxVolume * 100)}%`;
+    this.selectedConnectionIds.planner = config.parserConnectionId;
+    this.selectedConnectionIds.image = config.imageConnectionId;
     this.renderConnectionSelect("planner", this.connectionStates.planner, config.parserConnectionId);
     this.renderConnectionSelect("image", this.connectionStates.image, config.imageConnectionId);
     control<HTMLInputElement>(this.root, "imageModel").value = config.imageModel;
@@ -358,19 +531,25 @@ export class VisualNovelSettingsPanel {
     control<HTMLInputElement>(this.root, "promptPrefix").value = config.promptPrefix;
     control<HTMLInputElement>(this.root, "promptSuffix").value = config.promptSuffix;
     control<HTMLInputElement>(this.root, "negativePrompt").value = config.negativePrompt;
+    this.promptPresets = config.promptPresets.map((preset) => ({ ...preset }));
+    this.renderPromptPresetOptions(control<HTMLSelectElement>(this.root, "promptPresetSelect").value);
     control<HTMLTextAreaElement>(this.root, "customPlannerInstructions").value = config.customPlannerInstructions;
     control<HTMLInputElement>(this.root, "ignoredTags").value = config.ignoredTags;
     control<HTMLTextAreaElement>(this.root, "displayRegexRules").value = config.displayRegexRules;
     control<HTMLTextAreaElement>(this.root, "customCss").value = config.customCss;
     this.updateImageModelHint();
+    // The form now mirrors the saved config exactly.
+    this.markClean();
+    if (this.status.dataset.kind === "dirty") this.setStatus("", "idle");
   }
 
   setConnectionCatalog(kind: ConnectionCatalogKind, state: ConnectionCatalogState): void {
     this.connectionStates[kind] = state;
-    const configId = control<HTMLSelectElement>(
+    const select = control<HTMLSelectElement>(
       this.root,
       kind === "planner" ? "parserConnectionId" : "imageConnectionId",
-    ).value || null;
+    );
+    const configId = select.value || this.selectedConnectionIds[kind];
     this.renderConnectionSelect(kind, state, configId);
     if (kind === "image") this.updateImageModelHint();
   }
@@ -387,6 +566,7 @@ export class VisualNovelSettingsPanel {
       sceneImageFit: normalizeSceneImageFit(control<HTMLSelectElement>(this.root, "sceneImageFit").value),
       autoEnter: control<HTMLInputElement>(this.root, "autoEnter").checked,
       generateImages: control<HTMLInputElement>(this.root, "generateImages").checked,
+      referenceAnchoring: control<HTMLInputElement>(this.root, "referenceAnchoring").checked,
       useNativeCardImages: control<HTMLInputElement>(this.root, "useNativeCardImages").checked,
       generateChoices: control<HTMLInputElement>(this.root, "generateChoices").checked,
       maxImagesPerTurn: Number(control<HTMLInputElement>(this.root, "maxImagesPerTurn").value),
@@ -410,11 +590,34 @@ export class VisualNovelSettingsPanel {
       promptPrefix: control<HTMLInputElement>(this.root, "promptPrefix").value,
       promptSuffix: control<HTMLInputElement>(this.root, "promptSuffix").value,
       negativePrompt: control<HTMLInputElement>(this.root, "negativePrompt").value,
+      promptPresets: this.promptPresets.map((preset) => ({ ...preset })),
       customPlannerInstructions: control<HTMLTextAreaElement>(this.root, "customPlannerInstructions").value,
       ignoredTags: control<HTMLInputElement>(this.root, "ignoredTags").value,
       displayRegexRules: control<HTMLTextAreaElement>(this.root, "displayRegexRules").value,
       customCss: control<HTMLTextAreaElement>(this.root, "customCss").value
     };
+  }
+
+  private selectedConnectionIds: Record<ConnectionCatalogKind, string | null> = {
+    planner: null,
+    image: null,
+  };
+
+  private promptPresets: VisualNovelPromptPreset[] = [];
+
+  private renderPromptPresetOptions(selectedId: string): void {
+    const select = control<HTMLSelectElement>(this.root, "promptPresetSelect");
+    const options = [
+      { value: "", label: "Custom (no preset)" },
+      ...this.promptPresets.map((preset) => ({ value: preset.id, label: preset.name }))
+    ];
+    select.replaceChildren(...options.map((item) => {
+      const option = document.createElement("option");
+      option.value = item.value;
+      option.textContent = item.label;
+      return option;
+    }));
+    select.value = this.promptPresets.some((preset) => preset.id === selectedId) ? selectedId : "";
   }
 
   private readonly connectionStates: Record<ConnectionCatalogKind, ConnectionCatalogState> = {
