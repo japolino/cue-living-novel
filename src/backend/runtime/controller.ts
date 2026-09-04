@@ -50,6 +50,43 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/* ------------------------------------------------------------------ *
+ * Verbose debug logging ("listening" trace).
+ *
+ * When `debugLogging` is enabled every host event the extension listens to,
+ * every planning run, and every asset transition is traced to the Lumiverse
+ * log with a stable `[VN]` prefix. The flag is cached per user because host
+ * events arrive before any config read; the cache refreshes on every config
+ * load, so toggling the setting applies from the next event on.
+ * ------------------------------------------------------------------ */
+
+const debugFlags = new Map<string, boolean>();
+
+function rememberDebugFlag(userId: string | undefined, config: { debugLogging: boolean }): void {
+  debugFlags.set(userId ?? "owner", config.debugLogging);
+}
+
+function dbg(spindle: SpindleAPI, userId: string | undefined, message: string): void {
+  if (debugFlags.get(userId ?? "owner")) spindle.log.info(`[VN] ${message}`);
+}
+
+function summarizeDiagnostics(diagnostics: {
+  chatLoaded: boolean;
+  characterLoaded: boolean;
+  personaLoaded: boolean;
+  loreActivated: number;
+  loreIncluded: number;
+  errors: string[];
+}): string {
+  const parts = [
+    `character=${diagnostics.characterLoaded ? "yes" : "no"}`,
+    `persona=${diagnostics.personaLoaded ? "yes" : "no"}`,
+    `lore=${diagnostics.loreIncluded}/${diagnostics.loreActivated}`
+  ];
+  if (diagnostics.errors.length > 0) parts.push(`errors=[${diagnostics.errors.join("; ")}]`);
+  return parts.join(" ");
+}
+
 function assetView(record: StoredTurnRecord, job: StoredTurnRecord["jobs"][number]): AssetView {
   const cue = record.plan.visualCues.find((candidate) => candidate.assetJobId === job.jobId);
   return {
@@ -153,7 +190,9 @@ async function startAssets(
   userId?: string
 ): Promise<void> {
   const config = await loadConfig(spindle, userId);
+  rememberDebugFlag(userId, config);
   if (!config.generateImages || record.jobs.length === 0) return;
+  dbg(spindle, userId, `assets starting: ${record.jobs.length} job(s) for chat=${record.plan.key.chatId} message=${record.plan.key.assistantMessageId} concurrency=${config.imageConcurrency}`);
   const key = runtimeKey(userId, record.plan.key.chatId);
   assetControllers.get(key)?.abort("A newer turn replaced this asset batch.");
   const controller = new AbortController();
@@ -168,6 +207,7 @@ async function startAssets(
       config,
       controller.signal,
       async (jobs, changed) => {
+        dbg(spindle, userId, `asset ${changed.jobId} p${changed.paragraphIndex} [${changed.priority}] -> ${changed.status}${changed.imageId ? ` image=${changed.imageId}` : ""}${changed.error ? ` error="${changed.error}"` : ""}`);
         const active = activeTurnKeys.get(key) ?? null;
         if (!compareTurnKeys(active, changed.ownerTurnKey).accepted) return;
         current = { ...current, jobs, updatedAt: new Date().toISOString() };
@@ -203,6 +243,7 @@ async function processAssistantMessage(
   const existing = await loadTurnRecord(spindle, path, userId);
   const fingerprint = fingerprintForMessage({ id: message.id, swipe_id: message.swipe_id, content });
   if (existing?.plan.key.sourceFingerprint === fingerprint) {
+    dbg(spindle, userId, `turn reused from storage chat=${chatId} message=${message.id} fingerprint=${fingerprint}`);
     const key = runtimeKey(userId, chatId);
     activeTurnKeys.set(key, existing.plan.key);
     await persistActiveTurn(spindle, existing, path, userId);
@@ -211,8 +252,11 @@ async function processAssistantMessage(
   }
 
   const dedupeId = `${message.id}:${message.swipe_id}:${fingerprint}`;
+  dbg(spindle, userId, `planning enqueued chat=${chatId} message=${message.id} swipe=${message.swipe_id} fingerprint=${fingerprint}`);
   const scheduled = planningQueue.enqueue(userId, chatId, message.id, async (operation) => {
+    const planningStartedAt = Date.now();
     const config = await loadConfig(spindle, userId);
+    rememberDebugFlag(userId, config);
     const chatState = await loadChatState(spindle, chatId, userId);
     const singleCharacter = await loadSingleCharacterState(spindle, chatId, userId);
     const characterAppearance = await loadCharacterAppearance(spindle, userId);
@@ -230,6 +274,17 @@ async function processAssistantMessage(
       ...(userId ? { userId } : {})
     });
     if (operation.controller.signal.aborted) return;
+    dbg(spindle, userId, [
+      `planned chat=${chatId} message=${message.id} in ${Date.now() - planningStartedAt}ms`,
+      `fallback=${result.usedFallback ? "yes" : "no"}`,
+      `paragraphs=${result.plan.paragraphs.length}`,
+      `scenes=${result.plan.scenes.length} (${result.plan.scenes.map((scene) => `${scene.sceneId}@p${scene.startParagraph} rev${scene.revision} "${scene.environment.location}"`).join(", ")})`,
+      `cues=${result.plan.visualCues.length} [${result.plan.visualCues.map((cue) => `p${cue.paragraphIndex}:${cue.poseExpressionId ?? "?"}${cue.character ? `(${cue.character})` : ""}`).join(", ")}]`,
+      `audio=${result.plan.audioCues.length} [${result.plan.audioCues.map((cue) => `p${cue.paragraphIndex}:${[cue.bgm ? `bgm=${cue.bgm}` : "", cue.sfx ? `sfx=${cue.sfx}` : ""].filter(Boolean).join("+")}`).join(", ")}]`,
+      `choices=${result.plan.choices.length}`,
+      `protagonist="${result.singleCharacter.protagonist.name}" tags=${result.singleCharacter.protagonist.tags.length}`,
+      `context: ${summarizeDiagnostics(result.contextDiagnostics)}`
+    ].join(" | "));
     await saveSingleCharacterState(spindle, chatId, result.singleCharacter, userId);
     await mergeCharacterAppearanceFromState(spindle, result.singleCharacter, userId);
         let jobs: StoredTurnRecord["jobs"] = [];
@@ -305,6 +360,7 @@ async function generationEnded(spindle: SpindleAPI, payload: GenerationEndedPayl
     active: false,
     ...(payload.error ? { error: payload.error } : {})
   }, userId);
+  dbg(spindle, userId, `event GENERATION_ENDED chat=${payload.chatId} message=${payload.messageId ?? "latest"} contentChars=${payload.content?.length ?? 0}${payload.error ? ` error=${payload.error}` : ""}`);
   if (payload.error || !payload.content) return;
   const messages = await spindle.chat.getMessages(payload.chatId) as NormalizedChatMessage[];
   const message = payload.messageId
@@ -376,6 +432,7 @@ export async function markAssetReady(
     readyAt,
     finishedAt: readyAt
   });
+  dbg(spindle, userId, `asset ${readyJob.jobId} p${readyJob.paragraphIndex} -> browser_ready (decoded in browser)`);
   const jobs = record.jobs.map((candidate, candidateIndex) => candidateIndex === index ? readyJob : candidate);
   const next = { ...record, jobs, updatedAt: readyAt };
   await saveTurnRecord(spindle, chatState.activeTurnPath, next, userId);
@@ -388,6 +445,7 @@ export async function markAssetReady(
 }
 
 async function handleFrontendMessage(spindle: SpindleAPI, request: FrontendRequest, userId: string): Promise<void> {
+  dbg(spindle, userId, `frontend request ${request.type}`);
   switch (request.type) {
     case "vn_get_state":
       await sendState(spindle, request.chatId ?? "", userId);
@@ -399,6 +457,8 @@ async function handleFrontendMessage(spindle: SpindleAPI, request: FrontendReque
     }
     case "vn_set_config": {
       const config = await updateConfig(spindle, request.patch, userId);
+      rememberDebugFlag(userId, config);
+      dbg(spindle, userId, `config saved (${Object.keys(request.patch).length} field(s) in patch)`);
       if (request.patch.audioDirectory !== undefined) {
         void scanAudioCatalog(spindle, config.audioDirectory);
       }
@@ -482,6 +542,7 @@ export function registerVisualNovelBackend(spindle: SpindleAPI): void {
     });
   });
   spindle.on("GENERATION_STARTED", (payload, userId) => {
+    dbg(spindle, userId, `event GENERATION_STARTED chat=${payload.chatId}`);
     // A new generation is starting (a user message was submitted). Drop any
     // ownership of the previous turn's assets so queued old-turn ComfyUI calls
     // cannot start and running completions cannot persist/send, then abort the
@@ -499,18 +560,23 @@ export function registerVisualNovelBackend(spindle: SpindleAPI): void {
     });
   });
   spindle.on("GENERATION_STOPPED", (payload, userId) => {
+    dbg(spindle, userId, `event GENERATION_STOPPED chat=${payload.chatId}`);
     spindle.sendToFrontend({ type: "vn_generation", chatId: payload.chatId, active: false }, userId);
   });
   spindle.on("MESSAGE_SWIPED", (payload: MessageSwipedPayloadDTO, userId) => {
+    dbg(spindle, userId, "event MESSAGE_SWIPED");
     reconcileMessageEvent(spindle, payload, userId);
   });
   spindle.on("SWIPE_EDITED", (payload: SwipeEditedPayloadDTO, userId) => {
+    dbg(spindle, userId, "event SWIPE_EDITED");
     reconcileMessageEvent(spindle, payload, userId);
   });
   spindle.on("MESSAGE_EDITED", (payload, userId) => {
+    dbg(spindle, userId, "event MESSAGE_EDITED");
     reconcileMessageEvent(spindle, payload, userId);
   });
   spindle.on("MESSAGE_DELETED", (payload, userId) => {
+    dbg(spindle, userId, "event MESSAGE_DELETED");
     void clearDeletedTurn(spindle, payload, userId).catch((error) => {
       spindle.log.error(`Visual novel deletion reconciliation failed: ${errorText(error)}`);
     });
@@ -524,6 +590,7 @@ export function registerVisualNovelBackend(spindle: SpindleAPI): void {
     });
   });
   void loadConfig(spindle).then((cfg) => {
+    rememberDebugFlag(undefined, cfg);
     void scanAudioCatalog(spindle, cfg.audioDirectory || "audio");
   }).catch(() => {});
   spindle.log.info("Cue — Living Novel loaded.");

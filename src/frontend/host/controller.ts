@@ -178,6 +178,11 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
 
   let active = false;
   const configRef: { current: VisualNovelConfig | null } = { current: null };
+  // Browser-console mirror of the backend "listening" trace. Gated by the same
+  // debugLogging setting; shows every backend message the frontend listens to.
+  const vnDebug = (...parts: unknown[]): void => {
+    if (configRef.current?.debugLogging) console.info("[VN]", ...parts);
+  };
   let turn: TurnView | null = null;
   let pendingNextTurn: TurnView | null = null;
   let overrideHandles: ComponentOverrideHandle[] = [];
@@ -194,10 +199,12 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     if (!cue) return;
     const bgmSrc = cue.bgmUrl || cue.bgm;
     if (bgmSrc) {
+      vnDebug("audio", `p${paragraphIndex}`, "bgm ->", bgmSrc);
       audioEngine.playBgm(bgmSrc);
     }
     const sfxSrc = cue.sfxUrl || cue.sfx;
     if (sfxSrc) {
+      vnDebug("audio", `p${paragraphIndex}`, "sfx ->", sfxSrc);
       audioEngine.playSfx(sfxSrc);
     }
   }
@@ -372,7 +379,11 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   async function syncImageForParagraph(paragraphIndex: number): Promise<void> {
     if (!turn) return;
     const asset = selectCurrentImage(turn, paragraphIndex);
-    if (!asset?.imageUrl) return;
+    if (!asset?.imageUrl) {
+      vnDebug("image sync", `p${paragraphIndex}`, "no decodable asset yet");
+      return;
+    }
+    vnDebug("image sync", `p${paragraphIndex}`, `using cue p${asset.paragraphIndex}`, asset.status, asset.imageUrl);
     const loaded = await stage.setSceneImage({
       url: asset.imageUrl,
       alt: `Generated scene for paragraph ${asset.paragraphIndex + 1}`,
@@ -403,6 +414,12 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     turn = next;
     stage.setAssetProgress(computeAssetProgress(next));
     const decision = decideTurnApplication(previous, next, stage.getState().currentParagraphIndex, active, stage.getState().paragraphs.length > 0);
+    vnDebug("turn decision", decision.kind, {
+      message: next.messageId,
+      paragraphs: next.paragraphs.length,
+      choices: next.choices.length,
+      status: next.status
+    });
     if (decision.kind === "none") return;
     if (decision.kind === "planning") {
       stage.setPhase("planning");
@@ -436,6 +453,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   function routeBackend(payload: unknown): void {
     const type = messageType(payload);
     const message = payload as BackendResponse;
+    if (type && type !== "vn_asset") vnDebug("received", type, payload);
     if (type === "vn_connection_catalog" && message.type === "vn_connection_catalog") {
       settingsPanel?.setConnectionCatalog("planner", { status: "ready", options: message.planner ?? [] });
       settingsPanel?.setConnectionCatalog("image", { status: "ready", options: message.image ?? [] });
@@ -479,6 +497,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       return;
     }
     if (type === "vn_asset" && message.type === "vn_asset") {
+      vnDebug("received vn_asset", `p${message.asset.paragraphIndex}`, message.asset.status, message.asset.imageUrl ?? "(no url)", (!turn || turn.chatId !== message.chatId || turn.messageId !== message.messageId) ? "(ignored: not the active turn)" : "");
       if (!turn || turn.chatId !== message.chatId || turn.messageId !== message.messageId) return;
       turn = replaceAsset(turn, message.asset);
       stage.setAssetProgress(computeAssetProgress(turn));
