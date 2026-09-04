@@ -9,7 +9,15 @@ export type FrontendRequest =
   | { type: "vn_cancel"; chatId: string }
   | { type: "vn_retry_turn"; chatId: string; messageId: string }
   | { type: "vn_scan_audio"; directory?: string }
-  | { type: "vn_import_audio_file"; relativePath: string; dataBase64: string }
+  | {
+      type: "vn_import_audio_file";
+      relativePath: string;
+      dataBase64: string;
+      /** Set when a file is split to fit the host's 4 MB message limit. */
+      transferId?: string;
+      chunkIndex?: number;
+      chunkCount?: number;
+    }
   | { type: "vn_import_audio_done"; fileCount: number };
 
 export type AssetView = {

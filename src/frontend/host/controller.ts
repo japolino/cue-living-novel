@@ -307,13 +307,28 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
         try {
           const bytes = new Uint8Array(await file.arrayBuffer());
           const relativePath = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
-          ctx.sendToBackend({
-            type: "vn_import_audio_file",
-            relativePath,
-            dataBase64: base64FromBytes(bytes)
-          });
+          const dataBase64 = base64FromBytes(bytes);
+          // The host WebSocket bridge rejects frontend->backend messages over
+          // 4 MB, so larger files are sent as ordered chunks and reassembled.
+          const chunkSize = 3_000_000;
+          if (dataBase64.length <= chunkSize) {
+            ctx.sendToBackend({ type: "vn_import_audio_file", relativePath, dataBase64 });
+          } else {
+            const chunkCount = Math.ceil(dataBase64.length / chunkSize);
+            const transferId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+            for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
+              ctx.sendToBackend({
+                type: "vn_import_audio_file",
+                relativePath,
+                dataBase64: dataBase64.slice(chunkIndex * chunkSize, (chunkIndex + 1) * chunkSize),
+                transferId,
+                chunkIndex,
+                chunkCount
+              });
+            }
+          }
           sent += 1;
-          vnDebug("audio import", relativePath, `${bytes.length} bytes`);
+          vnDebug("audio import", relativePath, `${bytes.length} bytes`, dataBase64.length > chunkSize ? `(${Math.ceil(dataBase64.length / chunkSize)} chunks)` : "");
         } catch {
           skipped += 1;
         }

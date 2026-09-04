@@ -76,6 +76,57 @@ const debugFlags = new Map<string, boolean>();
 const pendingAudioImports = new Map<string, Promise<void>[]>();
 
 /**
+ * Reassembly buffers for chunked audio imports. The host WebSocket bridge
+ * caps a frontend->backend message at 4 MB, so files larger than one chunk
+ * arrive as ordered pieces sharing a transferId.
+ */
+const audioImportBuffers = new Map<string, { chunks: Array<string | undefined>; received: number }>();
+
+/** Maximum assembled base64 size (~30 MB of raw audio). */
+export const MAX_AUDIO_IMPORT_BASE64 = 40 * 1024 * 1024;
+
+/**
+ * Accept one chunk of a (possibly single-chunk) audio import. Returns the
+ * complete base64 payload once every chunk has arrived, otherwise null.
+ * Oversized transfers throw and drop their buffer.
+ */
+export function acceptAudioImportChunk(
+  bufferKey: string,
+  part: { dataBase64: string; chunkIndex?: number; chunkCount?: number }
+): string | null {
+  const chunkCount = part.chunkCount && part.chunkCount > 1 ? Math.floor(part.chunkCount) : 1;
+  if (chunkCount === 1) {
+    if (part.dataBase64.length > MAX_AUDIO_IMPORT_BASE64) throw new Error("Audio file too large to import (30 MB max).");
+    return part.dataBase64;
+  }
+  const index = Math.floor(part.chunkIndex ?? 0);
+  if (index < 0 || index >= chunkCount) return null;
+  const buffer = audioImportBuffers.get(bufferKey) ?? { chunks: new Array<string | undefined>(chunkCount), received: 0 };
+  if (buffer.chunks.length !== chunkCount) {
+    audioImportBuffers.delete(bufferKey);
+    return null;
+  }
+  if (buffer.chunks[index] === undefined) buffer.received += 1;
+  buffer.chunks[index] = part.dataBase64;
+  const assembledSoFar = buffer.chunks.reduce((total, chunk) => total + (chunk?.length ?? 0), 0);
+  if (assembledSoFar > MAX_AUDIO_IMPORT_BASE64) {
+    audioImportBuffers.delete(bufferKey);
+    throw new Error("Audio file too large to import (30 MB max).");
+  }
+  audioImportBuffers.set(bufferKey, buffer);
+  if (buffer.received < chunkCount) return null;
+  audioImportBuffers.delete(bufferKey);
+  return buffer.chunks.join("");
+}
+
+/** Drop any unfinished chunk buffers for a user's import session. */
+export function clearAudioImportBuffers(userKey: string): void {
+  for (const key of [...audioImportBuffers.keys()]) {
+    if (key.startsWith(`${userKey}:`)) audioImportBuffers.delete(key);
+  }
+}
+
+/**
  * Make a browser-supplied relative path safe for scoped storage: forward
  * slashes, no drive letters, no leading slashes, no dot segments.
  */
@@ -511,15 +562,18 @@ async function handleFrontendMessage(spindle: SpindleAPI, request: FrontendReque
       const dot = cleaned.lastIndexOf(".");
       const extension = dot >= 0 ? cleaned.slice(dot).toLowerCase() : "";
       if (!(SUPPORTED_AUDIO_EXTENSIONS as readonly string[]).includes(extension)) return;
-      // ~30 MB of raw audio per file once decoded from base64.
-      if (request.dataBase64.length > 40 * 1024 * 1024) {
-        throw new Error(`"${cleaned}" is too large to import (30 MB max per file).`);
+      const bufferKey = `${userId ?? "owner"}:${request.transferId ?? cleaned}`;
+      const assembled = acceptAudioImportChunk(bufferKey, request);
+      if (assembled === null) {
+        dbg(spindle, userId, `audio chunk ${((request.chunkIndex ?? 0) + 1)}/${request.chunkCount ?? 1} buffered for ${cleaned}`);
+        return;
       }
+      const dataBase64 = assembled;
       const config = await loadConfig(spindle, userId);
       const prefix = normalizeAudioStoragePrefix(config.audioDirectory || "audio");
       const target = `${prefix}/${cleaned}`;
       const write = (async () => {
-        const bytes = Uint8Array.from(atob(request.dataBase64), (character) => character.charCodeAt(0));
+        const bytes = Uint8Array.from(atob(dataBase64), (character) => character.charCodeAt(0));
         const directory = target.split("/").slice(0, -1).join("/");
         if (directory) await spindle.storage.mkdir(directory).catch(() => {});
         await spindle.storage.writeBinary(target, bytes);
@@ -536,6 +590,7 @@ async function handleFrontendMessage(spindle: SpindleAPI, request: FrontendReque
     }
     case "vn_import_audio_done": {
       const pendingKey = userId ?? "owner";
+      clearAudioImportBuffers(pendingKey);
       const pending = pendingAudioImports.get(pendingKey) ?? [];
       pendingAudioImports.delete(pendingKey);
       await Promise.allSettled(pending);
