@@ -6,6 +6,7 @@ import {
   extractAudioTags,
   findAudioEntry,
   getAudioCatalog,
+  getAudioCatalogPromptSummary,
   normalizeAudioStoragePrefix,
   resolveAudioUrl,
   scanAudioCatalog,
@@ -101,35 +102,37 @@ describe("audio-catalog scoped storage scanner & cache", () => {
     expect((await scanAudioCatalog(failing, "audio")).all).toEqual([]);
   });
 
-  test("finds entries via normalized titles and semantic mood/action tags", async () => {
-    const spindleWithMoods = storageSpindle({
-      "audio/bgm/1_At_home（希望）.ogg": "dummy",
-      "audio/bgm/2_Tango_Romantic.ogg": "dummy",
-      "audio/sfx/1_door_close.wav": "dummy",
+  test("finds entries by exact name, id, and relativePath and rejects fuzzy false positives", async () => {
+    const spindleExact = storageSpindle({
+      "audio/bgm/romantic_theme.mp3": "dummy",
+      "audio/bgm/battle_intense.ogg": "dummy",
+      "audio/sfx/sword_slash.wav": "dummy",
     });
-    await scanAudioCatalog(spindleWithMoods, "audio");
-    // Normalized title match ignoring numeric prefix and Japanese parens
-    expect(findAudioEntry("At home")?.name).toBe("1_At_home（希望）");
-    // Semantic tag matches
-    expect(findAudioEntry("romantic", "bgm")?.name).toBe("2_Tango_Romantic");
-    expect(findAudioEntry("door", "sfx")?.name).toBe("1_door_close");
+    await scanAudioCatalog(spindleExact, "audio");
+
+    // Exact name matches
+    expect(findAudioEntry("romantic_theme")?.name).toBe("romantic_theme");
+    expect(findAudioEntry("battle_intense.ogg")?.name).toBe("battle_intense");
+    expect(findAudioEntry("sword_slash", "sfx")?.name).toBe("sword_slash");
+
+    // Rejects fuzzy or substring false positives (prevents wrong-mood / misfired SFX)
+    expect(findAudioEntry("romantic")).toBeNull();
+    expect(findAudioEntry("battle")).toBeNull();
+    expect(findAudioEntry("slash")).toBeNull();
+    expect(findAudioEntry("intense")).toBeNull();
     clearAudioCatalogCache();
   });
 
-  test("integrates pack.json metadata when present", async () => {
-    const packJson = JSON.stringify({
-      tracks: {
-        bgm: [{ id: "bgm_home", name: "Cozy Home", file: "bgm/track1.ogg", tags: ["peaceful", "daily"] }]
-      }
+  test("getAudioCatalogPromptSummary provides complete BGM and SFX lists without mood-bucket starvation", async () => {
+    const spindleTracks = storageSpindle({
+      "audio/bgm/track_a.mp3": "dummy",
+      "audio/bgm/track_b.ogg": "dummy",
+      "audio/sfx/sfx_hit.wav": "dummy",
     });
-    const spindleWithPack = storageSpindle({
-      "audio/pack.json": packJson,
-      "audio/bgm/track1.ogg": "dummy",
-    });
-    await scanAudioCatalog(spindleWithPack, "audio");
-    const entry = findAudioEntry("peaceful", "bgm");
-    expect(entry?.name).toBe("Cozy Home");
-    expect(entry?.tags).toContain("peaceful");
+    await scanAudioCatalog(spindleTracks, "audio");
+    const summary = getAudioCatalogPromptSummary();
+    expect(summary.bgmLines).toEqual(["  * Available BGM: [track_a, track_b]"]);
+    expect(summary.sfxSamples).toEqual(["sfx_hit"]);
     clearAudioCatalogCache();
   });
 });

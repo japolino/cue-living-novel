@@ -143,12 +143,6 @@ function bytesToBase64(bytes: Uint8Array): string {
 let cachedCatalog: AudioCatalog = { bgm: [], sfx: [], all: [] };
 let cachedPrefix = "";
 
-type PackTrackMeta = {
-  name?: string | undefined;
-  tags?: string[] | undefined;
-  category?: AudioCategory | undefined;
-};
-
 /**
  * Scan audio files through Lumiverse's scoped storage API. No host filesystem
  * module or Bun.file access is used. The binary is converted to a browser-safe
@@ -167,45 +161,6 @@ export async function scanAudioCatalog(spindle: SpindleAPI, requestedPrefix = "a
     return cachedCatalog;
   }
 
-  // Attempt to read pack.json for rich English names, mood descriptions, and tags
-  const packMetadata: Record<string, PackTrackMeta> = {};
-  try {
-    const packJsonPath = joinStoragePath(prefix, "pack.json");
-    let rawPack: string | undefined;
-    if (typeof spindle.storage.read === "function") {
-      rawPack = await spindle.storage.read(packJsonPath);
-    } else if (typeof spindle.storage.readBinary === "function") {
-      const bytes = await spindle.storage.readBinary(packJsonPath);
-      rawPack = new TextDecoder().decode(bytes);
-    }
-    const parsed = rawPack ? JSON.parse(rawPack) as { tracks?: { bgm?: unknown[]; sfx?: unknown[] } } : null;
-    if (parsed && typeof parsed === "object" && parsed.tracks) {
-      for (const cat of ["bgm", "sfx"] as const) {
-        const list = parsed.tracks[cat];
-        if (Array.isArray(list)) {
-          for (const item of list) {
-            if (item && typeof item === "object") {
-              const rec = item as Record<string, unknown>;
-              const fileKey = typeof rec.file === "string" ? normalizedPath(rec.file).toLowerCase() : "";
-              const idKey = typeof rec.id === "string" ? rec.id.toLowerCase() : "";
-              const nameKey = typeof rec.name === "string" ? rec.name.toLowerCase() : "";
-              const meta: PackTrackMeta = {
-                name: typeof rec.name === "string" ? rec.name : undefined,
-                tags: Array.isArray(rec.tags) ? rec.tags.filter((t): t is string => typeof t === "string") : [],
-                category: cat
-              };
-              if (fileKey) packMetadata[fileKey] = meta;
-              if (idKey) packMetadata[idKey] = meta;
-              if (nameKey) packMetadata[nameKey] = meta;
-            }
-          }
-        }
-      }
-    }
-  } catch {
-    // pack.json is optional; continue if missing or invalid
-  }
-
   const entries: AudioCatalogEntry[] = [];
   for (const listedPath of files) {
     const relativePath = normalizedPath(listedPath);
@@ -214,23 +169,14 @@ export async function scanAudioCatalog(spindle: SpindleAPI, requestedPrefix = "a
     const storagePath = joinStoragePath(prefix, relativePath);
     try {
       const bytes = await spindle.storage.readBinary(storagePath);
-      const relLower = relativePath.toLowerCase();
-      const stemLower = stemOf(relativePath).toLowerCase();
-      const meta = packMetadata[relLower] ?? packMetadata[stemLower];
-      const category = meta?.category ?? categorizeAudioFile(storagePath, relativePath);
-      const name = meta?.name ?? stemOf(relativePath);
-      const tags = Array.from(new Set([
-        ...extractAudioTags(relativePath, category),
-        ...(meta?.tags ?? []).map((t) => t.toLowerCase())
-      ])).sort();
-
+      const category = categorizeAudioFile(storagePath, relativePath);
       entries.push({
         id: relativePath.replace(/\.[^.]+$/, ""),
-        name,
+        name: stemOf(relativePath),
         filePath: storagePath,
         relativePath,
         category,
-        tags,
+        tags: extractAudioTags(relativePath, category),
         url: `data:${mimeForExtension(extension)};base64,${bytesToBase64(bytes)}`,
       });
     } catch {
@@ -257,98 +203,27 @@ export function clearAudioCatalogCache(): void {
   cachedPrefix = "";
 }
 
-function cleanAudioToken(input: string): string {
-  return input
-    .toLowerCase()
-    .replace(/^[0-9]+[_\-=]/, "")
-    .replace(/（[^）]*）|\([^)]*\)/g, "")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
-
 /**
- * Resolve an audio query to a catalog entry. Supports exact id/name matching,
- * normalized titles (stripping leading indices and Japanese parentheticals),
- * substring matching, and semantic mood/action tag scoring.
+ * Resolve an audio query to a catalog entry using exact id, name, or relativePath.
+ * Deterministic matching prevents wrong-mood fuzzy false positives and SFX misfires.
  */
 export function findAudioEntry(query: string, preferredCategory?: AudioCategory): AudioCatalogEntry | null {
   const trimmed = query.trim();
   if (!trimmed) return null;
   const normalized = normalizedPath(trimmed).toLowerCase();
   const withoutExtension = normalized.replace(/\.[a-z0-9]+$/i, "");
-  const pool = cachedCatalog.all;
-  if (pool.length === 0) return null;
+  const matches = (entry: AudioCatalogEntry) =>
+    entry.id.toLowerCase() === normalized
+    || entry.id.toLowerCase() === withoutExtension
+    || entry.name.toLowerCase() === normalized
+    || entry.name.toLowerCase() === withoutExtension
+    || entry.relativePath.toLowerCase() === normalized;
 
-  // 1. Exact match on id, name, relativePath, or stem
-  const exact = pool.find((entry) => {
-    return entry.id.toLowerCase() === normalized
-      || entry.id.toLowerCase() === withoutExtension
-      || entry.name.toLowerCase() === normalized
-      || entry.name.toLowerCase() === withoutExtension
-      || entry.relativePath.toLowerCase() === normalized
-      || stemOf(entry.relativePath).toLowerCase() === normalized
-      || stemOf(entry.relativePath).toLowerCase() === withoutExtension;
-  });
-  if (exact) return exact;
-
-  // 2. Normalized match (ignoring numeric prefixes, parentheticals, punctuation)
-  const cleanedQuery = cleanAudioToken(withoutExtension);
-  if (cleanedQuery.length >= 2) {
-    const candidate = pool.find((entry) => {
-      if (preferredCategory && entry.category !== preferredCategory) return false;
-      const cleanName = cleanAudioToken(entry.name);
-      const cleanId = cleanAudioToken(entry.id);
-      return cleanName === cleanedQuery || cleanId === cleanedQuery;
-    });
+  if (preferredCategory && cachedCatalog[preferredCategory]?.length > 0) {
+    const candidate = cachedCatalog[preferredCategory].find(matches);
     if (candidate) return candidate;
   }
-
-  // 3. Substring match
-  if (normalized.length >= 3) {
-    const subMatch = pool.find((entry) => {
-      if (preferredCategory && entry.category !== preferredCategory) return false;
-      const entryNameLower = entry.name.toLowerCase();
-      const entryIdLower = entry.id.toLowerCase();
-      return entryNameLower.includes(normalized) || normalized.includes(entryNameLower)
-        || entryIdLower.includes(normalized) || normalized.includes(entryIdLower);
-    });
-    if (subMatch) return subMatch;
-  }
-
-  // 4. Semantic / mood tag scoring match
-  const tokens = cleanedQuery ? cleanedQuery.split(/\s+/).filter(Boolean) : tokenizeText(normalized);
-  if (tokens.length > 0) {
-    let bestScore = 0;
-    let bestEntry: AudioCatalogEntry | null = null;
-    for (const entry of pool) {
-      let score = 0;
-      for (const token of tokens) {
-        if (token.length < 2) continue;
-        if (entry.tags.includes(token)) {
-          score += 4;
-        } else if (entry.tags.some((t) => t.includes(token) || token.includes(t))) {
-          score += 2;
-        }
-        if (entry.name.toLowerCase().includes(token)) {
-          score += 2;
-        }
-      }
-      if (score > 0) {
-        if (preferredCategory && entry.category === preferredCategory) {
-          score += 3;
-        }
-        if (score > bestScore) {
-          bestScore = score;
-          bestEntry = entry;
-        }
-      }
-    }
-    if (bestScore >= 3 && bestEntry) {
-      return bestEntry;
-    }
-  }
-
-  return null;
+  return cachedCatalog.all.find(matches) ?? null;
 }
 
 export function resolveAudioUrl(query: string, category?: AudioCategory): string | null {
@@ -359,45 +234,15 @@ export function resolveAudioUrl(query: string, category?: AudioCategory): string
 }
 
 /**
- * Build a concise, mood-categorized summary of the audio catalog suitable for
- * inclusion in planner prompting.
+ * Build a concise summary of the audio catalog suitable for inclusion in planner prompting.
  */
 export function getAudioCatalogPromptSummary(): { bgmLines: string[]; sfxSamples: string[] } {
   const catalog = getAudioCatalog();
-  const moodBuckets: Record<string, string[]> = {
-    "peaceful / daily / cozy": ["peaceful", "daily", "calm", "home", "cozy", "gentle", "ambient", "day"],
-    "romantic / intimate / tender": ["romantic", "love", "tender", "intimate", "acoustic", "night", "warm"],
-    "emotional / melancholy / sad": ["melancholy", "sad", "emotional", "tears", "lonely", "sorrow", "rain"],
-    "playful / cheerful / comedic": ["playful", "comedic", "cheerful", "fun", "panic", "bright", "summer"],
-    "suspense / tension / mystery": ["tension", "suspense", "mystery", "dark", "unease", "ominous", "eerie"],
-    "action / battle / dramatic": ["battle", "action", "epic", "intense", "confrontation", "speed", "duel"]
-  };
-
-  const assigned: Record<string, string[]> = {};
-  for (const mood of Object.keys(moodBuckets)) assigned[mood] = [];
-
-  for (const entry of catalog.bgm) {
-    const entryTags = new Set(entry.tags);
-    for (const [mood, keywords] of Object.entries(moodBuckets)) {
-      if (keywords.some((kw) => entryTags.has(kw) || entry.name.toLowerCase().includes(kw))) {
-        if (assigned[mood] && assigned[mood].length < 4 && !assigned[mood].includes(entry.name)) {
-          assigned[mood].push(entry.name);
-        }
-        break;
-      }
-    }
-  }
-
   const bgmLines: string[] = [];
-  for (const [mood, tracks] of Object.entries(assigned)) {
-    if (tracks.length > 0) {
-      bgmLines.push(`  * ${mood}: [${tracks.join(", ")}]`);
-    }
+  if (catalog.bgm.length > 0) {
+    const bgmList = catalog.bgm.map((e) => e.name).slice(0, 25).join(", ");
+    bgmLines.push(`  * Available BGM: [${bgmList}]`);
   }
-  if (bgmLines.length === 0 && catalog.bgm.length > 0) {
-    bgmLines.push(`  * Available BGM: [${catalog.bgm.slice(0, 20).map((e) => e.name).join(", ")}]`);
-  }
-
-  const sfxSamples = catalog.sfx.slice(0, 25).map((e) => e.name);
+  const sfxSamples = catalog.sfx.slice(0, 30).map((e) => e.name);
   return { bgmLines, sfxSamples };
 }
