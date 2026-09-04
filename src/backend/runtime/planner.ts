@@ -599,11 +599,22 @@ async function requestPlannerOutput(
   connection: ResolvedPlannerConnection | null
 ): Promise<z.infer<typeof PlannerOutputSchema>> {
   const defaultParameters: Record<string, unknown> = {
-    max_tokens: 10000
+    max_tokens: 16000
   };
   const provider = connection?.provider?.toLowerCase();
+  const model = connection?.model ?? "";
   if (provider === "google") {
     defaultParameters.responseMimeType = "application/json";
+    // The host's reasoning off-switch has no Google branch: it only deletes
+    // thinkingConfig, which leaves Gemini on DEFAULT dynamic thinking. Thought
+    // tokens count against maxOutputTokens, so a long scene can exhaust the
+    // whole budget and return empty text (finishReason MAX_TOKENS). Pin the
+    // lightest supported thinking explicitly; parserParameters can override.
+    if (/gemini-3/i.test(model)) {
+      defaultParameters.thinkingConfig = { thinkingLevel: "minimal" };
+    } else if (/gemini-2\.5/i.test(model)) {
+      defaultParameters.thinkingConfig = { thinkingBudget: 0 };
+    }
   } else if (
     provider === "openai" ||
     provider === "custom" ||
@@ -654,6 +665,14 @@ async function requestPlannerOutput(
   });
   const rawContent = extractResponseContent(response);
   if (rawContent === undefined) throw new Error("The visual planner returned no text content.");
+  if (typeof rawContent === "string" && !rawContent.trim()) {
+    const record = response && typeof response === "object" ? response as Record<string, unknown> : {};
+    const finishReason = typeof record.finish_reason === "string" ? record.finish_reason : "unknown";
+    const hadReasoning = typeof record.reasoning === "string" && record.reasoning.trim().length > 0;
+    throw new Error(
+      `The visual planner returned empty content (finish_reason=${finishReason}${hadReasoning ? ", model spent the budget on thinking" : ""}).`
+    );
+  }
   return PlannerOutputSchema.parse(normalizePlannerOutput(jsonObject(rawContent)));
 }
 
@@ -779,7 +798,8 @@ function buildCardIdentity(visualContext: VisualContextSnapshot): { name: string
 function resolveSingleCharacter(
   input: PlanTurnInput,
   planner: z.infer<typeof PlannerOutputSchema>,
-  visualContext: VisualContextSnapshot
+  visualContext: VisualContextSnapshot,
+  usedFallback: boolean
 ): SingleCharacterState {
   const frozen = input.singleCharacter;
   const frozenName = normalizeCharacterName(frozen.protagonist.name);
@@ -794,39 +814,56 @@ function resolveSingleCharacter(
     };
   }
 
-  const plannerName = normalizeCharacterName(planner.characters[0]?.name ?? "");
+  // A usable planner-extracted identity names the actual on-screen character.
+  // Scenario cards carry a TITLE ("Monster Musume Paradise"), not a character,
+  // so the planner's name outranks the card name for seeding and lookup.
+  const plannerCharacter = planner.characters[0];
+  const plannerName = normalizeCharacterName(plannerCharacter?.name ?? "");
+  const plannerTags = plannerCharacter ? distillVisualTags(plannerCharacter.description) : [];
+  const plannerUsable = plannerTags.length >= 2 && isUsableIdentity(plannerName, plannerTags);
+  const personaName = normalizeCharacterName(visualContext.personaIdentity?.name ?? "");
+  const plannerIsPersona = Boolean(personaName) && characterAppearanceKey(plannerName) === characterAppearanceKey(personaName);
   const cardName = normalizeCharacterName(visualContext.characterIdentity?.name ?? "");
   const speakerName = normalizeCharacterName(input.message.name?.trim() ?? "");
-  const name = frozenName || cardName || plannerName || speakerName || "Protagonist";
+  const name = frozenName
+    || (plannerUsable && !plannerIsPersona ? plannerName : "")
+    || cardName
+    || plannerName
+    || speakerName
+    || "Protagonist";
 
   // 2. Durable global name-keyed baseline (Inlay characterAppearance).
-  const globalKey = appearanceMapKeyFor(input.characterAppearance, name);
-  if (globalKey) {
-    const globalTags = toUsableTags(name, splitTags(input.characterAppearance[globalKey] ?? ""));
-    if (isUsableIdentity(name, globalTags)) {
-      return { ...frozen, protagonist: { name, tags: globalTags }, environment: frozen.environment };
+  //    NEVER on a planner fallback: without a real extraction the name here is
+  //    just the card title / speaker label, and a scenario card's title can be
+  //    mapped to a completely different character learned in another chat.
+  //    Freezing that here would poison this chat permanently.
+  if (!usedFallback) {
+    const globalKey = appearanceMapKeyFor(input.characterAppearance, name);
+    if (globalKey) {
+      const globalTags = toUsableTags(name, splitTags(input.characterAppearance[globalKey] ?? ""));
+      if (isUsableIdentity(name, globalTags)) {
+        return { ...frozen, protagonist: { name, tags: globalTags }, environment: frozen.environment };
+      }
     }
   }
 
   // 3. Usable planner extraction. This mirrors Inlay: the card is parser
   //    context, while the parser emits the compact visual fields used by memory.
   //    A name-only or document-like result distills to no usable identity.
-  const plannerCharacter = planner.characters[0];
-  if (plannerCharacter) {
-    const pName = normalizeCharacterName(plannerCharacter.name);
-    const pTags = distillVisualTags(plannerCharacter.description);
-    if (pTags.length >= 2 && isUsableIdentity(pName, pTags)) {
-      return { ...frozen, protagonist: { name: pName, tags: pTags }, environment: frozen.environment };
-    }
+  if (plannerUsable && !plannerIsPersona) {
+    return { ...frozen, protagonist: { name: plannerName, tags: plannerTags }, environment: frozen.environment };
   }
 
-  // 4. Deterministic card fallback for planner failure/offline operation.
+  // 4. Deterministic card fallback for planner failure/offline operation. Safe
+  //    even on fallback: the tags come from THIS card's allow-listed visual
+  //    fields, so they can never describe a character from another chat.
   const cardIdentity = buildCardIdentity(visualContext);
   if (cardIdentity && cardIdentity.tags.length >= 2 && isUsableIdentity(cardIdentity.name, cardIdentity.tags)) {
     return { ...frozen, protagonist: cardIdentity, environment: frozen.environment };
   }
 
   // 5. Name-only NON-durable fallback: the name is a memory key, never a tag.
+  //    A later successful planner turn seeds the real identity.
   return {
     ...frozen,
     protagonist: buildCanonicalIdentity(name, []),
@@ -903,21 +940,31 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
   let planner: z.infer<typeof PlannerOutputSchema>;
   let usedFallback = false;
   const plannerConnection = await resolvePlannerConnection(spindle, input.config, input.userId);
-  try {
-    planner = await requestPlannerOutput(
-      spindle,
-      input,
-      narrative.paragraphs.map((paragraph) => `[${paragraph.index}] ${paragraph.text}`).join("\n\n"),
-      visualContext,
-      plannerConnection
-    );
-  } catch (error) {
-    usedFallback = true;
-    planner = fallbackPlanner(input, narrative.paragraphs.length);
-    if (input.config.debugLogging) spindle.log.warn(`Visual planner fallback: ${error instanceof Error ? error.message : String(error)}`);
+  const paragraphText = narrative.paragraphs.map((paragraph) => `[${paragraph.index}] ${paragraph.text}`).join("\n\n");
+  // The deterministic fallback is a last resort, not a peer: transient sidecar
+  // failures (empty responses, truncation, malformed JSON) get one retry
+  // before the turn downgrades.
+  const PLANNER_ATTEMPTS = 2;
+  let lastError: unknown = null;
+  planner = fallbackPlanner(input, narrative.paragraphs.length);
+  usedFallback = true;
+  for (let attempt = 1; attempt <= PLANNER_ATTEMPTS; attempt += 1) {
+    try {
+      planner = await requestPlannerOutput(spindle, input, paragraphText, visualContext, plannerConnection);
+      usedFallback = false;
+      break;
+    } catch (error) {
+      lastError = error;
+      if (input.config.debugLogging) {
+        spindle.log.warn(`Visual planner attempt ${attempt}/${PLANNER_ATTEMPTS} failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
+  if (usedFallback && lastError !== null) {
+    spindle.log.warn(`Visual planner fallback after ${PLANNER_ATTEMPTS} attempts: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
   }
 
-  const characterState = resolveSingleCharacter(input, planner, visualContext);
+  const characterState = resolveSingleCharacter(input, planner, visualContext, usedFallback);
   const protagonistName = characterState.protagonist.name.trim();
   const identityBlock = singleCharacterTagBlock(characterState);
 

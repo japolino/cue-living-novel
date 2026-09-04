@@ -417,7 +417,7 @@ test("planner tolerant parse recovers choices in alternate (choice/option/text) 
     expect(result.plan.scenes[0]?.environment.location).toBe("Stairwell");
   });
 
-  test("passes default max_tokens 10000 and JSON structured output format to planner generation", async () => {
+  test("passes default max_tokens, thinking pin, and JSON structured output to planner generation", async () => {
     let capturedParams: any = null;
     const spindle: any = {
       chats: { get: async () => ({ character_id: "character-1" }) },
@@ -447,8 +447,11 @@ test("planner tolerant parse recovers choices in alternate (choice/option/text) 
       characterAppearance: {}
     });
     expect(result.usedFallback).toBe(false);
-    expect(capturedParams?.max_tokens).toBe(10000);
+    expect(capturedParams?.max_tokens).toBe(16000);
     expect(capturedParams?.responseMimeType).toBe("application/json");
+    // Gemini 3.x: thinking pinned to minimal so thought tokens cannot eat the
+    // whole output budget and return empty content (finishReason MAX_TOKENS).
+    expect(capturedParams?.thinkingConfig).toEqual({ thinkingLevel: "minimal" });
   });
 
 });

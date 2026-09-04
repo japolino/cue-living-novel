@@ -115,7 +115,8 @@ describe("existing-chat bootstrap", () => {
       type: "vn_turn",
       turn: { messageId: "assistant-1", paragraphs: ["The old door opens.", "Mira raises her lantern."] }
     });
-    expect(runtime.generateCalls()).toBe(1);
+    // The planner is retried once before the deterministic fallback runs.
+    expect(runtime.generateCalls()).toBe(2);
     expect((runtime.data.get(chatStatePath("chat-bootstrap")) as { activeTurnPath?: unknown }).activeTurnPath).toBeString();
   });
 
@@ -135,8 +136,10 @@ describe("existing-chat bootstrap", () => {
     await sendState(runtime.spindle, "chat-bootstrap", "user-1");
 
     expect(runtime.sent.map(({ type }) => type)).toEqual(["vn_state", "vn_planning", "vn_turn"]);
-    expect(runtime.warnings).toHaveLength(1);
+    // One warning for the broken record, one for the audible planner fallback.
+    expect(runtime.warnings).toHaveLength(2);
     expect(runtime.warnings[0]).toContain("rebuilding it from chat");
+    expect(runtime.warnings[1]).toContain("Visual planner fallback");
   });
 
   test("leaves an empty chat idle without invoking the planner", async () => {
@@ -157,6 +160,8 @@ describe("existing-chat bootstrap", () => {
     const first = sendState(runtime.spindle, "chat-bootstrap", "user-1");
     const second = sendState(runtime.spindle, "chat-bootstrap", "user-1");
     await flushUntil(() => runtime.generateCalls() > 0);
+    // Both bootstraps deduplicate into ONE planning run; only the first
+    // planner attempt is in flight at this point.
     expect(runtime.generateCalls()).toBe(1);
     gate.reject(new Error("planner unavailable"));
     await Promise.all([first, second]);

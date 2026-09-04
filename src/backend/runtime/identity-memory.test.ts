@@ -192,3 +192,45 @@ describe("durable cross-chat character memory", () => {
     expect(result.singleCharacter.protagonist.tags).toEqual(["golden blonde short hair", "brilliant red eyes"]);
   });
 });
+
+describe("scenario-card fallback poisoning (regression)", () => {
+  const scenarioCard: Card = {
+    name: "Monster Musume Paradise",
+    description: "A city where monster girls vastly outnumber humans. Play as yourself.",
+    tags: []
+  };
+  const poisonedMap: CharacterAppearanceMap = {
+    "Monster Musume Paradise": "19yo female cow girl, soft cow horns, long brown hair, amber eyes, office blouse, bell choker"
+  };
+
+  function failingSpindle(card: Card): SpindleAPI {
+    const captured = { systemMessage: "" };
+    const spindle = spindleFor(card, [], captured) as unknown as Record<string, unknown>;
+    // Sidecar returns empty content -> planner falls back.
+    spindle.generate = { raw: async () => ({ content: "" }) };
+    return spindle as unknown as SpindleAPI;
+  }
+
+  test("a planner fallback never freezes a card-title global-map identity", async () => {
+    const result = await plan(failingSpindle(scenarioCard), emptySingleCharacter(), poisonedMap);
+    expect(result.usedFallback).toBe(true);
+    // The cow girl from another chat must NOT be adopted...
+    expect(result.singleCharacter.protagonist.tags.join(", ")).not.toContain("cow");
+    // ...and the identity must stay non-durable (name-only) so a later
+    // successful planner turn can seed the real character.
+    expect(result.singleCharacter.protagonist.tags).toEqual([]);
+  });
+
+  test("a successful planner extraction outranks the card title for seeding", async () => {
+    const captured = { systemMessage: "" };
+    const spindle = spindleFor(scenarioCard, [
+      { name: "Nana", description: "cat girl, cat ears, slit pupils, long black hair, amber eyes, black hoodie, gray sports shorts" }
+    ], captured);
+    const result = await plan(spindle, emptySingleCharacter(), poisonedMap);
+    expect(result.usedFallback).toBe(false);
+    expect(result.singleCharacter.protagonist.name).toBe("Nana");
+    const tags = result.singleCharacter.protagonist.tags.join(", ");
+    expect(tags).toContain("cat ears");
+    expect(tags).not.toContain("cow");
+  });
+});
