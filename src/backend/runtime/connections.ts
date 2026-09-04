@@ -23,15 +23,47 @@ function normalizedOptions(
   for (const connection of connections) {
     const id = text(connection.id);
     if (!id) continue;
-    const option: ConnectionCatalogOption = {
-      id,
-      name: text(connection.name) || id,
-      provider: text(connection.provider),
-      model: text(connection.model),
-      isDefault: connection.is_default === true
-    };
-    const existing = byId.get(id);
-    if (!existing || option.isDefault) byId.set(id, option);
+    const connName = text(connection.name) || id;
+    const provider = text(connection.provider);
+    const model = text(connection.model);
+    const isDefault = connection.is_default === true;
+    const metadata = (connection as { metadata?: Record<string, unknown> }).metadata;
+    const workflows = Array.isArray(metadata?.comfyui_workflows) ? metadata.comfyui_workflows : [];
+
+    if (provider === "comfyui" && workflows.length > 0) {
+      const activeId = typeof metadata?.comfyui_active_workflow_id === "string" ? metadata.comfyui_active_workflow_id : null;
+      byId.set(id, {
+        id,
+        name: `${connName} (active workflow)`,
+        provider,
+        model,
+        isDefault: isDefault && !activeId
+      });
+      for (const wf of workflows) {
+        if (!wf || typeof wf !== "object") continue;
+        const wId = text((wf as { id?: unknown }).id);
+        const wName = text((wf as { name?: unknown }).name) || wId;
+        if (!wId) continue;
+        const compoundId = `${id}::${wId}`;
+        byId.set(compoundId, {
+          id: compoundId,
+          name: `${connName} — ${wName}`,
+          provider,
+          model,
+          isDefault: isDefault && activeId === wId
+        });
+      }
+    } else {
+      const option: ConnectionCatalogOption = {
+        id,
+        name: connName,
+        provider,
+        model,
+        isDefault
+      };
+      const existing = byId.get(id);
+      if (!existing || option.isDefault) byId.set(id, option);
+    }
   }
   return [...byId.values()].sort((left, right) =>
     Number(right.isDefault) - Number(left.isDefault)

@@ -3,7 +3,9 @@ import type { VisualNovelConfig } from "../../config.js";
 import { AssetJobSchema, type AssetJob, type SceneState, type TurnPlan, type VisualCue } from "../../shared/contracts.js";
 import { AssetScheduler } from "../core/asset-scheduler.js";
 import { POSE_EXPRESSION_CATALOGUE, poseById } from "../../shared/character.js";
+import { characterAppearanceKey, normalizeCharacterName } from "../../shared/identity.js";
 import { assemblePrompt, normalizeConfig, renderNegativeWithCurrentSelection, renderPrompt, type PromptEntry } from "../inlay-prompt/index.js";
+import { loadPortraits, savePortrait, type StoredPortrait } from "./storage.js";
 
 export type AssetUpdateHandler = (jobs: AssetJob[], changed: AssetJob) => Promise<void> | void;
 
@@ -128,6 +130,100 @@ function abortError(signal: AbortSignal): Error {
   return error;
 }
 
+
+/* ------------------------------------------------------------------ *
+ * Reference-image anchoring.
+ *
+ * A character's first generated image in a chat becomes their canonical
+ * portrait (stored per chat, first-wins). Every later generation for that
+ * character passes the portrait back to the provider as an identity anchor:
+ * - NovelAI: Director / Precise Reference (`resolvedReferenceImages`), read
+ *   directly by the host's NovelAI provider.
+ * - ComfyUI / SwarmUI: `resolvedSourceImages`, which the host uploads and
+ *   patches into the active workflow's mapped `init_image` field (for
+ *   example an IP-Adapter reference LoadImage node).
+ * Other providers receive no reference parameters. Opt out by setting
+ * `referenceAnchoring: false` inside the connection's image parameters;
+ * `referenceStrength` (0..1, default 0.6) tunes the NovelAI strength.
+ * ------------------------------------------------------------------ */
+
+const REFERENCE_PROVIDERS = new Set(["novelai", "comfyui", "swarmui"]);
+
+/** Whether reference anchoring is enabled for this config (default on). */
+export function referenceAnchoringEnabled(config: VisualNovelConfig): boolean {
+  // The settings toggle is authoritative; `imageParameters.referenceAnchoring`
+  // remains as a per-connection escape hatch.
+  return config.referenceAnchoring !== false && config.imageParameters.referenceAnchoring !== false;
+}
+
+/** The character a cue depicts, used as the portrait lookup key. */
+export function cueCharacterName(scene: SceneState, cue: VisualCue): string {
+  return normalizeCharacterName(cue.character || scene.character || scene.cast[0] || "");
+}
+
+/** Provider-specific reference parameters for one generation. */
+export function referenceParametersFor(
+  provider: string | null,
+  portrait: Pick<StoredPortrait, "data" | "mimeType">,
+  config: VisualNovelConfig
+): Record<string, unknown> {
+  if (!provider || !REFERENCE_PROVIDERS.has(provider)) return {};
+  if (provider === "novelai") {
+    const raw = Number(config.imageParameters.referenceStrength);
+    const strength = Number.isFinite(raw) ? Math.min(1, Math.max(0, raw)) : 0.6;
+    return {
+      resolvedReferenceImages: [{
+        data: portrait.data,
+        strength,
+        infoExtracted: 1,
+        refType: "character"
+      }]
+    };
+  }
+  return {
+    resolvedSourceImages: [{ data: portrait.data, mimeType: portrait.mimeType }]
+  };
+}
+
+/** Parse a base64 data URL into raw base64 bytes and a MIME type. */
+export function parseDataUrl(dataUrl: string | undefined): { data: string; mimeType: string } | null {
+  if (typeof dataUrl !== "string") return null;
+  const match = /^data:([^;,]+);base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl.trim());
+  if (!match) return null;
+  return { mimeType: match[1]!, data: match[2]! };
+}
+
+/**
+ * Split a settings connection id into the real connection profile id and an
+ * optional ComfyUI workflow id. The settings catalog exposes per-workflow
+ * entries as compound `<connectionId>::<workflowId>` ids.
+ */
+export function splitConnectionSelection(raw: string | null): { connectionId?: string; workflowId?: string } {
+  if (!raw) return {};
+  const separator = raw.indexOf("::");
+  if (separator === -1) return { connectionId: raw };
+  return { connectionId: raw.slice(0, separator), workflowId: raw.slice(separator + 2) };
+}
+
+async function resolveImageProviderId(
+  spindle: SpindleAPI,
+  config: VisualNovelConfig,
+  userId?: string
+): Promise<string | null> {
+  try {
+    const { connectionId } = splitConnectionSelection(config.imageConnectionId);
+    if (connectionId) {
+      const connection = await spindle.imageGen.getConnection(connectionId, userId);
+      return connection?.provider ?? null;
+    }
+    const connections = await spindle.imageGen.listConnections(userId);
+    const chosen = connections.find((candidate) => candidate.is_default) ?? connections[0];
+    return chosen?.provider ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function generateAssets(
   spindle: SpindleAPI,
   plan: TurnPlan,
@@ -140,6 +236,21 @@ export async function generateAssets(
   let jobs = [...initialJobs];
   const providerKey = `image:${config.imageConnectionId ?? "default"}`;
   const scheduler = new AssetScheduler({ [providerKey]: { concurrency: config.imageConcurrency } });
+  const provider = referenceAnchoringEnabled(config) ? await resolveImageProviderId(spindle, config, userId) : null;
+  const anchorable = provider !== null && REFERENCE_PROVIDERS.has(provider);
+  let portraits: Record<string, StoredPortrait> = {};
+  if (anchorable) {
+    try {
+      portraits = await loadPortraits(spindle, plan.key.chatId, userId);
+    } catch {
+      portraits = {};
+    }
+  }
+  if (config.debugLogging) {
+    const portraitNames = Object.values(portraits).map((entry) => entry.name).join(", ");
+    spindle.log.info(`[VN] reference anchoring ${anchorable ? `active (provider=${provider})` : referenceAnchoringEnabled(config) ? `inactive (provider=${provider ?? "unknown"} unsupported)` : "disabled by config"}; ${Object.keys(portraits).length} portrait(s)${portraitNames ? ` [${portraitNames}]` : ""}`);
+  }
+  const capturing = new Set<string>();
   const ownedJobIds = new Set(initialJobs.map((job) => job.jobId));
   const unsubscribe = scheduler.subscribe((changed) => {
     if (!ownedJobIds.has(changed.jobId)) return;
@@ -161,19 +272,68 @@ export async function generateAssets(
         const scene = sceneForCue(plan, cue);
         const prompt = compileImagePrompt(config, scene, cue);
         const negativePrompt = compileNegativePrompt(config, scene, cue);
-        const result = await spindle.imageGen.generate({
-          ...(config.imageConnectionId ? { connection_id: config.imageConnectionId } : {}),
-          prompt,
-          ...(negativePrompt ? { negativePrompt } : {}),
-          ...(config.imageModel ? { model: config.imageModel } : {}),
-          parameters: config.imageParameters,
-          owner_chat_id: plan.key.chatId,
-          includeDataUrl: false,
-          ...(userId ? { userId } : {})
-        });
+        const characterName = cueCharacterName(scene, cue);
+        const characterKey = characterAppearanceKey(characterName);
+        const portrait = anchorable && characterKey ? portraits[characterKey] : undefined;
+        // Capture: the first anchored-less generation for a character becomes
+        // that character's canonical portrait, so request its data URL once.
+        const wantsCapture = anchorable && Boolean(characterKey) && !portrait && !capturing.has(characterKey);
+        if (wantsCapture) capturing.add(characterKey);
+        if (config.debugLogging && anchorable) {
+          spindle.log.info(`[VN] cue p${cue.paragraphIndex}: ${portrait ? `anchored to portrait ${portrait.imageId} (${portrait.name})` : wantsCapture ? `no portrait for "${characterName}" yet — capturing this render` : `unanchored (character="${characterName}")`}`);
+        }
+        const parameters = portrait && provider
+          ? { ...config.imageParameters, ...referenceParametersFor(provider, portrait, config) }
+          : config.imageParameters;
+        const { connectionId, workflowId } = splitConnectionSelection(config.imageConnectionId);
+        const effectiveParameters = {
+          ...parameters,
+          ...(workflowId ? { workflow_id: workflowId } : {})
+        };
+        let result;
+        try {
+          result = await spindle.imageGen.generate({
+            ...(connectionId ? { connection_id: connectionId } : {}),
+            prompt,
+            ...(negativePrompt ? { negativePrompt } : {}),
+            ...(config.imageModel ? { model: config.imageModel } : {}),
+            parameters: effectiveParameters,
+            owner_chat_id: plan.key.chatId,
+            includeDataUrl: wantsCapture,
+            ...(userId ? { userId } : {})
+          });
+        } catch (error) {
+          if (wantsCapture) capturing.delete(characterKey);
+          throw error;
+        }
         if (signal.aborted) throw abortError(signal);
         if (jobSignal.aborted) throw abortError(jobSignal);
         if (!result.imageId) throw new Error("The image provider completed without a persisted image ID.");
+        if (wantsCapture) {
+          const parsed = parseDataUrl(result.imageDataUrl);
+          if (parsed) {
+            const stored: StoredPortrait = {
+              name: characterName,
+              imageId: result.imageId,
+              data: parsed.data,
+              mimeType: parsed.mimeType,
+              createdAt: new Date().toISOString()
+            };
+            try {
+              if (await savePortrait(spindle, plan.key.chatId, stored, userId)) {
+                portraits[characterKey] = stored;
+                if (config.debugLogging) spindle.log.info(`[VN] portrait captured for "${characterName}" -> ${stored.imageId} (${stored.mimeType}, ${stored.data.length} base64 chars)`);
+              } else {
+                const refreshed = await loadPortraits(spindle, plan.key.chatId, userId);
+                const winner = refreshed[characterKey];
+                if (winner) portraits[characterKey] = winner;
+              }
+            } catch {
+              // Non-fatal: anchoring simply resumes on a later turn.
+            }
+          }
+          capturing.delete(characterKey);
+        }
         return {
           imageId: result.imageId,
           imageUrl: result.imageUrl ?? `/api/v1/images/${encodeURIComponent(result.imageId)}`

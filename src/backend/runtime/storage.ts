@@ -438,3 +438,106 @@ export async function saveTurnRecord(
     ...(userOptions(userId) ?? {})
   }));
 }
+
+/* ------------------------------------------------------------------ *
+ * Character reference portraits (image anchoring).
+ * ------------------------------------------------------------------ */
+
+/** A stored canonical reference portrait for one character in one chat. */
+export type StoredPortrait = {
+  /** Display name at capture time (the map key is the case-insensitive form). */
+  name: string;
+  /** Persisted Lumiverse image ID of the canonical portrait. */
+  imageId: string;
+  /** Raw base64 image bytes (no data-URL prefix). */
+  data: string;
+  mimeType: string;
+  createdAt: string;
+};
+
+export type PortraitRecord = {
+  schemaVersion: 1;
+  portraits: Record<string /* characterAppearanceKey */, StoredPortrait>;
+  updatedAt: string;
+};
+
+/** Path of the per-chat canonical portrait store. */
+export function portraitStatePath(chatId: string): string {
+  return `chats/${safeSegment(chatId)}/portraits.json`;
+}
+
+function isStoredPortrait(value: unknown): value is StoredPortrait {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.name === "string"
+    && typeof record.imageId === "string" && record.imageId.trim().length > 0
+    && typeof record.data === "string" && record.data.length > 0
+    && typeof record.mimeType === "string";
+}
+
+function normalizePortraitRecord(raw: unknown): PortraitRecord {
+  const empty: PortraitRecord = { schemaVersion: 1, portraits: {}, updatedAt: new Date(0).toISOString() };
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return empty;
+  const record = raw as Record<string, unknown>;
+  const source = record.portraits && typeof record.portraits === "object" && !Array.isArray(record.portraits)
+    ? record.portraits as Record<string, unknown>
+    : {};
+  const portraits: Record<string, StoredPortrait> = {};
+  for (const [rawKey, value] of Object.entries(source)) {
+    const key = characterAppearanceKey(rawKey);
+    if (!key || !isStoredPortrait(value)) continue;
+    portraits[key] = value;
+  }
+  return {
+    schemaVersion: 1,
+    portraits,
+    updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : empty.updatedAt
+  };
+}
+
+/** Load the per-chat portrait map, keyed by `characterAppearanceKey(name)`. */
+export async function loadPortraits(
+  spindle: SpindleAPI,
+  chatId: string,
+  userId?: string
+): Promise<Record<string, StoredPortrait>> {
+  const raw = await spindle.userStorage.getJson<unknown>(portraitStatePath(chatId), {
+    fallback: null,
+    ...(userOptions(userId) ?? {})
+  });
+  return normalizePortraitRecord(raw).portraits;
+}
+
+/**
+ * Persist a canonical portrait for a character. First-wins: an existing
+ * portrait for the same character is never overwritten, so the anchor image
+ * stays stable for the life of the chat (delete portraits.json to re-seed).
+ * Returns whether this portrait became the stored one.
+ */
+export async function savePortrait(
+  spindle: SpindleAPI,
+  chatId: string,
+  portrait: StoredPortrait,
+  userId?: string
+): Promise<boolean> {
+  const key = characterAppearanceKey(portrait.name);
+  if (!key || !isStoredPortrait(portrait)) return false;
+  const path = portraitStatePath(chatId);
+  let stored = false;
+  await serializedWrite(scopedKey(userId, path), async () => {
+    const raw = await spindle.userStorage.getJson<unknown>(path, {
+      fallback: null,
+      ...(userOptions(userId) ?? {})
+    });
+    const record = normalizePortraitRecord(raw);
+    if (record.portraits[key]) return;
+    record.portraits[key] = portrait;
+    record.updatedAt = new Date().toISOString();
+    await spindle.userStorage.setJson(path, record, {
+      indent: 2,
+      ...(userOptions(userId) ?? {})
+    });
+    stored = true;
+  });
+  return stored;
+}
