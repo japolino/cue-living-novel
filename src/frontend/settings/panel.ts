@@ -14,6 +14,8 @@ export type SettingsPanelOptions = {
   onOpenPreview: () => void;
   onRefreshConnections: () => void;
   onScanAudio?: (directory: string) => Promise<{ bgmCount: number; sfxCount: number } | void> | void;
+  /** Import user-picked audio files into the extension's scoped storage. */
+  onImportAudio?: (files: readonly File[]) => Promise<void> | void;
 };
 
 export type ConnectionCatalogKind = "planner" | "image";
@@ -261,8 +263,10 @@ export class VisualNovelSettingsPanel {
             </label>
             <div data-actions>
               <button type="button" data-scan-audio>Scan Audio</button>
+              <button type="button" data-import-audio>Import audio folder…</button>
               <small data-audio-status role="status"></small>
             </div>
+            <small>Import copies audio from any folder on your computer into the extension's storage — no need to locate the Lumiverse data directory.</small>
             <div data-row>
               <label>BGM volume (<span data-bgm-val>70%</span>)
                 <input name="bgmVolume" type="range" min="0" max="1" step="0.05" />
@@ -349,6 +353,20 @@ export class VisualNovelSettingsPanel {
       } catch (err) {
         if (this.audioStatus) this.audioStatus.textContent = err instanceof Error ? err.message : String(err);
       }
+    });
+    this.root.querySelector("[data-import-audio]")?.addEventListener("click", () => {
+      if (!this.options.onImportAudio) return;
+      const picker = document.createElement("input");
+      picker.type = "file";
+      picker.multiple = true;
+      // Folder selection: gives every contained file a webkitRelativePath.
+      picker.setAttribute("webkitdirectory", "");
+      picker.addEventListener("change", () => {
+        const files = picker.files ? Array.from(picker.files) : [];
+        if (files.length === 0) return;
+        void this.options.onImportAudio?.(files);
+      });
+      picker.click();
     });
     this.form.addEventListener("submit", (event) => {
       event.preventDefault();

@@ -9,6 +9,16 @@ import { stagingContext, supportsVisualNovelOverlay, type ComponentOverrideHandl
 
 const CLEANUP_KEY = Symbol.for("visual-novel-preview.frontend-cleanup");
 
+/** Chunked bytes -> base64 that avoids call-stack limits on large audio files. */
+function base64FromBytes(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
 function messageType(value: unknown): string {
   return value !== null && typeof value === "object" && typeof (value as { type?: unknown }).type === "string"
     ? (value as { type: string }).type
@@ -278,6 +288,38 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     onRefreshConnections: () => requestConnectionCatalog(),
     onScanAudio: (directory) => {
       ctx.sendToBackend({ type: "vn_scan_audio", directory });
+    },
+    onImportAudio: async (files) => {
+      const supported = [".mp3", ".ogg", ".wav", ".m4a", ".flac"];
+      const audioFiles = files.filter((file) => supported.some((extension) => file.name.toLowerCase().endsWith(extension)));
+      if (audioFiles.length === 0) {
+        settingsPanel?.setAudioStatus("No supported audio files (.mp3/.ogg/.wav/.m4a/.flac) in that folder.");
+        return;
+      }
+      let sent = 0;
+      let skipped = 0;
+      for (const file of audioFiles) {
+        if (file.size > 30 * 1024 * 1024) {
+          skipped += 1;
+          continue;
+        }
+        settingsPanel?.setAudioStatus(`Importing ${sent + 1}/${audioFiles.length}: ${file.name}…`);
+        try {
+          const bytes = new Uint8Array(await file.arrayBuffer());
+          const relativePath = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+          ctx.sendToBackend({
+            type: "vn_import_audio_file",
+            relativePath,
+            dataBase64: base64FromBytes(bytes)
+          });
+          sent += 1;
+          vnDebug("audio import", relativePath, `${bytes.length} bytes`);
+        } catch {
+          skipped += 1;
+        }
+      }
+      ctx.sendToBackend({ type: "vn_import_audio_done", fileCount: sent });
+      settingsPanel?.setAudioStatus(`Sent ${sent} file(s)${skipped ? `, skipped ${skipped}` : ""}; scanning…`);
     },
     onSave: (patch) => {
       const current = configRef.current;

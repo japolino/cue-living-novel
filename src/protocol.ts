@@ -8,7 +8,9 @@ export type FrontendRequest =
   | { type: "vn_asset_ready"; chatId: string; messageId: string; jobId: string; sourceFingerprint: string }
   | { type: "vn_cancel"; chatId: string }
   | { type: "vn_retry_turn"; chatId: string; messageId: string }
-  | { type: "vn_scan_audio"; directory?: string };
+  | { type: "vn_scan_audio"; directory?: string }
+  | { type: "vn_import_audio_file"; relativePath: string; dataBase64: string }
+  | { type: "vn_import_audio_done"; fileCount: number };
 
 export type AssetView = {
   jobId: string;

@@ -17,7 +17,13 @@ import { resolveNativeCardJobs } from "./native-assets.js";
 import { createAssetJobs, generateAssets } from "./images.js";
 import { fingerprintForMessage, planTurn } from "./planner.js";
 import { loadConnectionCatalog } from "./connections.js";
-import { resolveAudioUrl, scanAudioCatalog } from "./audio-catalog.js";
+import {
+  clearAudioCatalogCache,
+  normalizeAudioStoragePrefix,
+  resolveAudioUrl,
+  scanAudioCatalog,
+  SUPPORTED_AUDIO_EXTENSIONS
+} from "./audio-catalog.js";
 import {
   loadCharacterAppearance,
   loadChatState,
@@ -61,6 +67,29 @@ function errorText(error: unknown): string {
  * ------------------------------------------------------------------ */
 
 const debugFlags = new Map<string, boolean>();
+
+/**
+ * Audio imports arrive as one message per file followed by a "done" marker.
+ * Messages are handled concurrently, so the done handler must wait for every
+ * pending write before rescanning the catalog.
+ */
+const pendingAudioImports = new Map<string, Promise<void>[]>();
+
+/**
+ * Make a browser-supplied relative path safe for scoped storage: forward
+ * slashes, no drive letters, no leading slashes, no dot segments.
+ */
+export function sanitizeAudioImportPath(relativePath: string): string | null {
+  const normalized = relativePath
+    .replace(/\\/g, "/")
+    .replace(/^[A-Za-z]:\//, "")
+    .replace(/^\/+/, "");
+  const parts = normalized.split("/")
+    .map((part) => part.trim())
+    .filter((part) => part && part !== "." && part !== "..");
+  if (parts.length === 0) return null;
+  return parts.join("/");
+}
 
 function rememberDebugFlag(userId: string | undefined, config: { debugLogging: boolean }): void {
   debugFlags.set(userId ?? "owner", config.debugLogging);
@@ -469,6 +498,51 @@ async function handleFrontendMessage(spindle: SpindleAPI, request: FrontendReque
       const config = await loadConfig(spindle, userId);
       const dir = request.directory?.trim() || config.audioDirectory;
       const catalog = await scanAudioCatalog(spindle, dir);
+      spindle.sendToFrontend({
+        type: "vn_audio_scanned",
+        bgmCount: catalog.bgm.length,
+        sfxCount: catalog.sfx.length,
+      }, userId);
+      return;
+    }
+    case "vn_import_audio_file": {
+      const cleaned = sanitizeAudioImportPath(request.relativePath);
+      if (!cleaned) return;
+      const dot = cleaned.lastIndexOf(".");
+      const extension = dot >= 0 ? cleaned.slice(dot).toLowerCase() : "";
+      if (!(SUPPORTED_AUDIO_EXTENSIONS as readonly string[]).includes(extension)) return;
+      // ~30 MB of raw audio per file once decoded from base64.
+      if (request.dataBase64.length > 40 * 1024 * 1024) {
+        throw new Error(`"${cleaned}" is too large to import (30 MB max per file).`);
+      }
+      const config = await loadConfig(spindle, userId);
+      const prefix = normalizeAudioStoragePrefix(config.audioDirectory || "audio");
+      const target = `${prefix}/${cleaned}`;
+      const write = (async () => {
+        const bytes = Uint8Array.from(atob(request.dataBase64), (character) => character.charCodeAt(0));
+        const directory = target.split("/").slice(0, -1).join("/");
+        if (directory) await spindle.storage.mkdir(directory).catch(() => {});
+        await spindle.storage.writeBinary(target, bytes);
+        dbg(spindle, userId, `audio imported ${target} (${bytes.length} bytes)`);
+      })();
+      const pendingKey = userId ?? "owner";
+      const pending = pendingAudioImports.get(pendingKey) ?? [];
+      pending.push(write.catch((error) => {
+        spindle.log.warn(`Audio import failed for ${target}: ${errorText(error)}`);
+      }));
+      pendingAudioImports.set(pendingKey, pending);
+      await write;
+      return;
+    }
+    case "vn_import_audio_done": {
+      const pendingKey = userId ?? "owner";
+      const pending = pendingAudioImports.get(pendingKey) ?? [];
+      pendingAudioImports.delete(pendingKey);
+      await Promise.allSettled(pending);
+      const config = await loadConfig(spindle, userId);
+      clearAudioCatalogCache();
+      const catalog = await scanAudioCatalog(spindle, config.audioDirectory || "audio");
+      dbg(spindle, userId, `audio import finished: ${request.fileCount} file(s) sent, catalog now ${catalog.bgm.length} BGM / ${catalog.sfx.length} SFX`);
       spindle.sendToFrontend({
         type: "vn_audio_scanned",
         bgmCount: catalog.bgm.length,
