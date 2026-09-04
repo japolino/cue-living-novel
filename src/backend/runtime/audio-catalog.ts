@@ -167,21 +167,17 @@ export async function scanAudioCatalog(spindle: SpindleAPI, requestedPrefix = "a
     const extension = extensionOf(relativePath);
     if (!AUDIO_EXT_SET.has(extension)) continue;
     const storagePath = joinStoragePath(prefix, relativePath);
-    try {
-      const bytes = await spindle.storage.readBinary(storagePath);
-      const category = categorizeAudioFile(storagePath, relativePath);
-      entries.push({
-        id: relativePath.replace(/\.[^.]+$/, ""),
-        name: stemOf(relativePath),
-        filePath: storagePath,
-        relativePath,
-        category,
-        tags: extractAudioTags(relativePath, category),
-        url: `data:${mimeForExtension(extension)};base64,${bytesToBase64(bytes)}`,
-      });
-    } catch {
-      // A single unreadable file must not prevent the rest of the pack loading.
-    }
+    // Metadata only: file bytes are read lazily per cue (ensureAudioUrl), so a
+    // large imported library no longer sits in worker memory as base64.
+    const category = categorizeAudioFile(storagePath, relativePath);
+    entries.push({
+      id: relativePath.replace(/\.[^.]+$/, ""),
+      name: stemOf(relativePath),
+      filePath: storagePath,
+      relativePath,
+      category,
+      tags: extractAudioTags(relativePath, category),
+    });
   }
 
   entries.sort((left, right) => left.id.localeCompare(right.id));
@@ -201,6 +197,7 @@ export function getAudioCatalog(): AudioCatalog {
 export function clearAudioCatalogCache(): void {
   cachedCatalog = { bgm: [], sfx: [], all: [] };
   cachedPrefix = "";
+  clearAudioUrlCache();
 }
 
 /**
@@ -226,10 +223,73 @@ export function findAudioEntry(query: string, preferredCategory?: AudioCategory)
   return cachedCatalog.all.find(matches) ?? null;
 }
 
+/**
+ * Bounded data-URL cache. Only tracks actually used by recent turns are held
+ * in memory; the total character budget (~36 MB of raw audio) evicts the
+ * least-recently-used entries first.
+ */
+const audioUrlCache = new Map<string, string>();
+const AUDIO_URL_CACHE_BUDGET = 48_000_000;
+
+function cacheAudioUrl(id: string, url: string): void {
+  audioUrlCache.delete(id);
+  audioUrlCache.set(id, url);
+  let total = 0;
+  for (const value of audioUrlCache.values()) total += value.length;
+  for (const key of audioUrlCache.keys()) {
+    if (total <= AUDIO_URL_CACHE_BUDGET || audioUrlCache.size <= 1) break;
+    const evicted = audioUrlCache.get(key);
+    audioUrlCache.delete(key);
+    total -= evicted?.length ?? 0;
+  }
+}
+
+/** Clear the lazy data-URL cache (used on rescans and in tests). */
+export function clearAudioUrlCache(): void {
+  audioUrlCache.clear();
+}
+
+/** Load (and cache) the playable data URL for a catalog entry. */
+export async function ensureAudioUrl(spindle: SpindleAPI, entry: AudioCatalogEntry): Promise<string | null> {
+  const cached = audioUrlCache.get(entry.id);
+  if (cached) {
+    cacheAudioUrl(entry.id, cached);
+    return cached;
+  }
+  try {
+    const bytes = await spindle.storage.readBinary(entry.filePath);
+    const url = `data:${mimeForExtension(extensionOf(entry.relativePath))};base64,${bytesToBase64(bytes)}`;
+    cacheAudioUrl(entry.id, url);
+    return url;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Preload the data URLs for a turn's audio cues so the synchronous
+ * `resolveAudioUrl` can serve them from cache when the turn is rendered.
+ */
+export async function preloadAudioForCues(
+  spindle: SpindleAPI,
+  cues: ReadonlyArray<{ bgm?: string | null | undefined; sfx?: string | null | undefined }>
+): Promise<void> {
+  for (const cue of cues) {
+    for (const [query, category] of [[cue.bgm, "bgm"], [cue.sfx, "sfx"]] as const) {
+      if (!query) continue;
+      const entry = findAudioEntry(query, category);
+      if (entry) await ensureAudioUrl(spindle, entry);
+    }
+  }
+}
+
 export function resolveAudioUrl(query: string, category?: AudioCategory): string | null {
   if (!query) return null;
   const entry = findAudioEntry(query, category);
-  if (entry?.url) return entry.url;
+  if (entry) {
+    const cached = audioUrlCache.get(entry.id);
+    if (cached) return cached;
+  }
   return /^(?:https?:|data:|blob:)/i.test(query) ? query : null;
 }
 

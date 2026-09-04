@@ -11,6 +11,9 @@ import {
   resolveAudioUrl,
   scanAudioCatalog,
   tokenizeText,
+  ensureAudioUrl,
+  preloadAudioForCues,
+  clearAudioUrlCache,
 } from "./audio-catalog.js";
 
 function storageSpindle(files: Record<string, string>): SpindleAPI {
@@ -79,14 +82,25 @@ describe("audio-catalog scoped storage scanner & cache", () => {
     );
   });
 
-  test("caches entries and exposes browser-safe data URLs", async () => {
+  test("resolves data URLs lazily and serves them from the bounded cache", async () => {
     await scanAudioCatalog(spindle, "audio");
     expect(getAudioCatalog().all).toHaveLength(4);
+    // Before preloading, catalog entries resolve to null (bytes not in memory).
+    expect(resolveAudioUrl("main_theme")).toBeNull();
+    const entry = findAudioEntry("main_theme");
+    expect(entry).not.toBeNull();
+    await ensureAudioUrl(spindle, entry!);
     expect(resolveAudioUrl("main_theme")).toStartWith("data:audio/ogg;base64,");
+    // Preloading by cue shape fills the cache the same way.
+    clearAudioUrlCache();
+    await preloadAudioForCues(spindle, [{ bgm: "rainy_day", sfx: "sword_hit" }]);
+    expect(resolveAudioUrl("rainy_day", "bgm")).toStartWith("data:audio/mpeg;base64,");
+    expect(resolveAudioUrl("sword_hit", "sfx")).toStartWith("data:");
     expect(resolveAudioUrl("https://example.com/audio.mp3")).toBe("https://example.com/audio.mp3");
     expect(resolveAudioUrl("C:\\unsafe\\track.mp3")).toBeNull();
     clearAudioCatalogCache();
     expect(getAudioCatalog().all).toHaveLength(0);
+    expect(resolveAudioUrl("main_theme")).toBeNull();
   });
 
   test("finds entries by id, name, and relative path", async () => {

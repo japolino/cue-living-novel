@@ -20,6 +20,7 @@ import { loadConnectionCatalog } from "./connections.js";
 import {
   clearAudioCatalogCache,
   normalizeAudioStoragePrefix,
+  preloadAudioForCues,
   resolveAudioUrl,
   scanAudioCatalog,
   SUPPORTED_AUDIO_EXTENSIONS
@@ -180,6 +181,22 @@ function assetView(record: StoredTurnRecord, job: StoredTurnRecord["jobs"][numbe
   };
 }
 
+/**
+ * Load the data URLs for a turn's audio cues into the bounded cache, then
+ * build the view. Keeps `turnView` synchronous while audio bytes stay lazy.
+ */
+export async function turnViewWithAudio(spindle: SpindleAPI, record: StoredTurnRecord): Promise<TurnView> {
+  const cues = record.plan.audioCues?.length
+    ? record.plan.audioCues
+    : record.plan.visualCues.filter((cue) => Boolean(cue.bgm || cue.sfx));
+  try {
+    await preloadAudioForCues(spindle, cues);
+  } catch {
+    // Audio is best-effort: a failed preload only mutes the cue.
+  }
+  return turnView(record);
+}
+
 export function turnView(record: StoredTurnRecord): TurnView {
   const swipe = record.plan.key.swipeId;
   // Prefer the dedicated audio cue list (added so audio survives the image-cue
@@ -241,7 +258,7 @@ export async function sendState(spindle: SpindleAPI, chatId: string, userId?: st
     type: "vn_state",
     chatId,
     config,
-    turn: record ? turnView(record) : null
+    turn: record ? await turnViewWithAudio(spindle, record) : null
   }, userId);
   if (!record) await bootstrapLatestAssistantTurn(spindle, chatId, userId);
 }
@@ -327,7 +344,7 @@ async function processAssistantMessage(
     const key = runtimeKey(userId, chatId);
     activeTurnKeys.set(key, existing.plan.key);
     await persistActiveTurn(spindle, existing, path, userId);
-    spindle.sendToFrontend({ type: "vn_turn", turn: turnView(existing) }, userId);
+    spindle.sendToFrontend({ type: "vn_turn", turn: await turnViewWithAudio(spindle, existing) }, userId);
     return;
   }
 
@@ -413,7 +430,7 @@ async function processAssistantMessage(
     const key = runtimeKey(userId, chatId);
     activeTurnKeys.set(key, record.plan.key);
     await persistActiveTurn(spindle, record, path, userId);
-    spindle.sendToFrontend({ type: "vn_turn", turn: turnView(record) }, userId);
+    spindle.sendToFrontend({ type: "vn_turn", turn: await turnViewWithAudio(spindle, record) }, userId);
     if (!config.useNativeCardImages && config.generateImages) {
       void startAssets(spindle, record, path, userId).catch((error) => {
         if (!isAbortError(error)) {
