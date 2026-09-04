@@ -94,6 +94,19 @@ export function shouldPreserveImage(previous: TurnView | null, next: TurnView): 
   return true;
 }
 
+/**
+ * Literal nameplate for one paragraph. The planner attributes a per-paragraph
+ * speaker (`paragraphSpeakers`, parallel to `paragraphs`):
+ * - a name -> that character/persona name is displayed;
+ * - "" -> intentional narrator, the plate is hidden;
+ * - null / absent -> unknown, fall back to the turn speaker (card name),
+ *   which is exactly the pre-attribution behavior.
+ */
+export function nameplateForParagraph(view: TurnView, index: number): string {
+  const attributed = view.paragraphSpeakers?.[index];
+  return attributed === undefined || attributed === null ? view.speaker : attributed;
+}
+
 export function decideTurnApplication(
   previous: TurnView | null,
   next: TurnView,
@@ -498,7 +511,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       paragraphs: next.paragraphs.map((text, index) => ({
         id: `${next.sourceFingerprint}:${index}`,
         text,
-        speaker: next.speaker
+        speaker: nameplateForParagraph(next, index)
       })),
       choices: next.choices.map((choice) => ({ id: choice.id, label: choice.label, value: choice.value })),
       preserveImage

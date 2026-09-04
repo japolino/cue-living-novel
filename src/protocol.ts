@@ -47,6 +47,8 @@ export type TurnView = {
   speaker: string;
   userSpeaker?: string;
   paragraphs: string[];
+  /** Per-paragraph nameplate override; null entries fall back to `speaker`. */
+  paragraphSpeakers?: Array<string | null>;
   choices: Array<{ id: string; label: string; value: string }>;
   assets: AssetView[];
   audioCues?: AudioCueView[];

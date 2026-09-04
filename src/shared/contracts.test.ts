@@ -18,6 +18,7 @@ function plan(): TurnPlan {
       { index: 0, sourceIndex: 0, text: "First." },
       { index: 1, sourceIndex: 1, text: "Second." }
     ],
+    paragraphSpeakers: [],
     scenes: [{
       sceneId: "scene",
       revision: 0,

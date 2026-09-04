@@ -221,6 +221,9 @@ export function turnView(record: StoredTurnRecord): TurnView {
     speaker: record.speaker,
     userSpeaker: record.userSpeaker || "You",
     paragraphs: record.plan.paragraphs.map((paragraph) => paragraph.text),
+    ...(record.plan.paragraphSpeakers?.some((speaker) => speaker !== null)
+      ? { paragraphSpeakers: record.plan.paragraphSpeakers }
+      : {}),
     choices: record.plan.choices.map((choice) => ({ id: choice.id, label: choice.label, value: choice.submission })),
     assets: record.jobs.map((job) => assetView(record, job)),
     ...(audioCues.length > 0 ? { audioCues } : {}),

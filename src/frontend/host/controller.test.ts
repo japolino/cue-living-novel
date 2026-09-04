@@ -5,6 +5,7 @@ import {
   applyVisualConfigToStage,
   computeAssetProgress,
   decideTurnApplication,
+  nameplateForParagraph,
   sameTurnIdentity,
   selectCurrentImage,
   shouldPreserveImage,
@@ -300,5 +301,26 @@ describe("shouldPreserveImage", () => {
     const prev = turn({ chatId: "chat-1", speaker: "", messageId: "msg-1" });
     const next = turn({ chatId: "chat-1", speaker: "", messageId: "msg-2" });
     expect(shouldPreserveImage(prev, next)).toBe(true);
+  });
+});
+
+describe("nameplateForParagraph (per-paragraph literal speaker)", () => {
+  test("falls back to the turn speaker when there is no attribution", () => {
+    const view = turn({ paragraphs: ["One.", "Two."] });
+    expect(nameplateForParagraph(view, 0)).toBe("Mira");
+    expect(nameplateForParagraph(view, 1)).toBe("Mira");
+  });
+
+  test("uses the attributed name, hides the plate for narrator, and falls back on null", () => {
+    const view = turn({
+      speaker: "Monster Musume Paradise",
+      paragraphs: ["\"Hi!\"", "The sun sets.", "A stranger waves."],
+      paragraphSpeakers: ["Nana", "", null]
+    });
+    expect(nameplateForParagraph(view, 0)).toBe("Nana");
+    // "" = intentional narrator: the stage hides an empty nameplate.
+    expect(nameplateForParagraph(view, 1)).toBe("");
+    // null = unknown: today's behavior (card name).
+    expect(nameplateForParagraph(view, 2)).toBe("Monster Musume Paradise");
   });
 });

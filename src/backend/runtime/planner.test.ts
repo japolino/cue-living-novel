@@ -545,3 +545,73 @@ test("planTurn ignores user persona character attribution and prevents assigning
   // Cue 1 must not inherit the user's sleepy expression
   assert.notEqual(result.plan.visualCues[1]?.poseExpressionId, "sleepy");
 });
+
+test("planner speaker attribution produces sanitized per-paragraph nameplates", async () => {
+  const spindle: SpindleAPI = {
+    generate: {
+      raw: async () => ({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              scenes: [{
+                startParagraph: 0,
+                boundary: { claimedNewScene: true, reason: "initial", location: "Garden", timeOfDay: "day", majorTimeJump: false, environmentReplacement: false, forced: false },
+                environment: { location: "Garden", timeOfDay: "day", weather: null, lighting: null, description: "A garden", persistentElements: [] },
+                cast: ["Lyra"],
+                character: "Lyra",
+                basePrompt: "garden",
+                compositionLock: "centered"
+              }],
+              cues: [{ paragraphIndex: 0, expression: null }],
+              choices: [],
+              characters: [{ name: "Lyra", description: "elf girl, pointy elf ears, emerald eyes, silver hair, white sundress" }],
+              speakers: [
+                { paragraphIndex: 0, name: "lyra" },
+                { paragraphIndex: 1, name: "Totally Unknown Girl" },
+                { paragraphIndex: 2, name: "Narrator" }
+              ]
+            })
+          }
+        }]
+      })
+    },
+    log: { warn() {} }
+  } as unknown as SpindleAPI;
+
+  const result = await planTurn(spindle, {
+    chatId: "chat",
+    message: { ...message, name: "Monster Garden", content: "\"Hello!\"\n\nA stranger waves.\n\nThe sun sets slowly." },
+    content: "\"Hello!\"\n\nA stranger waves.\n\nThe sun sets slowly.",
+    previousScene: null,
+    previousContinuity: null,
+    recentMessages: [],
+    config: { ...DEFAULT_CONFIG, parserConnectionId: "parser" },
+    singleCharacter: emptySingleCharacter(),
+    characterAppearance: {}
+  });
+
+  // Known name: case-insensitive match resolves to the canonical casing.
+  // Unknown name: rejected -> null -> frontend falls back to the turn speaker.
+  // Narrator: empty plate (classic VN narration).
+  assert.deepEqual(result.plan.paragraphSpeakers, ["Lyra", null, ""]);
+});
+
+test("fallback turns carry no paragraph speakers", async () => {
+  const spindle: SpindleAPI = {
+    generate: { raw: async () => ({ choices: [{ message: { content: "not json" } }] }) },
+    log: { warn() {} }
+  } as unknown as SpindleAPI;
+  const result = await planTurn(spindle, {
+    chatId: "chat",
+    message: { ...message, content: "One.\n\nTwo." },
+    content: "One.\n\nTwo.",
+    previousScene: null,
+    previousContinuity: null,
+    recentMessages: [],
+    config: { ...DEFAULT_CONFIG, parserConnectionId: "parser" },
+    singleCharacter: emptySingleCharacter(),
+    characterAppearance: {}
+  });
+  assert.equal(result.usedFallback, true);
+  assert.deepEqual(result.plan.paragraphSpeakers, [null, null]);
+});

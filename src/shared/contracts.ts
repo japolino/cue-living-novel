@@ -240,6 +240,11 @@ export const TurnPlanSchema = z.object({
   schemaVersion: z.literal(1),
   key: TurnKeySchema,
   paragraphs: z.array(ParagraphSchema).min(1),
+  // Literal nameplate per paragraph (parallel to `paragraphs`), attributed by
+  // the planner. null = unknown -> frontend falls back to the turn speaker
+  // (character card name). "" = intentional narrator (hidden plate). Absent on
+  // turns planned before this field existed.
+  paragraphSpeakers: z.array(z.string().nullable()).default([]),
   scenes: z.array(SceneStateSchema).min(1),
   visualCues: z.array(VisualCueSchema).default([]),
   audioCues: z.array(AudioCueSchema).default([]),

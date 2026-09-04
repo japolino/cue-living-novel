@@ -67,11 +67,17 @@ const PlannerCharacterSchema = z.object({
   description: z.string().trim().min(1)
 }).strict();
 
+const PlannerSpeakerSchema = z.object({
+  paragraphIndex: z.number().int().min(0),
+  name: z.string().trim().min(1)
+});
+
 const PlannerOutputSchema = z.object({
   scenes: z.array(PlannerSceneSchema).default([]),
   cues: z.array(PlannerCueSchema).default([]),
   choices: z.array(PlannerChoiceSchema).max(6).default([]),
-  characters: z.array(PlannerCharacterSchema).default([])
+  characters: z.array(PlannerCharacterSchema).default([]),
+  speakers: z.array(PlannerSpeakerSchema).default([])
 }).strict();
 
 export type PlanTurnInput = {
@@ -156,8 +162,9 @@ function plannerInstruction(config: VisualNovelConfig, visualContext?: VisualCon
     "characters: Return name and ONE compact comma-separated line containing physical appearance tags. Capture permanent physical traits including species/race (e.g. elf, demon, catgirl, kitsune, furry, anthro, monster girl) and non-human anatomy (e.g. animal ears, horns, tail, wings, fangs, scales, fur, paws, claws). A description that merely repeats the name is invalid. Keep stable traits and never invent appearance that contradicts the card or KNOWN CHARACTERS baseline.",
     "cast & active character: If multiple characters are present or in a scenario card, set 'character' on the scene or cue to the active speaking or focused character.",
     "attire: If the active character changes clothes (e.g. swimsuit, pajamas, armor, sundress, uniform), specify the new outfit tags in 'attire'; otherwise null.",
+    "speakers: Attribute EVERY paragraph index to its literal on-screen nameplate name. Use the character's actual name for their dialogue and actions. When the text is written from the player's first-person point of view, use the player/persona name. Use \"Narrator\" for omniscient scene narration that belongs to no character. Never use the story or scenario card title as a speaker name.",
     hasAudio ? audioInstructions.join("\n") : "",
-    `Shape: {scenes:[{startParagraph,boundary:{claimedNewScene,reason,location,timeOfDay,majorTimeJump,environmentReplacement,forced},environment:{location,timeOfDay,weather,lighting,description,persistentElements},cast,character?,attire?,basePrompt,compositionLock}],cues:[{paragraphIndex,expression,character?,attire?${hasAudio ? ",bgm?,sfx?" : ""}}],choices:[{label,submission}],characters:[{name,description}]}`,
+    `Shape: {scenes:[{startParagraph,boundary:{claimedNewScene,reason,location,timeOfDay,majorTimeJump,environmentReplacement,forced},environment:{location,timeOfDay,weather,lighting,description,persistentElements},cast,character?,attire?,basePrompt,compositionLock}],cues:[{paragraphIndex,expression,character?,attire?${hasAudio ? ",bgm?,sfx?" : ""}}],choices:[{label,submission}],characters:[{name,description}],speakers:[{paragraphIndex,name}]}`,
     config.customPlannerInstructions ? config.customPlannerInstructions.trim() : ""
   ].filter(Boolean).join("\n");
 }
@@ -383,7 +390,23 @@ function normalizePlannerOutput(value: unknown): unknown {
     scenes,
     cues: rawCues.map(normalizeCue),
     choices: Array.isArray(record.choices) ? record.choices.map(normalizeChoice) : [],
-    characters: rawCharacters.map(normalizeCharacter)
+    characters: rawCharacters.map(normalizeCharacter),
+    speakers: Array.isArray(record.speakers)
+      ? record.speakers
+        .map((entry) => {
+          if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+          const item = entry as Record<string, unknown>;
+          const paragraphIndex = typeof item.paragraphIndex === "number" ? item.paragraphIndex
+            : typeof item.paragraphIndex === "string" ? Number.parseInt(item.paragraphIndex, 10)
+            : NaN;
+          const name = typeof item.name === "string" ? item.name.trim()
+            : typeof item.speaker === "string" ? item.speaker.trim()
+            : "";
+          if (!Number.isInteger(paragraphIndex) || paragraphIndex < 0 || !name) return null;
+          return { paragraphIndex, name };
+        })
+        .filter((entry): entry is { paragraphIndex: number; name: string } => entry !== null)
+      : []
   };
 }
 
@@ -730,7 +753,8 @@ function fallbackPlanner(input: PlanTurnInput, paragraphCount: number): z.infer<
     }],
     cues,
     choices: [],
-    characters: []
+    characters: [],
+    speakers: []
   };
 }
 
@@ -1116,10 +1140,54 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
       unlocksAfterParagraph: finalParagraph
     }));
 
+  // Per-paragraph literal nameplate attribution. Display-only metadata: a
+  // claimed speaker is accepted only when it matches a KNOWN name (planner
+  // roster, scene casts, persona, protagonist, card/speaker name) so a
+  // hallucinated attribution can never invent a nameplate. "Narrator" maps to
+  // an empty plate (classic VN narration); unknown/missing stays null and the
+  // frontend falls back to the turn speaker, i.e. today's behavior.
+  const cardDisplayName = (visualContext.characterIdentity?.name ?? "").trim();
+  const personaDisplayName = (personaName ?? "").trim();
+  const canonicalNames = new Map<string, string>();
+  const addCanonical = (name: string | null | undefined) => {
+    const trimmed = (name ?? "").trim();
+    if (!trimmed) return;
+    const key = trimmed.toLowerCase();
+    if (!canonicalNames.has(key)) canonicalNames.set(key, trimmed);
+  };
+  for (const character of planner.characters) addCanonical(character.name);
+  for (const scene of scenes) {
+    addCanonical(scene.character);
+    for (const castMember of scene.cast) addCanonical(castMember);
+  }
+  addCanonical(protagonistName);
+  addCanonical(cardDisplayName);
+  addCanonical(input.message.name);
+  const paragraphSpeakerByIndex = new Map<number, string>();
+  for (const entry of planner.speakers) {
+    if (paragraphSpeakerByIndex.has(entry.paragraphIndex)) continue;
+    const claimed = entry.name.trim();
+    if (!claimed) continue;
+    if (claimed.toLowerCase() === "narrator") {
+      paragraphSpeakerByIndex.set(entry.paragraphIndex, "");
+      continue;
+    }
+    if (isPersona(claimed)) {
+      if (personaDisplayName) paragraphSpeakerByIndex.set(entry.paragraphIndex, personaDisplayName);
+      continue;
+    }
+    const canonical = canonicalNames.get(claimed.toLowerCase());
+    if (canonical) paragraphSpeakerByIndex.set(entry.paragraphIndex, canonical);
+  }
+  const paragraphSpeakers = narrative.paragraphs.map(
+    (paragraph) => paragraphSpeakerByIndex.get(paragraph.index) ?? null
+  );
+
   const plan = validateTurnPlan(TurnPlanSchema.parse({
     schemaVersion: 1,
     key,
     paragraphs: narrative.paragraphs,
+    paragraphSpeakers,
     scenes,
     visualCues: cues,
     audioCues,
