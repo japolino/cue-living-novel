@@ -3,11 +3,16 @@ import type { VisualNovelConfig } from "../../config.js";
 import { AssetJobSchema, type AssetJob, type SceneState, type TurnPlan, type VisualCue } from "../../shared/contracts.js";
 import { AssetScheduler } from "../core/asset-scheduler.js";
 import { POSE_EXPRESSION_CATALOGUE, poseById } from "../../shared/character.js";
+import { compileActionProp } from "../../shared/action-prop.js";
 import {
   appearanceMapKeyFor,
   characterAppearanceKey,
+  characterIdFor,
   normalizeCharacterName,
-  type CharacterAppearanceMap
+  stripAnatomyCompounds,
+  subjectPromptFor,
+  type CharacterAppearanceMap,
+  type SubjectCategory
 } from "../../shared/identity.js";
 import { assemblePrompt, normalizeConfig, renderNegativeWithCurrentSelection, renderPrompt, splitTopLevelCsv, parseWeightedGroup, validateAndRepairDelimiters, type Config, type PromptEntry } from "../inlay-prompt/index.js";
 import {
@@ -37,6 +42,10 @@ function sceneForCue(plan: TurnPlan, cue: VisualCue): SceneState {
 export type CueVisualState = {
   characterName: string;
   characterKey: string;
+  /** Stable registry id when the planner resolved one; falls back to the name key. */
+  characterId: string;
+  /** Durable subject class persisted with the cue; `unknown` defers to the identity text. */
+  subjectCategory: SubjectCategory;
   baseIdentity: string;
   identity: string;
   attire: string;
@@ -91,7 +100,11 @@ export function resolveCueCharacterVisualState(
     identity = attire;
   }
 
-  return { characterName, characterKey, baseIdentity, identity, attire };
+  const characterId = cue.characterId?.trim() || (characterKey === sceneCharacterKey && scene.characterId?.trim()) || characterIdFor(characterName);
+  const subjectCategory: SubjectCategory = cue.subjectCategory
+    ?? (characterKey === sceneCharacterKey ? scene.subjectCategory : undefined)
+    ?? "unknown";
+  return { characterName, characterKey, characterId, subjectCategory, baseIdentity, identity, attire };
 }
 
 function compilePromptEntry(
@@ -115,8 +128,9 @@ function compilePromptEntry(
   });
   const visualState = resolveCueCharacterVisualState(scene, cue, characterAppearance);
   const identity = visualState.identity;
-  const [label, situation] = classifySubject(identity);
+  const [label, situation] = classifySubject(identity, visualState.subjectCategory);
   const pose = poseById(POSE_EXPRESSION_CATALOGUE, cue.poseExpressionId);
+  const actionTag = compileActionProp(cue.action);
   const timeWeather = [scene.environment.timeOfDay, scene.environment.weather].filter(Boolean).join(", ");
   const desc = scene.environment.description?.trim();
   const isRedundantDesc = !desc || desc.toLowerCase() === `a quiet ${scene.environment.location.toLowerCase()}.` || desc.toLowerCase() === scene.environment.location.toLowerCase();
@@ -139,6 +153,7 @@ function compilePromptEntry(
       label,
       identity,
       expression: pose.suffix,
+      ...(actionTag ? { action: actionTag } : {}),
       visibleTags: identity
     }]
   }, compilerConfig, 1, 1);
@@ -523,11 +538,20 @@ export function applyAttireOverride(baseIdentity: string, newAttire: string): st
   return validateAndRepairDelimiters(combined);
 }
 
-export function classifySubject(identity: string): [label: string, situation: string] {
+/**
+ * Decide the solo subject line. A persisted `subjectCategory` wins outright;
+ * only `unknown` falls back to explicit gender words in the identity text.
+ * Species and anatomy compounds ("cat ears", "fox tail", "wolf fur") are
+ * stripped before the creature check, so animal ears never make a "1other".
+ */
+export function classifySubject(identity: string, subjectCategory: SubjectCategory = "unknown"): [label: string, situation: string] {
+  const persisted = subjectPromptFor(subjectCategory);
+  if (persisted) return persisted;
+
   const text = identity.toLowerCase();
   if (/\b1boy\b/.test(text)) return ["boy", "1boy, solo"];
   if (/\b1girl\b/.test(text)) return ["girl", "1girl, solo"];
-  if (/\b1other\b/.test(text)) return ["1other", "1other, solo"];
+  if (/\b1other\b/.test(text)) return ["other", "1other, solo"];
 
   // Strip relational prose and possessives (e.g. "sister's", "mother's")
   let cleaned = text.replace(/\b\w+'s\b/gi, "");
@@ -536,17 +560,20 @@ export function classifySubject(identity: string): [label: string, situation: st
   cleaned = cleaned.replace(/\bfake\s+(?:mustache|beard)\b/gi, "");
 
   const isNonbinary = /\b(?:nonbinary|non-binary|agender|genderless)\b/i.test(cleaned);
-  const isAnimal = /\b(?:dog|cat|retriever|hound|wolf|horse|quadruped|four\s+legs|animal|creature|beast|monster)\b/i.test(cleaned);
-
   const isFemale = /\b(?:girl|woman|female|lady|gal|tomboy|(?:demon|wolf|cat|fox|monster|bunny|cow)\s*(?:girl|woman|female))\b/i.test(cleaned);
   const isMale = /\b(?:boy|man|male|guy|gentleman|father|son|brother|husband|(?:demon|wolf|cat|fox|monster|bunny|cow)\s*(?:boy|man|male)|anthro\s+\w+\s+male|male\s+warrior|male\s+android)\b/i.test(cleaned);
+
+  // Animal words attached to body parts are anatomy, not a creature subject.
+  const creatureText = stripAnatomyCompounds(cleaned)
+    .replace(/\b(?:kitsune|catgirl|foxgirl|wolfgirl|kemonomimi|nekomimi|neko|anthro|furry|beastkin|monster\s+girl|monster\s+boy)\b/gi, " ");
+  const isAnimal = /\b(?:dog|cat|retriever|hound|wolf|horse|quadruped|four\s+legs|animal|creature|beast|monster)\b/i.test(creatureText);
 
   if (isFemale && !isMale) {
     return ["girl", "1girl, solo"];
   } else if (isMale && !isFemale) {
     return ["boy", "1boy, solo"];
-  } else if (isAnimal || isNonbinary || /\b(?:1other|creature|monster|animal|robot|android|cyborg|machine|golem|inanimate)\b/i.test(cleaned)) {
-    return ["1other", "1other, solo"];
+  } else if (isAnimal || isNonbinary || /\b(?:1other|creature|monster|animal|robot|android|cyborg|machine|golem|inanimate)\b/i.test(creatureText)) {
+    return ["other", "1other, solo"];
   }
 
   // Default

@@ -1,5 +1,8 @@
 import { z } from "zod";
+import { ActionPropFieldSchema, ActionPropSchema, type ActionProp } from "./action-prop.js";
 import { PanelArtifactSchema } from "./panels.js";
+
+export { ActionPropFieldSchema, ActionPropSchema, type ActionProp };
 
 const IdentifierSchema = z.string().trim().min(1).max(256);
 const PropertyNameSchema = z.string().trim().min(1).max(128);
@@ -31,6 +34,14 @@ export const ChoiceSchema = z.object({
   unlocksAfterParagraph: NonNegativeIntegerSchema
 }).strict();
 export type Choice = z.infer<typeof ChoiceSchema>;
+
+/**
+ * Durable prompt subject class of a character. Persisted separately from
+ * anatomy: species and animal-ear tags never decide it. `unknown` lets the
+ * compiler fall back to explicit gender words in the identity text.
+ */
+export const SubjectCategorySchema = z.enum(["female", "male", "nonbinary", "nonhuman", "unknown"]);
+export type SubjectCategory = z.infer<typeof SubjectCategorySchema>;
 
 export const CharacterContinuitySchema = z.object({
   present: z.boolean().default(true),
@@ -131,6 +142,8 @@ export const SceneStateSchema = z.object({
   activeAssetId: IdentifierSchema.nullable().default(null),
   priorSceneId: IdentifierSchema.nullable().default(null),
   character: TextSchema.nullable().optional(),
+  characterId: z.string().trim().min(1).optional(),
+  subjectCategory: SubjectCategorySchema.optional(),
   attire: TextSchema.nullable().optional(),
   ambient: AmbientEffectSchema.nullable().optional()
 }).strict();
@@ -185,10 +198,12 @@ export const VisualCueSchema = z.object({
   sceneId: IdentifierSchema,
   sceneRevision: NonNegativeIntegerSchema,
   kind: VisualCueKindSchema,
-  action: z.string().trim().nullable().default(null),
+  action: ActionPropFieldSchema.default(null),
   expression: z.string().trim().nullable().default(null),
   poseExpressionId: z.string().trim().optional(),
   character: z.string().trim().nullable().optional(),
+  characterId: z.string().trim().min(1).optional(),
+  subjectCategory: SubjectCategorySchema.optional(),
   attire: z.string().trim().nullable().optional(),
   resolvedIdentity: z.string().optional(),
   resolvedAttire: z.string().nullable().optional(),
@@ -288,7 +303,13 @@ export const TurnPlanSchema = z.object({
   initialContinuity: ContinuityStateSchema,
   continuityDeltas: z.array(IndexedContinuityDeltaSchema).default([]),
   terminalContinuity: ContinuityStateSchema,
-  terminalVisualState: z.object({ character: z.string(), identity: z.string(), attire: z.string().nullable() }).optional(),
+  terminalVisualState: z.object({
+    character: z.string(),
+    characterId: z.string().trim().min(1).optional(),
+    subjectCategory: SubjectCategorySchema.optional(),
+    identity: z.string(),
+    attire: z.string().nullable()
+  }).optional(),
   planningStatus: PlanningStatusSchema,
   createdAt: TimestampSchema
 }).strict().superRefine((plan, context) => {

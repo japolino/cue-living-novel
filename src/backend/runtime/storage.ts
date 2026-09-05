@@ -14,10 +14,15 @@ import {
   distillVisualTags,
   hasIdentityDocumentNoise,
   isUsableIdentity,
+  mergeCharacterDeclarations,
   normalizeCharacterName,
+  normalizeCharacterRegistry,
   splitTags,
   toUsableTags,
-  type CharacterAppearanceMap
+  type CharacterAppearanceMap,
+  type CharacterDeclaration,
+  type CharacterRegistry,
+  type RegistryMergeReport
 } from "../../shared/identity.js";
 
 export type StoredTurnRecord = {
@@ -316,6 +321,98 @@ export async function mergePlannerCharacters(
   });
 }
 
+
+/* ------------------------------------------------------------------ *
+ * Per-chat character registry: stable ids, explicit aliases, subject class.
+ * ------------------------------------------------------------------ */
+
+export const CHARACTER_REGISTRY_SCHEMA_VERSION = 1 as const;
+
+export type StoredCharacterRegistry = {
+  schemaVersion: typeof CHARACTER_REGISTRY_SCHEMA_VERSION;
+  characters: CharacterRegistry;
+  updatedAt: string;
+};
+
+/** Path of the per-chat character registry. */
+export function characterRegistryPath(chatId: string): string {
+  return `chats/${safeSegment(chatId)}/character-registry.json`;
+}
+
+function chatRosterPath(chatId: string): string {
+  return `chats/${safeSegment(chatId)}/characters.json`;
+}
+
+/**
+ * Backward-compatible registry read. Chats created before the registry existed
+ * have only `characters.json` (name -> tags) and `visual-state.json`; those
+ * names are promoted to canonical entries with derived ids, no aliases, and a
+ * subject category taken only from explicit gender words in the tags. Nothing
+ * is written on load.
+ */
+export async function loadCharacterRegistry(
+  spindle: SpindleAPI,
+  chatId: string,
+  userId?: string
+): Promise<CharacterRegistry> {
+  const options = { fallback: null, ...(userOptions(userId) ?? {}) };
+  const raw = await spindle.userStorage.getJson<unknown>(characterRegistryPath(chatId), options);
+  const stored = normalizeCharacterRegistry(raw);
+  const declarations: CharacterDeclaration[] = [];
+  const rosterRaw = await spindle.userStorage.getJson<unknown>(chatRosterPath(chatId), { fallback: {}, ...(userOptions(userId) ?? {}) });
+  for (const [name, tags] of Object.entries(normalizeAppearanceMap(rosterRaw))) declarations.push({ name, tags });
+  const visualRaw = await spindle.userStorage.getJson<unknown>(singleCharacterStatePath(chatId), options);
+  const visual = migrateVisualProfilesToSingleCharacter(visualRaw);
+  if (normalizeCharacterName(visual.protagonist.name)) declarations.push({ name: visual.protagonist.name, tags: visual.protagonist.tags });
+  return mergeCharacterDeclarations(stored, declarations).registry;
+}
+
+/**
+ * Merge explicit declarations into the persisted registry (serialized
+ * read-merge-write). Existing ids, canonical names and usable baselines are
+ * never rewritten; aliases owned by another entry are rejected and reported.
+ */
+export async function mergeCharacterRegistry(
+  spindle: SpindleAPI,
+  chatId: string,
+  declarations: readonly CharacterDeclaration[],
+  userId?: string
+): Promise<RegistryMergeReport> {
+  const path = characterRegistryPath(chatId);
+  let report: RegistryMergeReport = { registry: {}, changed: false, rejectedAliases: [], rejectedSubjects: [] };
+  await serializedWrite(scopedKey(userId, path), async () => {
+    const existing = await loadCharacterRegistry(spindle, chatId, userId);
+    const existingRaw = await spindle.userStorage.getJson<unknown>(path, { fallback: null, ...(userOptions(userId) ?? {}) });
+    report = mergeCharacterDeclarations(existing, declarations);
+    // Persist when anything changed, or when legacy sources were promoted for the first time.
+    const promoted = !existingRaw && Object.keys(existing).length > 0;
+    if (!report.changed && !promoted) return;
+    const record: StoredCharacterRegistry = {
+      schemaVersion: CHARACTER_REGISTRY_SCHEMA_VERSION,
+      characters: report.registry,
+      updatedAt: new Date().toISOString()
+    };
+    await spindle.userStorage.setJson(path, record, { indent: 2, ...(userOptions(userId) ?? {}) });
+  });
+  return report;
+}
+
+/** Persist a whole resolved registry (e.g. the planner's merged result) without dropping entries. */
+export async function saveCharacterRegistry(
+  spindle: SpindleAPI,
+  chatId: string,
+  registry: CharacterRegistry,
+  userId?: string
+): Promise<RegistryMergeReport> {
+  const declarations: CharacterDeclaration[] = Object.values(registry).map((entry) => ({
+    name: entry.name,
+    characterId: entry.id,
+    aliases: entry.aliases,
+    tags: entry.tags,
+    subjectCategory: entry.subjectCategory
+  }));
+  return mergeCharacterRegistry(spindle, chatId, declarations, userId);
+}
 
 /**
  * One-time batch migration/repair. Lists every `chats/<id>/visual-state.json`,
