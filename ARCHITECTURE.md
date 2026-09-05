@@ -40,8 +40,10 @@ Lumiverse staging host
         +-- per-chat planning queue
         +-- context assembly
         +-- scene and cue planner
-        +-- fixed-camera single-character prompt compiler
+        +-- upper-body single-subject prompt compiler (vendored Inlay)
         +-- per-provider image scheduler
+        +-- reference portrait store
+        +-- audio catalog and import
         +-- chat mutation
         +-- per-user storage
 ```
@@ -55,13 +57,15 @@ Lumiverse staging host
 | `src/frontend/store` | deterministic paragraph, acknowledgement, choice, and input gating |
 | `src/frontend/settings` | Lumiverse settings surface |
 | `src/frontend/theme` | stable `data-vn-*` selectors, base theme, scene-image fit attribute, CSS isolation, network-fetch stripping |
-| `src/backend/runtime/controller.ts` | host event handling, submission reconciliation, active-turn ownership, single-character load/save |
-| `src/backend/runtime/planner.ts` | sidecar request, fallback plan, fixed camera, exactly-one-protagonist scene/cue/choice construction, deterministic pose assignment |
-| `src/backend/runtime/images.ts` | deterministic prompt compilation, image generation, per-provider asset scheduling, asset updates |
-| `src/backend/runtime/storage.ts` | versioned per-user config, per-chat state, frozen single-character visual state, serialized writes |
-| `src/backend/core/visual-state.ts` | immutable single-character identity registry, frozen tag block, schema-v1 profile migration |
+| `src/backend/runtime/controller.ts` | host event handling, submission reconciliation, active-turn ownership, visual-state and portrait load/save |
+| `src/backend/runtime/planner.ts` | sidecar request, JSON repair and fallback plan, scene/cue/choice construction, active-character and attire attribution, per-paragraph speaker nameplates, deterministic expression assignment |
+| `src/backend/runtime/images.ts` | deterministic prompt compilation through the vendored Inlay compiler, image generation, per-provider asset scheduling, reference-portrait anchoring, asset updates |
+| `src/backend/runtime/storage.ts` | versioned per-user config, per-chat state, protagonist visual state, per-chat portrait store, durable character-appearance memory, serialized writes |
+| `src/backend/runtime/audio-catalog.ts` | audio library scan, BGM/SFX categorization, tag matching |
+| `src/backend/inlay-prompt` | vendored Inlay prompt compiler: tag assembly, visibility filtering, environment sections, ComfyUI/NovelAI syntax rendering |
+| `src/backend/core/visual-state.ts` | frozen protagonist tag block, schema-v1 profile migration |
 | `src/backend/core` | host-neutral queues, contracts, continuity reduction, boundary decisions, stale guards |
-| `src/shared/character.ts` | closed pose/expression catalogue, pure pose selection, frozen single-character identity types |
+| `src/shared/character.ts` | closed pose/expression catalogue (92 entries), pure expression selection, single-character identity types |
 | `src/shared/contracts.ts` | strict Zod trust-boundary schemas |
 | `src/protocol.ts` | narrow frontend/backend message protocol |
 
@@ -76,10 +80,11 @@ GENERATION_ENDED
   -> key by chat + message + swipe + content fingerprint + revision
   -> enqueue one planning job for that chat
   -> gather recent and enabled structured context
-  -> ask sidecar for scenes, cues, and optional choices
-  -> resolve the frozen single-character identity (seed once, then freeze) and assign each cue a closed-catalogue pose
+  -> ask sidecar for scenes, cues, speakers, and optional choices
+  -> resolve the protagonist identity (seed once from planner/card/appearance memory, then freeze) and map each cue's expression onto the closed catalogue
+  -> attribute each paragraph to a literal speaker nameplate and each cue to its active character, attire, and optional BGM/SFX
   -> validate claimed scene changes against objective evidence
-  -> persist TurnPlan and the single-character visual state
+  -> persist TurnPlan, the visual state, and any new appearance memory
   -> show paragraph 0 immediately
   -> enqueue all cue images by visible/next/background priority
 
@@ -125,15 +130,24 @@ The frontend controller applies the whole presentation config (theme preset, sce
 A scene owns:
 
 - structured location, time, weather, lighting, and persistent environment elements
-- exactly one protagonist via `cast` (a single name) and the frozen identity/tag block (`identityPrompt`)
-- a reusable base prompt
-- a fixed, centered 16:9 camera lock
-- composition constraints and prior-scene lineage
-- zero or more paragraph cues
+- a `cast` list, an optional active `character` and `attire`, and the identity/tag block (`identityPrompt`)
+- a reusable base prompt and a declared composition lock (planner metadata; the current compiler does not forward `basePrompt`, the composition lock, or a 16:9 requirement to the provider)
+- prior-scene lineage
+- a scene-scoped `ambient` effect id (weather/mood layer; persists until the next scene boundary)
+- zero or more paragraph cues, each carrying an expression id, an optional one-shot `effect` id, and optional per-cue character, attire, BGM, and SFX
 
 The planner may propose a boundary, but the deterministic boundary reducer accepts a new scene only for an initial scene, location change, major time jump, environment replacement, or explicit force. Emotion, pose, ordinary action, punctuation, and camera wording do not create a new scene. Where a boundary is not justified, the previous scene (and its camera, composition, and base prompt) is reused so the frame stays stable.
 
-Camera framing is fixed to an eye-level, medium-wide, 50mm-equivalent, centered-subject composition with the lower quarter kept free for dialogue. This matches the supplied reference frames: the character stays centered, background geometry remains stable, and the dialogue or choice surface occupies the lower portion without covering the face. The lock is carried verbatim on every scene, so no scene can widen or re-frame the shot in a way that breaks the composition.
+Compiled camera framing is fixed to `upper body, eye level, straight-on` for every cue. The scene still carries a declared composition lock and the dialogue-safe-region intent as planner metadata, but the compiler does not currently emit them; framing stability comes from the fixed camera tags plus scene reuse. Keeping faces clear of the dialogue UI therefore depends on the provider/workflow dimensions rather than an enforced prompt constraint.
+
+## Stage effects
+
+Stage visuals are layered procedurally (CSS + inline SVG only; no network assets):
+
+- **Ambient effects** (scene scope): `rain`, `heavy_rain`, `snow`, `sakura`, `fog`, `fireflies`, `embers`, `vignette_dark`, `sepia_flashback`, `desaturate`, `dream_haze`, `danger_pulse`. The planner proposes one per scene (`PlannerSceneSchema.ambient`); it persists until the next accepted scene boundary. Weather effects animate real particle fields (multi-depth falling rain/snow, fluttering petals, drifting firefly glow, rising embers); `heavy_rain` adds a wet-lens pass (subtle blur plus refraction droplets). Grade effects (vignette, sepia, desaturate, haze, danger pulse) apply only to the scene image or a dedicated overlay — never to the dialogue box.
+- **One-shot cue effects** (paragraph scope): `shake`, `shake_hard`, `rumble`, `zoom_in`, `zoom_out`, `zoom_punch`, `tilt`, `heartbeat`, `flash_white`, `flash_red`, `lightning`, `speed_lines`, `blur_pulse`, `fade_to_black`, `fade_from_black`, `fade_to_white`, `sparkle_burst`, `hearts_burst`, `confetti`. The planner attaches them to individual cues (`PlannerCueSchema.effect`) for dramatic beats only; each runs once and self-clears.
+
+Pipeline: the planner emits raw strings which are normalized (trim, lowercase, spaces/hyphens to underscores) and validated against the closed catalogues in `src/shared/contracts.ts` — unknown ids are dropped to `null`/absent, never passed through. `TurnView` exposes per-paragraph `effects` and `ambients` arrays (omitted when empty) so the host can apply the turn's first ambient on load and paragraph-level overrides on reveal. The stage renders ambient markup inside the scene container (`data-vn-scene-ambient` drives scene-image filters; a sibling overlay carries particle/grade layers) and one-shot bursts in a dedicated fx overlay above the scene but below the dialogue box. Particle placement uses a seeded avalanche hash with stratified horizontal slots so fields cover the full width deterministically; all animation respects `prefers-reduced-motion` (static grade only, no motion).
 
 ## Asset state machine
 
@@ -153,32 +167,37 @@ Lumiverse chat messages are canonical. Paragraphs, choices, scenes, cues, and as
 
 ```text
 config.json
+character-appearance.json
+character-appearance-migrated.json
 chats/<chat-id>/state.json
 chats/<chat-id>/visual-state.json
+chats/<chat-id>/portraits.json
 turns/<chat-id>/<assistant-message-id>/<swipe-id>.json
 ```
 
-Per-path writes are serialized because `userStorage` has no transaction or compare-and-swap operation. Chat state points to the active turn and carries the latest accepted scene and terminal continuity. The visual-state record holds the frozen single-character identity and the latest environment descriptor.
+Per-path writes are serialized because `userStorage` has no transaction or compare-and-swap operation. Chat state points to the active turn and carries the latest accepted scene and terminal continuity. The visual-state record holds the frozen protagonist identity and the latest environment descriptor; the portrait record holds each character's canonical reference image ID and data; the appearance map remembers canonical tags per character name across chats.
 
 ## Image pipeline
 
-The extension has one native image pipeline. `planner.ts` asks a sidecar model — or a deterministic fallback planner when the sidecar is unavailable — for scene boundaries, environments, and paragraph cues, then builds a strict `TurnPlan`. `images.ts` compiles each cue into a prompt with `compileImagePrompt` and turns the plan into asset jobs with `createAssetJobs`, which a per-provider scheduler (`AssetScheduler`) generates with bounded concurrency and delivers progressively to the browser.
+The extension has one native image pipeline. `planner.ts` asks a sidecar model — or a deterministic fallback planner when the sidecar is unavailable — for scene boundaries, environments, paragraph cues (expression plus optional character, attire, BGM, SFX), per-paragraph speakers, and optional choices, then normalizes, repairs, and validates that JSON into a strict `TurnPlan` (one repair retry, then fallback). `images.ts` compiles each cue into a prompt with `compileImagePrompt` and turns the plan into asset jobs with `createAssetJobs`, which a per-provider scheduler (`AssetScheduler`) generates with bounded concurrency and delivers progressively to the browser.
 
-The compiled prompt is:
+Compilation goes through the vendored Inlay compiler (`src/backend/inlay-prompt`) configured for Anima-style tag assembly, ComfyUI section formatting, and `maxCharacters: 1`. The assembled prompt is, in order:
 
 ```text
-prefix + (identity: <tags>, solo | solo) + basePrompt + camera + composition + pose suffix + suffix
+prefix + subject (1girl|1boy|1other, solo) + identity tags (with any attire override applied)
+       + expression/pose suffix + environment (location, time+weather, lighting, background elements)
+       + camera (upper body, eye level, straight-on) + suffix
 ```
 
-The sidecar never supplies free-form `action`, `expression`, or prompt content. Those cue fields are emitted empty and ignored by the compiler, so no unbounded pose/expression vocabulary can re-enter the prompt. `PROMPT_PREFIX` and `PROMPT_SUFFIX` come from `config.ts`; the camera and composition come from the scene's fixed camera lock; the pose suffix comes from the closed catalogue.
+`PROMPT_PREFIX`, `PROMPT_SUFFIX`, and the negative prompt come from `config.ts`; the subject line is classified from the identity text; the pose suffix comes from the closed catalogue. The scene's `basePrompt`, composition lock, environment `description`, and declared aspect ratio are planner metadata that the current compiler does not forward to the provider.
 
-Where the extension owns the data, behavior is deterministic: a byte-identical content fingerprint keyed by message, swipe, and content makes generation events, reconnects, and edits idempotent; stale asset results are rejected by ownership guards; previous visual state is reused so the scene prompt and composition stay stable until a justified boundary; and the pipeline never mutates the canonical chat message.
+Where the extension owns the data, behavior is deterministic: a byte-identical content fingerprint keyed by message, swipe, and content makes generation events, reconnects, and edits idempotent; stale asset results are rejected by ownership guards; previous visual state is reused so the scene prompt stays stable until a justified boundary; and the pipeline never mutates the canonical chat message.
 
-### Exactly one protagonist
+### One subject per frame, switchable active character
 
-The planner instruction requires exactly one protagonist and explicitly forbids a second character, a crowd, a bystander, or "another" person. Its `characters` output is a single entry, and every scene `cast` is exactly `[protagonist.name]`. The prompt compiler forces `solo` into every compiled prompt, so a multi-character or background character frame cannot be generated from the planned scene.
+The planner instruction requires exactly one visible character per frame and forbids a second character, a crowd, or a bystander; the compiler forces `solo` into every prompt. Unlike earlier builds, the visible character is not always the same protagonist: the planner's `characters` output may describe several cast members, a scene can name an active `character`, and an individual cue can switch it again (`cue.character`, with persona names filtered out). Attire can likewise be overridden per scene or per cue. The frame is single-subject, but the subject can change between cues.
 
-### Frozen identity and tag block
+### Identity, appearance memory, and tag block
 
 The protagonist's physical identity is a frozen per-chat tag block stored at `chats/<chat-id>/visual-state.json` as:
 
@@ -186,13 +205,21 @@ The protagonist's physical identity is a frozen per-chat tag block stored at `ch
 { schemaVersion: 2, protagonist: { name, tags }, environment, updatedAt }
 ```
 
-On a fresh chat it is seeded once from the planner's single `characters` entry, whose comma-separated description becomes the normalized `tags` list. After seeding, the identity is immutable: `resolveSingleCharacter` returns the existing state whenever a name is already present, and `saveSingleCharacterState` never overwrites a stored `protagonist`. A later turn therefore cannot drift the appearance even if the sidecar proposes a different description. Only `environment` and `updatedAt` advance, and only on a real scene or environment change.
+On a fresh chat it is seeded once — from the planner's matching `characters` entry, the card, or the durable appearance memory — and the comma-separated description becomes the normalized `tags` list. After seeding, the protagonist identity is immutable: `saveSingleCharacterState` never overwrites a stored `protagonist`, so a later sidecar description cannot drift the appearance. Only `environment` and `updatedAt` advance. Document-shaped noise (a whole markdown card pasted as an appearance) is rejected rather than promoted into canonical memory.
 
-Legacy `{ schemaVersion: 1, profiles }` records are migrated transparently on read. The first profile — or an explicit `protagonistName` — is promoted to the frozen protagonist and its comma-separated `description` split into normalized, de-duplicated tags. No manual migration or storage rewrite is needed for existing chats, and nothing mutates the canonical chat message.
+Alongside the per-chat block, a durable global appearance map at `character-appearance.json` remembers one canonical comma-separated tag line per character name across chats, with a one-time migration marker at `character-appearance-migrated.json`. Legacy `{ schemaVersion: 1, profiles }` visual-state records are migrated transparently on read.
+
+### Reference portrait anchoring
+
+When reference anchoring is enabled (default on; toggle in settings or `imageParameters.referenceAnchoring`), the first successful render of a character is captured as that character's canonical portrait in `chats/<chat-id>/portraits.json`, keyed by a normalized character-appearance key, first-wins. Every later generation for that character passes the stored portrait back to the provider as an identity anchor: NovelAI receives a base64 reference image with `referenceStrength` (0..1, default 0.6); ComfyUI receives `resolvedSourceImages` for a workflow-mapped reference node. Other providers receive no reference parameters.
 
 ### Closed pose/expression catalogue
 
-Pose and expression belong to a closed, bounded catalogue (`POSE_EXPRESSION_CATALOGUE`, ≤ 16 entries, unique ids, non-empty suffixes). Selection is a pure function of `(paragraphIndex, paragraphText)`: a keyword match in the text wins, otherwise the set is indexed by paragraph index with a stable wrap-around. Each cue stores only a `poseExpressionId`; `compileImagePrompt` resolves it back to its exact suffix. Unknown or absent ids fall back to the first catalogue entry, so old stored cues and corrupt ids still resolve deterministically. The same paragraph always produces the same compiled prompt.
+Pose and expression belong to a closed, bounded catalogue (`POSE_EXPRESSION_CATALOGUE`, currently 92 entries, hard cap 128, unique ids, non-empty suffixes). The planner proposes a cue `expression`; a valid catalogue id is used directly, otherwise selection falls back to a pure function of `(paragraphIndex, paragraphText)` — keyword match first, then a stable paragraph-index wrap-around. Each cue stores only a `poseExpressionId`; `compileImagePrompt` resolves it back to its exact suffix. Unknown or absent ids fall back to the first catalogue entry, so old stored cues and corrupt ids still resolve deterministically. The same paragraph and plan always produce the same compiled prompt.
+
+## Audio pipeline
+
+Audio is optional and user-supplied. The settings panel imports audio files from any folder in chunks that fit the host's 4 MB message limit; `audio-catalog.ts` scans the stored library, classifies each file as BGM or SFX from its path keywords, and derives searchable tags from file and folder names. When a library is present, the planner is asked for optional per-cue `bgm` and `sfx` names, which the frontend `audio-engine` resolves against the catalog and plays with looped music and one-shot effects. Chats without an audio library skip all of this: the planner is not asked for audio cues.
 
 ## Staging host contract
 
