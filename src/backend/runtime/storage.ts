@@ -11,6 +11,7 @@ import {
 import {
   appearanceMapKeyFor,
   characterAppearanceKey,
+  distillVisualTags,
   hasIdentityDocumentNoise,
   isUsableIdentity,
   normalizeCharacterName,
@@ -155,16 +156,22 @@ export async function saveSingleCharacterState(
     // state is not frozen, so it can be repaired once a richer identity exists.
     const existingName = normalizeCharacterName(existing.protagonist.name);
     const existingUsable = isUsableIdentity(existingName, existing.protagonist.tags);
-    const incomingUsable = isUsableIdentity(state.protagonist.name, state.protagonist.tags);
+    const incomingName = normalizeCharacterName(state.protagonist.name);
+    const incomingUsable = isUsableIdentity(incomingName, state.protagonist.tags);
+    const sameCharacter = characterAppearanceKey(existingName) === characterAppearanceKey(incomingName);
     let protagonist: SingleCharacterState["protagonist"];
-    if (existingUsable) {
+    if (sameCharacter && existingUsable) {
+      // Continuing the same character: freeze initial seed to prevent prompt drift
       protagonist = { name: existing.protagonist.name, tags: toUsableTags(existing.protagonist.name, existing.protagonist.tags) };
     } else if (incomingUsable) {
+      // New character or first usable identity: adopt incoming
       protagonist = { name: state.protagonist.name, tags: toUsableTags(state.protagonist.name, state.protagonist.tags) };
+    } else if (existingUsable) {
+      protagonist = { name: existing.protagonist.name, tags: toUsableTags(existing.protagonist.name, existing.protagonist.tags) };
     } else {
       // Neither source carries a real appearance baseline. Keep the existing name
       // as the memory key, but NEVER inject the name as an appearance tag.
-      const name = existingName || normalizeCharacterName(state.protagonist.name);
+      const name = incomingName || existingName;
       protagonist = { name, tags: [] };
     }
     await spindle.userStorage.setJson(path, {
@@ -264,6 +271,48 @@ export async function mergeCharacterAppearanceFromState(
     });
   });
 }
+
+/**
+ * Merge planner-extracted characters into the durable global appearance map.
+ * Ensures characters introduced across scenes are remembered for subsequent turns.
+ */
+export async function mergePlannerCharacters(
+  spindle: SpindleAPI,
+  characters: Array<{ name: string; description: string }>,
+  userId?: string
+): Promise<void> {
+  if (!characters || characters.length === 0) return;
+  const path = characterAppearancePath();
+  await serializedWrite(scopedKey(userId, path), async () => {
+    const existingRaw = await spindle.userStorage.getJson<unknown>(path, {
+      fallback: {},
+      ...(userOptions(userId) ?? {})
+    });
+    const existing = normalizeAppearanceMap(existingRaw);
+    let changed = false;
+    for (const char of characters) {
+      const name = normalizeCharacterName(char.name);
+      if (!name) continue;
+      const key = characterAppearanceKey(name);
+      if (!key) continue;
+      const tags = distillVisualTags(char.description);
+      if (tags.length === 0) continue;
+      const existingKey = appearanceMapKeyFor(existing, name);
+      if (!existingKey || !isUsableIdentity(name, splitTags(existing[existingKey] ?? ""))) {
+        if (existingKey) delete existing[existingKey];
+        existing[name] = tags.join(", ");
+        changed = true;
+      }
+    }
+    if (changed) {
+      await spindle.userStorage.setJson(path, existing, {
+        indent: 2,
+        ...(userOptions(userId) ?? {})
+      });
+    }
+  });
+}
+
 
 /**
  * One-time batch migration/repair. Lists every `chats/<id>/visual-state.json`,

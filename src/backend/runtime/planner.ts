@@ -154,7 +154,7 @@ function plannerInstruction(config: VisualNovelConfig, visualContext?: VisualCon
     "FIRST-PERSON PERSPECTIVE (POV) & CHARACTER ATTRIBUTION:",
     `The visual novel is presented strictly from the first-person POV of the User/Persona (${personaName}).`,
     `- ${personaName} is the camera/observer and is NEVER drawn on screen. NEVER output ${personaName} as a character in cues.`,
-    `- The visible on-screen character is ALWAYS ${companionName} (or the active companion in the cast), never ${personaName}.`,
+    `- The visible on-screen character is ${companionName} (or whichever companion or character is active in the scene), never ${personaName}.`,
     `- Never set 'character' on a scene or cue to '${personaName}', 'User', or 'Player'.`,
     `- When narrative or dialogue describes what ${personaName} does or says (e.g. ${personaName} says they are sleepy, speaks, or takes an action), the on-screen cue expression must depict ${companionName}'s emotional reaction TO the user (e.g. listening, amused, fond, curious, surprised, playful, gentle), NOT ${personaName}'s private physical state (never make ${companionName} sleepy just because ${personaName} wants to sleep).`,
     "Paragraph indexes are zero-based. scenes must ALWAYS contain at least one scene with startParagraph: 0. Later scene starts must increase.",
@@ -170,8 +170,8 @@ function plannerInstruction(config: VisualNovelConfig, visualContext?: VisualCon
     config.mode === "cyoa" && config.generateChoices
       ? "choices: If the response does not contain authored Choice tags, return 2 to 4 contextual choices from the user's/persona's perspective. For each choice provide 'label' (a concise button text, e.g. 'Step closer and call her bluff') and 'submission' (a natural, descriptive action or dialogue sentence written in first-person prose from the user's perspective reacting to the scene, e.g. 'I take a slow step toward the desk, meeting her eyes with a quiet smirk. \"Are you really in a position to be making demands, Hina?\"'). NEVER return an index, number, or option code for submission."
       : "Return an empty choices array.",
-    "characters: Return name and ONE compact comma-separated line containing physical appearance tags. Capture permanent physical traits including species/race (e.g. elf, demon, catgirl, kitsune, furry, anthro, monster girl) and non-human anatomy (e.g. animal ears, horns, tail, wings, fangs, scales, fur, paws, claws). A description that merely repeats the name is invalid. Keep stable traits and never invent appearance that contradicts the card or KNOWN CHARACTERS baseline.",
-    "cast & active character: If multiple characters are present or in a scenario card, set 'character' on the scene or cue to the active speaking or focused character.",
+    "characters: Return name and ONE compact comma-separated line containing physical appearance tags. Capture permanent physical traits including species/race (e.g. elf, demon, catgirl, kitsune, furry, anthro, monster girl) and non-human anatomy (e.g. animal ears, horns, tail, wings, fangs, scales, fur, paws, claws). A description that merely repeats the name is invalid. If a new character enters or is introduced in this turn, include them in 'characters'. Keep stable traits and never invent appearance that contradicts the card or KNOWN CHARACTERS baseline.",
+    "cast & active character: Set 'character' on every scene and cue to the name of the character on screen. If a new or different character enters or speaks, set 'character' to that character.",
     "attire: If the active character changes clothes (e.g. swimsuit, pajamas, armor, sundress, uniform), specify the new outfit tags in 'attire'; otherwise null.",
     `effect: For a genuinely DRAMATIC beat only (impact, explosion, sudden reveal, blackout, jolt of fear, lightning strike, romantic rush), set the cue 'effect' to exactly one of: ${StageEffectSchema.options.join(", ")}. Otherwise null. Most paragraphs must have no effect.`,
     `ambient: On each scene, set 'ambient' to exactly one of: ${AmbientEffectSchema.options.join(", ")} when the scene's weather or mood clearly calls for a persistent overlay (rain outside, snowfall, dense fog, a flashback, dread); otherwise null.`,
@@ -369,9 +369,25 @@ function normalizeChoice(value: unknown): unknown {
 function normalizeCharacter(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const record = value as Record<string, unknown>;
+  const name = typeof record.name === "string" ? record.name.trim() : "";
+  const rawDesc = typeof record.description === "string" && record.description.trim()
+    ? record.description.trim()
+    : typeof record.appearance === "string" && record.appearance.trim()
+      ? record.appearance.trim()
+      : typeof record.visualTags === "string" && record.visualTags.trim()
+        ? record.visualTags.trim()
+        : typeof record.visual_tags === "string" && record.visual_tags.trim()
+          ? record.visual_tags.trim()
+          : typeof record.prompt === "string" && record.prompt.trim()
+            ? record.prompt.trim()
+            : typeof record.tags === "string" && record.tags.trim()
+              ? record.tags.trim()
+              : Array.isArray(record.tags)
+                ? record.tags.filter((t): t is string => typeof t === "string" && Boolean(t.trim())).join(", ")
+                : "";
   return {
-    name: typeof record.name === "string" ? record.name.trim() : "",
-    description: typeof record.description === "string" ? record.description.trim() : ""
+    name,
+    description: rawDesc
   };
 }
 
@@ -423,6 +439,12 @@ function normalizePlannerOutput(value: unknown): unknown {
     rawCharacters = record.characters;
   } else if (record.character && typeof record.character === "object" && !Array.isArray(record.character)) {
     rawCharacters = [record.character];
+  } else if (record.characters && typeof record.characters === "object" && !Array.isArray(record.characters)) {
+    rawCharacters = Object.entries(record.characters as Record<string, unknown>).map(([name, val]) => {
+      if (typeof val === "string") return { name, description: val };
+      if (val && typeof val === "object" && !Array.isArray(val)) return { name, ...(val as Record<string, unknown>) };
+      return { name, description: "" };
+    });
   }
 
   return {
@@ -510,7 +532,16 @@ function repairJsonString(candidate: string): string {
       if (inString) {
         // Lookahead: If inside string, check if this quote is followed by structural delimiter
         const rest = text.slice(i + 1).trimStart();
-        if (rest && !/^[,\}\]\:\n\r]/.test(rest)) {
+        let isRealDelimiter = false;
+        if (/^[:\}\]\n\r]/.test(rest)) {
+          isRealDelimiter = true;
+        } else if (rest.startsWith(",")) {
+          const afterComma = rest.slice(1).trimStart();
+          if (/^(?:"[^"\\]*"\s*:|[\{\[\]\}]|"[^"\\]*"|-?\d|true|false|null)/.test(afterComma)) {
+            isRealDelimiter = true;
+          }
+        }
+        if (!isRealDelimiter && rest) {
           // Unescaped inner quote inside string! Escape it.
           chars.push('\\"');
           continue;
@@ -794,7 +825,13 @@ function fallbackPlanner(input: PlanTurnInput, paragraphCount: number): z.infer<
         description,
         persistentElements: []
       },
-      cast: previous?.cast ?? [input.message.name].filter(Boolean),
+      cast: (() => {
+        const speaker = input.message.name?.trim();
+        const isUserSpeaker = speaker ? ["user", "player", "persona", "{{user}}"].includes(speaker.toLowerCase()) : true;
+        return speaker && !isUserSpeaker
+          ? [speaker]
+          : (previous?.cast ?? [input.message.name].filter(Boolean));
+      })(),
       basePrompt: previous?.basePrompt ?? `${description}, ${location}`,
       compositionLock: previous?.compositionLock ?? "Speaking character centered with the lower quarter clear for dialogue."
     }],
@@ -911,7 +948,58 @@ function resolveSingleCharacter(
   const frozen = input.singleCharacter;
   const frozenName = normalizeCharacterName(frozen.protagonist.name);
 
-  // 1. A USABLE per-chat frozen baseline is authoritative and wins outright.
+  const personaName = normalizeCharacterName(visualContext.personaIdentity?.name ?? "");
+  const isPersonaName = (candidate: string): boolean => {
+    if (!candidate) return false;
+    const n = candidate.trim().toLowerCase();
+    if (n === "user" || n === "player" || n === "persona" || n === "{{user}}") return true;
+    return Boolean(personaName && characterAppearanceKey(candidate) === characterAppearanceKey(personaName));
+  };
+
+  // If the planner introduces or focuses on a different non-persona character with usable tags,
+  // adopt that character as the active protagonist instead of staying trapped in the previous character.
+  const nonPersonaChars = planner.characters.filter((c) => !isPersonaName(c.name));
+  const activeSceneChar = planner.scenes[0]?.character && !isPersonaName(planner.scenes[0].character)
+    ? normalizeCharacterName(planner.scenes[0].character)
+    : "";
+  const activeCueChar = planner.cues[0]?.character && !isPersonaName(planner.cues[0].character)
+    ? normalizeCharacterName(planner.cues[0].character)
+    : "";
+  const firstPlannerChar = nonPersonaChars[0]?.name ? normalizeCharacterName(nonPersonaChars[0].name) : "";
+  const targetCharName = activeSceneChar || activeCueChar || firstPlannerChar;
+
+  const cardIdentity = buildCardIdentity(visualContext);
+  const cardHasCharacter = Boolean(cardIdentity && isUsableIdentity(cardIdentity.name, cardIdentity.tags));
+  const frozenMatchesCard = cardHasCharacter && characterAppearanceKey(cardIdentity!.name) === characterAppearanceKey(frozenName);
+
+  if (!frozenMatchesCard && targetCharName && frozenName && characterAppearanceKey(targetCharName) !== characterAppearanceKey(frozenName)) {
+    const matchingChar = nonPersonaChars.find((c) => {
+      const k1 = characterAppearanceKey(c.name);
+      const k2 = characterAppearanceKey(targetCharName);
+      return k1 === k2 || k1.replace(/[\s\-_]+/g, "") === k2.replace(/[\s\-_]+/g, "");
+    });
+    const extractedTags = matchingChar ? distillVisualTags(matchingChar.description) : [];
+    if (extractedTags.length >= 2 && isUsableIdentity(targetCharName, extractedTags)) {
+      return {
+        ...frozen,
+        protagonist: { name: targetCharName, tags: toUsableTags(targetCharName, extractedTags) },
+        environment: frozen.environment
+      };
+    }
+    const globalKey = appearanceMapKeyFor(input.characterAppearance, targetCharName);
+    if (globalKey) {
+      const globalTags = toUsableTags(targetCharName, splitTags(input.characterAppearance[globalKey] ?? ""));
+      if (isUsableIdentity(targetCharName, globalTags)) {
+        return {
+          ...frozen,
+          protagonist: { name: targetCharName, tags: globalTags },
+          environment: frozen.environment
+        };
+      }
+    }
+  }
+
+  // 1. A USABLE per-chat frozen baseline is authoritative when continuing the same character.
   //    A name-only / empty state is NOT usable, so it is repaired below instead.
   if (isUsableIdentity(frozenName, frozen.protagonist.tags)) {
     return {
@@ -928,7 +1016,6 @@ function resolveSingleCharacter(
   const plannerName = normalizeCharacterName(plannerCharacter?.name ?? "");
   const plannerTags = plannerCharacter ? distillVisualTags(plannerCharacter.description) : [];
   const plannerUsable = plannerTags.length >= 2 && isUsableIdentity(plannerName, plannerTags);
-  const personaName = normalizeCharacterName(visualContext.personaIdentity?.name ?? "");
   const plannerIsPersona = Boolean(personaName) && characterAppearanceKey(plannerName) === characterAppearanceKey(personaName);
   const cardName = normalizeCharacterName(visualContext.characterIdentity?.name ?? "");
   const speakerName = normalizeCharacterName(input.message.name?.trim() ?? "");
@@ -964,7 +1051,8 @@ function resolveSingleCharacter(
   // 4. Deterministic card fallback for planner failure/offline operation. Safe
   //    even on fallback: the tags come from THIS card's allow-listed visual
   //    fields, so they can never describe a character from another chat.
-  const cardIdentity = buildCardIdentity(visualContext);
+  // cardIdentity already declared above
+
   if (cardIdentity && cardIdentity.tags.length >= 2 && isUsableIdentity(cardIdentity.name, cardIdentity.tags)) {
     return { ...frozen, protagonist: cardIdentity, environment: frozen.environment };
   }
@@ -1031,6 +1119,7 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
   usedFallback: boolean;
   contextDiagnostics: VisualContextDiagnostics;
   singleCharacter: SingleCharacterState;
+  extractedCharacters?: Array<{ name: string; description: string }>;
 }> {
   const ignoredTags = parseIgnoredTags(input.config.ignoredTags);
   const resolvedContent = await resolveDisplayMacros(spindle, input, input.content);
@@ -1162,12 +1251,20 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
   }
 
   for (const proposal of proposals) {
+    const rawProposalChar = proposal.character && !isPersona(proposal.character) ? proposal.character : undefined;
+    const proposalCueChar = planner.cues.find(
+      (c) => c.paragraphIndex >= proposal.startParagraph && c.character && !isPersona(c.character)
+    )?.character;
+    const proposalCastChar = proposal.cast && proposal.cast.find((c) => !isPersona(c));
+    const nonPersonaPlannerChar = planner.characters.find((c) => !isPersona(c.name))?.name;
+    const activeChar = rawProposalChar || proposalCueChar || proposalCastChar || nonPersonaPlannerChar || previous?.character || protagonistName;
+    const targetCharKey = characterAppearanceKey(activeChar || protagonistName || "");
+
     const decision = decideSceneBoundary(previous, proposal.boundary);
     if (scenes.length > 0 && !decision.startsNewScene) continue;
-    const reusedScene = previous !== null && !decision.startsNewScene ? previous : null;
-    const rawProposalChar = proposal.character && !isPersona(proposal.character) ? proposal.character : undefined;
-    const activeChar = rawProposalChar || (proposal.cast && proposal.cast.find((c) => !isPersona(c))) || protagonistName;
-    const targetCharKey = characterAppearanceKey(activeChar || protagonistName || "");
+    const prevCharName = previous?.character || previous?.cast?.[0] || "";
+    const sameChar = !previous || !prevCharName || !activeChar || characterAppearanceKey(prevCharName) === characterAppearanceKey(activeChar);
+    const reusedScene = previous !== null && !decision.startsNewScene && sameChar ? previous : null;
 
     let isProposalReset = false;
     if (proposal.attire) {
@@ -1188,9 +1285,11 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
       if (globalKey && input.characterAppearance[globalKey]) {
         sceneIdentity = input.characterAppearance[globalKey];
       } else {
-        const matchingPlannerChar = planner.characters.find(
-          (c) => characterAppearanceKey(c.name) === characterAppearanceKey(activeChar)
-        );
+        const targetNorm = characterAppearanceKey(activeChar).replace(/[\s\-_]+/g, "");
+        const matchingPlannerChar = planner.characters.find((c) => {
+          const candNorm = characterAppearanceKey(c.name).replace(/[\s\-_]+/g, "");
+          return candNorm === targetNorm || characterAppearanceKey(c.name) === characterAppearanceKey(activeChar);
+        });
         if (matchingPlannerChar) {
           const distilled = distillVisualTags(matchingPlannerChar.description);
           if (distilled.length > 0) {
@@ -1431,7 +1530,7 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
   const singleCharacter = latestEnvironment && latestEnvironment !== characterState.environment
     ? { ...characterState, environment: latestEnvironment }
     : characterState;
-  return { plan, usedFallback, contextDiagnostics: visualContext.diagnostics, singleCharacter };
+  return { plan, usedFallback, contextDiagnostics: visualContext.diagnostics, singleCharacter, extractedCharacters: planner.characters };
 }
 
 export function fingerprintForMessage(message: Pick<ChatMessageDTO, "id" | "swipe_id" | "content">): string {

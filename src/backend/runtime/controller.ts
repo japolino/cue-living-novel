@@ -33,6 +33,7 @@ import {
   loadSingleCharacterState,
   loadTurnRecord,
   mergeCharacterAppearanceFromState,
+  mergePlannerCharacters,
   saveChatState,
   saveSingleCharacterState,
   saveTurnRecord,
@@ -438,6 +439,9 @@ async function processAssistantMessage(
     ].join(" | "));
     await saveSingleCharacterState(spindle, chatId, result.singleCharacter, userId);
     await mergeCharacterAppearanceFromState(spindle, result.singleCharacter, userId);
+    if (result.extractedCharacters && result.extractedCharacters.length > 0) {
+      await mergePlannerCharacters(spindle, result.extractedCharacters, userId);
+    }
         let jobs: StoredTurnRecord["jobs"] = [];
     if (config.useNativeCardImages) {
       try {
