@@ -252,3 +252,32 @@ describe("Finding #10: Environment truncation and description preservation", () 
     expect(compiled).toContain("Distinct spiral staircase");
   });
 });
+
+describe("Original creation reference tag injection", () => {
+  test("injects Character \\(Creation\\) when originalReference is enabled", () => {
+    const prompt = compileImagePrompt(
+      {
+        ...DEFAULT_CONFIG,
+        originalReference: true,
+        originalCreationName: "doki doki literature club"
+      },
+      scene,
+      cue("idle")
+    );
+    expect(prompt).toContain("Mira \\(doki doki literature club\\)");
+  });
+
+  test("does not inject Character \\(Creation\\) when originalReference is disabled", () => {
+    const prompt = compileImagePrompt(
+      {
+        ...DEFAULT_CONFIG,
+        originalReference: false,
+        originalCreationName: "doki doki literature club"
+      },
+      scene,
+      cue("idle")
+    );
+    expect(prompt).not.toContain("doki doki literature club");
+    expect(prompt).not.toContain("Mira \\(");
+  });
+});

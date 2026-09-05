@@ -47,6 +47,8 @@ const baseConfig: VisualNovelConfig = {
   referenceAnchoring: true,
   generateChoices: true,
   promptPresets: [],
+  originalReference: false,
+  originalCreationName: "",
   parserConnectionId: null,
   parserParameters: {},
   imageConnectionId: null,

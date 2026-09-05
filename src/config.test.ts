@@ -173,3 +173,16 @@ test("prompt presets default to an empty list", () => {
   assert.deepEqual(normalizeConfig({}).promptPresets, []);
   assert.deepEqual(normalizeConfig({ promptPresets: "nope" }).promptPresets, []);
 });
+
+test("configuration preserves and normalizes originalReference and originalCreationName", () => {
+  const normalized = normalizeConfig({
+    originalReference: true,
+    originalCreationName: "  doki doki literature club  "
+  });
+  assert.equal(normalized.originalReference, true);
+  assert.equal(normalized.originalCreationName, "doki doki literature club");
+
+  const defaults = normalizeConfig({});
+  assert.equal(defaults.originalReference, false);
+  assert.equal(defaults.originalCreationName, "");
+});

@@ -332,6 +332,8 @@ export class VisualNovelSettingsPanel {
             <label>Positive prefix<input name="promptPrefix" type="text" /></label>
             <label>Positive suffix<input name="promptSuffix" type="text" /></label>
             <label>Negative prompt<input name="negativePrompt" type="text" /></label>
+            <label data-check><input name="originalReference" type="checkbox" /><span>Include character creation / series reference tag</span></label>
+            <label>Creation / series name<input name="originalCreationName" type="text" placeholder="e.g. doki doki literature club" /><small>When enabled, formats character tags as: Character \(Creation\) (e.g. Miyo \(doki doki literature club\)).</small></label>
             <label>Planner instructions<textarea name="customPlannerInstructions"></textarea></label>
           </div>
         </details>
@@ -594,6 +596,8 @@ export class VisualNovelSettingsPanel {
     control<HTMLInputElement>(this.root, "promptPrefix").value = config.promptPrefix;
     control<HTMLInputElement>(this.root, "promptSuffix").value = config.promptSuffix;
     control<HTMLInputElement>(this.root, "negativePrompt").value = config.negativePrompt;
+    control<HTMLInputElement>(this.root, "originalReference").checked = config.originalReference;
+    control<HTMLInputElement>(this.root, "originalCreationName").value = config.originalCreationName;
     this.promptPresets = config.promptPresets.map((preset) => ({ ...preset }));
     this.renderPromptPresetOptions(control<HTMLSelectElement>(this.root, "promptPresetSelect").value);
     control<HTMLTextAreaElement>(this.root, "customPlannerInstructions").value = config.customPlannerInstructions;
@@ -653,6 +657,8 @@ export class VisualNovelSettingsPanel {
       promptPrefix: control<HTMLInputElement>(this.root, "promptPrefix").value,
       promptSuffix: control<HTMLInputElement>(this.root, "promptSuffix").value,
       negativePrompt: control<HTMLInputElement>(this.root, "negativePrompt").value,
+      originalReference: control<HTMLInputElement>(this.root, "originalReference").checked,
+      originalCreationName: control<HTMLInputElement>(this.root, "originalCreationName").value.trim(),
       promptPresets: this.promptPresets.map((preset) => ({ ...preset })),
       customPlannerInstructions: control<HTMLTextAreaElement>(this.root, "customPlannerInstructions").value,
       ignoredTags: control<HTMLInputElement>(this.root, "ignoredTags").value,

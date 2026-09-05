@@ -109,7 +109,9 @@ function compilePromptEntry(
     customPositiveSuffix: config.promptSuffix,
     customNegative: config.negativePrompt,
     maxCharacters: 1,
-    perspectiveMode: "dynamic"
+    perspectiveMode: "dynamic",
+    originalReference: config.originalReference,
+    originalCreationName: config.originalCreationName
   });
   const visualState = resolveCueCharacterVisualState(scene, cue, characterAppearance);
   const identity = visualState.identity;
@@ -130,7 +132,15 @@ function compilePromptEntry(
     paragraph: 1,
     situation,
     camera: { framing: "upper body", angle: "eye level", perspective: "straight-on", focus: [] },
-    characters: [{ label, identity, expression: pose.suffix, visibleTags: identity }]
+    characters: [{
+      ...(config.originalReference && config.originalCreationName?.trim() && visualState.characterName
+        ? { name: visualState.characterName }
+        : {}),
+      label,
+      identity,
+      expression: pose.suffix,
+      visibleTags: identity
+    }]
   }, compilerConfig, 1, 1);
 }
 

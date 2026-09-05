@@ -57,6 +57,10 @@ export type VisualNovelConfig = {
   promptSuffix: string;
   negativePrompt: string;
   promptPresets: VisualNovelPromptPreset[];
+  /** Append character creation/source reference to character tags: Character \(Source\) */
+  originalReference: boolean;
+  /** Creation/source name (e.g. "doki doki literature club") */
+  originalCreationName: string;
   customPlannerInstructions: string;
   customCss: string;
   ignoredTags: string;
@@ -95,6 +99,8 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   promptSuffix: "",
   negativePrompt: "low quality, blurry, malformed hands, text, subtitles, speech bubble, watermark, logo, frame, border",
   promptPresets: [],
+  originalReference: false,
+  originalCreationName: "",
   customPlannerInstructions: "",
   customCss: "",
   ignoredTags: "",
@@ -212,6 +218,8 @@ export function normalizeConfig(value: unknown): VisualNovelConfig {
     promptSuffix: retiredLegacySuffix(stringValue(input.promptSuffix, DEFAULT_CONFIG.promptSuffix)),
     negativePrompt: stringValue(input.negativePrompt, DEFAULT_CONFIG.negativePrompt),
     promptPresets: promptPresetList(input.promptPresets),
+    originalReference: bool(input.originalReference, DEFAULT_CONFIG.originalReference),
+    originalCreationName: stringValue(input.originalCreationName, DEFAULT_CONFIG.originalCreationName).trim(),
     customPlannerInstructions: stringValue(input.customPlannerInstructions, DEFAULT_CONFIG.customPlannerInstructions),
     customCss: stringValue(input.customCss, DEFAULT_CONFIG.customCss),
     ignoredTags: stringValue(input.ignoredTags, DEFAULT_CONFIG.ignoredTags),
