@@ -100,7 +100,21 @@ export const CameraLockSchema = z.object({
 }).strict();
 export type CameraLock = z.infer<typeof CameraLockSchema>;
 
-
+export const AmbientEffectSchema = z.enum([
+  "rain",
+  "heavy_rain",
+  "snow",
+  "sakura",
+  "fog",
+  "fireflies",
+  "embers",
+  "vignette_dark",
+  "sepia_flashback",
+  "desaturate",
+  "dream_haze",
+  "danger_pulse"
+]);
+export type AmbientEffect = z.infer<typeof AmbientEffectSchema>;
 
 export const SceneStateSchema = z.object({
   sceneId: IdentifierSchema,
@@ -116,7 +130,8 @@ export const SceneStateSchema = z.object({
   activeAssetId: IdentifierSchema.nullable().default(null),
   priorSceneId: IdentifierSchema.nullable().default(null),
   character: TextSchema.nullable().optional(),
-  attire: TextSchema.nullable().optional()
+  attire: TextSchema.nullable().optional(),
+  ambient: AmbientEffectSchema.nullable().optional()
 }).strict();
 export type SceneState = z.infer<typeof SceneStateSchema>;
 
@@ -144,7 +159,21 @@ export const StageEffectSchema = z.enum([
   "flash_white",
   "flash_red",
   "zoom_in",
-  "fade_to_black"
+  "fade_to_black",
+  "shake_hard",
+  "rumble",
+  "zoom_punch",
+  "speed_lines",
+  "fade_from_black",
+  "fade_to_white",
+  "lightning",
+  "zoom_out",
+  "tilt",
+  "heartbeat",
+  "blur_pulse",
+  "sparkle_burst",
+  "hearts_burst",
+  "confetti"
 ]);
 export type StageEffect = z.infer<typeof StageEffectSchema>;
 

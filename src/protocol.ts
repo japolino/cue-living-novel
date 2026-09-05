@@ -49,6 +49,10 @@ export type TurnView = {
   paragraphs: string[];
   /** Per-paragraph nameplate override; null entries fall back to `speaker`. */
   paragraphSpeakers?: Array<string | null>;
+  /** Per-paragraph one-shot stage effect ids; null entries mean no effect. */
+  effects?: Array<string | null>;
+  /** Per-paragraph persistent ambient effect ids; null entries mean no ambient. */
+  ambients?: Array<string | null>;
   choices: Array<{ id: string; label: string; value: string }>;
   assets: AssetView[];
   audioCues?: AudioCueView[];
