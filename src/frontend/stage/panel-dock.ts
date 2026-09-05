@@ -12,6 +12,8 @@ export function clampPanel(value: number, maximum: number): number {
 }
 
 const CSS = `
+summary{cursor:pointer}summary:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.drawer{box-sizing:border-box;overflow-wrap:anywhere}
 :host{position:absolute;inset:0;pointer-events:none;z-index:7;font:13px/1.45 system-ui;color:#eeeef4;--edge:#535565;--ink:#eeeef4;--muted:#b2b3c3;--paper:#171822;--accent:#c1b0eb}
 button,input,textarea{font:inherit;color:inherit}button{cursor:pointer;background:#252632;border:1px solid var(--edge);border-radius:6px;padding:7px 10px;min-height:34px}button:hover{border-color:var(--accent)}button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .launcher{position:absolute;top:max(12px,env(safe-area-inset-top));left:max(12px,env(safe-area-inset-left));pointer-events:auto;border-radius:20px;min-height:44px;background:#171822ed}
@@ -27,6 +29,7 @@ export class PanelDock {
   private launcher = document.createElement("button");
   private drawer = document.createElement("section");
   private list = document.createElement("div");
+  private ruleList = document.createElement("div");
   private notice = document.createElement("p");
   private pins: Pin[] = [];
   private rules: PanelRule[] = [];
@@ -51,16 +54,24 @@ export class PanelDock {
     this.drawer.className = "drawer"; this.drawer.hidden = true;
     this.drawer.setAttribute("aria-label", "Pinned panels");
     this.notice.className = "notice"; this.notice.setAttribute("role", "status");
-    const heading = document.createElement("h2"); heading.textContent = "Pinned panels";
+    const heading = document.createElement("h2"); heading.textContent = "Pin a card from this reply";
     const description = document.createElement("p");
-    description.textContent = "Keep a card, or follow a named status source. Drag its title to move it. Pins and rules are saved for this chat in this browser.";
+    description.textContent = "Put a status card or other display beside the dialogue. SimTracker is not required. Drag a pinned card's title to move it, or its bottom-right corner to resize it.";
+    const pinHelp = document.createElement("p");
+    pinHelp.textContent = "Pin this card saves the version you see now. Keep it updated follows newer versions when available. Your cards and positions are saved for this chat in this browser.";
     const capture = this.button("Capture SimTracker snapshot", () => this.capture());
     const reset = this.button("Reset positions", () => { this.pins.forEach((pin, i) => { pin.x = i % 2; pin.y = Math.min(.8, Math.floor(i / 2) * .12); pin.width = 300; pin.height = 320; }); this.layout(); this.save(); });
     const clear = this.button("Unpin all", () => { this.pins = []; this.renderPins(); this.save(); });
     const refresh = this.button("Refresh live sources", () => this.requestBridge());
     const close = this.button("Close", () => this.toggle(false));
-    const actions = document.createElement("div"); actions.className = "row"; actions.append(capture, refresh, reset, clear, close);
-    this.drawer.append(heading, description, actions, this.notice, this.list, this.importForm(), this.ruleForm());
+    const actions = document.createElement("div"); actions.className = "row"; actions.append(reset, clear, close);
+    const advanced = document.createElement("details"); advanced.setAttribute("data-panel-advanced", "");
+    const advancedTitle = document.createElement("summary"); advancedTitle.textContent = "Advanced tools";
+    const advancedHelp = document.createElement("p"); advancedHelp.textContent = "Optional tools for other extensions and custom status formats. You don't need these to pin a card listed above.";
+    const trackerHelp = document.createElement("p"); trackerHelp.textContent = "Already use SimTracker? Let its card appear in normal chat, then capture a copy here. Live updates need the companion adapter; capture alone saves a snapshot.";
+    const tools = document.createElement("div"); tools.className = "row"; tools.append(capture, refresh);
+    advanced.append(advancedTitle, advancedHelp, trackerHelp, tools, this.importForm(), this.ruleForm(), this.ruleList);
+    this.drawer.append(heading, description, actions, this.notice, this.list, pinHelp, advanced);
     this.root.append(style, this.launcher, this.drawer); mount.append(this.host);
     this.launcher.onclick = () => this.toggle(Boolean(this.drawer.hidden));
     // This layer is outside the stage's narrative root. Also stop host-level shortcuts.
@@ -126,19 +137,20 @@ export class PanelDock {
     }
     this.list.replaceChildren();
     this.launcher.textContent = `Panels${visible.length ? ` · ${visible.length}` : ""}`;
-    if (!visible.length) { const p = document.createElement("p"); p.textContent = "No cards revealed yet. You can paste HTML below or capture a mounted SimTracker card. Extraction applies to newly planned replies; older cached turns may have no card source."; this.list.append(p); }
+    if (!visible.length) { const p = document.createElement("p"); p.textContent = "No cards to pin yet. Keep reading: supported cards appear here when you reach them in a new reply. Not every reply contains a card, and older saved replies may not have any available."; this.list.append(p); }
     for (const card of visible) {
       const row = document.createElement("div"); row.className = "candidate";
       const label = document.createElement("strong"); label.textContent = card.title;
-      row.append(label, this.button("Keep this card", () => this.pin(card, false)));
-      if (card.followKey) row.append(this.button("Follow updates", () => this.pin(card, true)));
+      row.append(label, this.button("Pin this card", () => this.pin(card, false)));
+      if (card.followKey) row.append(this.button("Keep it updated", () => this.pin(card, true)));
       this.list.append(row);
     }
+    this.ruleList.replaceChildren();
     for (const rule of this.rules) {
       const row = document.createElement("div"); row.className = "candidate";
       const label = document.createElement("span"); label.textContent = `Rule: ${rule.title} `;
       row.append(label, this.button("Remove rule", () => { this.rules = this.rules.filter((r) => r.id !== rule.id); this.candidates = this.candidates.filter((c) => !c.id.startsWith(`rule:${rule.id}:`)); this.epoch++; for (const pin of this.pins) if (pin.follow === `rule:${rule.id}`) { pin.fingerprint = ""; this.nodes.get(pin.key)?.remove(); this.nodes.delete(pin.key); } this.save(); this.refresh(); }));
-      this.list.append(row);
+      this.ruleList.append(row);
     }
     this.renderPins();
   }

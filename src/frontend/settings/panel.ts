@@ -72,6 +72,9 @@ details[data-section] > summary::-webkit-details-marker { display: none; }
 details[data-section] > summary::before { content: "\\25B8"; font-size: .8em; color: var(--lumiverse-primary, #a986ff); transition: transform .15s ease; }
 details[data-section][open] > summary::before { transform: rotate(90deg); }
 details[data-section] > summary:hover { background: var(--lumiverse-fill-medium, rgba(255,255,255,.06)); }
+summary:focus-visible, button:focus-visible { outline: 2px solid var(--lumiverse-primary, #a986ff); outline-offset: 3px; }
+[data-advanced-settings] { margin-top: .4rem; }
+@media (prefers-reduced-motion: reduce) { details[data-section] > summary::before { transition: none; } }
 details[data-section] > summary > small { margin-left: auto; font-weight: 400; text-align: right; }
 [data-section-body] { display: grid; gap: .8rem; padding: .2rem 1rem 1rem; }
 p { margin: 0; color: var(--lumiverse-text-muted, rgba(255,255,255,.68)); }
@@ -107,10 +110,46 @@ function control<T extends HTMLElement>(root: ParentNode, name: string): T {
   return element;
 }
 
+/** Move technical controls without recreating them or dropping their saved values. */
+function organizeAdvancedSettings(form: HTMLFormElement): void {
+  const advanced = document.createElement("details");
+  advanced.setAttribute("data-section", "");
+  advanced.setAttribute("data-advanced-settings", "");
+  const summary = document.createElement("summary");
+  summary.textContent = "Advanced settings";
+  const body = document.createElement("div");
+  body.setAttribute("data-section-body", "");
+  const help = document.createElement("p");
+  help.textContent = "Optional controls for prompts, filtering and troubleshooting. Your saved settings stay active when this section is closed.";
+  const generation = document.createElement("details");
+  generation.setAttribute("data-section", "");
+  const title = document.createElement("summary");
+  title.textContent = "Generation and storage";
+  const fields = document.createElement("div");
+  fields.setAttribute("data-section-body", "");
+  for (const name of ["referenceAnchoring", "imageModel", "imageConcurrency", "parserParameters", "imageParameters", "audioDirectory"]) {
+    fields.append(control(form, name).closest("label")!);
+  }
+  // Remove the now-empty parameters row from the basic connection section.
+  for (const row of form.querySelectorAll("[data-row]")) if (!row.children.length) row.remove();
+  generation.append(title, fields);
+  body.append(help, generation, ...Array.from(form.querySelectorAll("[data-advanced-section]")));
+  advanced.append(summary, body);
+  form.querySelector("[data-actionbar]")!.before(advanced);
+  form.addEventListener("invalid", (event) => {
+    if (!(event.target instanceof HTMLElement)) return;
+    for (let parent = event.target.parentElement; parent; parent = parent.parentElement) {
+      if (parent instanceof HTMLDetailsElement) parent.open = true;
+    }
+  }, true);
+}
+
 function jsonObject(value: string, label: string): Record<string, unknown> {
   const trimmed = value.trim();
   if (!trimmed) return {};
-  const parsed: unknown = JSON.parse(trimmed);
+  let parsed: unknown;
+  try { parsed = JSON.parse(trimmed); }
+  catch { throw new Error(`${label} contains invalid JSON. Check that field in Advanced settings before saving.`); }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error(`${label} must be a JSON object.`);
   }
@@ -174,12 +213,12 @@ export class VisualNovelSettingsPanel {
           <summary>Presentation</summary>
           <div data-section-body>
             <div data-row>
-              <label>Mode<select name="mode"><option value="standard">Standard input</option><option value="cyoa">CYOA choices</option></select></label>
-              <label>Images per turn<input name="maxImagesPerTurn" type="number" min="0" max="12" step="1" /><small>0 = unlimited (all distinct cues)</small></label>
+              <label>How you reply<select name="mode"><option value="standard">Write your own reply</option><option value="cyoa">Choose from suggestions</option></select></label>
+              <label>Images per reply<input name="maxImagesPerTurn" type="number" min="0" max="12" step="1" /><small>Set a limit to control generation costs. 0 means no limit.</small></label>
             </div>
             <label>Theme style
               <select name="themePreset">${THEME_PRESET_OPTIONS.map(({ value, label }) => `<option value="${value}">${label}</option>`).join("")}</select>
-              <small>Predefined look for the stage. Custom CSS below is always applied on top.</small>
+              <small>Choose how your visual novel looks.</small>
             </label>
             <label>Scene image fit
               <select name="sceneImageFit">
@@ -194,16 +233,17 @@ export class VisualNovelSettingsPanel {
             <label data-check><input name="autoEnter" type="checkbox" /><span>Enter visual novel mode automatically when a chat opens</span></label>
             <label data-check><input name="generateImages" type="checkbox" /><span>Generate scene images</span></label>
             <label data-check><input name="referenceAnchoring" type="checkbox" /><span>Character reference anchoring (reuse each character's first portrait as an identity reference for later images)</span></label>
-            <label data-check><input name="useNativeCardImages" type="checkbox" /><span>Use native card images / expressions (disables external image generation)</span></label>
-            <label data-check><input name="generateChoices" type="checkbox" /><span>Generate choices when the response has no authored Choice tags</span></label>
+            <label data-check><input name="useNativeCardImages" type="checkbox" /><span>Use the character card's pictures instead of generating images</span></label>
+            <label data-check><input name="generateChoices" type="checkbox" /><span>Suggest choices when the reply doesn't include any</span></label>
           </div>
         </details>
         <details data-section open>
-          <summary>Generation connections</summary>
+          <summary>AI connections</summary>
           <div data-section-body>
             <p>Choose a saved Lumiverse connection or follow the host default.</p>
-            <label>Planner connection
+            <label>Story analysis connection
               <select name="parserConnectionId"><option value="">Lumiverse default</option></select>
+              <small>Reads the conversation to choose images and speakers. This does not replace your chat model.</small>
               <small data-connection-status="planner" role="status"></small>
             </label>
             <label>Image connection
@@ -222,7 +262,7 @@ export class VisualNovelSettingsPanel {
             </div>
           </div>
         </details>
-        <details data-section>
+        <details data-section data-advanced-section>
           <summary>Planning context</summary>
           <div data-section-body>
             <label>Recent messages<input name="includeRecentMessages" type="number" min="0" max="30" step="1" /></label>
@@ -233,7 +273,7 @@ export class VisualNovelSettingsPanel {
           </div>
         </details>
         <details data-section>
-          <summary>Text &amp; Dialogue Flow</summary>
+          <summary>Reading</summary>
           <div data-section-body>
             <div data-row>
               <label>Text typing speed (ms/char)
@@ -255,30 +295,30 @@ export class VisualNovelSettingsPanel {
           </div>
         </details>
         <details data-section>
-          <summary>Audio &amp; Atmosphere</summary>
+          <summary>Audio</summary>
           <div data-section-body>
             <label>Audio storage prefix
               <input name="audioDirectory" type="text" placeholder="audio" />
               <small>Folder inside the extension's scoped Lumiverse storage, scanned recursively for BGM and SFX.</small>
             </label>
             <div data-actions>
-              <button type="button" data-scan-audio>Scan Audio</button>
+              <button type="button" data-scan-audio>Refresh audio library</button>
               <button type="button" data-import-audio>Import audio folder…</button>
               <small data-audio-status role="status"></small>
             </div>
             <small>Import copies audio from any folder on your computer into the extension's storage — no need to locate the Lumiverse data directory.</small>
             <div data-row>
-              <label>BGM volume (<span data-bgm-val>70%</span>)
+              <label>Music volume (<span data-bgm-val>70%</span>)
                 <input name="bgmVolume" type="range" min="0" max="1" step="0.05" />
               </label>
-              <label>SFX volume (<span data-sfx-val>80%</span>)
+              <label>Sound effects volume (<span data-sfx-val>80%</span>)
                 <input name="sfxVolume" type="range" min="0" max="1" step="0.05" />
               </label>
             </div>
           </div>
         </details>
-        <details data-section>
-          <summary>Prompt</summary>
+        <details data-section data-advanced-section>
+          <summary>Image prompts</summary>
           <div data-section-body>
             <label>Preset
               <div data-preset-row>
@@ -295,8 +335,8 @@ export class VisualNovelSettingsPanel {
             <label>Planner instructions<textarea name="customPlannerInstructions"></textarea></label>
           </div>
         </details>
-        <details data-section>
-          <summary>Content Filtering &amp; Regex</summary>
+        <details data-section data-advanced-section>
+          <summary>Text filtering and regex</summary>
           <div data-section-body>
             <label>Ignored tags
               <input name="ignoredTags" type="text" placeholder="status, stats, system, inventory" />
@@ -308,7 +348,7 @@ export class VisualNovelSettingsPanel {
             </label>
           </div>
         </details>
-        <details data-section>
+        <details data-section data-advanced-section>
           <summary>Custom CSS</summary>
           <div data-section-body>
             <p>Selectors beginning with data-vn are stable. Remote imports and URL fetches are removed.</p>
@@ -325,6 +365,7 @@ export class VisualNovelSettingsPanel {
     this.root.append(style, ...Array.from(body.childNodes));
     options.mount.append(this.host);
     this.form = this.root.querySelector("form")!;
+    organizeAdvancedSettings(this.form);
     this.status = this.root.querySelector("[data-status]")!;
     this.audioStatus = this.root.querySelector("[data-audio-status]");
 
@@ -375,6 +416,10 @@ export class VisualNovelSettingsPanel {
         this.markClean();
         this.setStatus("Settings saved.", "saved", 3000);
       } catch (error) {
+        // JSON errors must not point at a control the user cannot see.
+        const advanced = this.root.querySelector<HTMLDetailsElement>("[data-advanced-settings]")!;
+        advanced.open = true;
+        for (const section of advanced.querySelectorAll("details")) section.open = true;
         this.setStatus(error instanceof Error ? error.message : String(error), "error");
       }
     });
