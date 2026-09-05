@@ -323,7 +323,14 @@ async function persistActiveTurn(
   await saveChatState(spindle, record.plan.key.chatId, {
     schemaVersion: 1,
     activeTurnPath: path,
-    latestScene: lastScene,
+    latestScene: lastScene && record.plan.terminalVisualState ? {
+      ...lastScene,
+      character: record.plan.terminalVisualState.character,
+      identityPrompt: record.plan.terminalVisualState.identity || null,
+      attire: record.plan.terminalVisualState.attire,
+      continuity: record.plan.terminalContinuity,
+      activeAssetId: null
+    } : lastScene,
     terminalContinuity: record.plan.terminalContinuity,
     updatedAt: new Date().toISOString()
   }, userId);
@@ -411,14 +418,14 @@ async function processAssistantMessage(
     rememberDebugFlag(userId, config);
     const chatState = await loadChatState(spindle, chatId, userId);
     const singleCharacter = await loadSingleCharacterState(spindle, chatId, userId);
-    const characterAppearance = await loadCharacterAppearance(spindle, userId);
+    const characterAppearance = await loadCharacterAppearance(spindle, userId, chatId);
     const messages = await spindle.chat.getMessages(chatId) as NormalizedChatMessage[];
     const result = await planTurn(spindle, {
       chatId,
       message,
       content,
-      previousScene: chatState.latestScene,
-      previousContinuity: chatState.terminalContinuity,
+      previousScene: options?.retry && existing ? existing.plan.scenes[0] ?? null : chatState.latestScene,
+      previousContinuity: options?.retry && existing ? existing.plan.initialContinuity : chatState.terminalContinuity,
       recentMessages: config.includeRecentMessages > 0 ? messages.slice(-config.includeRecentMessages) : [],
       config,
       singleCharacter,
@@ -437,10 +444,11 @@ async function processAssistantMessage(
       `protagonist="${result.singleCharacter.protagonist.name}" tags=${result.singleCharacter.protagonist.tags.length}`,
       `context: ${summarizeDiagnostics(result.contextDiagnostics)}`
     ].join(" | "));
+    await mergeCharacterAppearanceFromState(spindle, singleCharacter, userId, chatId);
     await saveSingleCharacterState(spindle, chatId, result.singleCharacter, userId);
-    await mergeCharacterAppearanceFromState(spindle, result.singleCharacter, userId);
+    await mergeCharacterAppearanceFromState(spindle, result.singleCharacter, userId, chatId);
     if (result.extractedCharacters && result.extractedCharacters.length > 0) {
-      await mergePlannerCharacters(spindle, result.extractedCharacters, userId);
+      await mergePlannerCharacters(spindle, result.extractedCharacters, userId, chatId);
     }
         let jobs: StoredTurnRecord["jobs"] = [];
     if (config.useNativeCardImages) {
@@ -630,9 +638,10 @@ async function retryTurn(
   const existing = await loadTurnRecord(spindle, path, userId);
   const config = await loadConfig(spindle, userId);
   rememberDebugFlag(userId, config);
-  const characterAppearance = await loadCharacterAppearance(spindle, userId);
+  const characterAppearance = await loadCharacterAppearance(spindle, userId, chatId);
 
-  if (!existing || existing.status === "failed" || existing.jobs.length === 0) {
+  if (!existing || existing.status === "failed" || existing.jobs.length === 0
+    || existing.plan.visualCues.some((cue) => cue.resolvedIdentity !== undefined && !cue.resolvedIdentity.trim())) {
     await processAssistantMessage(spindle, chatId, message, message.content, userId, { retry: true });
     return;
   }

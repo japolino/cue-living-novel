@@ -199,19 +199,21 @@ The planner instruction requires exactly one visible character per frame and for
 
 ### Identity, appearance memory, and tag block
 
+Character and clothing events resolve in paragraph order before the image-count limit is applied. Each new cue stores its own `resolvedIdentity` and nullable `resolvedAttire`; scenes retain their opening state. `terminalVisualState` and indexed continuity deltas carry the final subject and wardrobe into the next turn, including changes after the last generated image. Opening-cue repair never copies a future character or outfit backward. Planner entries also accept open-ended `species` and `anatomy` fields, preserving unfamiliar visual traits without expanding a species whitelist.
+
 The protagonist's physical identity is a frozen per-chat tag block stored at `chats/<chat-id>/visual-state.json` as:
 
 ```text
 { schemaVersion: 2, protagonist: { name, tags }, environment, updatedAt }
 ```
 
-On a fresh chat it is seeded once — from the planner's matching `characters` entry, the card, or the durable appearance memory — and the comma-separated description becomes the normalized `tags` list. After seeding, the protagonist identity is immutable: `saveSingleCharacterState` never overwrites a stored `protagonist`, so a later sidecar description cannot drift the appearance. Only `environment` and `updatedAt` advance. Document-shaped noise (a whole markdown card pasted as an appearance) is rejected rather than promoted into canonical memory.
+The active character's baseline is seeded from a matching planner entry, the card, or chat-scoped appearance memory. A later description of the same character cannot overwrite a usable baseline, but changing the active character selects that character's own baseline. Missing appearances never inherit another character's body. The image job reports an unresolved appearance and Retry reruns planning. Document-shaped noise is rejected rather than stored as canonical memory.
 
-Alongside the per-chat block, a durable global appearance map at `character-appearance.json` remembers one canonical comma-separated tag line per character name across chats, with a one-time migration marker at `character-appearance-migrated.json`. Legacy `{ schemaVersion: 1, profiles }` visual-state records are migrated transparently on read.
+A roster at `chats/<chat-id>/characters.json` remembers appearances within each chat. Runtime planning and image generation do not import the old user-wide `character-appearance.json` by name, since unrelated chats can reuse names such as Guard. Existing per-chat visual state seeds the scoped roster on the next planned turn; other cast members are relearned from matching planner entries. Legacy storage APIs remain available for compatibility.
 
 ### Reference portrait anchoring
 
-When reference anchoring is enabled (default on; toggle in settings or `imageParameters.referenceAnchoring`), the first successful render of a character is captured as that character's canonical portrait in `chats/<chat-id>/portraits.json`, keyed by a normalized character-appearance key, first-wins. Every later generation for that character passes the stored portrait back to the provider as an identity anchor: NovelAI receives a base64 reference image with `referenceStrength` (0..1, default 0.6); ComfyUI receives `resolvedSourceImages` for a workflow-mapped reference node. Other providers receive no reference parameters.
+When reference anchoring is enabled, supported providers capture a character portrait in `chats/<chat-id>/portraits.json`. Reuse requires a matching fingerprint of the normalized name, identity tags, provider, connection/workflow and configured model. Unversioned or incompatible portraits are not sent to the provider; a successful fresh capture replaces them. Concurrent cues for the same character wait for capture, while unrelated characters can render concurrently. NovelAI receives director reference images; ComfyUI and SwarmUI receive source images. Unsupported providers do not anchor.
 
 ### Closed pose/expression catalogue
 

@@ -6,7 +6,6 @@ import {
   AudioCueSchema,
   CameraLockSchema,
   ChoiceSchema,
-  ContinuityDeltaSchema,
   ContinuityStateSchema,
   SceneBoundaryProposalSchema,
   SceneEnvironmentSchema,
@@ -16,7 +15,6 @@ import {
   TurnPlanSchema,
   VisualCueSchema,
   type CharacterContinuity,
-  type CharacterContinuityPatch,
   type IndexedContinuityDelta,
   type SceneEnvironment,
   type SceneState,
@@ -24,6 +22,7 @@ import {
   type TurnPlan
 } from "../../shared/contracts.js";
 import { reduceContinuity } from "../core/continuity.js";
+import { resolveCueTimeline } from "../core/cue-state.js";
 import { prepareNarrative } from "../core/paragraphs.js";
 import { decideSceneBoundary } from "../core/scene-boundary.js";
 import { validateTurnPlan } from "../core/turn-plan.js";
@@ -171,13 +170,14 @@ function plannerInstruction(config: VisualNovelConfig, visualContext?: VisualCon
       ? "choices: If the response does not contain authored Choice tags, return 2 to 4 contextual choices from the user's/persona's perspective. For each choice provide 'label' (a concise button text, e.g. 'Step closer and call her bluff') and 'submission' (a natural, descriptive action or dialogue sentence written in first-person prose from the user's perspective reacting to the scene, e.g. 'I take a slow step toward the desk, meeting her eyes with a quiet smirk. \"Are you really in a position to be making demands, Hina?\"'). NEVER return an index, number, or option code for submission."
       : "Return an empty choices array.",
     "characters: Return name and ONE compact comma-separated line containing physical appearance tags. Capture permanent physical traits including species/race (e.g. elf, demon, catgirl, kitsune, furry, anthro, monster girl) and non-human anatomy (e.g. animal ears, horns, tail, wings, fangs, scales, fur, paws, claws). A description that merely repeats the name is invalid. If a new character enters or is introduced in this turn, include them in 'characters'. Keep stable traits and never invent appearance that contradicts the card or KNOWN CHARACTERS baseline.",
-    "cast & active character: Set 'character' on every scene and cue to the name of the character on screen. If a new or different character enters or speaks, set 'character' to that character.",
+    "Also return species as a short string and anatomy as an array of permanent physical traits when stated in the narrative or card. These fields accept any species, including unfamiliar or invented species. Do not infer a species from an ordinary personal name. Preserve these traits even when a descriptive character label repeats the species. Use null or an empty array when unknown.",
+    "cast & active character: Set 'character' on every scene and cue to the name of the character on screen. If a new or different character enters or speaks, set 'character' to that character. Apply changes only at the paragraph where they happen, never to earlier paragraphs.",
     "attire: If the active character changes clothes (e.g. swimsuit, pajamas, armor, sundress, uniform), specify the new outfit tags in 'attire'; otherwise null.",
     `effect: For a genuinely DRAMATIC beat only (impact, explosion, sudden reveal, blackout, jolt of fear, lightning strike, romantic rush), set the cue 'effect' to exactly one of: ${StageEffectSchema.options.join(", ")}. Otherwise null. Most paragraphs must have no effect.`,
     `ambient: On each scene, set 'ambient' to exactly one of: ${AmbientEffectSchema.options.join(", ")} when the scene's weather or mood clearly calls for a persistent overlay (rain outside, snowfall, dense fog, a flashback, dread); otherwise null.`,
     "speakers: Attribute EVERY paragraph index to its literal on-screen nameplate name. Use the character's actual name for their dialogue and actions. When the text is written from the player's first-person point of view, use the player/persona name. Use \"Narrator\" for omniscient scene narration that belongs to no character. Never use the story or scenario card title as a speaker name.",
     hasAudio ? audioInstructions.join("\n") : "",
-    `Shape: {scenes:[{startParagraph,boundary:{claimedNewScene,reason,location,timeOfDay,majorTimeJump,environmentReplacement,forced},environment:{location,timeOfDay,weather,lighting,description,persistentElements},cast,character?,attire?,ambient?,basePrompt,compositionLock}],cues:[{paragraphIndex,expression,character?,attire?,effect?${hasAudio ? ",bgm?,sfx?" : ""}}],choices:[{label,submission}],characters:[{name,description}],speakers:[{paragraphIndex,name}]}`,
+    `Shape: {scenes:[{startParagraph,boundary:{claimedNewScene,reason,location,timeOfDay,majorTimeJump,environmentReplacement,forced},environment:{location,timeOfDay,weather,lighting,description,persistentElements},cast,character?,attire?,ambient?,basePrompt,compositionLock}],cues:[{paragraphIndex,expression,character?,attire?,effect?${hasAudio ? ",bgm?,sfx?" : ""}}],choices:[{label,submission}],characters:[{name,description,species?,anatomy?}],speakers:[{paragraphIndex,name}]}`,
     config.customPlannerInstructions ? config.customPlannerInstructions.trim() : ""
   ].filter(Boolean).join("\n");
 }
@@ -387,7 +387,11 @@ function normalizeCharacter(value: unknown): unknown {
                 : "";
   return {
     name,
-    description: rawDesc
+    // Typed, open-ended fields preserve unfamiliar species/anatomy without a growing word whitelist.
+    description: [rawDesc,
+      typeof record.species === "string" && record.species.trim() ? `${record.species.trim()} species` : "",
+      ...(Array.isArray(record.anatomy) ? record.anatomy.filter((a): a is string => typeof a === "string" && !!a.trim()).map((a) => `${a.trim()} anatomy`) : [])
+    ].filter(Boolean).join(", ")
   };
 }
 
@@ -832,6 +836,7 @@ function fallbackPlanner(input: PlanTurnInput, paragraphCount: number): z.infer<
           ? [speaker]
           : (previous?.cast ?? [input.message.name].filter(Boolean));
       })(),
+      character: previous?.character || input.singleCharacter.protagonist.name || null,
       basePrompt: previous?.basePrompt ?? `${description}, ${location}`,
       compositionLock: previous?.compositionLock ?? "Speaking character centered with the lower quarter clear for dialogue."
     }],
@@ -867,15 +872,6 @@ function mergeEnvironment(base: SceneEnvironment, proposal: SceneEnvironment): S
     description: proposal.description?.trim() ? proposal.description : base.description,
     persistentElements
   });
-}
-
-function proposalForParagraph(proposals: Array<z.infer<typeof PlannerSceneSchema>>, paragraphIndex: number): z.infer<typeof PlannerSceneSchema> | undefined {
-  let active: z.infer<typeof PlannerSceneSchema> | undefined;
-  for (const proposal of proposals) {
-    if (proposal.startParagraph > paragraphIndex) break;
-    active = proposal;
-  }
-  return active;
 }
 
 function sceneForParagraph(scenes: SceneState[], paragraphIndex: number): SceneState {
@@ -1168,8 +1164,8 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
             paragraphIndex: 0,
             action: null,
             expression: null,
-            character: validCues[0]?.character ?? null,
-            attire: validCues[0]?.attire ?? null,
+            character: planner.scenes.find((scene) => scene.startParagraph === 0)?.character ?? null,
+            attire: null,
             promptDelta: ""
           });
         }
@@ -1190,23 +1186,6 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
   const characterState = resolveSingleCharacter(input, planner, visualContext, usedFallback);
   const protagonistName = characterState.protagonist.name.trim();
   const identityBlock = singleCharacterTagBlock(characterState);
-
-  // Initialize mutable per-character attire state
-  const characterAttire = new Map<string, string | null>();
-  if (input.previousContinuity?.characters) {
-    for (const [name, cont] of Object.entries(input.previousContinuity.characters)) {
-      const att = cont.wardrobe?.attire;
-      if (typeof att === "string" && att.trim()) {
-        characterAttire.set(characterAppearanceKey(name), att.trim());
-      }
-    }
-  }
-  if (input.previousScene?.attire) {
-    const prevChar = characterAppearanceKey(input.previousScene.character || protagonistName || "");
-    if (prevChar && !characterAttire.has(prevChar)) {
-      characterAttire.set(prevChar, input.previousScene.attire.trim());
-    }
-  }
 
   const sourceFingerprint = stableHash(`${input.message.id}\0${input.message.swipe_id}\0${input.content}`);
   const revision = (input.previousScene?.revision ?? 0) + 1;
@@ -1235,30 +1214,20 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
     .sort((left, right) => left.startParagraph - right.startParagraph);
   if (proposals[0]?.startParagraph !== 0) proposals.unshift(fallbackPlanner(input, narrative.paragraphs.length).scenes[0]!);
 
-  // Pre-scan proposals to salvage character, cast, and attire metadata
-  // even if specific scene proposals are later discarded as non-boundary continuations
-  for (const proposal of proposals) {
-    const rawProposalChar = proposal.character && !isPersona(proposal.character) ? proposal.character : undefined;
-    const proposalChar = rawProposalChar || (proposal.cast && proposal.cast.find((c) => !isPersona(c)));
-    const proposalCharKey = characterAppearanceKey(proposalChar || "");
-    if (proposal.attire) {
-      if (isAttireReset(proposal.attire)) {
-        if (proposalCharKey) characterAttire.delete(proposalCharKey);
-      } else {
-        if (proposalCharKey) characterAttire.set(proposalCharKey, proposal.attire.trim());
-      }
-    }
+  const turnAppearances = { ...input.characterAppearance };
+  // Retain this chat's original entity baseline even when the active companion changes later in the turn.
+  for (const state of [input.singleCharacter, characterState]) {
+    const name = state.protagonist.name;
+    if (isUsableIdentity(name, state.protagonist.tags) && !appearanceMapKeyFor(turnAppearances, name)) turnAppearances[name] = singleCharacterTagBlock(state);
   }
+  const timeline = resolveCueTimeline({ paragraphs: narrative.paragraphs.length, proposals, cues: planner.cues,
+    roster: planner.characters, appearances: turnAppearances,
+    baseline: { name: protagonistName, identity: identityBlock },
+    previousCharacter: input.previousScene?.character || input.singleCharacter.protagonist.name,
+    previousAttire: input.previousScene?.attire ?? null, continuity, isPersona, isReset: isAttireReset });
 
   for (const proposal of proposals) {
-    const rawProposalChar = proposal.character && !isPersona(proposal.character) ? proposal.character : undefined;
-    const proposalCueChar = planner.cues.find(
-      (c) => c.paragraphIndex >= proposal.startParagraph && c.character && !isPersona(c.character)
-    )?.character;
-    const proposalCastChar = proposal.cast && proposal.cast.find((c) => !isPersona(c));
-    const nonPersonaPlannerChar = planner.characters.find((c) => !isPersona(c.name))?.name;
-    const activeChar = rawProposalChar || proposalCueChar || proposalCastChar || nonPersonaPlannerChar || previous?.character || protagonistName;
-    const targetCharKey = characterAppearanceKey(activeChar || protagonistName || "");
+    const activeChar = timeline.snapshots[proposal.startParagraph]!.character;
 
     const decision = decideSceneBoundary(previous, proposal.boundary);
     if (scenes.length > 0 && !decision.startsNewScene) continue;
@@ -1266,38 +1235,6 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
     const sameChar = !previous || !prevCharName || !activeChar || characterAppearanceKey(prevCharName) === characterAppearanceKey(activeChar);
     const reusedScene = previous !== null && !decision.startsNewScene && sameChar ? previous : null;
 
-    let isProposalReset = false;
-    if (proposal.attire) {
-      if (isAttireReset(proposal.attire)) {
-        isProposalReset = true;
-        if (targetCharKey) characterAttire.delete(targetCharKey);
-      } else {
-        if (targetCharKey) characterAttire.set(targetCharKey, proposal.attire.trim());
-      }
-    }
-    const currentSceneAttire = isProposalReset
-      ? null
-      : ((targetCharKey ? characterAttire.get(targetCharKey) : null) ?? proposal.attire ?? null);
-
-    let sceneIdentity = identityBlock;
-    if (activeChar && characterAppearanceKey(activeChar) !== characterAppearanceKey(protagonistName)) {
-      const globalKey = appearanceMapKeyFor(input.characterAppearance, activeChar);
-      if (globalKey && input.characterAppearance[globalKey]) {
-        sceneIdentity = input.characterAppearance[globalKey];
-      } else {
-        const targetNorm = characterAppearanceKey(activeChar).replace(/[\s\-_]+/g, "");
-        const matchingPlannerChar = planner.characters.find((c) => {
-          const candNorm = characterAppearanceKey(c.name).replace(/[\s\-_]+/g, "");
-          return candNorm === targetNorm || characterAppearanceKey(c.name) === characterAppearanceKey(activeChar);
-        });
-        if (matchingPlannerChar) {
-          const distilled = distillVisualTags(matchingPlannerChar.description);
-          if (distilled.length > 0) {
-            sceneIdentity = distilled.join(", ");
-          }
-        }
-      }
-    }
     const sceneCast: string[] = proposal.cast && proposal.cast.length > 0
       ? proposal.cast.filter((c) => !isPersona(c))
       : (activeChar ? [activeChar] : (protagonistName ? [protagonistName] : []));
@@ -1319,11 +1256,11 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
       environment: mergedEnv,
       cast: sceneCast,
       character: activeChar || null,
-      attire: currentSceneAttire,
+      attire: timeline.snapshots[proposal.startParagraph]!.attire,
       ambient: normalizeAmbientEffect(proposal.ambient),
       continuity,
       basePrompt,
-      identityPrompt: sceneIdentity || null,
+      identityPrompt: timeline.snapshots[proposal.startParagraph]!.identity || null,
       cameraLock: FIXED_CAMERA,
       compositionLock: reusedScene ? reusedScene.compositionLock : proposal.compositionLock,
       activeAssetId: reusedScene ? (envChanged ? null : reusedScene.activeAssetId) : null,
@@ -1353,36 +1290,6 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
       const scene = sceneForParagraph(scenes, cue.paragraphIndex);
       const paragraph = narrative.paragraphs.find((candidate) => candidate.index === cue.paragraphIndex);
       const cueIsUser = isPersona(cue.character);
-      const matchingProposal = proposalForParagraph(proposals, cue.paragraphIndex);
-      const proposalChar = matchingProposal?.character && !isPersona(matchingProposal.character)
-        ? matchingProposal.character
-        : (matchingProposal?.cast && matchingProposal.cast.find((c) => !isPersona(c)));
-      const sceneChar = scene.character && !isPersona(scene.character) ? scene.character : undefined;
-      const explicitCueChar = cue.character && !isPersona(cue.character) ? cue.character : undefined;
-      const assignedCharacter = cueIsUser
-        ? (sceneChar || proposalChar || protagonistName)
-        : (explicitCueChar || proposalChar || sceneChar || protagonistName);
-      const targetCharKey = characterAppearanceKey(assignedCharacter || scene.character || protagonistName || "");
-
-      let isCueReset = false;
-      if (cue.attire) {
-        if (isAttireReset(cue.attire)) {
-          isCueReset = true;
-          if (targetCharKey) characterAttire.delete(targetCharKey);
-        } else {
-          if (targetCharKey) characterAttire.set(targetCharKey, cue.attire.trim());
-        }
-      }
-      const sceneAttireForChar = (!scene.character || characterAppearanceKey(scene.character) === targetCharKey)
-        ? (scene.attire || undefined)
-        : undefined;
-      const resolvedAttire = isCueReset
-        ? undefined
-        : ((targetCharKey ? characterAttire.get(targetCharKey) : undefined) ?? sceneAttireForChar);
-      if (scene.character && characterAppearanceKey(scene.character) === targetCharKey) {
-        scene.attire = resolvedAttire ?? null;
-      }
-
       // When a cue was erroneously aimed at the user/persona (e.g. user dialogue
       // or action), do not copy the user's expression or scan the user's speech
       // for companion poses. Default to an attentive listening pose.
@@ -1398,8 +1305,10 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
         action: null,
         expression: null,
         poseExpressionId: pose.id,
-        character: assignedCharacter,
-        attire: resolvedAttire,
+        character: timeline.snapshots[cue.paragraphIndex]!.character,
+        attire: timeline.snapshots[cue.paragraphIndex]!.attire ?? undefined,
+        resolvedIdentity: timeline.snapshots[cue.paragraphIndex]!.identity,
+        resolvedAttire: timeline.snapshots[cue.paragraphIndex]!.attire,
         ...(normalizeStageEffect(cue.effect) ? { effect: normalizeStageEffect(cue.effect) as StageEffect } : {}),
         promptDelta: "",
         assetJobId: id("asset", `${sourceFingerprint}:${cue.paragraphIndex}:${index}`),
@@ -1407,14 +1316,6 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
         ...(cue.sfx ? { sfx: cue.sfx } : {})
       });
     });
-
-  // Ensure scenes reflect the latest attire for their characters
-  for (const scene of scenes) {
-    const sCharKey = characterAppearanceKey(scene.character || protagonistName || "");
-    if (sCharKey && characterAttire.has(sCharKey)) {
-      scene.attire = characterAttire.get(sCharKey) ?? null;
-    }
-  }
 
   const audioCues = planner.cues
     .filter((cue) => Boolean(cue.bgm || cue.sfx))
@@ -1484,28 +1385,7 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
     (paragraph) => paragraphSpeakerByIndex.get(paragraph.index) ?? null
   );
 
-  // Build terminal continuity and deltas reflecting mutable character attire
-  const characterUpdates: Record<string, CharacterContinuityPatch> = {};
-  const allCharNames = new Set([
-    ...Object.keys(continuity.characters).map((k) => characterAppearanceKey(k)),
-    ...Array.from(characterAttire.keys())
-  ]);
-
-  for (const charKey of allCharNames) {
-    const existingEntry = Object.entries(continuity.characters).find(([k]) => characterAppearanceKey(k) === charKey);
-    const prevAttire = existingEntry ? existingEntry[1].wardrobe?.attire ?? null : null;
-    const nextAttire = characterAttire.get(charKey) ?? null;
-    if (nextAttire !== prevAttire) {
-      const displayName = existingEntry ? existingEntry[0] : (characterAppearanceKey(protagonistName) === charKey ? protagonistName : charKey);
-      characterUpdates[displayName] = {
-        wardrobe: { attire: nextAttire }
-      };
-    }
-  }
-
-  const continuityDeltas: IndexedContinuityDelta[] = Object.keys(characterUpdates).length > 0
-    ? [{ paragraphIndex: 0, delta: ContinuityDeltaSchema.parse({ characterUpdates, forgetCharacters: [], factUpdates: {} }) }]
-    : [];
+  const continuityDeltas: IndexedContinuityDelta[] = timeline.deltas;
 
   const terminalContinuity = reduceContinuity(continuity, continuityDeltas);
 
@@ -1523,13 +1403,17 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
     initialContinuity: continuity,
     continuityDeltas,
     terminalContinuity,
-    planningStatus: cues.length === 0 && narrative.paragraphs.length > 0 ? "partial" : (usedFallback ? "partial" : "planned"),
+    terminalVisualState: timeline.snapshots.at(-1),
+    planningStatus: usedFallback || cues.some((cue) => !cue.resolvedIdentity) || (cues.length === 0 && narrative.paragraphs.length > 0) ? "partial" : "planned",
     createdAt: new Date().toISOString()
   }));
   const latestEnvironment = scenes.at(-1)?.environment.description;
-  const singleCharacter = latestEnvironment && latestEnvironment !== characterState.environment
-    ? { ...characterState, environment: latestEnvironment }
-    : characterState;
+  const terminal = timeline.snapshots.at(-1);
+  const singleCharacter = {
+    ...characterState,
+    ...(terminal?.identity ? { protagonist: { name: terminal.character, tags: toUsableTags(terminal.character, splitTags(terminal.identity)) } } : {}),
+    environment: latestEnvironment || characterState.environment
+  };
   return { plan, usedFallback, contextDiagnostics: visualContext.diagnostics, singleCharacter, extractedCharacters: planner.characters };
 }
 

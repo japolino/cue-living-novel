@@ -160,7 +160,7 @@ function compactVisualFragment(raw: string): string[] {
   const clean = collapse(raw.replace(/^wearing\s+/i, ""));
   if (!clean || clean.length > 56 || clean.split(/\s+/).length > 7) return [];
   if (INTIMATE_CONTENT.test(clean) || PROSE_OR_META.test(clean)) return [];
-  if (!VISUAL_TAG_WORDS.test(clean)) return [];
+  if (!VISUAL_TAG_WORDS.test(clean) && !/\b(?:species|anatomy|[a-z-]+(?:girl|boy|musume))\b/i.test(clean)) return [];
   return [clean];
 }
 
@@ -237,7 +237,7 @@ export function distillVisualTags(source: string): string[] {
 export function toUsableTags(name: string, tags: string[]): string[] {
   const nameKey = characterAppearanceKey(name);
   return dedupeSubsumed(distillVisualTags(tags.join(", "))
-    .filter((tag) => characterAppearanceKey(tag) !== nameKey));
+    .filter((tag) => characterAppearanceKey(tag) !== nameKey || /\b(?:species|anatomy|[a-z-]*girl|[a-z-]*boy|[a-z-]*musume|human|elf|demon|dragon|shark|furry|anthro)\b/i.test(tag)));
 }
 
 /**

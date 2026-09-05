@@ -226,6 +226,26 @@ function singleCharacterPayload(description: string) {
 }
 
 describe("single-character planning flow", () => {
+  test("persists the terminal subject and wardrobe without rewriting the opening scene", async () => {
+    const runtime = planningRuntime([
+      { id: "assistant-timeline", content: "Mira listens.\n\nA visitor enters.", is_user: false, name: "Scenario" }
+    ], { generateRaw: () => ({ ...singleCharacterPayload("silver hair, green eyes"),
+      cues: [{ paragraphIndex: 0, character: "Mira" }, { paragraphIndex: 1, character: "Visitor", attire: "blue pajamas" }],
+      characters: [{ name: "Mira", description: "silver hair, green eyes" }, { name: "Visitor", description: "red hair, blue eyes" }]
+    }) });
+    await sendState(runtime.spindle, "chat-controller", "user-timeline");
+    const state = runtime.data.get(chatStatePath("chat-controller")) as StoredChatState;
+    const record = runtime.data.get(state.activeTurnPath!) as StoredTurnRecord;
+    expect(record.plan.scenes[0]?.character).toBe("Mira");
+    expect(record.plan.scenes[0]?.attire).toBeNull();
+    expect(state.latestScene?.character).toBe("Visitor");
+    expect(state.latestScene?.attire).toBe("blue pajamas");
+    expect(state.latestScene?.identityPrompt).toBe("red hair, blue eyes");
+    const roster = runtime.data.get("chats/chat-controller/characters.json") as Record<string, string>;
+    expect(roster.Mira).toBe("silver hair, green eyes");
+    expect(roster.Visitor).toBe("red hair, blue eyes");
+  });
+
   test("seeds the single-character state once from the planner on a fresh chat", async () => {
     const runtime = planningRuntime([
       { id: "user-1", content: "Open the door.", is_user: true, name: "User" },
@@ -419,7 +439,7 @@ describe("GENERATION_STARTED abort and ownership invalidation", () => {
 });
 
 describe("Finding #3: vn_retry_turn recovery and settings snapshotting", () => {
-  test("recovers failed jobs, applies changed config, snapshots settings, and calls provider", async () => {
+  for (const missingIdentity of [false, true]) test(`recovers failed jobs${missingIdentity ? " by replanning unresolved identity" : " with changed settings"}`, async () => {
     let frontendHandler!: (payload: unknown) => void;
     const sent: any[] = [];
     const calls: any[] = [];
@@ -459,6 +479,8 @@ describe("Finding #3: vn_retry_turn recovery and settings snapshotting", () => {
       queuedAt: now, imageId: null, imageUrl: null, readyAt: null, generatedAt: null
     });
 
+    if (missingIdentity) p.visualCues[0]!.resolvedIdentity = "";
+    let planningCalls = 0;
     const record: StoredTurnRecord = {
       schemaVersion: 1,
       speaker: "Mira",
@@ -483,6 +505,10 @@ describe("Finding #3: vn_retry_turn recovery and settings snapshotting", () => {
         setJson: async (path: string, value: unknown) => { data.set(path, value); }
       },
       chat: { getMessages: async () => [message] },
+      generate: { raw: async () => {
+        planningCalls++;
+        return { text: JSON.stringify(singleCharacterPayload("silver hair, green eyes")) };
+      } },
       imageGen: {
         getConnection: async () => ({ provider: "comfyui" }),
         listConnections: async () => [{ provider: "comfyui", is_default: true }],
@@ -506,6 +532,7 @@ describe("Finding #3: vn_retry_turn recovery and settings snapshotting", () => {
     }
 
     expect(calls).toHaveLength(1);
+    expect(planningCalls).toBe(missingIdentity ? 1 : 0);
     expect(calls[0].prompt).toContain("new quality tags");
 
     const saved = data.get(turnPath("chat", message.id, 0)) as StoredTurnRecord;

@@ -211,14 +211,15 @@ function normalizeAppearanceMap(raw: unknown): CharacterAppearanceMap {
 }
 
 /**
- * Load the durable global character-appearance map and run the one-time batch
- * migration/repair over existing `chats/<id>/visual-state.json` records. Inlay
- * behavior: a good baseline learned in chat A is reused exactly in chat B.
+ * Runtime callers pass chatId to isolate appearance memory. The legacy global
+ * API remains readable, but is never imported into a chat by name alone.
  */
 export async function loadCharacterAppearance(
   spindle: SpindleAPI,
-  userId?: string
+  userId?: string,
+  chatId?: string
 ): Promise<CharacterAppearanceMap> {
+  if (chatId) return normalizeAppearanceMap(await spindle.userStorage.getJson<unknown>(`chats/${safeSegment(chatId)}/characters.json`, { fallback: {}, ...(userOptions(userId) ?? {}) }));
   const raw = await spindle.userStorage.getJson<unknown>(characterAppearancePath(), {
     fallback: {},
     ...(userOptions(userId) ?? {})
@@ -242,19 +243,20 @@ export async function saveCharacterAppearance(
 }
 
 /**
- * Merge a resolved single-character identity into the global map. Preserves an
+ * Merge a resolved single-character identity into the selected map. Preserves an
  * existing usable baseline exactly; only fills missing entries or repairs
  * degraded (name-only / empty) entries. Names are memory keys, never tags.
  */
 export async function mergeCharacterAppearanceFromState(
   spindle: SpindleAPI,
   state: SingleCharacterState,
-  userId?: string
+  userId?: string,
+  chatId?: string
 ): Promise<void> {
   const name = normalizeCharacterName(state.protagonist.name);
   const tags = toUsableTags(name, state.protagonist.tags);
   if (!name || tags.length === 0) return;
-  const path = characterAppearancePath();
+  const path = chatId ? `chats/${safeSegment(chatId)}/characters.json` : characterAppearancePath();
   await serializedWrite(scopedKey(userId, path), async () => {
     const existingRaw = await spindle.userStorage.getJson<unknown>(path, {
       fallback: {},
@@ -273,16 +275,17 @@ export async function mergeCharacterAppearanceFromState(
 }
 
 /**
- * Merge planner-extracted characters into the durable global appearance map.
+ * Merge planner-extracted characters into the selected appearance map.
  * Ensures characters introduced across scenes are remembered for subsequent turns.
  */
 export async function mergePlannerCharacters(
   spindle: SpindleAPI,
   characters: Array<{ name: string; description: string }>,
-  userId?: string
+  userId?: string,
+  chatId?: string
 ): Promise<void> {
   if (!characters || characters.length === 0) return;
-  const path = characterAppearancePath();
+  const path = chatId ? `chats/${safeSegment(chatId)}/characters.json` : characterAppearancePath();
   await serializedWrite(scopedKey(userId, path), async () => {
     const existingRaw = await spindle.userStorage.getJson<unknown>(path, {
       fallback: {},
@@ -513,6 +516,7 @@ export type StoredPortrait = {
   createdAt: string;
   /** Source prompt used when capturing this portrait, for provenance. */
   prompt?: string;
+  identityFingerprint?: string;
 };
 
 export type PortraitRecord = {

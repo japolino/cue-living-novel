@@ -37,9 +37,19 @@ function sceneForCue(plan: TurnPlan, cue: VisualCue): SceneState {
 export type CueVisualState = {
   characterName: string;
   characterKey: string;
+  baseIdentity: string;
   identity: string;
   attire: string;
 };
+
+export function portraitIdentityFingerprint(name: string, identity: string, config: VisualNovelConfig, provider: string | null): string {
+  if (!identity.trim()) return "";
+  return hash(JSON.stringify(["identity-v2", characterAppearanceKey(name), identity.split(",").map((tag) => tag.trim().toLowerCase()).filter(Boolean).sort(), provider, config.imageConnectionId, config.imageModel]));
+}
+
+export function compatiblePortrait(portrait: StoredPortrait | undefined, fingerprint: string): StoredPortrait | undefined {
+  return fingerprint && portrait?.identityFingerprint === fingerprint ? portrait : undefined;
+}
 
 export function resolveCueCharacterVisualState(
   scene: SceneState,
@@ -72,7 +82,8 @@ export function resolveCueCharacterVisualState(
     baseIdentity = scene.identityPrompt?.trim() ?? "";
   }
 
-  const attire = cue.attire || (characterKey === sceneCharacterKey ? scene.attire : null) || "";
+  if (cue.resolvedIdentity !== undefined) baseIdentity = cue.resolvedIdentity;
+  const attire = cue.resolvedAttire !== undefined ? cue.resolvedAttire ?? "" : cue.attire || (characterKey === sceneCharacterKey ? scene.attire : null) || "";
   let identity = baseIdentity;
   if (attire && identity) {
     identity = applyAttireOverride(identity, attire);
@@ -80,7 +91,7 @@ export function resolveCueCharacterVisualState(
     identity = attire;
   }
 
-  return { characterName, characterKey, identity, attire };
+  return { characterName, characterKey, baseIdentity, identity, attire };
 }
 
 function compilePromptEntry(
@@ -294,7 +305,7 @@ export async function generateAssets(
 
   const [initialPortraits, characterAppearance] = await Promise.all([
     anchorable ? loadPortraits(spindle, plan.key.chatId, userId).catch(() => ({} as Record<string, StoredPortrait>)) : Promise.resolve({} as Record<string, StoredPortrait>),
-    loadCharacterAppearance(spindle, userId).catch(() => ({} as CharacterAppearanceMap))
+    loadCharacterAppearance(spindle, userId, plan.key.chatId).catch(() => ({} as CharacterAppearanceMap))
   ]);
   const portraits: Record<string, StoredPortrait> = { ...initialPortraits };
 
@@ -324,6 +335,7 @@ export async function generateAssets(
         if (signal.aborted) throw abortError(signal);
         const scene = sceneForCue(plan, cue);
         const visualState = resolveCueCharacterVisualState(scene, cue, characterAppearance);
+        if (cue.resolvedIdentity !== undefined && !cue.resolvedIdentity.trim()) throw new Error(`No usable appearance was resolved for "${visualState.characterName}". Replan this turn with a character description; the previous character will not be substituted.`);
         const prompt = compileImagePrompt(config, scene, cue, characterAppearance);
         const negativePrompt = compileNegativePrompt(config, scene, cue, characterAppearance);
         const characterName = visualState.characterName;
@@ -339,11 +351,12 @@ export async function generateAssets(
           }
         }
 
-        let portrait = anchorable && characterKey ? portraits[characterKey] : undefined;
+        const identityFingerprint = portraitIdentityFingerprint(characterName, visualState.baseIdentity, config, provider);
+        let portrait = anchorable && characterKey ? compatiblePortrait(portraits[characterKey], identityFingerprint) : undefined;
         let isCaptureOwner = false;
         let captureResolve: ((val: StoredPortrait | null) => void) | undefined;
 
-        const wantsCapture = anchorable && Boolean(characterKey) && !portrait && !capturePromises.has(characterKey);
+        const wantsCapture = anchorable && Boolean(characterKey) && Boolean(identityFingerprint) && !portrait && !capturePromises.has(characterKey);
         if (wantsCapture) {
           isCaptureOwner = true;
           const promise = new Promise<StoredPortrait | null>((resolve) => {
@@ -388,10 +401,11 @@ export async function generateAssets(
                 data: parsed.data,
                 mimeType: parsed.mimeType,
                 createdAt: new Date().toISOString(),
-                prompt
+                prompt,
+                identityFingerprint
               };
               try {
-                if (await savePortrait(spindle, plan.key.chatId, stored, userId)) {
+                if (await savePortrait(spindle, plan.key.chatId, stored, userId, { replace: !compatiblePortrait(portraits[characterKey], identityFingerprint) })) {
                   portraits[characterKey] = stored;
                   if (config.debugLogging) spindle.log.info(`[VN] portrait captured for "${characterName}" -> ${stored.imageId} (${stored.mimeType}, ${stored.data.length} base64 chars)`);
                 } else {

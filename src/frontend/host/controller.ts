@@ -48,6 +48,12 @@ export function selectCurrentImage(turn: TurnView, paragraphIndex: number): Asse
   return match;
 }
 
+export function currentAssetError(turn: TurnView, paragraphIndex: number): string | null {
+  const current = turn.assets.filter((asset) => asset.paragraphIndex <= paragraphIndex)
+    .sort((a, b) => b.paragraphIndex - a.paragraphIndex)[0];
+  return current?.status === "failed" ? current.error || "Image generation failed. Retry this turn." : null;
+}
+
 /**
  * Whether two turn deliveries refer to the same logical turn. Used to guard
  * against a re-broadcast of the same turn (a GENERATION_ENDED followed by a
@@ -490,6 +496,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
 
   async function syncImageForParagraph(paragraphIndex: number): Promise<void> {
     if (!turn) return;
+    const assetError = currentAssetError(turn, paragraphIndex);
+    if (assetError) stage.setError(assetError);
     const asset = selectCurrentImage(turn, paragraphIndex);
     if (!asset?.imageUrl) {
       vnDebug("image sync", `p${paragraphIndex}`, "no decodable asset yet");

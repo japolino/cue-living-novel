@@ -4,6 +4,7 @@ import type { VisualNovelConfig } from "../../config.js";
 import {
   applyVisualConfigToStage,
   computeAssetProgress,
+  currentAssetError,
   decideTurnApplication,
   nameplateForParagraph,
   sameTurnIdentity,
@@ -12,6 +13,17 @@ import {
   type VisualStageThemeTarget,
 } from "./controller";
 import type { AssetView, TurnView } from "../../protocol.js";
+
+test("image errors follow the reading cursor without revealing future failures", () => {
+  const assets: AssetView[] = [
+    { jobId: "a", cueId: "a", paragraphIndex: 0, status: "generated", imageUrl: "a.png" },
+    { jobId: "b", cueId: "b", paragraphIndex: 1, status: "failed", error: "No usable appearance" },
+    { jobId: "c", cueId: "c", paragraphIndex: 2, status: "generated", imageUrl: "c.png" }
+  ];
+  expect(currentAssetError({ assets } as TurnView, 0)).toBeNull();
+  expect(currentAssetError({ assets } as TurnView, 1)).toBe("No usable appearance");
+  expect(currentAssetError({ assets } as TurnView, 2)).toBeNull();
+});
 
 function spyStage(): VisualStageThemeTarget & { calls: string[] } {
   const calls: string[] = [];

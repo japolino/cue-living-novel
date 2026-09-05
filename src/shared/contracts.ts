@@ -190,6 +190,8 @@ export const VisualCueSchema = z.object({
   poseExpressionId: z.string().trim().optional(),
   character: z.string().trim().nullable().optional(),
   attire: z.string().trim().nullable().optional(),
+  resolvedIdentity: z.string().optional(),
+  resolvedAttire: z.string().nullable().optional(),
   effect: StageEffectSchema.optional(),
   promptDelta: z.string().trim().default(""),
   assetJobId: IdentifierSchema,
@@ -286,6 +288,7 @@ export const TurnPlanSchema = z.object({
   initialContinuity: ContinuityStateSchema,
   continuityDeltas: z.array(IndexedContinuityDeltaSchema).default([]),
   terminalContinuity: ContinuityStateSchema,
+  terminalVisualState: z.object({ character: z.string(), identity: z.string(), attire: z.string().nullable() }).optional(),
   planningStatus: PlanningStatusSchema,
   createdAt: TimestampSchema
 }).strict().superRefine((plan, context) => {

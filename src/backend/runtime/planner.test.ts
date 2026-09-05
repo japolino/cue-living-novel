@@ -664,7 +664,8 @@ test("attire persists across cues, turns, and character switches, and resets on 
   assert.equal(resultA.plan.visualCues[1]?.attire, "blue pajamas");
   // Missing attire on cue 2 remains unchanged
   assert.equal(resultA.plan.visualCues[2]?.attire, "blue pajamas");
-  assert.equal(resultA.plan.scenes[0]?.attire, "blue pajamas");
+  assert.equal(resultA.plan.scenes[0]?.attire, null);
+  assert.equal(resultA.plan.terminalVisualState?.attire, "blue pajamas");
   assert.equal(resultA.plan.terminalContinuity.characters["Mira"]?.wardrobe?.attire, "blue pajamas");
 
   // 2. Turn B: Next turn without explicit attire inherits pajamas from previousScene / terminalContinuity

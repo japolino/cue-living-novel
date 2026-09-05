@@ -7,6 +7,7 @@ import {
   cueCharacterName,
   generateAssets,
   parseDataUrl,
+  portraitIdentityFingerprint,
   referenceAnchoringEnabled,
   referenceParametersFor,
   splitConnectionSelection
@@ -267,7 +268,7 @@ describe("generateAssets reference anchoring", () => {
 
   test("anchors NovelAI generations with director reference images", async () => {
     const { spindle, calls } = imageRuntime("novelai");
-    await savePortrait(spindle, "chat", portrait);
+    await savePortrait(spindle, "chat", { ...portrait, identityFingerprint: portraitIdentityFingerprint("Mira", scene.identityPrompt!, config, "novelai") });
     const turnPlan = plan([cue("one", 0)]);
     const jobs = createAssetJobs(turnPlan, config);
     await generateAssets(spindle, turnPlan, jobs, config, new AbortController().signal, () => {});
@@ -292,6 +293,51 @@ describe("generateAssets reference anchoring", () => {
   });
 });
 
+describe("portrait identity provenance", () => {
+  const config = { ...DEFAULT_CONFIG, imageConnectionId: "conn", imageConcurrency: 2 };
+  test("legacy and mismatched portraits are replaced without feeding the old image back", async () => {
+    for (const identityFingerprint of [undefined, "old-identity"]) {
+      const { spindle, calls } = imageRuntime("comfyui");
+      await savePortrait(spindle, "chat", { ...portrait, ...(identityFingerprint ? { identityFingerprint } : {}) });
+      const turnPlan = plan([cue("one", 0, "Mira", "smile"), cue("two", 1, "Mira", "sad")]);
+      await generateAssets(spindle, turnPlan, createAssetJobs(turnPlan, config), config, new AbortController().signal, () => {});
+      expect(calls[0]?.parameters.resolvedSourceImages).toBeUndefined();
+      expect(calls[0]?.includeDataUrl).toBe(true);
+      expect(calls[1]?.parameters.resolvedSourceImages).toEqual([{ data: "UE9SVFJBSVQ=", mimeType: "image/png" }]);
+      expect((await loadPortraits(spindle, "chat")).mira?.identityFingerprint).toBe(portraitIdentityFingerprint("Mira", scene.identityPrompt!, config, "comfyui"));
+    }
+  });
+
+  test("fingerprints track identity, entity, model and workflow, but tolerate tag order", () => {
+    const baseline = portraitIdentityFingerprint("Mira", "blue eyes, black hair", config, "comfyui");
+    expect(portraitIdentityFingerprint("mira", "black hair, blue eyes", config, "comfyui")).toBe(baseline);
+    expect(portraitIdentityFingerprint("Mira", "green eyes, black hair", config, "comfyui")).not.toBe(baseline);
+    expect(portraitIdentityFingerprint("Other", "blue eyes, black hair", config, "comfyui")).not.toBe(baseline);
+    expect(portraitIdentityFingerprint("Mira", "blue eyes, black hair", { ...config, imageModel: "new" }, "comfyui")).not.toBe(baseline);
+    expect(portraitIdentityFingerprint("Mira", "blue eyes, black hair", { ...config, imageConnectionId: "conn::other" }, "comfyui")).not.toBe(baseline);
+    expect(portraitIdentityFingerprint("Mira", "blue eyes, black hair", config, "novelai")).not.toBe(baseline);
+  });
+
+  test("unresolved new subjects fail visibly without generating or capturing a substitute", async () => {
+    const { spindle, calls } = imageRuntime("comfyui");
+    const turnPlan = plan([{ ...cue("one", 0, "Visitor"), resolvedIdentity: "", resolvedAttire: null }]);
+    const jobs = await generateAssets(spindle, turnPlan, createAssetJobs(turnPlan, config), config, new AbortController().signal, () => {});
+    expect(calls).toHaveLength(0);
+    expect(jobs[0]?.status).toBe("failed");
+    expect(jobs[0]?.error).toContain("No usable appearance");
+    expect(await loadPortraits(spindle, "chat")).toEqual({});
+  });
+
+  test("secondary cue snapshots fingerprint their own identity rather than the scene lead", async () => {
+    const { spindle, calls } = imageRuntime("comfyui");
+    const turnPlan = plan([{ ...cue("one", 0, "Other"), resolvedIdentity: "red hair, blue eyes" }]);
+    await generateAssets(spindle, turnPlan, createAssetJobs(turnPlan, config), config, new AbortController().signal, () => {});
+    const stored = (await loadPortraits(spindle, "chat")).other!;
+    expect(stored.identityFingerprint).toBe(portraitIdentityFingerprint("Other", "red hair, blue eyes", config, "comfyui"));
+    expect(calls[0]?.parameters.resolvedSourceImages).toBeUndefined();
+  });
+});
+
 describe("splitConnectionSelection", () => {
   test("passes plain connection ids through", () => {
     expect(splitConnectionSelection("conn-1")).toEqual({ connectionId: "conn-1" });
@@ -306,8 +352,8 @@ describe("splitConnectionSelection", () => {
 describe("generateAssets with a compound workflow selection", () => {
   test("resolves the provider from the real connection id and forwards workflow_id", async () => {
     const { spindle, calls } = imageRuntime("comfyui");
-    await savePortrait(spindle, "chat", portrait);
     const config = { ...DEFAULT_CONFIG, imageConnectionId: "conn::wf-yume", imageConcurrency: 1 };
+    await savePortrait(spindle, "chat", { ...portrait, identityFingerprint: portraitIdentityFingerprint("Mira", scene.identityPrompt!, config, "comfyui") });
     const turnPlan = plan([cue("one", 0)]);
     await generateAssets(spindle, turnPlan, createAssetJobs(turnPlan, config), config, new AbortController().signal, () => {});
 
