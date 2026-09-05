@@ -92,6 +92,7 @@ import {
 
 export interface VnStageCallbacks {
   onAdvance?: (paragraphIndex: number, inputUnlocked: boolean) => void;
+  onPrevious?: (paragraphIndex: number) => void;
   onChoice?: (choice: VnChoice) => void | Promise<void>;
   onSubmit?: (text: string) => void | Promise<void>;
   onExit?: () => void;
@@ -141,6 +142,7 @@ const THEME_MARKUP = `
     <section data-vn-narrative hidden aria-label="Dialogue">
       <div data-vn-dialogue>
         <nav data-vn-controls aria-label="Dialogue controls">
+          <button data-vn-control="previous" type="button" aria-label="Previous paragraph" aria-keyshortcuts="ArrowLeft" title="Previous paragraph (Left Arrow)">Previous</button>
           <button data-vn-control="log" type="button" aria-label="History Log">Log</button>
           <button data-vn-control="auto" type="button" aria-label="Toggle auto play">
             <span data-vn-auto-ring aria-hidden="true">
@@ -314,6 +316,8 @@ export class VnStage {
   private readonly dialogueText: HTMLElement;
   private readonly progress: HTMLElement;
   private readonly continueButton: HTMLButtonElement;
+  private readonly previousButton: HTMLButtonElement;
+  private isRewinding = false;
   private readonly interaction: HTMLElement;
   private readonly choiceList: HTMLOListElement;
   private readonly inputForm: HTMLFormElement;
@@ -430,6 +434,7 @@ export class VnStage {
     this.dialogueText = queryRequired(this.themeRoot, "[data-vn-dialogue-text]");
     this.progress = queryRequired(this.themeRoot, "[data-vn-progress]");
     this.continueButton = queryRequired(this.themeRoot, "[data-vn-continue]");
+    this.previousButton = queryRequired(this.themeRoot, "[data-vn-control='previous']");
     this.interaction = queryRequired(this.themeRoot, "[data-vn-interaction]");
     this.choiceList = queryRequired(this.themeRoot, "[data-vn-choice-list]");
     this.inputForm = queryRequired(this.themeRoot, "[data-vn-input-form]");
@@ -555,6 +560,11 @@ export class VnStage {
     const canAdvance = view.canAdvance;
     const isReady = canAdvance && !this.isTyping;
     this.continueButton.hidden = !canAdvance;
+    this.previousButton.disabled = !view.canGoBack;
+    // The response overlay covers the dialogue controls at the end of a turn.
+    // Keep the same button reachable there, then return it to the reading bar.
+    const previousParent = view.acceptsInput ? this.interaction : queryRequired(this.themeRoot, "[data-vn-controls]");
+    if (this.previousButton.parentElement !== previousParent) previousParent.prepend(this.previousButton);
     this.continueButton.dataset.vnReady = String(isReady);
   }
 
@@ -1149,6 +1159,10 @@ export class VnStage {
   }
 
   private bindEvents(): void {
+    this.previousButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      this.previous();
+    });
     this.exitButton.addEventListener("click", () => this.callbacks.onExit?.());
     this.continueButton.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -1203,6 +1217,11 @@ export class VnStage {
         return;
       }
       if (isInteractiveTarget(event.target)) return;
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        this.previous();
+        return;
+      }
       if (event.key === "l" || event.key === "L") {
         event.preventDefault();
         this.openBacklog();
@@ -1255,6 +1274,26 @@ export class VnStage {
     const previousPhase = this.state.phase;
     this.state = reduceVnStage(this.state, action);
     this.render(previousPhase);
+  }
+
+  previous(): void {
+    if (this.destroyed || this.isBacklogOpen || !selectVnStageView(this.state).canGoBack) return;
+    this.isSkipping = false;
+    this.isAutoPlay = false;
+    this.clearAllTimers();
+    this.isTyping = false;
+    this.activeTextNodes = [];
+    this.updateControlButtons();
+    // Restore persistent atmosphere without replaying a future one-shot effect.
+    this.ambientOverride = this.state.ambient;
+    for (const paragraph of this.state.paragraphs.slice(0, this.state.currentParagraphIndex)) {
+      const ambient = paragraph.ambient !== undefined ? paragraph.ambient : paragraph.cue?.ambient;
+      if (ambient === null || isAmbientEffect(ambient)) this.ambientOverride = ambient;
+    }
+    this.isRewinding = true;
+    try { this.dispatch({ type: "previous" }); }
+    finally { this.isRewinding = false; }
+    this.callbacks.onPrevious?.(this.state.currentParagraphIndex);
   }
 
   private advance(): void {
@@ -1434,6 +1473,7 @@ export class VnStage {
     text: string,
     formatted: string,
   ): void {
+    if (this.readParagraphIds.has(id)) return;
     this.readParagraphIds.add(id);
     const last = this.backlogEntries[this.backlogEntries.length - 1];
     if (!last || last.text !== text || last.speaker !== speaker) {
@@ -1573,9 +1613,9 @@ export class VnStage {
     this.currentRenderedParagraphId = paragraph.id;
     this.currentRenderedFormatted = formatted;
     this.recordBacklogAndRead(paragraph.id, paragraph.speaker, paragraph.text, formatted);
-    this.triggerParagraphEffects(paragraph);
+    if (!this.isRewinding) this.triggerParagraphEffects(paragraph);
 
-    if (this.textSpeed <= 0 || this.isSkipping) {
+    if (this.textSpeed <= 0 || this.isSkipping || this.isRewinding) {
       this.clearTypewriter();
       this.dialogueText.innerHTML = formatted;
       this.isTyping = false;

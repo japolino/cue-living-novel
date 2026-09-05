@@ -244,12 +244,15 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     sfxVolume: configRef.current?.sfxVolume ?? 0.8,
   });
 
+  let currentBgm: string | null = null;
+  let turnOpeningBgm: string | null = null;
   function syncAudioForParagraph(activeTurn: TurnView, paragraphIndex: number): void {
     if (!activeTurn.audioCues || activeTurn.audioCues.length === 0) return;
     const cue = activeTurn.audioCues.find((c) => c.paragraphIndex === paragraphIndex);
     if (!cue) return;
     const bgmSrc = cue.bgmUrl || cue.bgm;
     if (bgmSrc) {
+      currentBgm = bgmSrc;
       vnDebug("audio", `p${paragraphIndex}`, "bgm ->", bgmSrc);
       audioEngine.playBgm(bgmSrc);
     }
@@ -264,6 +267,15 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     mount: app.root,
     themePreset: configRef.current?.themePreset ?? "lumiverse",
     onExit: () => deactivate(),
+    onPrevious: (paragraphIndex) => {
+      panels.setCursor(paragraphIndex);
+      audioEngine.stopAll();
+      const earlierMusic = turn?.audioCues?.filter((cue) => cue.paragraphIndex <= paragraphIndex && (cue.bgmUrl || cue.bgm))
+        .sort((a, b) => b.paragraphIndex - a.paragraphIndex)[0];
+      currentBgm = earlierMusic?.bgmUrl || earlierMusic?.bgm || turnOpeningBgm;
+      if (currentBgm) audioEngine.playBgm(currentBgm);
+      void syncImageForParagraph(paragraphIndex);
+    },
     onAdvance: (paragraphIndex) => {
       panels.setCursor(paragraphIndex);
       if (pendingNextTurn) {
@@ -562,6 +574,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     panels.setTurn(next, 0);
     const mode = requestedMode === "cyoa" && next.choices.length > 0 ? "cyoa" : "standard";
     const preserveImage = shouldPreserveImage(previous, next);
+    turnOpeningBgm = preserveImage ? currentBgm : null;
     stage.loadTurn({
       mode,
       paragraphs: next.paragraphs.map((text, index) => ({

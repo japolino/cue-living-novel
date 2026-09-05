@@ -130,6 +130,10 @@ export class PanelDock {
     for (const pin of this.pins) {
       if (!pin.follow || !this.turn) continue;
       const latest = visible.filter((card) => card.followKey === pin.follow).at(-1);
+      if (!latest && pin.fingerprint) {
+        pin.fingerprint = "";
+        this.nodes.get(pin.key)?.remove(); this.nodes.delete(pin.key);
+      }
       if (latest && (pin.card.html !== latest.html || pin.fingerprint !== this.turn.sourceFingerprint)) {
         pin.card = latest; pin.message = this.turn.messageId; pin.fingerprint = this.turn.sourceFingerprint;
         this.nodes.get(pin.key)?.remove(); this.nodes.delete(pin.key);

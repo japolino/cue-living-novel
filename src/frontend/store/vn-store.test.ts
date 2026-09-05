@@ -12,6 +12,32 @@ const paragraphs = [
   { id: "p2", text: "Second" },
 ];
 
+test("previous restores reading state, preserves draft and invalidates future images", () => {
+  let state = reduceVnStage(createInitialVnStageState(), { type: "load-turn", turn: { mode: "cyoa", paragraphs, choices: [{ id: "a", label: "Answer", value: "answer" }] } });
+  assert.equal(selectVnStageView(state).canGoBack, false);
+  assert.equal(reduceVnStage(state, { type: "previous" }), state);
+  state = reduceVnStage(state, { type: "advance" });
+  state = reduceVnStage(state, { type: "advance" });
+  state = { ...state, draft: "Keep this draft", pendingImage: { url: "future.png", alt: "", requestId: "future" } };
+  state = reduceVnStage(state, { type: "previous" });
+  assert.equal(state.currentParagraphIndex, 0);
+  assert.equal(state.phase, "revealing");
+  assert.equal(state.draft, "Keep this draft");
+  assert.equal(state.turnFinished, false);
+  assert.equal(selectVnStageView(state).showChoices, false);
+  assert.equal(state.pendingImage, null);
+  assert.equal(reduceVnStage(state, { type: "image-ready", requestId: "future" }).displayedImage, null);
+});
+
+test("previous cannot rewind an in-flight submission or a user reply", () => {
+  for (const phase of ["planning", "submitting", "waiting-for-response", "error"] as const) {
+    const state = createInitialVnStageState({ phase, paragraphs, currentParagraphIndex: 1 });
+    assert.equal(reduceVnStage(state, { type: "previous" }), state);
+  }
+  const user = createInitialVnStageState({ phase: "revealing", paragraphs, currentParagraphIndex: 1, isUserTurn: true });
+  assert.equal(reduceVnStage(user, { type: "previous" }), user);
+});
+
 test("the final paragraph must be acknowledged before input unlocks", () => {
   let state = reduceVnStage(createInitialVnStageState(), {
     type: "load-turn",

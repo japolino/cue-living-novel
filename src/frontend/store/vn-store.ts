@@ -113,6 +113,7 @@ export interface VnTurnInput {
 export type VnStageAction =
   | { type: "load-turn"; turn: VnTurnInput }
   | { type: "advance" }
+  | { type: "previous" }
   | { type: "set-mode"; mode: VnMode }
   | { type: "set-draft"; draft: string }
   | { type: "set-phase"; phase: VnPhase }
@@ -136,6 +137,7 @@ export interface VnStageView {
   paragraphNumber: number;
   paragraphCount: number;
   canAdvance: boolean;
+  canGoBack: boolean;
   acceptsInput: boolean;
   showChoices: boolean;
   showStandardInput: boolean;
@@ -185,6 +187,7 @@ export const selectVnStageView = (state: VnStageState): VnStageView => {
     paragraphNumber: paragraph ? state.currentParagraphIndex + 1 : 0,
     paragraphCount: state.paragraphs.length,
     canAdvance: state.phase === "revealing" && paragraph !== null,
+    canGoBack: (state.phase === "revealing" || state.phase === "awaiting-input") && !state.isUserTurn && state.currentParagraphIndex > 0,
     acceptsInput,
     showChoices: acceptsInput && state.mode === "cyoa",
     showStandardInput: acceptsInput && state.mode === "standard",
@@ -251,6 +254,12 @@ export const reduceVnStage = (
         turnFinished: true,
         showRerollPrompt: true,
       };
+    }
+
+    case "previous": {
+      if (!selectVnStageView(state).canGoBack) return state;
+      return { ...state, currentParagraphIndex: state.currentParagraphIndex - 1, phase: "revealing",
+        turnFinished: false, showRerollPrompt: false, displayedImage: null, pendingImage: null, imageError: null };
     }
 
     case "present-user-paragraph": {

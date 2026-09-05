@@ -7,6 +7,7 @@ Cue is a Lumiverse extension that turns a chat into a living visual novel. It re
 The preview includes:
 
 - paragraph-by-paragraph reveal with a final acknowledgement gate
+- Previous button and Left Arrow to reread earlier paragraphs in the current reply. Going back pauses Auto and Skip, keeps your response draft, and does not rewind the chat. Skip still uses your selected mode.
 - Standard typed-response and CYOA choice modes
 - a single native image pipeline — planner → asset scheduler — with per-provider bounded concurrency and progressive delivery
 - previous-image retention and decode-before-swap so a late image never blanks the stage

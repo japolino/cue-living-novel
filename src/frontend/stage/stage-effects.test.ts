@@ -71,6 +71,7 @@ class MockNode {
   children: MockNode[] = [];
   get childNodes(): MockNode[] { return this.children; }
   parentNode: MockNode | null = null;
+  get parentElement(): MockNode | null { return this.parentNode; }
   textContent = "";
   _innerHTML = "";
   hidden = false;
@@ -135,9 +136,18 @@ class MockNode {
   }
 
   appendChild(node: MockNode) {
+    node.remove();
     node.parentNode = this;
     this.children.push(node);
     return node;
+  }
+
+  prepend(...nodes: MockNode[]) {
+    for (const node of [...nodes].reverse()) {
+      node.remove();
+      node.parentNode = this;
+      this.children.unshift(node);
+    }
   }
 
   remove() {
@@ -254,9 +264,11 @@ function buildStandardStageDOM(parent: MockNode) {
   logBtn.setAttribute("data-vn-control", "log");
   const autoBtn = new MockNode("button");
   autoBtn.setAttribute("data-vn-control", "auto");
-  const skipBtn = new MockNode("button");
-  skipBtn.setAttribute("data-vn-control", "skip");
-  controls.append(logBtn, autoBtn, skipBtn);
+    const skipBtn = new MockNode("button");
+    skipBtn.setAttribute("data-vn-control", "skip");
+    const previousBtn = new MockNode("button");
+    previousBtn.setAttribute("data-vn-control", "previous");
+    controls.append(previousBtn, logBtn, autoBtn, skipBtn);
 
   const speaker = new MockNode("span");
   speaker.setAttribute("data-vn-speaker", "");

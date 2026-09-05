@@ -875,7 +875,7 @@ button[data-vn-badge]:active {
 }
 
 /*
- * In-stage dialogue navigation & controls: Backlog, Auto-play, Skip
+ * In-stage dialogue navigation & controls: Previous, Backlog, Auto-play, Skip
  */
 [data-vn-controls] {
   position: absolute;
@@ -886,6 +886,19 @@ button[data-vn-badge]:active {
   gap: 0.35rem;
   z-index: 5;
   user-select: none;
+}
+
+[data-vn-interaction] > [data-vn-control="previous"] {
+  position: absolute;
+  bottom: max(1rem, env(safe-area-inset-bottom));
+  left: max(1rem, env(safe-area-inset-left));
+}
+
+@media (max-width: 640px) {
+  [data-vn-controls] {
+    top: -3.5rem;
+    right: 1rem;
+  }
 }
 
 [data-vn-control] {
