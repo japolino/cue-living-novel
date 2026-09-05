@@ -28,12 +28,14 @@ import {
 } from "./audio-catalog.js";
 import {
   loadCharacterAppearance,
+  loadCharacterRegistry,
   loadChatState,
   loadConfig,
   loadSingleCharacterState,
   loadTurnRecord,
   mergeCharacterAppearanceFromState,
   mergePlannerCharacters,
+  saveCharacterRegistry,
   saveChatState,
   saveSingleCharacterState,
   saveTurnRecord,
@@ -326,6 +328,8 @@ async function persistActiveTurn(
     latestScene: lastScene && record.plan.terminalVisualState ? {
       ...lastScene,
       character: record.plan.terminalVisualState.character,
+      ...(record.plan.terminalVisualState.characterId ? { characterId: record.plan.terminalVisualState.characterId } : {}),
+      ...(record.plan.terminalVisualState.subjectCategory ? { subjectCategory: record.plan.terminalVisualState.subjectCategory } : {}),
       identityPrompt: record.plan.terminalVisualState.identity || null,
       attire: record.plan.terminalVisualState.attire,
       continuity: record.plan.terminalContinuity,
@@ -419,6 +423,7 @@ async function processAssistantMessage(
     const chatState = await loadChatState(spindle, chatId, userId);
     const singleCharacter = await loadSingleCharacterState(spindle, chatId, userId);
     const characterAppearance = await loadCharacterAppearance(spindle, userId, chatId);
+    const characterRegistry = await loadCharacterRegistry(spindle, chatId, userId);
     const messages = await spindle.chat.getMessages(chatId) as NormalizedChatMessage[];
     const result = await planTurn(spindle, {
       chatId,
@@ -430,6 +435,7 @@ async function processAssistantMessage(
       config,
       singleCharacter,
       characterAppearance,
+      characterRegistry,
       ...(userId ? { userId } : {})
     });
     if (operation.controller.signal.aborted) return;
@@ -442,6 +448,10 @@ async function processAssistantMessage(
       `audio=${result.plan.audioCues.length} [${result.plan.audioCues.map((cue) => `p${cue.paragraphIndex}:${[cue.bgm ? `bgm=${cue.bgm}` : "", cue.sfx ? `sfx=${cue.sfx}` : ""].filter(Boolean).join("+")}`).join(", ")}]`,
       `choices=${result.plan.choices.length}`,
       `protagonist="${result.singleCharacter.protagonist.name}" tags=${result.singleCharacter.protagonist.tags.length}`,
+      `subject=${result.plan.terminalVisualState?.characterId ?? "?"}/${result.plan.terminalVisualState?.subjectCategory ?? "unknown"}`,
+      `registry=${Object.values(result.characterRegistry).map((entry) => `${entry.id}${entry.aliases.length ? `(${entry.aliases.join("/")})` : ""}`).join(",")}`,
+      ...(result.rejectedAliases.length ? [`rejectedAliases=[${result.rejectedAliases.map((item) => `${item.alias}->${item.requestedFor} owned by ${item.ownedBy}`).join("; ")}]`] : []),
+      ...(result.rejectedSubjects.length ? [`rejectedSubjects=[${result.rejectedSubjects.map((item) => `${item.name}: ${item.requested} kept ${item.durable}`).join("; ")}]`] : []),
       `context: ${summarizeDiagnostics(result.contextDiagnostics)}`
     ].join(" | "));
     await mergeCharacterAppearanceFromState(spindle, singleCharacter, userId, chatId);
@@ -450,6 +460,8 @@ async function processAssistantMessage(
     if (result.extractedCharacters && result.extractedCharacters.length > 0) {
       await mergePlannerCharacters(spindle, result.extractedCharacters, userId, chatId);
     }
+    // Persist stable ids, explicit aliases and subject categories learned this turn.
+    await saveCharacterRegistry(spindle, chatId, result.characterRegistry, userId);
         let jobs: StoredTurnRecord["jobs"] = [];
     if (config.useNativeCardImages) {
       try {

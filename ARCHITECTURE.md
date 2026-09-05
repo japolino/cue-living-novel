@@ -140,6 +140,45 @@ The planner may propose a boundary, but the deterministic boundary reducer accep
 
 Compiled camera framing is fixed to `upper body, eye level, straight-on` for every cue. The scene still carries a declared composition lock and the dialogue-safe-region intent as planner metadata, but the compiler does not currently emit them; framing stability comes from the fixed camera tags plus scene reuse. Keeping faces clear of the dialogue UI therefore depends on the provider/workflow dimensions rather than an enforced prompt constraint.
 
+### Environment continuity, structured changes, and stale contradiction prevention
+
+Continuing scenes (`!decision.startsNewScene`) preserve established descriptive environment fields by default. This prevents LLM paraphrases, generic atmospheric rewrites, or omitted fields from eroding established visual details (such as specific props, architectural elements, or lighting setups).
+
+1. **Planner-only input vs stored contracts**:
+   - `PlannerSceneSchema.environment` accepts `PlannerEnvironmentInputSchema` (`persistentElements`, `removedElements`, `changes`), and `PlannerSceneSchema.environmentChanges` accepts `PlannerEnvironmentChangesSchema`.
+   - These patch operations are planner-only: during normalization, all operations are evaluated deterministically and the resulting scene is strictly parsed into `SceneEnvironmentSchema` (`location`, `timeOfDay`, `weather`, `lighting`, `description`, `persistentElements`).
+   - Stored `SceneEnvironment` and `SceneState` never carry transient operation keys.
+
+2. **Structured `environmentChanges` schema & semantics**:
+   - `description?: string`: Explicitly replaces the textual scene description. There is intentionally no `clearDescription`; description can only be replaced, or is re-synthesized automatically when lighting/time/weather changes without a replacement description.
+   - `lighting?: string | null`: Explicitly replaces or clears lighting state (null explicitly clears lighting).
+   - `timeOfDay?: string | null`: Explicitly updates or clears time of day (null explicitly clears timeOfDay).
+   - `weather?: string | null`: Explicitly updates or clears weather (null or 'none' explicitly clears weather).
+   - Location changes belong only in `boundary` and `environment.location` — there is no location field in `environmentChanges`.
+   - `addElements: string[]`: Appends new persistent elements without duplicating existing elements.
+   - `removeElements: string[]`: Targeted removal of specific persistent elements by exact name or core noun.
+   - `replaceElements: Array<{ from: string, to: string }>`: Replaces matching element `from` with `to` (e.g. `{ from: "closed window", to: "shattered window" }`).
+   - `clearElements: boolean`: Clears all persistent elements to an empty array.
+   - `clearLighting: boolean`: Clears lighting to `null`.
+   - `clearWeather: boolean`: Clears weather to `null`.
+
+3. **Preservation vs legacy progression**:
+   - Absent an explicit `environmentChanges` patch, continuing scenes preserve `base.description`, `base.lighting`, and `base.persistentElements`.
+   - Generic rewrites (even longer descriptive fluff) cannot erase established physical props (e.g. `television glowing`).
+   - Legitimate backward-compatible progression in standard fields (`location`, `timeOfDay`, `weather`, and distinct lighting transitions like `lights off` or `dark`) is accepted.
+   - Generic mentions (e.g. `bookshelf`) never downgrade or replace detailed established items (`tall mahogany bookshelf packed with grimoires`).
+   - Compound props on furniture (e.g. `laptop on desk`) are added as new objects without replacing the furniture (`wooden desk`).
+
+4. **Clear behavior and sentinel preservation**:
+   - `normalizeWeather` preserves the `'none'` sentinel through normalization so `mergeEnvironment` can distinguish an explicit clear from an omitted/unchanged field (`null`).
+   - `mergeEnvironment` clears `weather` to `null` upon receiving `'none'` or `clearWeather: true`.
+   - Final scene construction sanitizes any residual `'none'` to `null`, ensuring literal `'none'` never leaks into compiled prompts.
+   - `lighting: "none"` or `clearLighting: true` clears lighting to `null`. Valid ambient descriptors (`normal`, `ambient`, `clear`) are preserved as legitimate lighting conditions and are not converted to `null`.
+
+5. **Stale contradiction neutralization**:
+   - When lighting, timeOfDay, or weather changes and the planner does not provide a new description, stale contradictory prose (e.g. `at dusk`, `warm lamps lit`) is dropped and re-synthesized from the new location and lighting.
+   - When lighting explicitly becomes dark or off (`lights off`, `dark`, `blackout`, `unlit`), light-state modifiers on persistent elements (`lit`, `brightly glowing`, `burning`) are neutralized (`lit lamp` -> `lamp`), preserving the object without contradictory glowing text in the compiled prompt.
+
 ## Stage effects
 
 Stage visuals are layered procedurally (CSS + inline SVG only; no network assets):
@@ -171,6 +210,8 @@ character-appearance.json
 character-appearance-migrated.json
 chats/<chat-id>/state.json
 chats/<chat-id>/visual-state.json
+chats/<chat-id>/characters.json
+chats/<chat-id>/character-registry.json
 chats/<chat-id>/portraits.json
 turns/<chat-id>/<assistant-message-id>/<swipe-id>.json
 ```
@@ -189,7 +230,7 @@ prefix + subject (1girl|1boy|1other, solo) + identity tags (with any attire over
        + camera (upper body, eye level, straight-on) + suffix
 ```
 
-`PROMPT_PREFIX`, `PROMPT_SUFFIX`, and the negative prompt come from `config.ts`; the subject line is classified from the identity text; the pose suffix comes from the closed catalogue. The scene's `basePrompt`, composition lock, environment `description`, and declared aspect ratio are planner metadata that the current compiler does not forward to the provider.
+`PROMPT_PREFIX`, `PROMPT_SUFFIX`, and the negative prompt come from `config.ts`; the subject line comes from the cue's persisted `subjectCategory`, falling back to explicit gender words in the identity text; the pose suffix comes from the closed catalogue. The scene's `basePrompt`, composition lock, environment `description`, and declared aspect ratio are planner metadata that the current compiler does not forward to the provider.
 
 Where the extension owns the data, behavior is deterministic: a byte-identical content fingerprint keyed by message, swipe, and content makes generation events, reconnects, and edits idempotent; stale asset results are rejected by ownership guards; previous visual state is reused so the scene prompt stays stable until a justified boundary; and the pipeline never mutates the canonical chat message.
 
@@ -211,6 +252,14 @@ The active character's baseline is seeded from a matching planner entry, the car
 
 A roster at `chats/<chat-id>/characters.json` remembers appearances within each chat. Runtime planning and image generation do not import the old user-wide `character-appearance.json` by name, since unrelated chats can reuse names such as Guard. Existing per-chat visual state seeds the scoped roster on the next planned turn; other cast members are relearned from matching planner entries. Legacy storage APIs remain available for compatibility.
 
+### Stable character ids, explicit aliases, and subject category
+
+`chats/<chat-id>/character-registry.json` stores one entry per character: a stable `id` derived from the canonical name, the canonical `name`, explicit `aliases`, the appearance `tags`, and a durable `subjectCategory` (`female | male | nonbinary | nonhuman | unknown`). Chats created before the registry existed are promoted on load from `characters.json` and `visual-state.json`; nothing is written until a planned turn merges new declarations.
+
+Aliases are explicit only. The planner sees each known character's id in `KNOWN CHARACTERS` and may set `characterId` on a scene, cue, or character entry, or list `aliases` on an entry, when the story makes clear that a label such as "Fox girl" names Kitsune. Every reference is resolved to its canonical name before the cue timeline runs, so the relabelled character keeps its body, wardrobe, portrait key, and continuity. Resolution is conservative: a label that already names a known entity is never re-pointed by an id (the id is ignored and the conflict is reported in `rejectedAliases`); only a `characters[]` entry persists an alias; a scene or cue id link canonicalizes the current turn only and never creates an entry; an id that does not exist is ignored. A label with no explicit link stays a new subject even when it shares a species or appearance; two kitsune characters are two entries. A usable baseline is never overwritten by an incomplete later description.
+
+`subjectCategory` is persisted separately from anatomy. Species and animal-ear tags never set it; only explicit gender or presentation statements do (planner `subjectCategory`/`gender`, or explicit words in the tags such as "fox girl", "woman", "male", "nonbinary"). It is filled once and then durable: a later per-turn value that disagrees is reported in `rejectedSubjects` and ignored, so one planner slip cannot flip a character to `1other`. The only correction path is a request that matches explicit gender words in the entity's own frozen baseline tags (for example a `fox girl` baseline wrongly stored as `nonhuman` can become `female`); the per-turn description is never consulted, so partial descriptions cannot drift the category. A baseline without gender words has no in-app correction path and requires editing `character-registry.json`. Scenes, cues, and `terminalVisualState` carry `characterId` and `subjectCategory`; the prompt compiler uses the persisted category first and only falls back to text classification when it is `unknown`, after stripping species+anatomy compounds so "cat ears" can no longer produce `1other`.
+
 ### Reference portrait anchoring
 
 When reference anchoring is enabled, supported providers capture a character portrait in `chats/<chat-id>/portraits.json`. Reuse requires a matching fingerprint of the normalized name, identity tags, provider, connection/workflow and configured model. Unversioned or incompatible portraits are not sent to the provider; a successful fresh capture replaces them. Concurrent cues for the same character wait for capture, while unrelated characters can render concurrently. NovelAI receives director reference images; ComfyUI and SwarmUI receive source images. Unsupported providers do not anchor.
@@ -218,6 +267,16 @@ When reference anchoring is enabled, supported providers capture a character por
 ### Closed pose/expression catalogue
 
 Pose and expression belong to a closed, bounded catalogue (`POSE_EXPRESSION_CATALOGUE`, currently 92 entries, hard cap 128, unique ids, non-empty suffixes). The planner proposes a cue `expression`; a valid catalogue id is used directly, otherwise selection falls back to a pure function of `(paragraphIndex, paragraphText)` — keyword match first, then a stable paragraph-index wrap-around. Each cue stores only a `poseExpressionId`; `compileImagePrompt` resolves it back to its exact suffix. Unknown or absent ids fall back to the first catalogue entry, so old stored cues and corrupt ids still resolve deterministically. The same paragraph and plan always produce the same compiled prompt.
+
+### Bounded action and prop support
+
+Props and physical interactions are modeled via a bounded, validated schema (`src/shared/action-prop.ts`) rather than arbitrary prompt deltas. This permits narrative gestures (such as "holding brass key in right raised hand") while preventing arbitrary prose or prompt injection from leaking into generated images.
+
+- **Action catalogue & relationships**: Allowed actions belong to a closed set of physical verbs (`holding`, `carrying`, `wielding`, `raising`, `pointing`, `touching`, `showing`, `presenting`, `inspecting`, `resting_hand_on`, etc.). Allowed placements belong to a closed enum of 20 canonical relationships (`in right raised hand`, `in left raised hand`, `in right hand`, `in left hand`, `with both hands`, `held aloft`, `at side`, etc.). Conflicting hand and relationship values are rejected by schema validation.
+- **Visible object noun grammar**: Props must adhere to a deterministic noun grammar consisting of a closed base noun catalogue (70 entries including `key`, `lantern`, `book`, `staff`, `dagger`, `sword`, `coin`, `pocket watch`, `compass`) with up to two allowed modifiers (materials like `brass`, `wooden`, `silver`; colors like `crimson`, `blue`; styles like `ornate`, `ancient`). Camera directives (`body`, `shot`, `framing`, `close-up`), anatomy directives (`hair`, `eyes`, `skin`), subject directives (`another girl`, `1boy`), clothing directives (`dress`, `boots`, `jacket`), and prompt-injection keywords are strictly forbidden and rejected.
+- **Legacy backward compatibility**: `ActionPropFieldSchema` uses a preprocessor that normalizes legacy invalid strings (e.g. `"Mira turns"`, `"speaks"`, `"raises a lantern"`) to `null` while normalizing valid action strings or structured objects to a canonical `ActionProp`. Omitted or null actions default safely to `null`.
+- **Compiler deterministic assembly**: `compileActionProp` renders action tags with underscores replaced by natural spaces (e.g. `resting_hand_on` becomes `"resting hand on"`). The compiled action tag is appended immediately after the catalogue pose suffix in both fixed and dynamic perspective modes. The pose catalogue expression is never overridden or replaced.
+- **Isolation from identity and memory**: Props live strictly on cue scope (`cue.action`). They are never appended to `resolvedIdentity`, `visibleTags`, scene `identityPrompt`, `terminalVisualState`, or `characterAppearance` memory, ensuring props never freeze into the character's durable appearance. `portraitIdentityFingerprint` does not include props (preventing spurious reference portrait recaptures), while `promptFingerprint` does include them so prop changes trigger fresh asset generation. Cues attributed to the user/persona discard companion actions.
 
 ## Audio pipeline
 

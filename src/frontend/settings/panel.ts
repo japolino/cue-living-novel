@@ -269,7 +269,7 @@ export class VisualNovelSettingsPanel {
             <label data-check><input name="includeCharacterContext" type="checkbox" /><span>Include character-card context</span></label>
             <label data-check><input name="includePersonaContext" type="checkbox" /><span>Include active persona context</span></label>
             <label data-check><input name="includeLorebookContext" type="checkbox" /><span>Include activated lorebook context</span></label>
-            <label data-check><input name="debugLogging" type="checkbox" /><span>Verbose debug logging (host events, planning, assets, anchoring) to the Lumiverse log and browser console</span></label>
+            <label data-check><input name="debugLogging" type="checkbox" /><span>Verbose debug logging (host events, planning, assets, anchoring) to the Lumiverse log and browser console. Warning: while enabled, story text, the raw planner response, and resolved character, wardrobe, and environment state are written to the Lumiverse log.</span></label>
           </div>
         </details>
         <details data-section>
