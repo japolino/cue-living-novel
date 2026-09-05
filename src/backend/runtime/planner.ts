@@ -1414,6 +1414,8 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
     schemaVersion: 1,
     key,
     paragraphs: narrative.paragraphs,
+    panels: narrative.panels,
+    panelSource: resolvedContent.slice(0, 200_000),
     paragraphSpeakers,
     scenes,
     visualCues: cues,

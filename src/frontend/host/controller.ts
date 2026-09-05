@@ -6,6 +6,8 @@ import type { AmbientEffect, StageEffect } from "../store/index.js";
 import { VisualNovelSettingsPanel } from "../settings/panel.js";
 import type { VnChoice } from "../store/index.js";
 import { createVnHeaderLauncher } from "./manual-launcher.js";
+import { captureSimTrackerCards } from "./panel-capture.js";
+import { PanelDock } from "../stage/panel-dock.js";
 import { stagingContext, supportsVisualNovelOverlay, type ComponentOverrideHandle } from "./staging-context.js";
 
 const CLEANUP_KEY = Symbol.for("visual-novel-preview.frontend-cleanup");
@@ -257,6 +259,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     themePreset: configRef.current?.themePreset ?? "lumiverse",
     onExit: () => deactivate(),
     onAdvance: (paragraphIndex) => {
+      panels.setCursor(paragraphIndex);
       if (pendingNextTurn) {
         const next = pendingNextTurn;
         pendingNextTurn = null;
@@ -296,6 +299,23 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       });
     },
   });
+
+  let panelCapture: { chatId: string; messageId: string; fingerprint: string | null; cards: Array<{ title: string; html: string }> } | null = null;
+  const panels = new PanelDock(stage.panelMount);
+  const panelRequests = new Map<string, { resolve: (template: string) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  panels.onResolveTemplate = (template) => new Promise((resolve, reject) => {
+    const requestId = crypto.randomUUID();
+    const timer = setTimeout(() => { panelRequests.delete(requestId); reject(new Error("Host template resolution timed out.")); }, 10_000);
+    panelRequests.set(requestId, { resolve, reject, timer });
+    const context = ctx.getActiveChat();
+    ctx.sendToBackend({ type: "vn_resolve_panel_template", chatId: context.chatId ?? "", ...(context.characterId ? { characterId: context.characterId } : {}), requestId, template });
+  });
+  panels.onCapture = () => {
+    if (!turn) return [];
+    const mounted = captureSimTrackerCards(ctx.dom.findMessageElement(turn.messageId), document);
+    if (mounted.length) return mounted;
+    return panelCapture?.chatId === turn.chatId && panelCapture.messageId === turn.messageId && panelCapture.fingerprint === turn.sourceFingerprint ? panelCapture.cards : [];
+  };
 
   const action = ctx.ui.registerInputBarAction({
     id: "visual-novel-preview-toggle",
@@ -426,6 +446,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       throw new Error("This Lumiverse build does not expose the staging component override contract.");
     }
     active = true;
+    const captureMessageId = turn?.messageId ?? ctx.messages.getLatestMessageId();
+    panelCapture = captureMessageId ? { chatId: chatId(), messageId: captureMessageId, fingerprint: turn?.sourceFingerprint ?? null, cards: captureSimTrackerCards(ctx.dom.findMessageElement(captureMessageId), document) } : null;
     registerOverrides();
     app.setVisible(true);
     action.setLabel("Exit visual novel");
@@ -501,6 +523,10 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
    * generated, preventing a blank screen between turns.
    */
   function applyTurn(next: TurnView, previous: TurnView | null): void {
+    if (panelCapture) {
+      if (panelCapture.chatId !== next.chatId || panelCapture.messageId !== next.messageId || (panelCapture.fingerprint !== null && panelCapture.fingerprint !== next.sourceFingerprint)) panelCapture = null;
+      else panelCapture.fingerprint = next.sourceFingerprint;
+    }
     turn = next;
     stage.setAssetProgress(computeAssetProgress(next));
     const decision = decideTurnApplication(previous, next, stage.getState().currentParagraphIndex, active, stage.getState().paragraphs.length > 0);
@@ -520,10 +546,12 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       return;
     }
     if (decision.kind === "same-turn") {
+      panels.setTurn(next, decision.paragraphIndex);
       void syncImageForParagraph(decision.paragraphIndex);
       return;
     }
     const requestedMode = configRef.current?.mode ?? "standard";
+    panels.setTurn(next, 0);
     const mode = requestedMode === "cyoa" && next.choices.length > 0 ? "cyoa" : "standard";
     const preserveImage = shouldPreserveImage(previous, next);
     stage.loadTurn({
@@ -546,6 +574,14 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   function routeBackend(payload: unknown): void {
     const type = messageType(payload);
     const message = payload as BackendResponse;
+    if (message.type === "vn_panel_template") {
+      const pending = panelRequests.get(message.requestId);
+      if (!pending) return;
+      panelRequests.delete(message.requestId); clearTimeout(pending.timer);
+      if (message.error || message.chatId !== chatId()) pending.reject(new Error(message.error ?? "The active chat changed."));
+      else pending.resolve(message.template ?? "");
+      return;
+    }
     if (type && type !== "vn_asset") vnDebug("received", type, payload);
     if (type === "vn_connection_catalog" && message.type === "vn_connection_catalog") {
       settingsPanel?.setConnectionCatalog("planner", { status: "ready", options: message.planner ?? [] });
@@ -567,6 +603,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
         applyTurn(message.turn, turn);
       } else {
         turn = null;
+        panels.setTurn(null);
         stage.reset();
         if (active) stage.setPhase("idle");
       }
@@ -630,12 +667,16 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   const unsubBackend = ctx.onBackendMessage(routeBackend);
   const unsubAction = action.onClick(toggleVisualNovel);
   const unsubChat = ctx.events.on("CHAT_SWITCHED", () => {
+    panelCapture = null;
+    panels.setTurn(null);
     turn = null;
     pendingNextTurn = null;
     stage.reset();
     requestState();
   });
   const unsubFork = ctx.events.on("CHAT_FORKED", () => {
+    panelCapture = null;
+    panels.setTurn(null);
     turn = null;
     pendingNextTurn = null;
     stage.reset();
@@ -665,6 +706,9 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     settingsPanel?.destroy();
     settingsHandle?.destroy();
     audioEngine.destroy();
+    panels.destroy();
+    for (const pending of panelRequests.values()) { clearTimeout(pending.timer); pending.reject(new Error("Panel layer closed.")); }
+    panelRequests.clear();
     stage.destroy();
     app.destroy();
     if ((globalThis as Record<PropertyKey, unknown>)[CLEANUP_KEY] === cleanup) {

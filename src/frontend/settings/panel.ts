@@ -300,11 +300,11 @@ export class VisualNovelSettingsPanel {
           <div data-section-body>
             <label>Ignored tags
               <input name="ignoredTags" type="text" placeholder="status, stats, system, inventory" />
-              <small>Comma-separated tags to omit from dialogue and image planning (e.g. &lt;status&gt;, [Status]).</small>
+              <small>Comma-separated tag names, such as status, inventory, WORLD_VOICE. Removes the whole matching block from dialogue AND image planning, including multiline blocks. Recognized status blocks remain available as plain-text cards in Panels. This does not edit the chat message.</small>
             </label>
             <label>Display regex rules
               <textarea name="displayRegexRules" spellcheck="false" placeholder="/§([^§]+)§/g => <em class=&quot;vn-transmission&quot;>$1</em>"></textarea>
-              <small>One rule per line: <code>/pattern/flags =&gt; replacement</code> or <code>pattern =&gt; replacement</code>.</small>
+              <small>Dialogue formatting only. One rule per line: <code>/pattern/flags =&gt; replacement</code> or <code>pattern =&gt; replacement</code>. An empty replacement hides a match from dialogue, but not image planning. Only safe inline formatting is rendered here. For full HTML/SVG cards and multiline templates, open Panels in VN.</small>
             </label>
           </div>
         </details>

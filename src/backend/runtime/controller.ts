@@ -10,6 +10,7 @@ import {
   ChoiceSchema
 } from "../../shared/contracts.js";
 import type { FrontendRequest, AssetView, TurnView } from "../../protocol.js";
+import { resolvePanelTemplate } from "./panel-templates.js";
 import { isFrontendRequest } from "../../protocol.js";
 import { compareTurnKeys } from "../core/guards.js";
 import { PlanningQueue, isAbortError } from "../core/planning-queue.js";
@@ -262,6 +263,8 @@ export function turnView(record: StoredTurnRecord): TurnView {
     speaker: record.speaker,
     userSpeaker: record.userSpeaker || "You",
     paragraphs: record.plan.paragraphs.map((paragraph) => paragraph.text),
+    ...(record.plan.panels ? { panels: record.plan.panels } : {}),
+    ...(record.plan.panelSource ? { panelSource: record.plan.panelSource } : {}),
     ...(record.plan.paragraphSpeakers?.some((speaker) => speaker !== null)
       ? { paragraphSpeakers: record.plan.paragraphSpeakers }
       : {}),
@@ -696,6 +699,16 @@ async function retryTurn(
 async function handleFrontendMessage(spindle: SpindleAPI, request: FrontendRequest, userId: string): Promise<void> {
   dbg(spindle, userId, `frontend request ${request.type}`);
   switch (request.type) {
+    case "vn_resolve_panel_template": {
+      if (typeof request.requestId !== "string" || request.requestId.length > 100 || typeof request.chatId !== "string") return;
+      try {
+        const template = await resolvePanelTemplate(spindle, request.template, request.chatId, userId, typeof request.characterId === "string" ? request.characterId : undefined);
+        spindle.sendToFrontend({ type: "vn_panel_template", requestId: request.requestId, chatId: request.chatId, template }, userId);
+      } catch (error) {
+        spindle.sendToFrontend({ type: "vn_panel_template", requestId: request.requestId, chatId: request.chatId, error: error instanceof Error ? error.message : String(error) }, userId);
+      }
+      return;
+    }
     case "vn_get_state":
       await sendState(spindle, request.chatId ?? "", userId);
       return;

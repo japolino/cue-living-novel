@@ -1,6 +1,8 @@
 import type { VisualNovelConfig } from "./config.js";
+import type { PanelArtifact } from "./shared/panels.js";
 
 export type FrontendRequest =
+  | { type: "vn_resolve_panel_template"; chatId: string; characterId?: string; requestId: string; template: string }
   | { type: "vn_get_state"; chatId?: string }
   | { type: "vn_get_connection_catalog" }
   | { type: "vn_set_config"; patch: Partial<VisualNovelConfig>; chatId?: string }
@@ -47,6 +49,8 @@ export type TurnView = {
   speaker: string;
   userSpeaker?: string;
   paragraphs: string[];
+  panels?: PanelArtifact[];
+  panelSource?: string;
   /** Per-paragraph nameplate override; null entries fall back to `speaker`. */
   paragraphSpeakers?: Array<string | null>;
   /** Per-paragraph one-shot stage effect ids; null entries mean no effect. */
@@ -74,6 +78,7 @@ export type ConnectionCatalogErrors = {
 };
 
 export type BackendResponse =
+  | { type: "vn_panel_template"; requestId: string; chatId: string; template?: string; error?: string }
   | { type: "vn_state"; chatId: string; config: VisualNovelConfig; turn: TurnView | null }
   | { type: "vn_config"; config: VisualNovelConfig }
   | {

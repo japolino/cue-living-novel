@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PanelArtifactSchema } from "./panels.js";
 
 const IdentifierSchema = z.string().trim().min(1).max(256);
 const PropertyNameSchema = z.string().trim().min(1).max(128);
@@ -271,6 +272,8 @@ export const TurnPlanSchema = z.object({
   schemaVersion: z.literal(1),
   key: TurnKeySchema,
   paragraphs: z.array(ParagraphSchema).min(1),
+  panels: z.array(PanelArtifactSchema).max(12).optional(),
+  panelSource: z.string().max(1_000_000).optional(),
   // Literal nameplate per paragraph (parallel to `paragraphs`), attributed by
   // the planner. null = unknown -> frontend falls back to the turn speaker
   // (character card name). "" = intentional narrator (hidden plate). Absent on

@@ -285,6 +285,7 @@ const errorMessage = (error: unknown): string =>
     : "The request failed. Try again.";
 
 export class VnStage {
+  readonly panelMount: HTMLElement;
   private state: VnStageState;
   private readonly callbacks: VnStageCallbacks;
   private readonly host: HTMLDivElement;
@@ -364,6 +365,7 @@ export class VnStage {
     const outerStyle = document.createElement("style");
     outerStyle.textContent = VN_OUTER_CSS;
     const shell = document.createElement("div");
+    this.panelMount = shell;
     shell.setAttribute("data-vn-shell", "");
 
     const themeHost = document.createElement("div");

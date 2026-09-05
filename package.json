@@ -9,6 +9,7 @@
   },
   "scripts": {
     "test": "bun test --isolate",
+    "test:panels": "bun run ./scripts/test-panels-browser.ts",
     "typecheck": "tsc --project tsconfig.json --noEmit",
     "typecheck:build": "tsc --project tsconfig.build.json --noEmit",
     "build": "bun run typecheck:build && bun build ./src/backend.ts ./src/frontend.ts --outdir ./dist --target browser --format esm",
@@ -21,6 +22,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "playwright": "1.63.0",
     "bun-types": "^1.4.0",
     "lumiverse-spindle-types": "0.6.23",
     "typescript": "7.0.2"

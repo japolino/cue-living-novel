@@ -1,4 +1,5 @@
 import type { Choice, Paragraph } from "../../shared/contracts.js";
+import { escapePanelText, extractPanelSpans, maskPanelSpans, panelHash, MAX_PANELS, MAX_PANEL_HTML, MAX_PANEL_TOTAL, type PanelArtifact, type PanelSpan } from "../../shared/panels.js";
 
 export type PrepareNarrativeOptions = {
   ignoredTags?: readonly string[];
@@ -7,6 +8,7 @@ export type PrepareNarrativeOptions = {
 export type PreparedNarrative = {
   paragraphs: Paragraph[];
   choices: Choice[];
+  panels: PanelArtifact[];
 };
 
 type RawChoice = { id?: string | undefined; label: string; submission: string };
@@ -78,8 +80,8 @@ function stripIgnoredTags(content: string, tags: readonly string[]): string {
     output = output
       .replace(new RegExp(`<${name}\\b[^>]*>[\\s\\S]*?<\\/${name}>`, "gi"), "")
       .replace(new RegExp(`<\\/?${name}\\b[^>]*>`, "gi"), "")
-      .replace(new RegExp(`\\[${name}\\b.*?\][\\s\\S]*?\\[\\/${name}\\]`, "gi"), "")
-      .replace(new RegExp(`\\[\\/?${name}\\b.*?\]`, "gi"), "");
+      .replace(new RegExp(`\\[${name}\\b[^\\]]*\][\\s\\S]*?\\[\\/${name}\\]`, "gi"), "")
+      .replace(new RegExp(`\\[\\/?${name}\\b[^\\]]*\]`, "gi"), "");
   }
   return output;
 }
@@ -176,14 +178,58 @@ function stableChoiceId(label: string, index: number): string {
 }
 
 export function prepareNarrative(content: string, options: PrepareNarrativeOptions = {}): PreparedNarrative {
+  content = content.replace(/\r\n?/g, "\n");
+  const spans: PanelSpan[] = extractPanelSpans(content);
+  const hidden: Array<{ start: number; end: number }> = [];
+  for (const raw of options.ignoredTags ?? []) {
+    const tag = raw.trim().replace(/^[<\[]|[>\]]$/g, "").replace(/^\//, "");
+    if (!tag) continue;
+    const name = escapeRegExp(tag);
+    const pattern = new RegExp(`<${name}\\b[^>]*>[\\s\\S]*?<\\/${name}\\s*>|<\\/?${name}\\b[^>]*>|\\[${name}\\b[^\\]]*\\][\\s\\S]*?\\[\\/${name}\\]|\\[\\/?${name}\\b[^\\]]*\\]`, "gi");
+    for (const match of content.matchAll(pattern)) {
+      const range = { start: match.index, end: match.index + match[0].length };
+      hidden.push(range);
+      const nestedCards = spans.filter((span) => span.start < range.end && range.start < span.end);
+      for (const card of nestedCards) spans.splice(spans.indexOf(card), 1);
+      // Reasoning/private metadata is not a status-card source.
+      if (/^(?:status|stats|inventory|hero|world_voice|tracker)$/i.test(tag)
+        && match[0].length < MAX_PANEL_HTML / 6 && spans.length < MAX_PANELS) {
+        spans.push({ ...range, html: nestedCards.length ? nestedCards.map((card) => card.html).join("\n") : `<pre>${escapePanelText(match[0])}</pre>`, title: tag, followKey: `tag:${tag.toLowerCase()}` });
+      }
+    }
+  }
+  // Multiple entities using the same marker cannot safely share a following pin.
+  for (const span of spans) if (span.followKey && spans.filter((other) => other.followKey === span.followKey).length > 1) {
+    const key = span.followKey;
+    for (const other of spans) if (other.followKey === key) delete other.followKey;
+  }
+  let total = 0;
+  const retained = spans.filter((span) => { if (span.html.length > MAX_PANEL_HTML || total + span.html.length > MAX_PANEL_TOTAL) return false; total += span.html.length; return true; });
+  spans.splice(0, spans.length, ...retained);
+  const masked = maskPanelSpans(content, [...spans, ...hidden]);
   const paragraphs: Paragraph[] = [];
   const rawChoices: RawChoice[] = [];
+  const paragraphEnds: number[] = [];
+  let offset = 0;
   for (const block of splitBlocks(content)) {
-    const extracted = extractChoices(block.text);
+    const start = content.indexOf(block.text, offset);
+    offset = start + block.text.length;
+    const extracted = extractChoices(masked.slice(start, offset));
     rawChoices.push(...extracted.choices);
     const text = cleanNarrativeBlock(stripIgnoredTags(extracted.text, options.ignoredTags ?? []));
-    if (text) paragraphs.push({ index: paragraphs.length, sourceIndex: block.sourceIndex, text });
+    if (text) {
+      paragraphs.push({ index: paragraphs.length, sourceIndex: block.sourceIndex, text });
+      paragraphEnds.push(offset);
+    }
   }
+  if (!paragraphs.length && spans.length) paragraphs.push({ index: 0, sourceIndex: 0, text: "A new panel is available in Panels." });
+  const panels = spans.sort((a, b) => a.start - b.start).slice(0, MAX_PANELS).map((span, index): PanelArtifact => ({
+    id: `panel-${index}-${panelHash(span.html)}`,
+    title: span.title,
+    html: span.html,
+    paragraphIndex: Math.min(Math.max(0, paragraphs.length - 1), paragraphEnds.filter((end) => end <= span.start).length),
+    ...(span.followKey ? { followKey: span.followKey } : {}),
+  }));
   const unlocksAfterParagraph = Math.max(0, paragraphs.length - 1);
   const usedIds = new Set<string>();
   const choices = rawChoices.map((choice, index): Choice => {
@@ -194,5 +240,5 @@ export function prepareNarrative(content: string, options: PrepareNarrativeOptio
     usedIds.add(id);
     return { id, label: choice.label, submission: choice.submission, source: "authored", unlocksAfterParagraph };
   });
-  return { paragraphs, choices };
+  return { paragraphs, choices, panels };
 }
