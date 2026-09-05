@@ -1344,7 +1344,7 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
 
   // Per-paragraph literal nameplate attribution. Display-only metadata: a
   // claimed speaker is accepted only when it matches a KNOWN name (planner
-  // roster, scene casts, persona, protagonist, card/speaker name) so a
+  // roster, cue characters, scene casts, persona, protagonist, card/speaker name) so a
   // hallucinated attribution can never invent a nameplate. "Narrator" maps to
   // an empty plate (classic VN narration); unknown/missing stays null and the
   // frontend falls back to the turn speaker, i.e. today's behavior.
@@ -1362,6 +1362,16 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
     addCanonical(scene.character);
     for (const castMember of scene.cast) addCanonical(castMember);
   }
+  // Use all in-range declarations, not only materialized scenes or image-limit
+  // survivors. Speaking is independent of whether an image was scheduled.
+  for (const proposal of proposals) {
+    addCanonical(proposal.character);
+    for (const castMember of proposal.cast) addCanonical(castMember);
+  }
+  for (const cue of distinctCues) addCanonical(cue.character);
+  for (const name of Object.keys(input.characterAppearance)) addCanonical(name);
+  for (const name of Object.keys(continuity.characters)) addCanonical(name);
+  addCanonical(input.singleCharacter.protagonist.name);
   addCanonical(protagonistName);
   addCanonical(cardDisplayName);
   addCanonical(input.message.name);
