@@ -1144,3 +1144,104 @@ test("salvages character and attire metadata from redundant same-setting scene p
 });
 
 
+test("stage effect and scene ambient survive planning; invalid values are dropped (screen effects)", async () => {
+  const spindle: SpindleAPI = {
+    generate: {
+      raw: async () => ({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                scenes: [
+                  {
+                    startParagraph: 0,
+                    boundary: { claimedNewScene: true, reason: "initial", location: "Rooftop", timeOfDay: "night", majorTimeJump: false, environmentReplacement: false, forced: false },
+                    environment: { location: "Rooftop", timeOfDay: "night", weather: "storm", lighting: "lightning", description: "A rooftop in a storm", persistentElements: [] },
+                    cast: ["Mira"],
+                    character: "Mira",
+                    ambient: "Heavy Rain",
+                    basePrompt: "rooftop, storm",
+                    compositionLock: "centered"
+                  }
+                ],
+                cues: [
+                  { paragraphIndex: 0, expression: "surprise", character: "Mira", effect: "lightning" },
+                  { paragraphIndex: 1, expression: "idle", character: "Mira", effect: "explode_everything" }
+                ],
+                choices: [],
+                characters: [{ name: "Mira", description: "silver hair, green eyes, red coat" }]
+              })
+            }
+          }
+        ]
+      })
+    },
+    log: { warn() {} }
+  } as unknown as SpindleAPI;
+
+  const result = await planTurn(spindle, {
+    chatId: "chat",
+    message: { ...message, name: "Mira", content: "Thunder cracks overhead.\n\nShe steadies herself." },
+    content: "Thunder cracks overhead.\n\nShe steadies herself.",
+    previousScene: null,
+    previousContinuity: null,
+    recentMessages: [],
+    config: { ...DEFAULT_CONFIG, parserConnectionId: "parser" },
+    singleCharacter: emptySingleCharacter(),
+    characterAppearance: { "Mira": "silver hair, green eyes, red coat" }
+  });
+
+  // "Heavy Rain" normalizes onto the exact enum id; the scene carries it.
+  assert.equal(result.plan.scenes[0]?.ambient, "heavy_rain");
+  // A valid effect lands on the built cue.
+  assert.equal(result.plan.visualCues[0]?.effect, "lightning");
+  // An unknown effect is dropped rather than invented.
+  assert.equal(result.plan.visualCues[1]?.effect, undefined);
+});
+
+test("absent effect and ambient stay absent (screen effects)", async () => {
+  const spindle: SpindleAPI = {
+    generate: {
+      raw: async () => ({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                scenes: [
+                  {
+                    startParagraph: 0,
+                    boundary: { claimedNewScene: true, reason: "initial", location: "Cafe", timeOfDay: "day", majorTimeJump: false, environmentReplacement: false, forced: false },
+                    environment: { location: "Cafe", timeOfDay: "day", weather: "clear", lighting: "warm", description: "A cafe", persistentElements: [] },
+                    cast: ["Mira"],
+                    character: "Mira",
+                    basePrompt: "cafe interior",
+                    compositionLock: "centered"
+                  }
+                ],
+                cues: [{ paragraphIndex: 0, expression: "smile", character: "Mira" }],
+                choices: [],
+                characters: [{ name: "Mira", description: "silver hair, green eyes, red coat" }]
+              })
+            }
+          }
+        ]
+      })
+    },
+    log: { warn() {} }
+  } as unknown as SpindleAPI;
+
+  const result = await planTurn(spindle, {
+    chatId: "chat",
+    message: { ...message, name: "Mira", content: "She sips her coffee." },
+    content: "She sips her coffee.",
+    previousScene: null,
+    previousContinuity: null,
+    recentMessages: [],
+    config: { ...DEFAULT_CONFIG, parserConnectionId: "parser" },
+    singleCharacter: emptySingleCharacter(),
+    characterAppearance: { "Mira": "silver hair, green eyes, red coat" }
+  });
+
+  assert.equal(result.plan.scenes[0]?.ambient ?? null, null);
+  assert.equal(result.plan.visualCues[0]?.effect, undefined);
+});

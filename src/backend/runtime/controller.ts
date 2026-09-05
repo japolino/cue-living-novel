@@ -168,7 +168,46 @@ function summarizeDiagnostics(diagnostics: {
   return parts.join(" ");
 }
 
-
+/**
+ * Per-paragraph stage-effect and ambient views. A paragraph's one-shot effect
+ * comes from its visual cue; its persistent ambient comes from the scene that
+ * owns the most recent cue at or before that paragraph (falling back to the
+ * first scene). Both arrays are omitted when the turn has nothing to show so
+ * old frontends and stored records stay byte-compatible.
+ */
+function effectViews(record: StoredTurnRecord): Pick<TurnView, "effects" | "ambients"> {
+  const paragraphCount = record.plan.paragraphs.length;
+  if (paragraphCount === 0) return {};
+  const effects: Array<string | null> = new Array(paragraphCount).fill(null);
+  for (const cue of record.plan.visualCues) {
+    if (cue.effect && cue.paragraphIndex < paragraphCount) {
+      effects[cue.paragraphIndex] = cue.effect;
+    }
+  }
+  const sceneAmbient = new Map<string, string | null>();
+  for (const scene of record.plan.scenes) {
+    sceneAmbient.set(scene.sceneId, scene.ambient ?? null);
+  }
+  const ambients: Array<string | null> = new Array(paragraphCount).fill(null);
+  let current: string | null = record.plan.scenes.length > 0 ? (record.plan.scenes[0]!.ambient ?? null) : null;
+  const cuesByParagraph = new Map<number, string>();
+  for (const cue of record.plan.visualCues) {
+    cuesByParagraph.set(cue.paragraphIndex, cue.sceneId);
+  }
+  for (let index = 0; index < paragraphCount; index += 1) {
+    const sceneId = cuesByParagraph.get(index);
+    if (sceneId !== undefined && sceneAmbient.has(sceneId)) {
+      current = sceneAmbient.get(sceneId) ?? null;
+    }
+    ambients[index] = current;
+  }
+  const hasEffect = effects.some((value) => value !== null);
+  const hasAmbient = ambients.some((value) => value !== null);
+  return {
+    ...(hasEffect ? { effects } : {}),
+    ...(hasAmbient ? { ambients } : {})
+  };
+}
 
 function assetView(record: StoredTurnRecord, job: StoredTurnRecord["jobs"][number]): AssetView {
   const cue = record.plan.visualCues.find((candidate) => candidate.assetJobId === job.jobId);
@@ -226,7 +265,8 @@ export function turnView(record: StoredTurnRecord): TurnView {
     ...(record.plan.paragraphSpeakers?.some((speaker) => speaker !== null)
       ? { paragraphSpeakers: record.plan.paragraphSpeakers }
       : {}),
-      choices: record.plan.choices.map((choice) => ({ id: choice.id, label: choice.label, value: choice.submission })),
+    ...effectViews(record),
+    choices: record.plan.choices.map((choice) => ({ id: choice.id, label: choice.label, value: choice.submission })),
     assets: record.jobs.map((job) => assetView(record, job)),
     ...(audioCues.length > 0 ? { audioCues } : {}),
     status: record.status,

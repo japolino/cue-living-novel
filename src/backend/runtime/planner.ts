@@ -2,6 +2,7 @@ import type { ChatMessageDTO, SpindleAPI } from "lumiverse-spindle-types";
 import { z } from "zod";
 import type { VisualNovelConfig } from "../../config.js";
 import {
+  AmbientEffectSchema,
   AudioCueSchema,
   CameraLockSchema,
   ChoiceSchema,
@@ -10,6 +11,7 @@ import {
   SceneBoundaryProposalSchema,
   SceneEnvironmentSchema,
   SceneStateSchema,
+  StageEffectSchema,
   TurnKeySchema,
   TurnPlanSchema,
   VisualCueSchema,
@@ -18,6 +20,7 @@ import {
   type IndexedContinuityDelta,
   type SceneEnvironment,
   type SceneState,
+  type StageEffect,
   type TurnPlan
 } from "../../shared/contracts.js";
 import { reduceContinuity } from "../core/continuity.js";
@@ -48,6 +51,7 @@ const PlannerSceneSchema = z.object({
   cast: z.array(z.string().trim().min(1)).default([]),
   character: z.string().trim().nullable().optional(),
   attire: z.string().trim().nullable().optional(),
+  ambient: z.string().trim().nullable().optional(),
   basePrompt: z.string().trim().min(1),
   compositionLock: z.string().trim().min(1).default("Character centered with clear negative space behind the dialogue window.")
 }).strict();
@@ -59,6 +63,7 @@ const PlannerCueSchema = z.object({
   character: z.string().trim().nullable().optional(),
   attire: z.string().trim().nullable().optional(),
   promptDelta: z.string().trim().optional(),
+  effect: z.string().trim().nullable().optional(),
   bgm: z.string().trim().nullable().optional(),
   sfx: z.string().trim().nullable().optional()
 }).strict();
@@ -168,9 +173,11 @@ function plannerInstruction(config: VisualNovelConfig, visualContext?: VisualCon
     "characters: Return name and ONE compact comma-separated line containing physical appearance tags. Capture permanent physical traits including species/race (e.g. elf, demon, catgirl, kitsune, furry, anthro, monster girl) and non-human anatomy (e.g. animal ears, horns, tail, wings, fangs, scales, fur, paws, claws). A description that merely repeats the name is invalid. Keep stable traits and never invent appearance that contradicts the card or KNOWN CHARACTERS baseline.",
     "cast & active character: If multiple characters are present or in a scenario card, set 'character' on the scene or cue to the active speaking or focused character.",
     "attire: If the active character changes clothes (e.g. swimsuit, pajamas, armor, sundress, uniform), specify the new outfit tags in 'attire'; otherwise null.",
+    `effect: For a genuinely DRAMATIC beat only (impact, explosion, sudden reveal, blackout, jolt of fear, lightning strike, romantic rush), set the cue 'effect' to exactly one of: ${StageEffectSchema.options.join(", ")}. Otherwise null. Most paragraphs must have no effect.`,
+    `ambient: On each scene, set 'ambient' to exactly one of: ${AmbientEffectSchema.options.join(", ")} when the scene's weather or mood clearly calls for a persistent overlay (rain outside, snowfall, dense fog, a flashback, dread); otherwise null.`,
     "speakers: Attribute EVERY paragraph index to its literal on-screen nameplate name. Use the character's actual name for their dialogue and actions. When the text is written from the player's first-person point of view, use the player/persona name. Use \"Narrator\" for omniscient scene narration that belongs to no character. Never use the story or scenario card title as a speaker name.",
     hasAudio ? audioInstructions.join("\n") : "",
-    `Shape: {scenes:[{startParagraph,boundary:{claimedNewScene,reason,location,timeOfDay,majorTimeJump,environmentReplacement,forced},environment:{location,timeOfDay,weather,lighting,description,persistentElements},cast,character?,attire?,basePrompt,compositionLock}],cues:[{paragraphIndex,expression,character?,attire?${hasAudio ? ",bgm?,sfx?" : ""}}],choices:[{label,submission}],characters:[{name,description}],speakers:[{paragraphIndex,name}]}`,
+    `Shape: {scenes:[{startParagraph,boundary:{claimedNewScene,reason,location,timeOfDay,majorTimeJump,environmentReplacement,forced},environment:{location,timeOfDay,weather,lighting,description,persistentElements},cast,character?,attire?,ambient?,basePrompt,compositionLock}],cues:[{paragraphIndex,expression,character?,attire?,effect?${hasAudio ? ",bgm?,sfx?" : ""}}],choices:[{label,submission}],characters:[{name,description}],speakers:[{paragraphIndex,name}]}`,
     config.customPlannerInstructions ? config.customPlannerInstructions.trim() : ""
   ].filter(Boolean).join("\n");
 }
@@ -274,7 +281,21 @@ function normalizeEnvironment(value: unknown): unknown {
   };
 }
 
+/** Exact-enum stage-effect normalization: anything unknown becomes null. */
+function normalizeStageEffect(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const candidate = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  const parsed = StageEffectSchema.safeParse(candidate);
+  return parsed.success ? parsed.data : null;
+}
 
+/** Exact-enum ambient-effect normalization: anything unknown becomes null. */
+function normalizeAmbientEffect(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const candidate = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  const parsed = AmbientEffectSchema.safeParse(candidate);
+  return parsed.success ? parsed.data : null;
+}
 
 function normalizeScene(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
@@ -288,7 +309,8 @@ function normalizeScene(value: unknown): unknown {
       : [],
     character: typeof record.character === "string" ? record.character.trim() : null,
     attire: typeof record.attire === "string" ? record.attire.trim() : null,
-      basePrompt: typeof record.basePrompt === "string" && record.basePrompt.trim() ? record.basePrompt.trim() : "a visual novel scene",
+    ambient: normalizeAmbientEffect(record.ambient),
+    basePrompt: typeof record.basePrompt === "string" && record.basePrompt.trim() ? record.basePrompt.trim() : "a visual novel scene",
     compositionLock: typeof record.compositionLock === "string" ? record.compositionLock.trim() : "Character centered with clear negative space behind the dialogue window."
   };
 }
@@ -309,7 +331,8 @@ function normalizeCue(value: unknown): unknown {
     expression: typeof record.expression === "string" ? record.expression.trim() : null,
     character: typeof record.character === "string" ? record.character.trim() : null,
     attire: typeof record.attire === "string" ? record.attire.trim() : null,
-      promptDelta: typeof record.promptDelta === "string"
+    effect: normalizeStageEffect(record.effect),
+    promptDelta: typeof record.promptDelta === "string"
       ? record.promptDelta.trim()
       : (typeof record.prompt_delta === "string" ? record.prompt_delta.trim() : ""),
     bgm: typeof record.bgm === "string" ? record.bgm.trim() : (typeof record.music === "string" ? record.music.trim() : null),
@@ -1198,6 +1221,7 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
       cast: sceneCast,
       character: activeChar || null,
       attire: currentSceneAttire,
+      ambient: normalizeAmbientEffect(proposal.ambient),
       continuity,
       basePrompt,
       identityPrompt: sceneIdentity || null,
@@ -1277,6 +1301,7 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
         poseExpressionId: pose.id,
         character: assignedCharacter,
         attire: resolvedAttire,
+        ...(normalizeStageEffect(cue.effect) ? { effect: normalizeStageEffect(cue.effect) as StageEffect } : {}),
         promptDelta: "",
         assetJobId: id("asset", `${sourceFingerprint}:${cue.paragraphIndex}:${index}`),
         ...(cue.bgm ? { bgm: cue.bgm } : {}),
