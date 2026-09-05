@@ -1,3 +1,5 @@
+import { VN_EFFECTS_CSS } from "./effects-css.js";
+
 export const VN_BASE_CSS = `
 :host {
   --vn-accent: #d8a8ff;
@@ -1069,5 +1071,6 @@ button[data-vn-badge]:active {
   from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: translateY(0); }
 }
-`;
 
+${VN_EFFECTS_CSS}
+`;

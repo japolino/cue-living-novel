@@ -14,15 +14,45 @@ export type StageEffect =
   | "flash_white"
   | "flash_red"
   | "zoom_in"
-  | "fade_to_black";
+  | "fade_to_black"
+  | "shake_hard"
+  | "rumble"
+  | "zoom_punch"
+  | "speed_lines"
+  | "fade_from_black"
+  | "fade_to_white"
+  | "lightning"
+  | "zoom_out"
+  | "tilt"
+  | "heartbeat"
+  | "blur_pulse"
+  | "sparkle_burst"
+  | "hearts_burst"
+  | "confetti";
+
+export type AmbientEffect =
+  | "rain"
+  | "heavy_rain"
+  | "snow"
+  | "sakura"
+  | "fog"
+  | "fireflies"
+  | "embers"
+  | "vignette_dark"
+  | "sepia_flashback"
+  | "desaturate"
+  | "dream_haze"
+  | "danger_pulse";
 
 export interface VnParagraph {
   id: string;
   text: string;
   speaker?: string;
   effect?: StageEffect;
+  ambient?: AmbientEffect | null;
   cue?: {
     effect?: StageEffect;
+    ambient?: AmbientEffect | null;
     [key: string]: unknown;
   };
 }
@@ -68,6 +98,7 @@ export interface VnStageState {
   noValidOutput: boolean;
   showRerollPrompt: boolean;
   isUserTurn?: boolean;
+  ambient: AmbientEffect | null;
 }
 
 export interface VnTurnInput {
@@ -76,6 +107,7 @@ export interface VnTurnInput {
   choices?: readonly VnChoice[];
   inputPlaceholder?: string;
   preserveImage?: boolean;
+  ambient?: AmbientEffect | null;
 }
 
 export type VnStageAction =
@@ -96,6 +128,7 @@ export type VnStageAction =
   | { type: "image-ready"; requestId: string }
   | { type: "image-failed"; requestId: string; error: string }
   | { type: "present-user-paragraph"; paragraph: VnParagraph }
+  | { type: "set-ambient"; ambient: AmbientEffect | null }
   | { type: "reset" };
 
 export interface VnStageView {
@@ -129,6 +162,7 @@ export const createInitialVnStageState = (
   noValidOutput: false,
   showRerollPrompt: false,
   isUserTurn: false,
+  ambient: null,
   ...values,
 });
 
@@ -188,6 +222,7 @@ export const reduceVnStage = (
         noValidOutput: hasNoParagraphs,
         showRerollPrompt: hasNoParagraphs,
         isUserTurn: false,
+        ambient: action.turn.ambient !== undefined ? action.turn.ambient : state.ambient,
       };
     }
 
@@ -325,6 +360,12 @@ export const reduceVnStage = (
         ...state,
         pendingImage: null,
         imageError: action.error,
+      };
+
+    case "set-ambient":
+      return {
+        ...state,
+        ambient: action.ambient,
       };
 
     case "reset":

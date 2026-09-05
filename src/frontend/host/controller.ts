@@ -1,7 +1,8 @@
 import type { SpindleFrontendContext } from "lumiverse-spindle-types";
 import type { VisualNovelConfig } from "../../config.js";
 import type { AssetView, BackendResponse, TurnView } from "../../protocol.js";
-import { AudioEngine, VnStage } from "../stage/index.js";
+import { AudioEngine, VnStage, isAmbientEffect, isStageEffect } from "../stage/index.js";
+import type { AmbientEffect, StageEffect } from "../store/index.js";
 import { VisualNovelSettingsPanel } from "../settings/panel.js";
 import type { VnChoice } from "../store/index.js";
 import { createVnHeaderLauncher } from "./manual-launcher.js";
@@ -105,6 +106,25 @@ export function shouldPreserveImage(previous: TurnView | null, next: TurnView): 
 export function nameplateForParagraph(view: TurnView, index: number): string {
   const attributed = view.paragraphSpeakers?.[index];
   return attributed === undefined || attributed === null ? view.speaker : attributed;
+}
+
+/** The validated one-shot stage effect for a paragraph, as a spreadable object. */
+export function effectForParagraph(view: TurnView, index: number): { effect?: StageEffect } {
+  const effect = view.effects?.[index];
+  return isStageEffect(effect) ? { effect } : {};
+}
+
+/** The validated ambient effect for a paragraph, as a spreadable object. */
+export function ambientForParagraph(view: TurnView, index: number): { ambient?: AmbientEffect | null } {
+  const ambient = view.ambients?.[index];
+  if (ambient === null) return { ambient: null };
+  return isAmbientEffect(ambient) ? { ambient } : {};
+}
+
+/** The turn-level opening ambient (paragraph 0's ambient, when valid). */
+export function firstAmbient(view: TurnView): AmbientEffect | null {
+  const ambient = view.ambients?.[0];
+  return isAmbientEffect(ambient) ? ambient : null;
 }
 
 export function decideTurnApplication(
@@ -511,10 +531,13 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       paragraphs: next.paragraphs.map((text, index) => ({
         id: `${next.sourceFingerprint}:${index}`,
         text,
-        speaker: nameplateForParagraph(next, index)
+        speaker: nameplateForParagraph(next, index),
+        ...effectForParagraph(next, index),
+        ...ambientForParagraph(next, index)
       })),
       choices: next.choices.map((choice) => ({ id: choice.id, label: choice.label, value: choice.value })),
-      preserveImage
+      preserveImage,
+      ambient: firstAmbient(next)
     });
     void syncImageForParagraph(0);
     syncAudioForParagraph(next, 0);

@@ -13,23 +13,61 @@ import {
   type VnChoice,
   type VnPhase,
   type VnSceneImage,
+  type AmbientEffect,
   type StageEffect,
   type VnParagraph,
   type VnStageAction,
   type VnStageState,
   type VnTurnInput,
 } from "../store";
+import { generateAmbientMarkup, generateCueEffectMarkup } from "./procedural-particles.js";
 
 export type { StageEffect };
+export type { AmbientEffect };
+
+const STAGE_EFFECT_IDS: ReadonlySet<string> = new Set([
+  "shake",
+  "flash_white",
+  "flash_red",
+  "zoom_in",
+  "fade_to_black",
+  "shake_hard",
+  "rumble",
+  "zoom_punch",
+  "speed_lines",
+  "fade_from_black",
+  "fade_to_white",
+  "lightning",
+  "zoom_out",
+  "tilt",
+  "heartbeat",
+  "blur_pulse",
+  "sparkle_burst",
+  "hearts_burst",
+  "confetti",
+]);
+
+const AMBIENT_EFFECT_IDS: ReadonlySet<string> = new Set([
+  "rain",
+  "heavy_rain",
+  "snow",
+  "sakura",
+  "fog",
+  "fireflies",
+  "embers",
+  "vignette_dark",
+  "sepia_flashback",
+  "desaturate",
+  "dream_haze",
+  "danger_pulse",
+]);
 
 export function isStageEffect(value: unknown): value is StageEffect {
-  return (
-    value === "shake" ||
-    value === "flash_white" ||
-    value === "flash_red" ||
-    value === "zoom_in" ||
-    value === "fade_to_black"
-  );
+  return typeof value === "string" && STAGE_EFFECT_IDS.has(value);
+}
+
+export function isAmbientEffect(value: unknown): value is AmbientEffect {
+  return typeof value === "string" && AMBIENT_EFFECT_IDS.has(value);
 }
 
 export const TEXT_SHAKE_HEURISTIC_REGEX = /\*\s*(?:thud|slam|crash|smack|shake)[!?.,]*\s*\*/i;
@@ -86,11 +124,13 @@ const THEME_MARKUP = `
     <div data-vn-scene aria-hidden="true">
       <img data-vn-scene-image data-vn-layer="active" data-vn-empty="true" alt="" />
       <img data-vn-scene-image data-vn-layer="incoming" data-vn-empty="true" alt="" />
+      <div data-vn-ambient aria-hidden="true"></div>
       <div data-vn-scrim></div>
     </div>
 
     ${VN_ORNAMENT_LAYER_MARKUP}
 
+    <div data-vn-fx aria-hidden="true"></div>
     <div data-vn-flash aria-hidden="true"></div>
 
     <div data-vn-status-stack aria-live="polite" aria-atomic="false"></div>
@@ -260,6 +300,12 @@ export class VnStage {
   private incomingImageEl: HTMLImageElement;
   private sceneImage: HTMLImageElement;
   private readonly flashOverlay: HTMLElement;
+  private readonly fxOverlay: HTMLElement;
+  private readonly ambientOverlay: HTMLElement;
+  private currentAmbient: AmbientEffect | null = null;
+  private ambientOverride: AmbientEffect | null | undefined = undefined;
+  private sceneFxTimer: ReturnType<typeof setTimeout> | null = null;
+  private fxBurstTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly statusStack: HTMLElement;
   private readonly emptyState: HTMLElement;
   private readonly narrative: HTMLElement;
@@ -372,6 +418,8 @@ export class VnStage {
     this.incomingImageEl = queryRequired(this.themeRoot, "[data-vn-scene-image][data-vn-layer='incoming']");
     this.sceneImage = this.activeImageEl;
     this.flashOverlay = queryRequired(this.themeRoot, "[data-vn-flash]");
+    this.fxOverlay = queryRequired(this.themeRoot, "[data-vn-fx]");
+    this.ambientOverlay = queryRequired(this.themeRoot, "[data-vn-ambient]");
     this.setSceneImageFit(options.sceneImageFit ?? "cover");
     this.statusStack = queryRequired(this.themeRoot, "[data-vn-status-stack]");
     this.emptyState = queryRequired(this.themeRoot, "[data-vn-empty-state]");
@@ -543,6 +591,7 @@ export class VnStage {
 
   loadTurn(turn: VnTurnInput): void {
     this.resetZoom();
+    this.ambientOverride = undefined;
     this.dispatch({ type: "load-turn", turn });
     this.focus();
   }
@@ -681,14 +730,207 @@ export class VnStage {
       case "fade_to_black":
         this.triggerFadeToBlack();
         break;
+      case "shake_hard":
+        this.triggerTimedShake("vn-shake-hard", "hard", 500);
+        break;
+      case "rumble":
+        this.triggerTimedShake("vn-rumble", "rumble", 800);
+        break;
+      case "zoom_out":
+        this.triggerZoomOut();
+        break;
+      case "zoom_punch":
+        this.triggerSceneAnimation("vnZoom", "punch", "vn-zoom-punch", 450);
+        break;
+      case "tilt":
+        this.triggerSceneAnimation("vnTilt", "true", "vn-tilt", 700);
+        break;
+      case "blur_pulse":
+        this.triggerSceneAnimation("vnBlur", "true", "vn-blur-pulse", 650);
+        break;
+      case "heartbeat":
+        this.triggerHeartbeat();
+        break;
+      case "fade_from_black":
+        this.triggerFlashPreset("fade_from_black", 800);
+        break;
+      case "fade_to_white":
+        this.triggerFlashPreset("fade_to_white", 800);
+        break;
+      case "lightning":
+        this.triggerFlashPreset("lightning", 550);
+        break;
+      case "speed_lines":
+        this.triggerFxBurst("speed_lines", 650);
+        break;
+      case "sparkle_burst":
+        this.triggerFxBurst("sparkle_burst", 850);
+        break;
+      case "hearts_burst":
+        this.triggerFxBurst("hearts_burst", 950);
+        break;
+      case "confetti":
+        this.triggerFxBurst("confetti", 1200);
+        break;
     }
   }
 
+  /** Timed whole-stage shake variants (hard impact / rumble). */
+  private triggerTimedShake(className: string, datasetValue: string, duration: number): void {
+    if (this.shakeTimer !== null) {
+      clearTimeout(this.shakeTimer);
+      this.shakeTimer = null;
+    }
+    const classes = ["vn-shake", "vn-shake-hard", "vn-rumble"];
+    for (const el of [this.root, this.scene]) {
+      el.classList.remove(...classes);
+      delete el.dataset.vnShake;
+    }
+    if (typeof this.root.offsetWidth === "number") {
+      void this.root.offsetWidth;
+    }
+    for (const el of [this.root, this.scene]) {
+      el.classList.add(className);
+      el.dataset.vnShake = datasetValue;
+    }
+    this.shakeTimer = setTimeout(() => {
+      if (this.destroyed) return;
+      for (const el of [this.root, this.scene]) {
+        el.classList.remove(className);
+        delete el.dataset.vnShake;
+      }
+      this.shakeTimer = null;
+    }, duration);
+  }
+
+  private triggerZoomOut(): void {
+    this.resetZoom();
+    this.scene.classList.add("vn-zoom-out");
+    this.scene.dataset.vnZoom = "out";
+    for (const img of this.sceneImages) {
+      img.classList.add("vn-zoom-out");
+      img.dataset.vnZoom = "out";
+    }
+  }
+
+  /** Short scene-level dataset animation (zoom punch, tilt, blur pulse). */
+  private triggerSceneAnimation(datasetKey: "vnZoom" | "vnTilt" | "vnBlur", datasetValue: string, className: string, duration: number): void {
+    if (this.sceneFxTimer !== null) {
+      clearTimeout(this.sceneFxTimer);
+      this.sceneFxTimer = null;
+    }
+    this.scene.classList.remove("vn-zoom-punch", "vn-tilt", "vn-blur-pulse");
+    delete this.scene.dataset.vnTilt;
+    delete this.scene.dataset.vnBlur;
+    if (this.scene.dataset.vnZoom === "punch") delete this.scene.dataset.vnZoom;
+    if (typeof this.scene.offsetWidth === "number") {
+      void this.scene.offsetWidth;
+    }
+    this.scene.classList.add(className);
+    this.scene.dataset[datasetKey] = datasetValue;
+    this.sceneFxTimer = setTimeout(() => {
+      if (this.destroyed) return;
+      this.scene.classList.remove(className);
+      if (datasetKey === "vnZoom") {
+        if (this.scene.dataset.vnZoom === "punch") delete this.scene.dataset.vnZoom;
+      } else {
+        delete this.scene.dataset[datasetKey];
+      }
+      this.sceneFxTimer = null;
+    }, duration);
+  }
+
+  private triggerHeartbeat(): void {
+    this.triggerSceneAnimation("vnTilt", "false", "vn-heartbeat", 850);
+    delete this.scene.dataset.vnTilt;
+    this.scene.dataset.vnHeartbeat = "true";
+    this.flashOverlay.classList.remove("vn-heartbeat-flash");
+    if (typeof this.flashOverlay.offsetWidth === "number") {
+      void this.flashOverlay.offsetWidth;
+    }
+    this.flashOverlay.classList.add("vn-heartbeat-flash");
+    setTimeout(() => {
+      if (this.destroyed) return;
+      delete this.scene.dataset.vnHeartbeat;
+      this.flashOverlay.classList.remove("vn-heartbeat-flash");
+    }, 900);
+  }
+
+  /** Full-screen flash overlay presets driven by data-vn-flash values. */
+  private triggerFlashPreset(value: "fade_from_black" | "fade_to_white" | "lightning", duration: number): void {
+    if (this.fadeTimer !== null) {
+      clearTimeout(this.fadeTimer);
+      this.fadeTimer = null;
+    }
+    this.flashOverlay.classList.remove("vn-flash-white", "vn-flash-red", "vn-fade-to-black", "vn-fade-from-black", "vn-fade-to-white", "vn-lightning");
+    delete this.flashOverlay.dataset.vnFlash;
+    if (typeof this.flashOverlay.offsetWidth === "number") {
+      void this.flashOverlay.offsetWidth;
+    }
+    this.flashOverlay.dataset.vnFlash = value;
+    this.fadeTimer = setTimeout(() => {
+      if (this.destroyed) return;
+      delete this.flashOverlay.dataset.vnFlash;
+      this.fadeTimer = null;
+    }, duration);
+  }
+
+  /** One-shot procedural particle bursts rendered into the fx overlay. */
+  private triggerFxBurst(effect: StageEffect, duration: number): void {
+    if (this.fxBurstTimer !== null) {
+      clearTimeout(this.fxBurstTimer);
+      this.fxBurstTimer = null;
+    }
+    delete this.fxOverlay.dataset.vnEffect;
+    this.fxOverlay.innerHTML = "";
+    if (typeof this.fxOverlay.offsetWidth === "number") {
+      void this.fxOverlay.offsetWidth;
+    }
+    this.fxOverlay.innerHTML = generateCueEffectMarkup(effect);
+    this.fxOverlay.dataset.vnEffect = effect;
+    this.fxBurstTimer = setTimeout(() => {
+      if (this.destroyed) return;
+      delete this.fxOverlay.dataset.vnEffect;
+      this.fxOverlay.innerHTML = "";
+      this.fxBurstTimer = null;
+    }, duration);
+  }
+
+  /** Apply (or clear) the persistent scene-level ambient overlay. */
+  applyAmbient(effect: AmbientEffect | null): void {
+    if (this.destroyed) return;
+    if (effect === this.currentAmbient) return;
+    this.currentAmbient = effect;
+    if (this.currentAmbient === null) {
+      delete this.scene.dataset.vnSceneAmbient;
+      delete this.ambientOverlay.dataset.vnAmbient;
+      this.ambientOverlay.className = "";
+      this.ambientOverlay.innerHTML = "";
+      return;
+    }
+    this.scene.dataset.vnSceneAmbient = effect as string;
+    this.ambientOverlay.dataset.vnAmbient = effect as string;
+    this.ambientOverlay.className = `vn-ambient-${effect}`;
+    this.ambientOverlay.innerHTML = generateAmbientMarkup(this.currentAmbient);
+  }
+
+  getAmbientOverlay(): HTMLElement {
+    return this.ambientOverlay;
+  }
+
+  getFxOverlay(): HTMLElement {
+    return this.fxOverlay;
+  }
+
+  getCurrentAmbient(): AmbientEffect | null {
+    return this.currentAmbient;
+  }
+
   resetZoom(): void {
-    this.scene.classList.remove("vn-zoom-in");
+    this.scene.classList.remove("vn-zoom-in", "vn-zoom-out");
     delete this.scene.dataset.vnZoom;
     for (const img of this.sceneImages) {
-      img.classList.remove("vn-zoom-in");
+      img.classList.remove("vn-zoom-in", "vn-zoom-out");
       delete img.dataset.vnZoom;
     }
   }
@@ -706,13 +948,30 @@ export class VnStage {
       clearTimeout(this.fadeTimer);
       this.fadeTimer = null;
     }
-    this.root.classList.remove("vn-shake");
-    this.scene.classList.remove("vn-shake");
+    if (this.sceneFxTimer !== null) {
+      clearTimeout(this.sceneFxTimer);
+      this.sceneFxTimer = null;
+    }
+    if (this.fxBurstTimer !== null) {
+      clearTimeout(this.fxBurstTimer);
+      this.fxBurstTimer = null;
+    }
+    this.root.classList.remove("vn-shake", "vn-shake-hard", "vn-rumble");
+    this.scene.classList.remove("vn-shake", "vn-shake-hard", "vn-rumble", "vn-zoom-punch", "vn-tilt", "vn-blur-pulse", "vn-heartbeat");
     delete this.root.dataset.vnShake;
     delete this.scene.dataset.vnShake;
+    delete this.scene.dataset.vnTilt;
+    delete this.scene.dataset.vnBlur;
+    delete this.scene.dataset.vnHeartbeat;
 
-    this.flashOverlay.classList.remove("vn-flash-white", "vn-flash-red", "vn-fade-to-black");
+    this.flashOverlay.classList.remove("vn-flash-white", "vn-flash-red", "vn-fade-to-black", "vn-fade-from-black", "vn-fade-to-white", "vn-lightning", "vn-heartbeat-flash");
     delete this.flashOverlay.dataset.vnFlash;
+
+    delete this.fxOverlay.dataset.vnEffect;
+    this.fxOverlay.innerHTML = "";
+
+    this.ambientOverride = undefined;
+    this.applyAmbient(null);
 
     this.resetZoom();
   }
@@ -812,6 +1071,12 @@ export class VnStage {
 
     if (triggeredEffect !== "shake" && TEXT_SHAKE_HEURISTIC_REGEX.test(paragraph.text)) {
       this.triggerEffect("shake");
+    }
+
+    const paragraphAmbient = paragraph.ambient ?? paragraph.cue?.ambient;
+    if (paragraphAmbient === null || isAmbientEffect(paragraphAmbient)) {
+      this.ambientOverride = paragraphAmbient;
+      this.applyAmbient(paragraphAmbient);
     }
   }
 
@@ -1057,6 +1322,8 @@ export class VnStage {
     } else {
       this.clearSceneImages();
     }
+
+    this.applyAmbient(this.ambientOverride !== undefined ? this.ambientOverride : this.state.ambient);
 
     this.narrative.hidden = view.paragraph === null;
     this.emptyState.hidden = view.paragraph !== null || this.state.phase !== "idle";

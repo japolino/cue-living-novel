@@ -1,6 +1,7 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import {
   VnStage,
+  isAmbientEffect,
   isStageEffect,
   TEXT_SHAKE_HEURISTIC_REGEX,
   type StageEffect,
@@ -224,7 +225,13 @@ function buildStandardStageDOM(parent: MockNode) {
   const scrim = new MockNode("div");
   scrim.setAttribute("data-vn-scrim", "");
 
-  scene.append(imgActive, imgIncoming, scrim);
+  const ambient = new MockNode("div");
+  ambient.setAttribute("data-vn-ambient", "");
+
+  scene.append(imgActive, imgIncoming, ambient, scrim);
+
+  const fx = new MockNode("div");
+  fx.setAttribute("data-vn-fx", "");
 
   const flash = new MockNode("div");
   flash.setAttribute("data-vn-flash", "");
@@ -287,7 +294,7 @@ function buildStandardStageDOM(parent: MockNode) {
   backlogContent.setAttribute("data-vn-backlog-content", "");
   backlog.append(backlogClose, backlogContent);
 
-  root.append(scene, flash, status, empty, narrative, interaction, backlog);
+  root.append(scene, fx, flash, status, empty, narrative, interaction, backlog);
   parent.append(root);
 }
 
@@ -478,5 +485,149 @@ describe("VnStage visual effects & transitions", () => {
     // When typing completes, button is marked ready
     (stage as any).completeTypewriter();
     expect(contBtn.dataset.vnReady).toBe("true");
+  });
+});
+
+
+describe("extended stage effects & ambient overlays", () => {
+  let originalDocument: any;
+  let mount: any;
+
+  beforeEach(() => {
+    originalDocument = (globalThis as any).document;
+    (globalThis as any).document = {
+      createElement: (tag: string) => new MockNode(tag),
+      createElementNS: (_ns: string, tag: string) => new MockNode(tag),
+    };
+    mount = new MockNode("div");
+  });
+
+  afterEach(() => {
+    (globalThis as any).document = originalDocument;
+  });
+
+  test("isStageEffect accepts every extended effect id", () => {
+    const ids: StageEffect[] = [
+      "shake", "flash_white", "flash_red", "zoom_in", "fade_to_black",
+      "shake_hard", "rumble", "zoom_punch", "speed_lines", "fade_from_black",
+      "fade_to_white", "lightning", "zoom_out", "tilt", "heartbeat",
+      "blur_pulse", "sparkle_burst", "hearts_burst", "confetti",
+    ];
+    for (const id of ids) expect(isStageEffect(id)).toBe(true);
+    expect(isStageEffect("explode")).toBe(false);
+  });
+
+  test("isAmbientEffect accepts exactly the ambient catalogue", () => {
+    const ids = [
+      "rain", "heavy_rain", "snow", "sakura", "fog", "fireflies", "embers",
+      "vignette_dark", "sepia_flashback", "desaturate", "dream_haze", "danger_pulse",
+    ];
+    for (const id of ids) expect(isAmbientEffect(id)).toBe(true);
+    expect(isAmbientEffect("shake")).toBe(false);
+    expect(isAmbientEffect(null)).toBe(false);
+    expect(isAmbientEffect("")).toBe(false);
+  });
+
+  test("shake_hard and rumble apply and clear their classes", async () => {
+    const stage = new VnStage({ mount });
+    const root = (stage as any).root as unknown as MockNode;
+    stage.triggerEffect("shake_hard");
+    expect(root.classList.contains("vn-shake-hard")).toBe(true);
+    expect(root.dataset.vnShake).toBe("hard");
+    await new Promise((r) => setTimeout(r, 560));
+    expect(root.classList.contains("vn-shake-hard")).toBe(false);
+    stage.triggerEffect("rumble");
+    expect(root.classList.contains("vn-rumble")).toBe(true);
+    expect(root.dataset.vnShake).toBe("rumble");
+    await new Promise((r) => setTimeout(r, 860));
+    expect(root.classList.contains("vn-rumble")).toBe(false);
+  });
+
+  test("zoom_out persists until reset; zoom_punch and tilt are timed", async () => {
+    const stage = new VnStage({ mount });
+    const scene = (stage as any).scene as unknown as MockNode;
+    stage.triggerEffect("zoom_out");
+    expect(scene.dataset.vnZoom).toBe("out");
+    stage.resetZoom();
+    expect(scene.dataset.vnZoom).toBeUndefined();
+
+    stage.triggerEffect("zoom_punch");
+    expect(scene.dataset.vnZoom).toBe("punch");
+    expect(scene.classList.contains("vn-zoom-punch")).toBe(true);
+    await new Promise((r) => setTimeout(r, 510));
+    expect(scene.classList.contains("vn-zoom-punch")).toBe(false);
+
+    stage.triggerEffect("tilt");
+    expect(scene.dataset.vnTilt).toBe("true");
+    await new Promise((r) => setTimeout(r, 760));
+    expect(scene.dataset.vnTilt).toBeUndefined();
+  });
+
+  test("flash presets fade_from_black / fade_to_white / lightning drive the flash overlay", async () => {
+    const stage = new VnStage({ mount });
+    const flash = stage.getFlashOverlay() as unknown as MockNode;
+    stage.triggerEffect("fade_from_black");
+    expect(flash.dataset.vnFlash).toBe("fade_from_black");
+    stage.triggerEffect("lightning");
+    expect(flash.dataset.vnFlash).toBe("lightning");
+    await new Promise((r) => setTimeout(r, 610));
+    expect(flash.dataset.vnFlash).toBeUndefined();
+  });
+
+  test("particle bursts mount procedural SVG into the fx overlay and clear after their duration", async () => {
+    const stage = new VnStage({ mount });
+    const fx = stage.getFxOverlay() as unknown as MockNode;
+    stage.triggerEffect("sparkle_burst");
+    expect(fx.dataset.vnEffect).toBe("sparkle_burst");
+    expect(fx.innerHTML).toContain("<svg");
+    await new Promise((r) => setTimeout(r, 910));
+    expect(fx.dataset.vnEffect).toBeUndefined();
+    expect(fx.innerHTML).toBe("");
+
+    stage.triggerEffect("confetti");
+    expect(fx.dataset.vnEffect).toBe("confetti");
+    expect(fx.innerHTML).toContain("<svg");
+  });
+
+  test("applyAmbient mounts weather markup, persists across paragraph advance, and clears on reset", () => {
+    const stage = new VnStage({ mount });
+    const scene = (stage as any).scene as unknown as MockNode;
+    const overlay = stage.getAmbientOverlay() as unknown as MockNode;
+
+    stage.loadTurn({ mode: "standard", paragraphs: [{ id: "p-rain", text: "Rain hammers the roof." }], choices: [], ambient: "rain" } as VnTurnInput);
+    expect(stage.getCurrentAmbient()).toBe("rain");
+    expect(scene.dataset.vnSceneAmbient).toBe("rain");
+    expect(overlay.dataset.vnAmbient).toBe("rain");
+    expect(overlay.innerHTML).toContain("vn-rain-bg");
+
+    // Ambient survives loading a turn that does not mention ambient.
+    stage.loadTurn({ mode: "standard", paragraphs: [{ id: "p0", text: "Hello." }], choices: [] } as VnTurnInput);
+    expect(stage.getCurrentAmbient()).toBe("rain");
+
+    // A turn with ambient: null explicitly clears it.
+    stage.loadTurn({ mode: "standard", paragraphs: [{ id: "p1", text: "Later." }], choices: [], ambient: null } as VnTurnInput);
+    expect(stage.getCurrentAmbient()).toBe(null);
+    expect(overlay.innerHTML).toBe("");
+    expect(scene.dataset.vnSceneAmbient).toBeUndefined();
+  });
+
+  test("heavy_rain markup carries the wet-lens droplets; mood grades mount without SVG", () => {
+    const stage = new VnStage({ mount });
+    const overlay = stage.getAmbientOverlay() as unknown as MockNode;
+    stage.applyAmbient("heavy_rain");
+    expect(overlay.innerHTML).toContain("data-vn-lens-droplets");
+    stage.applyAmbient("vignette_dark");
+    expect(overlay.dataset.vnAmbient).toBe("vignette_dark");
+    expect(overlay.innerHTML).toBe("");
+    stage.applyAmbient(null);
+    expect(overlay.dataset.vnAmbient).toBeUndefined();
+  });
+
+  test("reset clears ambient state entirely", () => {
+    const stage = new VnStage({ mount });
+    stage.applyAmbient("snow");
+    expect(stage.getCurrentAmbient()).toBe("snow");
+    stage.reset();
+    expect(stage.getCurrentAmbient()).toBe(null);
   });
 });
