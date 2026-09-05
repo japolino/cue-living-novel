@@ -123,3 +123,54 @@ describe("tagBlockFor", () => {
     expect(tagBlockFor({ name: "", tags: [] })).toBe("");
   });
 });
+
+describe("semantic expression selection and fallback (audit #7)", () => {
+  const catalogue = POSE_EXPRESSION_CATALOGUE;
+
+  test("resolves exact IDs and alias map", () => {
+    expect(selectPoseExpression(catalogue, 0, "She is listening.", "talking").id).toBe("speak");
+    expect(selectPoseExpression(catalogue, 0, "She sits quietly.", "happy").id).toBe("smile");
+    expect(selectPoseExpression(catalogue, 0, "She sits quietly.", "calm").id).toBe("idle");
+    expect(selectPoseExpression(catalogue, 0, "She sits quietly.", "crying").id).toBe("sad");
+    expect(selectPoseExpression(catalogue, 0, "She sits quietly.", "shock").id).toBe("surprise");
+  });
+
+  test("uses word boundaries to prevent substring matching on unrelated words", () => {
+    // "gloves" does not match "love" -> lovestruck
+    expect(selectPoseExpression(catalogue, 0, "She puts on her gloves.").id).toBe("idle");
+    // "illustrated atlas" does not match "lust" -> lustful
+    expect(selectPoseExpression(catalogue, 0, "She opens the illustrated atlas.").id).toBe("idle");
+    // "wavelength" does not match "wave"
+    expect(selectPoseExpression(catalogue, 0, "The wavelength is 500 nanometers.").id).toBe("idle");
+  });
+
+  test("handles negation in narrative text and preferred expression", () => {
+    expect(selectPoseExpression(catalogue, 0, "She did not smile.").id).toBe("idle");
+    expect(selectPoseExpression(catalogue, 0, "Mira does not smile.").id).toBe("idle");
+    expect(selectPoseExpression(catalogue, 0, "She did not laugh at the joke.").id).toBe("idle");
+    expect(selectPoseExpression(catalogue, 0, "She waits.", "not angry").id).toBe("idle");
+    expect(selectPoseExpression(catalogue, 0, "She waits.", "not smiling").id).toBe("idle");
+  });
+
+  test("prefers first non-negated occurrence for subject attribution", () => {
+    // "smiles" appears first for the subject; "laughs" is subsequent
+    expect(selectPoseExpression(catalogue, 0, "She smiles, but the other person laughs.").id).toBe("smile");
+  });
+
+  test("intimate expressions require unambiguous positive evidence and never trigger on casual text or index cycling", () => {
+    // casual text does not trigger intimate expressions
+    expect(selectPoseExpression(catalogue, 0, "The door is blue.").id).toBe("idle");
+    expect(selectPoseExpression(catalogue, 19, "The door is blue.").id).toBe("idle");
+    expect(selectPoseExpression(catalogue, 3, "Mira examines the sealed letter.").id).toBe("idle");
+    // positive explicit word triggers intimate expression
+    expect(selectPoseExpression(catalogue, 0, "She was truly lovestruck.").id).toBe("lovestruck");
+    expect(selectPoseExpression(catalogue, 0, "He was filled with lustful thoughts.").id).toBe("lustful");
+    expect(selectPoseExpression(catalogue, 0, "She felt deeply aroused.").id).toBe("aroused");
+  });
+
+  test("poseById resolves aliased names as well as exact IDs", () => {
+    expect(poseById(catalogue, "talking").id).toBe("speak");
+    expect(poseById(catalogue, "happy").id).toBe("smile");
+    expect(poseById(catalogue, "calm").id).toBe("idle");
+  });
+});

@@ -10,7 +10,12 @@ import {
   migrateVisualProfilesToSingleCharacter,
   saveCharacterAppearance,
   saveSingleCharacterState,
-  singleCharacterStatePath
+  singleCharacterStatePath,
+  deletePortrait,
+  resetPortraits,
+  savePortrait,
+  loadPortraits,
+  type StoredPortrait
 } from "./storage.js";
 import {
   DEFAULT_ENVIRONMENT_DESCRIPTOR,
@@ -334,5 +339,105 @@ describe("document identity invalidation", () => {
       Hina: "## Physical Appearance **Hair:** golden blonde short cut, ## Personality **Habits:** Twirling hair when thinking"
     }]]));
     expect(await loadCharacterAppearance(spindle)).toEqual({});
+  });
+});
+
+describe("Finding #11: portrait storage validation and replacement/reset", () => {
+  const now = new Date().toISOString();
+  const validPortrait: StoredPortrait = {
+    name: "Mira",
+    imageId: "img-valid",
+    data: "QUJD",
+    mimeType: "image/png",
+    createdAt: now
+  };
+
+  test("rejects corrupt or non-base64 data and non-image MIME types", async () => {
+    const { spindle } = storageRuntime();
+    // Non-base64 data
+    expect(await savePortrait(spindle, "chat-1", {
+      name: "Mira",
+      imageId: "bad",
+      data: "not base64!!",
+      mimeType: "image/png",
+      createdAt: now
+    })).toBe(false);
+
+    // Non-image MIME type
+    expect(await savePortrait(spindle, "chat-1", {
+      name: "Mira",
+      imageId: "bad",
+      data: "QUJD",
+      mimeType: "text/plain",
+      createdAt: now
+    })).toBe(false);
+
+    // Corrupt record with empty data
+    expect(await savePortrait(spindle, "chat-1", {
+      name: "Mira",
+      imageId: "bad",
+      data: "",
+      mimeType: "image/png",
+      createdAt: now
+    })).toBe(false);
+
+    // Valid image saves successfully
+    expect(await savePortrait(spindle, "chat-1", validPortrait)).toBe(true);
+  });
+
+  test("deletePortrait removes a character's portrait", async () => {
+    const { spindle } = storageRuntime();
+    await savePortrait(spindle, "chat-1", validPortrait);
+    const before = await loadPortraits(spindle, "chat-1");
+    expect(before.mira?.imageId).toBe("img-valid");
+
+    expect(await deletePortrait(spindle, "chat-1", "Mira")).toBe(true);
+    const after = await loadPortraits(spindle, "chat-1");
+    expect(after.mira).toBeUndefined();
+
+    // Deleting non-existent returns false
+    expect(await deletePortrait(spindle, "chat-1", "Mira")).toBe(false);
+  });
+
+  test("resetPortraits clears all stored portraits for a chat", async () => {
+    const { spindle } = storageRuntime();
+    await savePortrait(spindle, "chat-1", validPortrait);
+    await savePortrait(spindle, "chat-1", {
+      name: "Rin",
+      imageId: "img-rin",
+      data: "QUJD",
+      mimeType: "image/png",
+      createdAt: now
+    });
+    const before = await loadPortraits(spindle, "chat-1");
+    expect(Object.keys(before)).toHaveLength(2);
+
+    await resetPortraits(spindle, "chat-1");
+    const after = await loadPortraits(spindle, "chat-1");
+    expect(Object.keys(after)).toHaveLength(0);
+  });
+
+  test("savePortrait with replace: true overwrites an existing portrait", async () => {
+    const { spindle } = storageRuntime();
+    await savePortrait(spindle, "chat-1", validPortrait);
+
+    const updatedPortrait: StoredPortrait = {
+      name: "Mira",
+      imageId: "img-replaced",
+      data: "REVGR0g=",
+      mimeType: "image/webp",
+      createdAt: now
+    };
+
+    // Without replace: true, first-wins keeps old portrait
+    expect(await savePortrait(spindle, "chat-1", updatedPortrait)).toBe(false);
+    let loaded = await loadPortraits(spindle, "chat-1");
+    expect(loaded.mira?.imageId).toBe("img-valid");
+
+    // With replace: true, it successfully replaces
+    expect(await savePortrait(spindle, "chat-1", updatedPortrait, undefined, { replace: true })).toBe(true);
+    loaded = await loadPortraits(spindle, "chat-1");
+    expect(loaded.mira?.imageId).toBe("img-replaced");
+    expect(loaded.mira?.mimeType).toBe("image/webp");
   });
 });

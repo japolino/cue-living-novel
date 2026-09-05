@@ -79,15 +79,60 @@ function block(title: string, lines: readonly string[], maximum: number): string
   return content.length ? compact([`## ${title}`, ...content].join("\n"), maximum) : "";
 }
 
+function extractVisualSalientDescription(description: string, maximum: number): string {
+  const normalized = description.replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+  if (normalized.length <= maximum) return normalized;
+
+  const segments = normalized.split(/\n+/).flatMap((p) => p.split(/(?<=[.!?])\s+/));
+  const visualSegments: string[] = [];
+  for (const seg of segments) {
+    if (VISUAL_TERMS.test(seg)) {
+      visualSegments.push(seg.trim());
+    }
+  }
+
+  const visualBlock = visualSegments.join(" ");
+  if (visualBlock.length >= maximum) {
+    return compact(visualBlock, maximum);
+  }
+
+  const headBudget = maximum - visualBlock.length - 25;
+  const head = headBudget > 200 ? compact(normalized, headBudget) : "";
+  if (!head) {
+    return compact(visualBlock, maximum);
+  }
+
+  if (visualSegments.length === 0 || visualSegments.every((seg) => head.includes(seg))) {
+    return compact(normalized, maximum);
+  }
+
+  return `${head}\n[visual traits]: ${visualBlock}`;
+}
+
 function characterContext(character: CharacterDTO | null): string {
   if (!character) return "";
+  const nameLine = line("Name", character.name);
+  const personalityLine = character.personality ? line("Personality", compact(character.personality, 600)) : "";
+  const scenarioLine = character.scenario ? line("Scenario", compact(character.scenario, 800)) : "";
+  const creatorNotesLine = character.creator_notes ? line("Creator notes", compact(character.creator_notes, 400)) : "";
+  const tagsLine = character.tags.length ? `Tags: ${character.tags.join(", ").slice(0, 400)}` : "";
+
+  const reservedLength = [nameLine, personalityLine, scenarioLine, creatorNotesLine, tagsLine]
+    .filter(Boolean)
+    .reduce((acc, l) => acc + l.length + 1, 30);
+
+  const descBudget = Math.max(1200, MAX_CHARACTER_CONTEXT - reservedLength);
+  const descLine = character.description
+    ? line("Description", extractVisualSalientDescription(character.description, descBudget))
+    : "";
+
   return block("Character card", [
-    line("Name", character.name),
-    line("Description", character.description),
-    line("Personality", character.personality),
-    line("Scenario", character.scenario),
-    line("Creator notes", character.creator_notes),
-    character.tags.length ? `Tags: ${character.tags.join(", ")}` : ""
+    nameLine,
+    descLine,
+    personalityLine,
+    scenarioLine,
+    creatorNotesLine,
+    tagsLine
   ], MAX_CHARACTER_CONTEXT);
 }
 

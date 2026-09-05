@@ -68,6 +68,7 @@ export type EnvironmentJson = {
   timeWeather?: unknown;
   lightingMood?: unknown;
   backgroundElements?: unknown;
+  description?: unknown;
 };
 
 export type ShotJson = {

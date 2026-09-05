@@ -70,13 +70,16 @@ function cue(id: string, paragraphIndex = 0, character?: string, poseExpressionI
 }
 
 function plan(cues: VisualCue[]): TurnPlan {
+  const maxP = Math.max(1, ...cues.map((c) => c.paragraphIndex));
+  const paragraphs = Array.from({ length: maxP + 1 }, (_, index) => ({
+    index,
+    sourceIndex: index,
+    text: `Paragraph ${index}.`
+  }));
   return TurnPlanSchema.parse({
     schemaVersion: 1,
     key,
-    paragraphs: [
-      { index: 0, sourceIndex: 0, text: "First." },
-      { index: 1, sourceIndex: 1, text: "Second." }
-    ],
+    paragraphs,
     scenes: [scene],
     visualCues: cues,
     choices: [],
@@ -315,5 +318,112 @@ describe("generateAssets with a compound workflow selection", () => {
     // …and the workflow sub-selection travels as workflow_id.
     expect(calls[0]?.parameters.workflow_id).toBe("wf-yume");
     expect(calls[0]?.connection_id).toBe("conn");
+  });
+});
+
+describe("Finding #11: reference-capture race and recovery", () => {
+  test("default concurrency: subsequent same-character cues wait for capture and become anchored", async () => {
+    const { spindle, calls } = imageRuntime("comfyui");
+    const config = { ...DEFAULT_CONFIG, imageConnectionId: "conn", imageConcurrency: 2 };
+    const turnPlan = plan([
+      cue("one", 0, "Mira", "smile"),
+      cue("two", 1, "Mira", "sad"),
+      cue("three", 2, "Mira", "wave")
+    ]);
+    const jobs = createAssetJobs(turnPlan, config);
+    const finalJobs = await generateAssets(spindle, turnPlan, jobs, config, new AbortController().signal, () => {});
+
+    expect(finalJobs.every((j) => j.status === "generated")).toBe(true);
+    expect(calls).toHaveLength(3);
+
+    // First call captures the portrait
+    expect(calls[0]?.includeDataUrl).toBe(true);
+    expect(calls[0]?.parameters.resolvedSourceImages).toBeUndefined();
+
+    // Second and third calls must be anchored to the captured portrait!
+    expect(calls[1]?.includeDataUrl).toBe(false);
+    expect(calls[1]?.parameters.resolvedSourceImages).toEqual([
+      { data: "UE9SVFJBSVQ=", mimeType: "image/png" }
+    ]);
+    expect(calls[2]?.includeDataUrl).toBe(false);
+    expect(calls[2]?.parameters.resolvedSourceImages).toEqual([
+      { data: "UE9SVFJBSVQ=", mimeType: "image/png" }
+    ]);
+  });
+
+  test("failed first provider result releases capture ownership in finally, allowing subsequent cue to capture", async () => {
+    let callCount = 0;
+    const { spindle: base } = storageRuntime();
+    const calls: any[] = [];
+    const spindle = base as any;
+    spindle.imageGen = {
+      getConnection: async () => ({ provider: "comfyui" }),
+      listConnections: async () => [{ provider: "comfyui", is_default: true }],
+      generate: async (input: any) => {
+        calls.push(input);
+        callCount++;
+        // First call fails missing imageId
+        if (callCount === 1) {
+          return { imageDataUrl: "data:image/png;base64,UE9SVFJBSVQ=" };
+        }
+        return {
+          imageId: `img-${callCount}`,
+          imageUrl: `/images/img-${callCount}`,
+          imageDataUrl: input.includeDataUrl ? "data:image/png;base64,UE9SVFJBSVQ=" : undefined
+        };
+      }
+    };
+
+    const config = { ...DEFAULT_CONFIG, imageConnectionId: "conn", imageConcurrency: 1 };
+    const turnPlan = plan([
+      cue("one", 0, "Mira", "smile"),
+      cue("two", 1, "Mira", "sad")
+    ]);
+    const jobs = createAssetJobs(turnPlan, config);
+    const finalJobs = await generateAssets(spindle, turnPlan, jobs, config, new AbortController().signal, () => {});
+
+    expect(finalJobs[0]?.status).toBe("failed");
+    expect(finalJobs[1]?.status).toBe("generated");
+
+    // Because first capture failed, ownership was released in finally,
+    // so second cue successfully requested capture!
+    expect(calls[0]?.includeDataUrl).toBe(true);
+    expect(calls[1]?.includeDataUrl).toBe(true);
+
+    const portraits = await loadPortraits(spindle, "chat");
+    expect(portraits.mira?.imageId).toBe("img-2");
+  });
+
+  test("unrelated characters remain concurrent without waiting on each other", async () => {
+    const events: string[] = [];
+    const { spindle: base } = storageRuntime();
+    const spindle = base as any;
+    spindle.imageGen = {
+      getConnection: async () => ({ provider: "comfyui" }),
+      listConnections: async () => [{ provider: "comfyui", is_default: true }],
+      generate: async (input: any) => {
+        const isMira = input.prompt.includes("silver hair");
+        const name = isMira ? "Mira" : "Rin";
+        events.push(`${name}-start`);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        events.push(`${name}-end`);
+        return {
+          imageId: `img-${name}`,
+          imageUrl: `/images/img-${name}`,
+          imageDataUrl: "data:image/png;base64,UE9SVFJBSVQ="
+        };
+      }
+    };
+
+    const config = { ...DEFAULT_CONFIG, imageConnectionId: "conn", imageConcurrency: 2 };
+    const turnPlan = plan([
+      cue("one", 0, "Mira", "smile"),
+      cue("two", 1, "Rin", "smile")
+    ]);
+    const jobs = createAssetJobs(turnPlan, config);
+    await generateAssets(spindle, turnPlan, jobs, config, new AbortController().signal, () => {});
+
+    // Both Mira and Rin should start concurrently before either ends
+    expect(events.slice(0, 2)).toEqual(["Mira-start", "Rin-start"]);
   });
 });

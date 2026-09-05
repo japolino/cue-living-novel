@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { SpindleAPI } from "lumiverse-spindle-types";
-import { TurnPlanSchema, type AssetJob } from "../../shared/contracts.js";
+import { AssetJobSchema, TurnPlanSchema, type AssetJob } from "../../shared/contracts.js";
 import { markAssetReady, registerVisualNovelBackend, sendState, turnView } from "./controller.js";
 import { chatStatePath, singleCharacterStatePath, turnPath, type StoredChatState, type StoredTurnRecord } from "./storage.js";
 import { seedSingleCharacter } from "../core/visual-state.js";
@@ -415,5 +415,103 @@ describe("GENERATION_STARTED abort and ownership invalidation", () => {
     expect(assetStatuses()).not.toContain("generated");
     // The queued second job never started: the image provider saw exactly one call.
     expect(gates.length).toBe(1);
+  });
+});
+
+describe("Finding #3: vn_retry_turn recovery and settings snapshotting", () => {
+  test("recovers failed jobs, applies changed config, snapshots settings, and calls provider", async () => {
+    let frontendHandler!: (payload: unknown) => void;
+    const sent: any[] = [];
+    const calls: any[] = [];
+    const data = new Map<string, unknown>();
+    const message = {
+      id: "assistant-retry-1",
+      chat_id: "chat",
+      content: "Mira smiles warmly.",
+      is_user: false,
+      name: "Mira",
+      swipe_id: 0
+    };
+
+    const p = TurnPlanSchema.parse({
+      schemaVersion: 1,
+      key: { chatId: "chat", assistantMessageId: message.id, swipeId: 0, sourceFingerprint: "fingerprint-1", revision: 1 },
+      paragraphs: [{ index: 0, sourceIndex: 0, text: "Mira smiles warmly." }],
+      scenes: [{
+        sceneId: "scene", revision: 1, startParagraph: 0,
+        environment: { location: "Garden", timeOfDay: "day", weather: null, lighting: "sunlight", description: "A garden.", persistentElements: [] },
+        cast: ["Mira"], character: "Mira", continuity: { revision: 0, characters: {}, facts: {} },
+        basePrompt: "garden", identityPrompt: "silver hair, green eyes",
+        cameraLock: { framing: "upper body", angle: "eye level", perspective: "fixed", lens: "50mm", subjectAnchor: "center", horizon: "upper third", safeDialogueRegion: "lower third", aspectRatio: "16:9" },
+        compositionLock: "centered", activeAssetId: null, priorSceneId: null
+      }],
+      visualCues: [{
+        cueId: "cue-0", paragraphIndex: 0, sceneId: "scene", sceneRevision: 1, kind: "flattened_scene",
+        action: null, expression: null, poseExpressionId: "smile", character: "Mira", promptDelta: "", assetJobId: "job-0"
+      }],
+      choices: [], initialContinuity: { revision: 0, characters: {}, facts: {} }, continuityDeltas: [], terminalContinuity: { revision: 0, characters: {}, facts: {} }, planningStatus: "planned", createdAt: now
+    });
+
+    const failedJob: AssetJob = AssetJobSchema.parse({
+      jobId: "job-0", ownerTurnKey: p.key, sceneId: "scene", sceneRevision: 1, paragraphIndex: 0,
+      promptFingerprint: "old-fingerprint-12345678", provider: "image:default", priority: "visible",
+      status: "failed", startedAt: now, finishedAt: now, error: "Temporary outage",
+      queuedAt: now, imageId: null, imageUrl: null, readyAt: null, generatedAt: null
+    });
+
+    const record: StoredTurnRecord = {
+      schemaVersion: 1,
+      speaker: "Mira",
+      status: "ready",
+      plan: p,
+      jobs: [failedJob],
+      updatedAt: now
+    };
+    data.set(turnPath("chat", message.id, 0), record);
+    data.set("config.json", {
+      generateImages: true,
+      maxImagesPerTurn: 2,
+      imageConcurrency: 1,
+      promptPrefix: "new quality tags"
+    });
+
+    const spindle = {
+      on: () => {},
+      onFrontendMessage: (fn: any) => { frontendHandler = fn; },
+      userStorage: {
+        getJson: async (path: string, options: any) => data.get(path) ?? options.fallback,
+        setJson: async (path: string, value: unknown) => { data.set(path, value); }
+      },
+      chat: { getMessages: async () => [message] },
+      imageGen: {
+        getConnection: async () => ({ provider: "comfyui" }),
+        listConnections: async () => [{ provider: "comfyui", is_default: true }],
+        generate: async (input: any) => {
+          calls.push(input);
+          return { imageId: "img-recovered-0", imageUrl: "/api/v1/images/img-recovered-0" };
+        }
+      },
+      sendToFrontend: (msg: unknown) => { sent.push(msg); },
+      log: { info: () => {}, warn: () => {}, error: () => {} }
+    } as any;
+
+    registerVisualNovelBackend(spindle);
+    await frontendHandler({ type: "vn_retry_turn", chatId: "chat", messageId: message.id });
+
+    // Wait for the asset to finish generating
+    for (let i = 0; i < 50; i++) {
+      const saved = data.get(turnPath("chat", message.id, 0)) as StoredTurnRecord | undefined;
+      if (saved?.jobs[0]?.status === "generated") break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].prompt).toContain("new quality tags");
+
+    const saved = data.get(turnPath("chat", message.id, 0)) as StoredTurnRecord;
+    expect(saved.jobs[0]?.status).toBe("generated");
+    expect(saved.jobs[0]?.imageId).toBe("img-recovered-0");
+    expect(saved.settingsSnapshot?.promptPrefix).toBe("new quality tags");
+    expect(saved.attempts && saved.attempts.length >= 1).toBe(true);
   });
 });

@@ -144,6 +144,41 @@ describe("visual context assembly", () => {
     });
   });
 
+
+  test("reserves separate budgets for essential fields and preserves late visual traits from long descriptions (audit #12)", async () => {
+    const description = "A long account of past events. ".repeat(200) + "Mira has silver hair and green eyes. Her wings are translucent.";
+    const longCharacter: CharacterDTO = {
+      ...character,
+      description,
+      scenario: "SCENARIO_SENTINEL moonlit observatory",
+      tags: ["WINGS_SENTINEL"]
+    };
+    const spindle = {
+      chats: { get: async () => chat },
+      characters: { get: async () => longCharacter },
+      personas: { getActive: async () => null },
+      world_books: { getActivated: async () => [], entries: { get: async () => null } },
+      macros: { resolve: async (content: string) => ({ text: content, diagnostics: [] }) }
+    } as unknown as SpindleAPI;
+
+    const snapshot = await loadVisualContext(spindle, {
+      chatId: "chat-1",
+      target: "Mira arrives",
+      config: { ...DEFAULT_CONFIG, includeCharacterContext: true, includePersonaContext: false, includeLorebookContext: false }
+    });
+
+    // Length stays strictly within budget
+    expect(snapshot.plannerContext.length).toBeLessThanOrEqual(5200);
+    // Salient visual traits from late in the description are preserved
+    expect(snapshot.plannerContext).toContain("silver hair");
+    expect(snapshot.plannerContext).toContain("wings");
+    // Scenario and tags budgets are reserved and preserved
+    expect(snapshot.plannerContext).toContain("SCENARIO_SENTINEL");
+    expect(snapshot.plannerContext).toContain("WINGS_SENTINEL");
+    // Full structured description is preserved intact
+    expect(snapshot.characterIdentity?.description).toContain("silver hair");
+  });
+
   test("returns an empty snapshot instead of breaking planning when lookups fail", async () => {
     const unavailable = async (): Promise<never> => { throw new Error("permission unavailable"); };
     const spindle = {

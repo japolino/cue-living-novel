@@ -16,6 +16,7 @@ import {
   isFragmentCameraFraming,
   isFragmentRenderScope,
   resolveShotPerspective,
+  projectTagVisibility,
   tagVisibilityRegions,
   visibilityModifiersFor,
   type VisibilityRegion
@@ -25,7 +26,7 @@ import type { AssembledPrompt, CharacterJson, CreativeConcept, PromptEntry, Scen
 
 // Compatibility export; ownership lives in the deterministic resolver.
 export { projectDynamicVisibleTags, resolveShotPerspective } from "./shot-resolution.js";
-import { asRecord, cleanArray, cleanString, csvParts, escapeRegExp, unique } from "./utils.js";
+import { asRecord, cleanArray, cleanString, csvParts, escapeRegExp, parseWeightedGroup, serializePromptWeights, splitTopLevelCsv, unique, validateAndRepairDelimiters } from "./utils.js";
 
 export function normalizeReferenceTags(tagString: unknown): string {
   return unique(csvParts(tagString).filter((tag) => {
@@ -133,10 +134,12 @@ export function renderPrompt(prompt: AssembledPrompt, syntax: Config["promptSynt
   const cached = renderedPromptCache.get(prompt)?.[syntax];
   if (cached !== undefined) return cached;
   const rendered = joinSections(prompt.sections, syntax, prompt.format || "ordered");
+  const serialized = serializePromptWeights(rendered, syntax);
+  const validated = validateAndRepairDelimiters(serialized);
   const entries = renderedPromptCache.get(prompt) || {};
-  entries[syntax] = rendered;
+  entries[syntax] = validated;
   renderedPromptCache.set(prompt, entries);
-  return rendered;
+  return validated;
 }
 
 export function renderPromptWithCurrentAffixes(
@@ -147,12 +150,13 @@ export function renderPromptWithCurrentAffixes(
   const preset = activePromptPreset(config);
   const clean = (value: string): string => format === "ordered" ? normalizePromptSection(value) : value.trim();
   const separator = config.promptSyntax === "comfyui" ? (format === "ordered" ? ",\n\n" : ",\n") : ", ";
-  return [
+  const rawAffixed = [
     clean(preset?.positivePrefix || ""),
     clean(config.customPositivePrefix),
     corePrompt.trim(),
     clean(config.customPositiveSuffix)
   ].filter(Boolean).join(separator);
+  return validateAndRepairDelimiters(serializePromptWeights(rawAffixed, config.promptSyntax));
 }
 
 export function renderNegativeWithCurrentSelection(
@@ -473,13 +477,15 @@ function assembleVisibilityTierCharacterBlock(
 
   const projected: string[] = [];
   for (const { tag, source } of baselineTags(character)) {
-    if (modifiers.hideEyes && EYE_TAG.test(tag.toLowerCase())) continue;
-    if (tagVisibilityRegions(tag, source).some((region) => regions.has(region))) projected.push(tag);
+    for (const visibleTag of projectTagVisibility(tag, source, regions, modifiers)) {
+      projected.push(visibleTag);
+    }
   }
-  for (const tag of csvParts(stripOrReplaceNames(cleanString(character.visibleTags), replacements, true))) {
-    if (projected.some((candidate) => candidate.toLowerCase() === tag.toLowerCase())) continue;
-    if (modifiers.hideEyes && EYE_TAG.test(tag.toLowerCase())) continue;
-    if (tagVisibilityRegions(tag, "projection").some((region) => regions.has(region))) projected.push(tag);
+  for (const rawTag of csvParts(stripOrReplaceNames(cleanString(character.visibleTags), replacements, true))) {
+    for (const visibleTag of projectTagVisibility(rawTag, "projection", regions, modifiers)) {
+      if (projected.some((candidate) => candidate.toLowerCase() === visibleTag.toLowerCase())) continue;
+      projected.push(visibleTag);
+    }
   }
 
   return unique(csvParts(
@@ -498,6 +504,22 @@ function structuredSnippets(value: unknown, cap: number): string[] {
     .map((entry) => cleanString(entry))
     .filter(Boolean)
     .slice(0, cap);
+}
+
+function semanticSnippets(value: unknown, cap: number): string[] {
+  if (value === null || value === undefined) return [];
+  const values = Array.isArray(value) ? value : [value];
+  const results: string[] = [];
+  for (const entry of values) {
+    if (typeof entry !== "string") continue;
+    const trimmed = entry.trim();
+    if (!trimmed) continue;
+    const parts = trimmed.split(/\s*[\n;]+\s*/).map((s) => s.trim()).filter(Boolean);
+    for (const part of parts) {
+      if (part) results.push(cleanString(part));
+    }
+  }
+  return results.slice(0, cap);
 }
 
 const CAMERA_FRAMING = new Set<string>(CAMERA_FRAMING_VALUES);
@@ -803,13 +825,16 @@ function assembleAnimaPrompt(
       ? { text: cleanString(creativeConcept?.camera), structured: false }
     : assembleStructuredCamera(perspectiveMode === "dynamic" ? dynamicCamera.value : shot.camera);
   const environment = scene.environment || {};
-  const location = structuredSnippets(environment.location, 1);
-  const timeWeather = structuredSnippets(environment.timeWeather, 1);
+  const location = semanticSnippets(environment.location, 1);
+  const timeWeather = semanticSnippets(environment.timeWeather, 1);
   const lightingMood = config.supplement
     ? structuredSnippets(environment.lightingMood, compactDynamic ? 1 : 3)
     : [];
   const backgroundElements = config.supplement || perspectiveMode === "static"
     ? structuredSnippets(environment.backgroundElements, compactDynamic ? 3 : 5)
+    : [];
+  const description = (config.supplement || perspectiveMode === "static") && environment.description
+    ? semanticSnippets(environment.description, compactDynamic ? 1 : 2)
     : [];
   const legacyPlace = location.length === 0 ? stripOrReplaceNames(cleanString(scene.place), replacements, true) : "";
   const environmentSection = perspectiveMode === "asset" ? "white background, simple background" : [
@@ -817,7 +842,8 @@ function assembleAnimaPrompt(
     legacyPlace,
     ...timeWeather.map((value) => stripOrReplaceNames(value, replacements, false)),
     ...lightingMood.map((value) => stripOrReplaceNames(value, replacements, false)),
-    ...backgroundElements.map((value) => stripOrReplaceNames(value, replacements, false))
+    ...backgroundElements.map((value) => stripOrReplaceNames(value, replacements, false)),
+    ...description.map((value) => stripOrReplaceNames(value, replacements, false))
   ].filter(Boolean).join(", ");
   return { sections: [
     stripOrReplaceNames(

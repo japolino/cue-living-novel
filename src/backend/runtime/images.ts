@@ -3,9 +3,20 @@ import type { VisualNovelConfig } from "../../config.js";
 import { AssetJobSchema, type AssetJob, type SceneState, type TurnPlan, type VisualCue } from "../../shared/contracts.js";
 import { AssetScheduler } from "../core/asset-scheduler.js";
 import { POSE_EXPRESSION_CATALOGUE, poseById } from "../../shared/character.js";
-import { characterAppearanceKey, normalizeCharacterName } from "../../shared/identity.js";
-import { assemblePrompt, normalizeConfig, renderNegativeWithCurrentSelection, renderPrompt, type PromptEntry } from "../inlay-prompt/index.js";
-import { loadPortraits, savePortrait, type StoredPortrait } from "./storage.js";
+import {
+  appearanceMapKeyFor,
+  characterAppearanceKey,
+  normalizeCharacterName,
+  type CharacterAppearanceMap
+} from "../../shared/identity.js";
+import { assemblePrompt, normalizeConfig, renderNegativeWithCurrentSelection, renderPrompt, splitTopLevelCsv, parseWeightedGroup, validateAndRepairDelimiters, type Config, type PromptEntry } from "../inlay-prompt/index.js";
+import {
+  loadCharacterAppearance,
+  loadPortraits,
+  savePortrait,
+  VALID_IMAGE_MIMES,
+  type StoredPortrait
+} from "./storage.js";
 
 export type AssetUpdateHandler = (jobs: AssetJob[], changed: AssetJob) => Promise<void> | void;
 
@@ -23,9 +34,64 @@ function sceneForCue(plan: TurnPlan, cue: VisualCue): SceneState {
   return scene;
 }
 
-function compilePromptEntry(config: VisualNovelConfig, scene: SceneState, cue: VisualCue): PromptEntry {
+export type CueVisualState = {
+  characterName: string;
+  characterKey: string;
+  identity: string;
+  attire: string;
+};
+
+export function resolveCueCharacterVisualState(
+  scene: SceneState,
+  cue: VisualCue,
+  characterAppearance?: CharacterAppearanceMap
+): CueVisualState {
+  const characterName = cueCharacterName(scene, cue);
+  const characterKey = characterAppearanceKey(characterName);
+  const sceneCharacterName = normalizeCharacterName(scene.character || scene.cast[0] || "");
+  const sceneCharacterKey = characterAppearanceKey(sceneCharacterName);
+
+  let baseIdentity = "";
+  if (characterKey && sceneCharacterKey && characterKey === sceneCharacterKey) {
+    baseIdentity = scene.identityPrompt?.trim() ?? "";
+  } else if (characterKey && sceneCharacterKey && characterKey !== sceneCharacterKey) {
+    // Cue character differs from the scene's primary character.
+    // Do not leak the scene character's identity prompt.
+    const mapKey = appearanceMapKeyFor(characterAppearance, characterName);
+    if (mapKey && characterAppearance?.[mapKey]) {
+      baseIdentity = characterAppearance[mapKey].trim();
+    } else if (scene.continuity?.characters) {
+      const match = Object.entries(scene.continuity.characters).find(
+        ([name]) => characterAppearanceKey(name) === characterKey
+      );
+      if (match && match[1]?.appearance) {
+        baseIdentity = Object.values(match[1].appearance).filter(Boolean).join(", ");
+      }
+    }
+  } else {
+    baseIdentity = scene.identityPrompt?.trim() ?? "";
+  }
+
+  const attire = cue.attire || (characterKey === sceneCharacterKey ? scene.attire : null) || "";
+  let identity = baseIdentity;
+  if (attire && identity) {
+    identity = applyAttireOverride(identity, attire);
+  } else if (attire) {
+    identity = attire;
+  }
+
+  return { characterName, characterKey, identity, attire };
+}
+
+function compilePromptEntry(
+  config: VisualNovelConfig,
+  scene: SceneState,
+  cue: VisualCue,
+  characterAppearance?: CharacterAppearanceMap
+): PromptEntry {
+  const promptSyntax = (config as any).promptSyntax ?? "comfyui";
   const compilerConfig = normalizeConfig({
-    promptSyntax: "comfyui",
+    promptSyntax,
     promptStyle: "anima",
     supplement: true,
     customPositivePrefix: config.promptPrefix,
@@ -34,34 +100,20 @@ function compilePromptEntry(config: VisualNovelConfig, scene: SceneState, cue: V
     maxCharacters: 1,
     perspectiveMode: "dynamic"
   });
-  let identity = scene.identityPrompt?.trim() ?? "";
-  const attire = cue.attire || scene.attire;
-  if (attire && identity) {
-    identity = applyAttireOverride(identity, attire);
-  }
-  const identityText = identity.toLowerCase();
-  const isFemale = /\b(?:1girl|girl|woman|female|lady|maid|sister|mother|daughter|gal|tomboy)\b/i.test(identityText);
-  const isMale = /\b(?:1boy|boy|man|male|guy|gentleman|brother|father|son|mustache|beard)\b/i.test(identityText);
-  let label = "girl";
-  let situation = "1girl, solo";
-  if (isFemale && !isMale) {
-    label = "girl";
-    situation = "1girl, solo";
-  } else if (isMale && !isFemale) {
-    label = "boy";
-    situation = "1boy, solo";
-  } else if (/\b(?:1other|creature|monster|animal|robot|android|cyborg|machine|golem|inanimate)\b/i.test(identityText)) {
-    label = "1other";
-    situation = "1other, solo";
-  }
+  const visualState = resolveCueCharacterVisualState(scene, cue, characterAppearance);
+  const identity = visualState.identity;
+  const [label, situation] = classifySubject(identity);
   const pose = poseById(POSE_EXPRESSION_CATALOGUE, cue.poseExpressionId);
-  const timeWeather = [scene.environment.timeOfDay, scene.environment.weather].filter(Boolean).join(" ");
+  const timeWeather = [scene.environment.timeOfDay, scene.environment.weather].filter(Boolean).join(", ");
+  const desc = scene.environment.description?.trim();
+  const isRedundantDesc = !desc || desc.toLowerCase() === `a quiet ${scene.environment.location.toLowerCase()}.` || desc.toLowerCase() === scene.environment.location.toLowerCase();
   return assemblePrompt({
     environment: {
       location: [scene.environment.location],
       timeWeather,
       lightingMood: scene.environment.lighting ? [scene.environment.lighting] : [],
-      backgroundElements: scene.environment.persistentElements
+      backgroundElements: scene.environment.persistentElements,
+      ...(isRedundantDesc ? {} : { description: [desc] })
     }
   }, {
     paragraph: 1,
@@ -71,13 +123,25 @@ function compilePromptEntry(config: VisualNovelConfig, scene: SceneState, cue: V
   }, compilerConfig, 1, 1);
 }
 
-export function compileImagePrompt(config: VisualNovelConfig, scene: SceneState, cue: VisualCue): string {
-  const entry = compilePromptEntry(config, scene, cue);
-  return renderPrompt(entry.prompt, "comfyui");
+export function compileImagePrompt(
+  config: VisualNovelConfig,
+  scene: SceneState,
+  cue: VisualCue,
+  characterAppearance?: CharacterAppearanceMap,
+  syntax?: Config["promptSyntax"]
+): string {
+  const selectedSyntax = syntax ?? (config as any).promptSyntax ?? "comfyui";
+  const entry = compilePromptEntry(config, scene, cue, characterAppearance);
+  return renderPrompt(entry.prompt, selectedSyntax);
 }
 
-export function compileNegativePrompt(config: VisualNovelConfig, scene: SceneState, cue: VisualCue): string {
-  const entry = compilePromptEntry(config, scene, cue);
+export function compileNegativePrompt(
+  config: VisualNovelConfig,
+  scene: SceneState,
+  cue: VisualCue,
+  characterAppearance?: CharacterAppearanceMap
+): string {
+  const entry = compilePromptEntry(config, scene, cue, characterAppearance);
   if (entry.negative) return entry.negative;
   const compilerConfig = normalizeConfig({
     promptSyntax: "comfyui",
@@ -92,12 +156,16 @@ export function compileNegativePrompt(config: VisualNovelConfig, scene: SceneSta
   return renderNegativeWithCurrentSelection(entry.shotNegative, entry.prompt.format ?? "ordered", compilerConfig);
 }
 
-export function createAssetJobs(plan: TurnPlan, config: VisualNovelConfig): AssetJob[] {
+export function createAssetJobs(
+  plan: TurnPlan,
+  config: VisualNovelConfig,
+  characterAppearance?: CharacterAppearanceMap
+): AssetJob[] {
   const now = new Date().toISOString();
   return plan.visualCues.map((cue, index) => {
     const scene = sceneForCue(plan, cue);
     const pose = poseById(POSE_EXPRESSION_CATALOGUE, cue.poseExpressionId);
-    const promptIdentity = `${compileImagePrompt(config, scene, cue)}\0${pose.id}`;
+    const promptIdentity = `${compileImagePrompt(config, scene, cue, characterAppearance)}\0${pose.id}`;
     return AssetJobSchema.parse({
       jobId: cue.assetJobId,
       ownerTurnKey: plan.key,
@@ -130,29 +198,10 @@ function abortError(signal: AbortSignal): Error {
   return error;
 }
 
-
-/* ------------------------------------------------------------------ *
- * Reference-image anchoring.
- *
- * A character's first generated image in a chat becomes their canonical
- * portrait (stored per chat, first-wins). Every later generation for that
- * character passes the portrait back to the provider as an identity anchor:
- * - NovelAI: Director / Precise Reference (`resolvedReferenceImages`), read
- *   directly by the host's NovelAI provider.
- * - ComfyUI / SwarmUI: `resolvedSourceImages`, which the host uploads and
- *   patches into the active workflow's mapped `init_image` field (for
- *   example an IP-Adapter reference LoadImage node).
- * Other providers receive no reference parameters. Opt out by setting
- * `referenceAnchoring: false` inside the connection's image parameters;
- * `referenceStrength` (0..1, default 0.6) tunes the NovelAI strength.
- * ------------------------------------------------------------------ */
-
 const REFERENCE_PROVIDERS = new Set(["novelai", "comfyui", "swarmui"]);
 
 /** Whether reference anchoring is enabled for this config (default on). */
 export function referenceAnchoringEnabled(config: VisualNovelConfig): boolean {
-  // The settings toggle is authoritative; `imageParameters.referenceAnchoring`
-  // remains as a per-connection escape hatch.
   return config.referenceAnchoring !== false && config.imageParameters.referenceAnchoring !== false;
 }
 
@@ -190,7 +239,11 @@ export function parseDataUrl(dataUrl: string | undefined): { data: string; mimeT
   if (typeof dataUrl !== "string") return null;
   const match = /^data:([^;,]+);base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl.trim());
   if (!match) return null;
-  return { mimeType: match[1]!, data: match[2]! };
+  const mimeType = match[1]!.toLowerCase();
+  const data = match[2]!;
+  if (!VALID_IMAGE_MIMES.has(mimeType)) return null;
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(data)) return null;
+  return { mimeType, data };
 }
 
 /**
@@ -238,19 +291,19 @@ export async function generateAssets(
   const scheduler = new AssetScheduler({ [providerKey]: { concurrency: config.imageConcurrency } });
   const provider = referenceAnchoringEnabled(config) ? await resolveImageProviderId(spindle, config, userId) : null;
   const anchorable = provider !== null && REFERENCE_PROVIDERS.has(provider);
-  let portraits: Record<string, StoredPortrait> = {};
-  if (anchorable) {
-    try {
-      portraits = await loadPortraits(spindle, plan.key.chatId, userId);
-    } catch {
-      portraits = {};
-    }
-  }
+
+  const [initialPortraits, characterAppearance] = await Promise.all([
+    anchorable ? loadPortraits(spindle, plan.key.chatId, userId).catch(() => ({} as Record<string, StoredPortrait>)) : Promise.resolve({} as Record<string, StoredPortrait>),
+    loadCharacterAppearance(spindle, userId).catch(() => ({} as CharacterAppearanceMap))
+  ]);
+  const portraits: Record<string, StoredPortrait> = { ...initialPortraits };
+
   if (config.debugLogging) {
     const portraitNames = Object.values(portraits).map((entry) => entry.name).join(", ");
     spindle.log.info(`[VN] reference anchoring ${anchorable ? `active (provider=${provider})` : referenceAnchoringEnabled(config) ? `inactive (provider=${provider ?? "unknown"} unsupported)` : "disabled by config"}; ${Object.keys(portraits).length} portrait(s)${portraitNames ? ` [${portraitNames}]` : ""}`);
   }
-  const capturing = new Set<string>();
+
+  const capturePromises = new Map<string, Promise<StoredPortrait | null>>();
   const ownedJobIds = new Set(initialJobs.map((job) => job.jobId));
   const unsubscribe = scheduler.subscribe((changed) => {
     if (!ownedJobIds.has(changed.jobId)) return;
@@ -270,29 +323,48 @@ export async function generateAssets(
       return scheduler.schedule(job, async (_scheduledJob, jobSignal) => {
         if (signal.aborted) throw abortError(signal);
         const scene = sceneForCue(plan, cue);
-        const prompt = compileImagePrompt(config, scene, cue);
-        const negativePrompt = compileNegativePrompt(config, scene, cue);
-        const characterName = cueCharacterName(scene, cue);
-        const characterKey = characterAppearanceKey(characterName);
-        const portrait = anchorable && characterKey ? portraits[characterKey] : undefined;
-        // Capture: the first anchored-less generation for a character becomes
-        // that character's canonical portrait, so request its data URL once.
-        const wantsCapture = anchorable && Boolean(characterKey) && !portrait && !capturing.has(characterKey);
-        if (wantsCapture) capturing.add(characterKey);
-        if (config.debugLogging && anchorable) {
-          spindle.log.info(`[VN] cue p${cue.paragraphIndex}: ${portrait ? `anchored to portrait ${portrait.imageId} (${portrait.name})` : wantsCapture ? `no portrait for "${characterName}" yet — capturing this render` : `unanchored (character="${characterName}")`}`);
+        const visualState = resolveCueCharacterVisualState(scene, cue, characterAppearance);
+        const prompt = compileImagePrompt(config, scene, cue, characterAppearance);
+        const negativePrompt = compileNegativePrompt(config, scene, cue, characterAppearance);
+        const characterName = visualState.characterName;
+        const characterKey = visualState.characterKey;
+
+        // If another render is currently capturing this character, wait for it before proceeding.
+        // Dependent renders wait; unrelated characters stay concurrent.
+        if (anchorable && characterKey && capturePromises.has(characterKey)) {
+          try {
+            await capturePromises.get(characterKey);
+          } catch {
+            // Predecessor capture failure is handled gracefully below
+          }
         }
-        const parameters = portrait && provider
-          ? { ...config.imageParameters, ...referenceParametersFor(provider, portrait, config) }
-          : config.imageParameters;
-        const { connectionId, workflowId } = splitConnectionSelection(config.imageConnectionId);
-        const effectiveParameters = {
-          ...parameters,
-          ...(workflowId ? { workflow_id: workflowId } : {})
-        };
-        let result;
+
+        let portrait = anchorable && characterKey ? portraits[characterKey] : undefined;
+        let isCaptureOwner = false;
+        let captureResolve: ((val: StoredPortrait | null) => void) | undefined;
+
+        const wantsCapture = anchorable && Boolean(characterKey) && !portrait && !capturePromises.has(characterKey);
+        if (wantsCapture) {
+          isCaptureOwner = true;
+          const promise = new Promise<StoredPortrait | null>((resolve) => {
+            captureResolve = resolve;
+          });
+          capturePromises.set(characterKey, promise);
+        }
+
         try {
-          result = await spindle.imageGen.generate({
+          if (config.debugLogging && anchorable) {
+            spindle.log.info(`[VN] cue p${cue.paragraphIndex}: ${portrait ? `anchored to portrait ${portrait.imageId} (${portrait.name})` : wantsCapture ? `no portrait for "${characterName}" yet — capturing this render` : `unanchored (character="${characterName}")`}`);
+          }
+          const parameters = portrait && provider
+            ? { ...config.imageParameters, ...referenceParametersFor(provider, portrait, config) }
+            : config.imageParameters;
+          const { connectionId, workflowId } = splitConnectionSelection(config.imageConnectionId);
+          const effectiveParameters = {
+            ...parameters,
+            ...(workflowId ? { workflow_id: workflowId } : {})
+          };
+          const result = await spindle.imageGen.generate({
             ...(connectionId ? { connection_id: connectionId } : {}),
             prompt,
             ...(negativePrompt ? { negativePrompt } : {}),
@@ -302,58 +374,157 @@ export async function generateAssets(
             includeDataUrl: wantsCapture,
             ...(userId ? { userId } : {})
           });
-        } catch (error) {
-          if (wantsCapture) capturing.delete(characterKey);
-          throw error;
-        }
-        if (signal.aborted) throw abortError(signal);
-        if (jobSignal.aborted) throw abortError(jobSignal);
-        if (!result.imageId) throw new Error("The image provider completed without a persisted image ID.");
-        if (wantsCapture) {
-          const parsed = parseDataUrl(result.imageDataUrl);
-          if (parsed) {
-            const stored: StoredPortrait = {
-              name: characterName,
-              imageId: result.imageId,
-              data: parsed.data,
-              mimeType: parsed.mimeType,
-              createdAt: new Date().toISOString()
-            };
-            try {
-              if (await savePortrait(spindle, plan.key.chatId, stored, userId)) {
-                portraits[characterKey] = stored;
-                if (config.debugLogging) spindle.log.info(`[VN] portrait captured for "${characterName}" -> ${stored.imageId} (${stored.mimeType}, ${stored.data.length} base64 chars)`);
-              } else {
-                const refreshed = await loadPortraits(spindle, plan.key.chatId, userId);
-                const winner = refreshed[characterKey];
-                if (winner) portraits[characterKey] = winner;
+
+          if (signal.aborted) throw abortError(signal);
+          if (jobSignal.aborted) throw abortError(jobSignal);
+          if (!result.imageId) throw new Error("The image provider completed without a persisted image ID.");
+
+          if (wantsCapture) {
+            const parsed = parseDataUrl(result.imageDataUrl);
+            if (parsed) {
+              const stored: StoredPortrait = {
+                name: characterName,
+                imageId: result.imageId,
+                data: parsed.data,
+                mimeType: parsed.mimeType,
+                createdAt: new Date().toISOString(),
+                prompt
+              };
+              try {
+                if (await savePortrait(spindle, plan.key.chatId, stored, userId)) {
+                  portraits[characterKey] = stored;
+                  if (config.debugLogging) spindle.log.info(`[VN] portrait captured for "${characterName}" -> ${stored.imageId} (${stored.mimeType}, ${stored.data.length} base64 chars)`);
+                } else {
+                  const refreshed = await loadPortraits(spindle, plan.key.chatId, userId);
+                  const winner = refreshed[characterKey];
+                  if (winner) portraits[characterKey] = winner;
+                }
+              } catch {
+                // Non-fatal: anchoring simply resumes on a later turn.
               }
-            } catch {
-              // Non-fatal: anchoring simply resumes on a later turn.
             }
           }
-          capturing.delete(characterKey);
+          return {
+            imageId: result.imageId,
+            imageUrl: result.imageUrl ?? `/api/v1/images/${encodeURIComponent(result.imageId)}`
+          };
+        } finally {
+          // Release ownership in finally, covering validation and persistence failures
+          if (isCaptureOwner) {
+            captureResolve?.(portraits[characterKey] ?? null);
+            capturePromises.delete(characterKey);
+          }
         }
-        return {
-          imageId: result.imageId,
-          imageUrl: result.imageUrl ?? `/api/v1/images/${encodeURIComponent(result.imageId)}`
-        };
       }).promise;
     });
     await Promise.allSettled(promises);
+    // Guarantee finished batches have no unexplained queued jobs
+    for (let i = 0; i < jobs.length; i++) {
+      if (jobs[i]!.status === "queued") {
+        jobs[i] = AssetJobSchema.parse({
+          ...jobs[i]!,
+          status: "cancelled",
+          imageId: null,
+          imageUrl: null,
+          generatedAt: null,
+          readyAt: null,
+          error: null,
+          finishedAt: new Date().toISOString()
+        });
+      }
+    }
     return jobs;
   } finally {
     signal.removeEventListener("abort", abort);
     unsubscribe();
   }
-}const CLOTHING_TAG_REGEX = /\b(?:clothes|clothing|attire|outfit|uniform|dress|skirt|shirt|blouse|sweater|cardigan|jacket|coat|hoodie|vest|suit|robe|kimono|yukata|hanfu|gi|pants|trousers|jeans|shorts|leggings|tights|pantyhose|socks?|stockings?|shoes?|boots?|sneakers?|heels?|sandals?|gloves?|hat|cap|hood|scarf|tie|ribbon|bow|collar|apron|swimsuit|bikini|pajamas?|leotard|bodysuit|armor|armour|cloak|cape)\b/i;
+}
+
+const CLOTHING_TAG_REGEX = /\b(?:clothes|clothing|attire|outfit|uniform|dress(?:es)?|sundress(?:es)?|skirt(?:s)?|shirt(?:s)?|t-?shirt(?:s)?|tee-?shirt(?:s)?|sweatshirt(?:s)?|blouse(?:s)?|sweater(?:s)?|cardigan(?:s)?|jacket(?:s)?|coat(?:s)?|hoodie(?:s)?|vest(?:s)?|suit(?:s)?|robe(?:s)?|kimono(?:s)?|yukata|hanfu|gi|pants|trousers|jeans|shorts|leggings|tights|pantyhose|socks?|stockings?|shoes?|boots?|sneakers?|heels?|sandals?|gloves?|hat(?:s)?|cap(?:s)?|hood(?:s)?|scarf|scarves|tie(?:s)?|necktie(?:s)?|ribbon(?:s)?|(?:hair\s*)?bows?(?!\s*[-]?\s*(?:shaped|lips|mouth))|collar(?:s)?|apron(?:s)?|swimsuit(?:s)?|bikini(?:s)?|pajamas?|leotard(?:s)?|bodysuit(?:s)?|armor|armour|breastplate(?:s)?|cloak(?:s)?|cape(?:s)?)\b/i;
+
+export function isClothingTag(tag: string): boolean {
+  if (/\b(?:bow[- ]shaped|cupid(?:'s)?\s+bow|lips?|mouth)\b/i.test(tag)) {
+    return false;
+  }
+  const normalized = tag.toLowerCase().replace(/_/g, " ");
+  return CLOTHING_TAG_REGEX.test(normalized);
+}
+
+export function cleanClothingFromPhrase(phrase: string): string {
+  const match = phrase.match(/^(.*?)\s+\b(?:wearing|dressed in|clad in|sporting)\s+(.+)$/i);
+  if (match && match[1] && match[2]) {
+    const clothingPart = match[2];
+    if (isClothingTag(clothingPart)) {
+      return match[1].trim();
+    }
+  }
+  return phrase;
+}
 
 export function applyAttireOverride(baseIdentity: string, newAttire: string): string {
   const trimmedAttire = newAttire.trim();
-  if (!trimmedAttire) return baseIdentity;
-  const tags = baseIdentity.split(",").map((t) => t.trim()).filter(Boolean);
-  const physicalTags = tags.filter((tag) => !CLOTHING_TAG_REGEX.test(tag));
-  return [...physicalTags, trimmedAttire].join(", ");
+  if (!trimmedAttire && !baseIdentity.trim()) return "";
+  if (!baseIdentity.trim()) return trimmedAttire;
+
+  const tags = splitTopLevelCsv(baseIdentity);
+  const physicalTags: string[] = [];
+
+  for (const tag of tags) {
+    const parsed = parseWeightedGroup(tag);
+    if (parsed) {
+      const surviving: string[] = [];
+      for (const item of parsed.items) {
+        const cleaned = cleanClothingFromPhrase(item);
+        if (cleaned && !isClothingTag(cleaned)) {
+          surviving.push(cleaned);
+        }
+      }
+      if (surviving.length > 0) {
+        if (parsed.type === "comfy") {
+          physicalTags.push(`(${surviving.join(", ")}:${parsed.weight})`);
+        } else {
+          physicalTags.push(`${parsed.prefix}${surviving.join(", ")}${parsed.suffix}`);
+        }
+      }
+      continue;
+    }
+
+    const cleanedTag = cleanClothingFromPhrase(tag);
+    if (cleanedTag && !isClothingTag(cleanedTag)) {
+      physicalTags.push(cleanedTag);
+    }
+  }
+
+  const combined = trimmedAttire ? [...physicalTags, trimmedAttire].join(", ") : physicalTags.join(", ");
+  return validateAndRepairDelimiters(combined);
 }
 
+export function classifySubject(identity: string): [label: string, situation: string] {
+  const text = identity.toLowerCase();
+  if (/\b1boy\b/.test(text)) return ["boy", "1boy, solo"];
+  if (/\b1girl\b/.test(text)) return ["girl", "1girl, solo"];
+  if (/\b1other\b/.test(text)) return ["1other", "1other, solo"];
 
+  // Strip relational prose and possessives (e.g. "sister's", "mother's")
+  let cleaned = text.replace(/\b\w+'s\b/gi, "");
+  // Strip known clothing phrases containing gender words like "maid uniform"
+  cleaned = cleaned.replace(/\bmaid\s+uniform\b/gi, "uniform");
+  cleaned = cleaned.replace(/\bfake\s+(?:mustache|beard)\b/gi, "");
+
+  const isNonbinary = /\b(?:nonbinary|non-binary|agender|genderless)\b/i.test(cleaned);
+  const isAnimal = /\b(?:dog|cat|retriever|hound|wolf|horse|quadruped|four\s+legs|animal|creature|beast|monster)\b/i.test(cleaned);
+
+  const isFemale = /\b(?:girl|woman|female|lady|gal|tomboy|(?:demon|wolf|cat|fox|monster|bunny|cow)\s*(?:girl|woman|female))\b/i.test(cleaned);
+  const isMale = /\b(?:boy|man|male|guy|gentleman|father|son|brother|husband|(?:demon|wolf|cat|fox|monster|bunny|cow)\s*(?:boy|man|male)|anthro\s+\w+\s+male|male\s+warrior|male\s+android)\b/i.test(cleaned);
+
+  if (isFemale && !isMale) {
+    return ["girl", "1girl, solo"];
+  } else if (isMale && !isFemale) {
+    return ["boy", "1boy, solo"];
+  } else if (isAnimal || isNonbinary || /\b(?:1other|creature|monster|animal|robot|android|cyborg|machine|golem|inanimate)\b/i.test(cleaned)) {
+    return ["1other", "1other, solo"];
+  }
+
+  // Default
+  return ["girl", "1girl, solo"];
+}

@@ -28,6 +28,13 @@ export type StoredTurnRecord = {
   jobs: AssetJob[];
   error?: string;
   updatedAt: string;
+  settingsSnapshot?: Record<string, unknown>;
+  attempts?: Array<{
+    attemptNumber: number;
+    timestamp: string;
+    settings: Record<string, unknown>;
+    error?: string | null;
+  }>;
 };
 
 export type StoredChatState = {
@@ -423,6 +430,8 @@ export async function loadTurnRecord(
     plan: TurnPlanSchema.parse(raw.plan),
     jobs: Array.isArray(raw.jobs) ? raw.jobs.map((job) => AssetJobSchema.parse(job)) : [],
     ...(typeof raw.error === "string" ? { error: raw.error } : {}),
+    ...(raw.settingsSnapshot && typeof raw.settingsSnapshot === "object" ? { settingsSnapshot: raw.settingsSnapshot as Record<string, unknown> } : {}),
+    ...(Array.isArray(raw.attempts) ? { attempts: raw.attempts as NonNullable<StoredTurnRecord["attempts"]> } : {}),
     updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : new Date(0).toISOString()
   };
 }
@@ -453,6 +462,8 @@ export type StoredPortrait = {
   data: string;
   mimeType: string;
   createdAt: string;
+  /** Source prompt used when capturing this portrait, for provenance. */
+  prompt?: string;
 };
 
 export type PortraitRecord = {
@@ -466,13 +477,28 @@ export function portraitStatePath(chatId: string): string {
   return `chats/${safeSegment(chatId)}/portraits.json`;
 }
 
+export const VALID_IMAGE_MIMES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/webp",
+  "image/gif",
+  "image/avif"
+]);
+
 function isStoredPortrait(value: unknown): value is StoredPortrait {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
-  return typeof record.name === "string"
-    && typeof record.imageId === "string" && record.imageId.trim().length > 0
-    && typeof record.data === "string" && record.data.length > 0
-    && typeof record.mimeType === "string";
+  if (
+    typeof record.name !== "string" || !record.name.trim() ||
+    typeof record.imageId !== "string" || !record.imageId.trim() ||
+    typeof record.data !== "string" || !record.data.trim() ||
+    typeof record.mimeType !== "string" || !VALID_IMAGE_MIMES.has(record.mimeType.toLowerCase())
+  ) {
+    return false;
+  }
+  const cleanData = record.data.trim();
+  return /^[A-Za-z0-9+/]+={0,2}$/.test(cleanData);
 }
 
 function normalizePortraitRecord(raw: unknown): PortraitRecord {
@@ -509,16 +535,18 @@ export async function loadPortraits(
 }
 
 /**
- * Persist a canonical portrait for a character. First-wins: an existing
- * portrait for the same character is never overwritten, so the anchor image
- * stays stable for the life of the chat (delete portraits.json to re-seed).
+ * Persist a canonical portrait for a character. First-wins by default: an
+ * existing portrait for the same character is never overwritten unless
+ * `options.replace` is true, so the anchor image stays stable for the life of
+ * the chat.
  * Returns whether this portrait became the stored one.
  */
 export async function savePortrait(
   spindle: SpindleAPI,
   chatId: string,
   portrait: StoredPortrait,
-  userId?: string
+  userId?: string,
+  options?: { replace?: boolean }
 ): Promise<boolean> {
   const key = characterAppearanceKey(portrait.name);
   if (!key || !isStoredPortrait(portrait)) return false;
@@ -530,7 +558,7 @@ export async function savePortrait(
       ...(userOptions(userId) ?? {})
     });
     const record = normalizePortraitRecord(raw);
-    if (record.portraits[key]) return;
+    if (record.portraits[key] && !options?.replace) return;
     record.portraits[key] = portrait;
     record.updatedAt = new Date().toISOString();
     await spindle.userStorage.setJson(path, record, {
@@ -540,4 +568,57 @@ export async function savePortrait(
     stored = true;
   });
   return stored;
+}
+
+/**
+ * Delete a character's canonical portrait from the store, allowing it to be
+ * re-seeded on subsequent generations. Returns whether a portrait was deleted.
+ */
+export async function deletePortrait(
+  spindle: SpindleAPI,
+  chatId: string,
+  characterName: string,
+  userId?: string
+): Promise<boolean> {
+  const key = characterAppearanceKey(characterName);
+  if (!key) return false;
+  const path = portraitStatePath(chatId);
+  let deleted = false;
+  await serializedWrite(scopedKey(userId, path), async () => {
+    const raw = await spindle.userStorage.getJson<unknown>(path, {
+      fallback: null,
+      ...(userOptions(userId) ?? {})
+    });
+    const record = normalizePortraitRecord(raw);
+    if (!record.portraits[key]) return;
+    delete record.portraits[key];
+    record.updatedAt = new Date().toISOString();
+    await spindle.userStorage.setJson(path, record, {
+      indent: 2,
+      ...(userOptions(userId) ?? {})
+    });
+    deleted = true;
+  });
+  return deleted;
+}
+
+/**
+ * Reset all stored canonical portraits for a chat.
+ */
+export async function resetPortraits(
+  spindle: SpindleAPI,
+  chatId: string,
+  userId?: string
+): Promise<void> {
+  const path = portraitStatePath(chatId);
+  await serializedWrite(scopedKey(userId, path), async () => {
+    await spindle.userStorage.setJson(path, {
+      schemaVersion: 1,
+      portraits: {},
+      updatedAt: new Date().toISOString()
+    }, {
+      indent: 2,
+      ...(userOptions(userId) ?? {})
+    });
+  });
 }

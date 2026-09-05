@@ -21,7 +21,7 @@ import type {
   ResolvedShot
 } from "./domain.js";
 import type { CharacterJson } from "./types.js";
-import { asRecord, cleanString, csvParts, unique } from "./utils.js";
+import { asRecord, cleanString, csvParts, parseWeightedGroup, unique } from "./utils.js";
 
 /**
  * Deterministic shot-resolution primitives shared by parser normalization and
@@ -87,7 +87,7 @@ const REGION_TAG_PATTERNS: Array<[VisibilityRegion[], RegExp]> = [
   [["hands"], /\b(?:hands?|fingers?|fingernails?|palms?|wrists?|gloves?|mittens?|rings?|watches|bracelets?)\b/],
   [["arms"], /\b(?:arms?|sleeves?|elbows?|forearms?|biceps|triceps)\b/],
   [["shoulders"], /\b(?:shoulders?|shoulder pads)\b/],
-  [["shoulders", "torso"], /\b(?:shirts?|blouses?|tank tops?|sweaters?|sweatshirts?|cardigans?|hoodies?|jackets?|blazers?|coats?|vests?|jerseys?|suits?|dresses?|robes?|gowns?|overalls|aprons?|uniforms?|ribbons?|capes?|cloaks?|tunics?|waistcoats?|suspenders?|sash(?:es)?|shirtless|topless)\b/],
+  [["shoulders", "torso"], /\b(?:shirts?|blouses?|tank tops?|sweaters?|sweatshirts?|cardigans?|hoodies?|jackets?|blazers?|coats?|vests?|jerseys?|suits?|dresses?|sundresses?|robes?|gowns?|overalls|aprons?|uniforms?|ribbons?|capes?|cloaks?|tunics?|waistcoats?|suspenders?|sash(?:es)?|breastplates?|shirtless|topless)\b/],
   [["shoulders", "torso", "arms"], /\b(?:sleeveless|oversized|unzipped|unbuttoned|open front)\b/],
   [["hips", "legs"], /\b(?:side slit|high slit|pleated|high[- ]?waisted|low[- ]?rise)\b/],
   [["shoulders", "torso", "arms", "hips", "legs"], /\b(?:torn clothes|wet clothes)\b/],
@@ -110,20 +110,75 @@ export const EYE_TAG = /\b(?:eyes?|eyebrows?|brows|eyelashes?|lashes|pupils|iris
 
 function fallbackVisibilityRegions(source: VisibilityTagSource): VisibilityRegion[] {
   // Legacy identity remains global. Unknown appearance is conservatively
-  // treated as face-local, unknown attire as an upper garment, and unknown
-  // body/parser-only tags require a complete figure.
+  // treated as face-local, unknown attire as an upper garment.
+  // Unknown projection tags fail-open (preserved unless specifically excluded).
   if (source === "identity") return ALL_VISIBILITY_REGIONS;
   if (source === "appearance") return ["face"];
   if (source === "attire") return ["shoulders", "torso"];
-  return ["figure"];
+  if (source === "projection") return ALL_VISIBILITY_REGIONS;
+  return ALL_VISIBILITY_REGIONS;
 }
 
 export function tagVisibilityRegions(tag: string, source: VisibilityTagSource): VisibilityRegion[] {
-  const normalized = tag.toLowerCase();
+  const normalized = tag.toLowerCase().replace(/_/g, " ");
   for (const [regions, pattern] of REGION_TAG_PATTERNS) {
     if (pattern.test(normalized)) return regions;
   }
   return fallbackVisibilityRegions(source);
+}
+
+export function decomposeTagProse(tag: string): string[] {
+  const parts = tag.split(/\s+(?:and|with(?:\s+(?:a|an))?|wearing)\s+/i);
+  return parts.map((p) => p.trim()).filter(Boolean);
+}
+
+export function projectTagVisibility(
+  rawTag: string,
+  source: VisibilityTagSource,
+  regions: Set<VisibilityRegion>,
+  modifiers: { hideFace: boolean; hideEyes: boolean }
+): string[] {
+  const parsed = parseWeightedGroup(rawTag);
+  if (parsed) {
+    const surviving: string[] = [];
+    for (const item of parsed.items) {
+      if (modifiers.hideEyes && EYE_TAG.test(item.toLowerCase())) continue;
+      const tagRegions = tagVisibilityRegions(item, source);
+      if (tagRegions.some((r) => regions.has(r))) {
+        surviving.push(item);
+      }
+    }
+    if (surviving.length === 0) return [];
+    if (parsed.type === "comfy") {
+      return [`(${surviving.join(", ")}:${parsed.weight})`];
+    } else {
+      return [`${parsed.prefix}${surviving.join(", ")}${parsed.suffix}`];
+    }
+  }
+
+  const subparts = decomposeTagProse(rawTag);
+  if (subparts.length > 1) {
+    const output: string[] = [];
+    for (const sub of subparts) {
+      if (modifiers.hideEyes && EYE_TAG.test(sub.toLowerCase())) continue;
+      const tagRegions = tagVisibilityRegions(sub, source);
+      if (tagRegions.some((r) => regions.has(r))) {
+        output.push(sub);
+      }
+    }
+    if (output.length === subparts.length) {
+      if (modifiers.hideEyes && EYE_TAG.test(rawTag.toLowerCase())) return [];
+      return [rawTag];
+    }
+    return output;
+  }
+
+  if (modifiers.hideEyes && EYE_TAG.test(rawTag.toLowerCase())) return [];
+  const tagRegions = tagVisibilityRegions(rawTag, source);
+  if (tagRegions.some((r) => regions.has(r))) {
+    return [rawTag];
+  }
+  return [];
 }
 
 export function visibilityModifiersFor(framing: string, angle: string, perspective: string, renderScope: string): { hideFace: boolean; hideEyes: boolean } {
@@ -170,8 +225,9 @@ export function projectDynamicVisibleTags(character: CharacterJson, camera: unkn
   if (modifiers.hideFace) regions.delete("face");
   const projected: string[] = [];
   for (const { tag, source } of baselineTags(character)) {
-    if (modifiers.hideEyes && EYE_TAG.test(tag.toLowerCase())) continue;
-    if (tagVisibilityRegions(tag, source).some((region) => regions.has(region))) projected.push(tag);
+    for (const visibleTag of projectTagVisibility(tag, source, regions, modifiers)) {
+      projected.push(visibleTag);
+    }
   }
   return unique(projected).join(", ");
 }

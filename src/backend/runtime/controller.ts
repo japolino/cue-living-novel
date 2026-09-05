@@ -168,6 +168,8 @@ function summarizeDiagnostics(diagnostics: {
   return parts.join(" ");
 }
 
+
+
 function assetView(record: StoredTurnRecord, job: StoredTurnRecord["jobs"][number]): AssetView {
   const cue = record.plan.visualCues.find((candidate) => candidate.assetJobId === job.jobId);
   return {
@@ -224,7 +226,7 @@ export function turnView(record: StoredTurnRecord): TurnView {
     ...(record.plan.paragraphSpeakers?.some((speaker) => speaker !== null)
       ? { paragraphSpeakers: record.plan.paragraphSpeakers }
       : {}),
-    choices: record.plan.choices.map((choice) => ({ id: choice.id, label: choice.label, value: choice.submission })),
+      choices: record.plan.choices.map((choice) => ({ id: choice.id, label: choice.label, value: choice.submission })),
     assets: record.jobs.map((job) => assetView(record, job)),
     ...(audioCues.length > 0 ? { audioCues } : {}),
     status: record.status,
@@ -336,19 +338,25 @@ async function processAssistantMessage(
   chatId: string,
   message: NormalizedChatMessage,
   content: string,
-  userId?: string
+  userId?: string,
+  options?: { retry?: boolean; forceRegenerate?: boolean }
 ): Promise<void> {
   if (!content.trim() || message.is_user) return;
   const path = turnPath(chatId, message.id, message.swipe_id);
   const existing = await loadTurnRecord(spindle, path, userId);
   const fingerprint = fingerprintForMessage({ id: message.id, swipe_id: message.swipe_id, content });
-  if (existing?.plan.key.sourceFingerprint === fingerprint) {
-    dbg(spindle, userId, `turn reused from storage chat=${chatId} message=${message.id} fingerprint=${fingerprint}`);
-    const key = runtimeKey(userId, chatId);
-    activeTurnKeys.set(key, existing.plan.key);
-    await persistActiveTurn(spindle, existing, path, userId);
-    spindle.sendToFrontend({ type: "vn_turn", turn: await turnViewWithAudio(spindle, existing) }, userId);
-    return;
+  if (!options?.retry && !options?.forceRegenerate && existing?.plan.key.sourceFingerprint === fingerprint) {
+    const hasIncompleteJobs = existing.jobs.some(
+      (job) => job.status === "failed" || job.status === "cancelled" || job.status === "queued" || job.status === "generating"
+    );
+    if (!hasIncompleteJobs) {
+      dbg(spindle, userId, `turn reused from storage chat=${chatId} message=${message.id} fingerprint=${fingerprint}`);
+      const key = runtimeKey(userId, chatId);
+      activeTurnKeys.set(key, existing.plan.key);
+      await persistActiveTurn(spindle, existing, path, userId);
+      spindle.sendToFrontend({ type: "vn_turn", turn: await turnViewWithAudio(spindle, existing) }, userId);
+      return;
+    }
   }
 
   const dedupeId = `${message.id}:${message.swipe_id}:${fingerprint}`;
@@ -367,7 +375,7 @@ async function processAssistantMessage(
       content,
       previousScene: chatState.latestScene,
       previousContinuity: chatState.terminalContinuity,
-      recentMessages: messages.slice(-config.includeRecentMessages),
+      recentMessages: config.includeRecentMessages > 0 ? messages.slice(-config.includeRecentMessages) : [],
       config,
       singleCharacter,
       characterAppearance,
@@ -402,7 +410,7 @@ async function processAssistantMessage(
         if (config.debugLogging) spindle.log.warn(`Native card image resolution failed: ${errorText(err)}`);
       }
     } else if (config.generateImages) {
-      jobs = createAssetJobs(result.plan, config);
+      jobs = createAssetJobs(result.plan, config, characterAppearance);
     }
     let userSpeaker = "You";
     try {
@@ -421,6 +429,15 @@ async function processAssistantMessage(
       } catch {}
     }
 
+    const settingsSnapshot: Record<string, unknown> = {
+      promptPrefix: config.promptPrefix,
+      promptSuffix: config.promptSuffix,
+      negativePrompt: config.negativePrompt,
+      imageConnectionId: config.imageConnectionId,
+      imageModel: config.imageModel,
+      imageConcurrency: config.imageConcurrency
+    };
+    const nowTime = new Date().toISOString();
     const record: StoredTurnRecord = {
       schemaVersion: 1,
       speaker: message.name || "Narrator",
@@ -428,7 +445,15 @@ async function processAssistantMessage(
       status: "ready",
       plan: result.plan,
       jobs,
-      updatedAt: new Date().toISOString()
+      updatedAt: nowTime,
+      settingsSnapshot,
+      attempts: [
+        {
+          attemptNumber: 1,
+          timestamp: nowTime,
+          settings: settingsSnapshot
+        }
+      ]
     };
     const key = runtimeKey(userId, chatId);
     activeTurnKeys.set(key, record.plan.key);
@@ -544,6 +569,90 @@ export async function markAssetReady(
   }, userId);
 }
 
+async function retryTurn(
+  spindle: SpindleAPI,
+  chatId: string,
+  message: NormalizedChatMessage,
+  userId?: string
+): Promise<void> {
+  const key = runtimeKey(userId, chatId);
+  assetControllers.get(key)?.abort("Retrying turn.");
+  planningQueue.cancelChat(userId, chatId);
+
+  const path = turnPath(chatId, message.id, message.swipe_id);
+  const existing = await loadTurnRecord(spindle, path, userId);
+  const config = await loadConfig(spindle, userId);
+  rememberDebugFlag(userId, config);
+  const characterAppearance = await loadCharacterAppearance(spindle, userId);
+
+  if (!existing || existing.status === "failed" || existing.jobs.length === 0) {
+    await processAssistantMessage(spindle, chatId, message, message.content, userId, { retry: true });
+    return;
+  }
+
+  const freshJobs = createAssetJobs(existing.plan, config, characterAppearance);
+  const freshJobMap = new Map(freshJobs.map((j) => [j.jobId, j]));
+  const nowTime = new Date().toISOString();
+  const updatedJobs = existing.jobs.map((job) => {
+    if (job.status === "browser_ready" || job.status === "generated") {
+      return job;
+    }
+    const fresh = freshJobMap.get(job.jobId);
+    return AssetJobSchema.parse({
+      ...job,
+      status: "queued",
+      promptFingerprint: fresh?.promptFingerprint ?? job.promptFingerprint,
+      imageId: null,
+      imageUrl: null,
+      error: null,
+      queuedAt: nowTime,
+      startedAt: null,
+      generatedAt: null,
+      readyAt: null,
+      finishedAt: null
+    });
+  });
+
+  const settingsSnapshot: Record<string, unknown> = {
+    promptPrefix: config.promptPrefix,
+    promptSuffix: config.promptSuffix,
+    negativePrompt: config.negativePrompt,
+    imageConnectionId: config.imageConnectionId,
+    imageModel: config.imageModel,
+    imageConcurrency: config.imageConcurrency
+  };
+
+  const updatedRecord: StoredTurnRecord = {
+    ...existing,
+    status: "ready",
+    jobs: updatedJobs,
+    updatedAt: nowTime,
+    settingsSnapshot,
+    attempts: [
+      ...(existing.attempts ?? []),
+      {
+        attemptNumber: (existing.attempts?.length ?? 1) + 1,
+        timestamp: nowTime,
+        settings: settingsSnapshot
+      }
+    ]
+  };
+
+  activeTurnKeys.set(key, updatedRecord.plan.key);
+  await saveTurnRecord(spindle, path, updatedRecord, userId);
+  await persistActiveTurn(spindle, updatedRecord, path, userId);
+  spindle.sendToFrontend({ type: "vn_turn", turn: await turnViewWithAudio(spindle, updatedRecord) }, userId);
+
+  if (!config.useNativeCardImages && config.generateImages) {
+    void startAssets(spindle, updatedRecord, path, userId).catch((error) => {
+      if (!isAbortError(error)) {
+        spindle.log.error(`Visual novel asset pipeline retry failed: ${errorText(error)}`);
+        spindle.sendToFrontend({ type: "vn_error", chatId, operation: "retry_turn", error: errorText(error) }, userId);
+      }
+    });
+  }
+}
+
 async function handleFrontendMessage(spindle: SpindleAPI, request: FrontendRequest, userId: string): Promise<void> {
   dbg(spindle, userId, `frontend request ${request.type}`);
   switch (request.type) {
@@ -640,7 +749,8 @@ async function handleFrontendMessage(spindle: SpindleAPI, request: FrontendReque
       const messages = await spindle.chat.getMessages(request.chatId) as NormalizedChatMessage[];
       const message = messages.find((candidate) => candidate.id === request.messageId);
       if (!message) throw new Error("The assistant message no longer exists.");
-      await processAssistantMessage(spindle, request.chatId, message, message.content, userId);
+      await retryTurn(spindle, request.chatId, message, userId);
+      return;
     }
   }
 }

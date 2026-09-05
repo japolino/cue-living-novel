@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { DEFAULT_CONFIG } from "../../config.js";
 import { TurnPlanSchema, type SceneState, type TurnPlan, type VisualCue } from "../../shared/contracts.js";
 import { POSE_EXPRESSION_CATALOGUE, poseById } from "../../shared/character.js";
-import { compileImagePrompt, compileNegativePrompt, createAssetJobs } from "./images.js";
+import { compileImagePrompt, compileNegativePrompt, createAssetJobs, generateAssets } from "./images.js";
 
 const now = new Date().toISOString();
 const key = {
@@ -211,5 +211,124 @@ describe("createAssetJobs promptFingerprint", () => {
     expect(compiled).toContain("white sundress");
     expect(compiled).toContain("straw hat");
     expect(compiled).not.toContain("black sailor uniform");
+  });
+});
+
+describe("Finding #1: per-cue character resolution", () => {
+  test("cue character switch compiles the cue character's identity and not the scene character's", () => {
+    const miraScene: SceneState = {
+      ...scene,
+      character: "Mira",
+      identityPrompt: "silver hair, green eyes, red coat"
+    };
+    const miraCue: VisualCue = cue("smile");
+    const rinCue: VisualCue = {
+      ...cue("smile"),
+      cueId: "cue-rin",
+      character: "Rin"
+    };
+    const guestCue: VisualCue = {
+      ...cue("smile"),
+      cueId: "cue-guest",
+      character: "Guest"
+    };
+    const characterAppearance = {
+      Rin: "black hair, blue eyes, blue kimono"
+    };
+
+    const miraPrompt = compileImagePrompt(DEFAULT_CONFIG, miraScene, miraCue, characterAppearance);
+    expect(miraPrompt).toContain("silver hair");
+    expect(miraPrompt).toContain("green eyes");
+    expect(miraPrompt).toContain("red coat");
+    expect(miraPrompt).not.toContain("black hair");
+
+    const rinPrompt = compileImagePrompt(DEFAULT_CONFIG, miraScene, rinCue, characterAppearance);
+    expect(rinPrompt).toContain("black hair");
+    expect(rinPrompt).toContain("blue eyes");
+    expect(rinPrompt).toContain("blue kimono");
+    expect(rinPrompt).not.toContain("silver hair");
+    expect(rinPrompt).not.toContain("green eyes");
+    expect(rinPrompt).not.toContain("red coat");
+
+    // Character with no stored appearance must NOT leak Mira's traits
+    const guestPrompt = compileImagePrompt(DEFAULT_CONFIG, miraScene, guestCue, characterAppearance);
+    expect(guestPrompt).not.toContain("silver hair");
+    expect(guestPrompt).not.toContain("green eyes");
+    expect(guestPrompt).not.toContain("red coat");
+  });
+
+  test("createAssetJobs differentiates prompt fingerprints when cue character switches", () => {
+    const p = TurnPlanSchema.parse({
+      schemaVersion: 1,
+      key,
+      paragraphs: [
+        { index: 0, sourceIndex: 0, text: "Mira smiles." },
+        { index: 1, sourceIndex: 1, text: "Rin smiles." }
+      ],
+      scenes: [{ ...scene, character: "Mira", identityPrompt: "silver hair, green eyes" }],
+      visualCues: [
+        { ...cue("smile"), cueId: "cue-0", paragraphIndex: 0, character: "Mira", assetJobId: "job-0" },
+        { ...cue("smile"), cueId: "cue-1", paragraphIndex: 1, character: "Rin", assetJobId: "job-1" }
+      ],
+      choices: [],
+      initialContinuity: { revision: 0, characters: {}, facts: {} },
+      continuityDeltas: [],
+      terminalContinuity: { revision: 0, characters: {}, facts: {} },
+      planningStatus: "planned",
+      createdAt: now
+    });
+    const characterAppearance = { Rin: "black hair, blue eyes" };
+    const jobs = createAssetJobs(p, DEFAULT_CONFIG, characterAppearance);
+    expect(jobs[0]!.promptFingerprint).not.toBe(jobs[1]!.promptFingerprint);
+  });
+});
+
+describe("Finding #2: repeated expressions generate all cues without lingering queued jobs", () => {
+  test("two identical cues across paragraphs share 1 provider call and both reach generated status", async () => {
+    const p = TurnPlanSchema.parse({
+      schemaVersion: 1,
+      key,
+      paragraphs: [
+        { index: 0, sourceIndex: 0, text: "First smile." },
+        { index: 1, sourceIndex: 1, text: "Second smile." }
+      ],
+      scenes: [scene],
+      visualCues: [
+        { ...cue("smile"), cueId: "cue-0", paragraphIndex: 0, character: "Mira", assetJobId: "job-0" },
+        { ...cue("smile"), cueId: "cue-1", paragraphIndex: 1, character: "Mira", assetJobId: "job-1" }
+      ],
+      choices: [],
+      initialContinuity: { revision: 0, characters: {}, facts: {} },
+      continuityDeltas: [],
+      terminalContinuity: { revision: 0, characters: {}, facts: {} },
+      planningStatus: "planned",
+      createdAt: now
+    });
+
+    const calls: any[] = [];
+    const spindle = {
+      userStorage: { getJson: async () => null, setJson: async () => {} },
+      imageGen: {
+        getConnection: async () => ({ provider: "comfyui" }),
+        listConnections: async () => [{ provider: "comfyui", is_default: true }],
+        generate: async (input: any) => {
+          calls.push(input);
+          return { imageId: "img-shared", imageUrl: "/api/v1/images/img-shared" };
+        }
+      },
+      log: { info: () => {}, warn: () => {}, error: () => {} }
+    } as any;
+
+    const initialJobs = createAssetJobs(p, DEFAULT_CONFIG);
+    const finalJobs = await generateAssets(spindle, p, initialJobs, DEFAULT_CONFIG, new AbortController().signal, () => {});
+
+    expect(calls).toHaveLength(1);
+    expect(finalJobs).toHaveLength(2);
+    expect(finalJobs[0]!.status).toBe("generated");
+    expect(finalJobs[1]!.status).toBe("generated");
+    expect(finalJobs[0]!.imageId).toBe("img-shared");
+    expect(finalJobs[1]!.imageId).toBe("img-shared");
+    // Acceptance check: no unexplained queued jobs
+    expect(finalJobs.some((j) => j.status === "queued")).toBe(false);
   });
 });

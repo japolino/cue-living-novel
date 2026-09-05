@@ -83,3 +83,11 @@ export type {
   CharacterFieldSource,
   ShotMode
 } from "./domain.js";
+
+// --- Utility helpers ---
+export {
+  splitTopLevelCsv,
+  parseWeightedGroup,
+  validateAndRepairDelimiters,
+  serializePromptWeights
+} from "./utils.js";

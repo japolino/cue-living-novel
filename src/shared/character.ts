@@ -399,24 +399,89 @@ export const POSE_EXPRESSION_CATALOGUE_MAX_SIZE = 128 as const;
 const FALLBACK_POSE: PoseExpressionDefinition = POSE_EXPRESSION_CATALOGUE[0]!;
 
 /**
- * Ordered keyword -> pose-id map used for deterministic keyword-driven
- * selection. First match wins; the map is read top-to-bottom and is stable.
+ * Explicit alias map for common expression variants and synonyms.
  */
-const KEYWORD_TO_POSE: ReadonlyArray<readonly [string, string]> = [
-  ["laugh", "laugh"], ["smil", "smile"], ["smirk", "smirk"], ["cry", "sad"], ["sad", "sad"],
-  ["angry", "angry"], ["shout", "angry"], ["surpris", "surprise"],
-  ["shock", "surprise"], ["think", "think"], ["wonder", "think"],
-  ["wave", "wave"], ["greet", "wave"], ["shy", "shy"], ["blush", "shy"],
-  ["talk", "speak"], ["say", "speak"], ["listen", "listen"],
-  ["arous", "aroused"], ["pout", "pouting"], ["excite", "excited"],
-  ["giggle", "giggling"], ["sleep", "sleepy"], ["proud", "proud"],
-  ["curious", "curious"], ["bored", "bored"], ["confus", "confused"],
-  ["disappoint", "disappointed"], ["disgust", "disgusted"], ["embarrass", "embarrassed"],
-  ["fluster", "flustered"], ["jealous", "jealous"], ["joy", "joyful"],
-  ["love", "lovestruck"], ["lust", "lustful"], ["nervous", "nervous"],
-  ["relie", "relieved"], ["scare", "scared"], ["smug", "smug"],
-  ["worr", "worried"], ["cozy", "cozy"], ["exhaust", "exhausted"]
+const EXPRESSION_ALIASES: Readonly<Record<string, string>> = {
+  neutral: "idle",
+  normal: "idle",
+  relaxed: "idle",
+  calm: "idle",
+  talking: "speak",
+  speaking: "speak",
+  happy: "smile",
+  crying: "sad",
+  sadness: "sad",
+  anger: "angry",
+  annoyance: "annoyed",
+  shock: "surprise",
+  sleep: "sleepy",
+  fluster: "flustered",
+  pout: "pouting",
+  giggle: "giggling",
+  laughing: "laugh",
+  thinking: "think",
+  curiosity: "curious",
+  relieved: "relieved",
+  confused: "confused",
+  frightened: "scared"
+};
+
+/**
+ * Ordered keyword patterns for emotion detection with word boundaries.
+ * Intimate expressions (aroused, lustful, lovestruck) require positive explicit words.
+ */
+const KEYWORD_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/\b(?:laughs?|laughing|laughter|chuckle|chuckles|chuckling)\b/i, "laugh"],
+  [/\b(?:smiles?|smiling)\b/i, "smile"],
+  [/\b(?:smirks?|smirking)\b/i, "smirk"],
+  [/\b(?:sad|cries|crying|cried|tears|sob|sobbing|weep|weeping)\b/i, "sad"],
+  [/\b(?:angry|anger|shouts?|shouting|yells?|yelling|furious|rage)\b/i, "angry"],
+  [/\b(?:surprised?|surprising|shocked?|astonished?|gasps?|gasping)\b/i, "surprise"],
+  [/\b(?:thinks?|thinking|thoughtful|ponder|ponders|pondering|wonders?|wondering)\b/i, "think"],
+  [/\b(?:waves?|waving|waved|greet|greets|greeting)\b/i, "wave"],
+  [/\b(?:shy|blush|blushes|blushing)\b/i, "shy"],
+  [/\b(?:talks?|talking|talked|speaks?|speaking|spoke)\b/i, "speak"],
+  [/\b(?:listens?|listening|listened)\b/i, "listen"],
+  [/\b(?:pouts?|pouting|pouted)\b/i, "pouting"],
+  [/\b(?:excited?|exciting|excitement)\b/i, "excited"],
+  [/\b(?:giggles?|giggling|giggled)\b/i, "giggling"],
+  [/\b(?:sleepy|asleep|dozing|yawning)\b/i, "sleepy"],
+  [/\b(?:proud|proudly)\b/i, "proud"],
+  [/\b(?:curious|curiously)\b/i, "curious"],
+  [/\b(?:bored|boring)\b/i, "bored"],
+  [/\b(?:confused?|confusing|confusion)\b/i, "confused"],
+  [/\b(?:disappointed?|disappointing|disappointment)\b/i, "disappointed"],
+  [/\b(?:disgusted?|disgusting|disgust)\b/i, "disgusted"],
+  [/\b(?:embarrassed?|embarrassing|embarrassment)\b/i, "embarrassed"],
+  [/\b(?:flustered?|flustering)\b/i, "flustered"],
+  [/\b(?:jealous|jealousy)\b/i, "jealous"],
+  [/\b(?:joy|joyful|joyous)\b/i, "joyful"],
+  [/\b(?:nervous|nervously|anxious|anxiously)\b/i, "nervous"],
+  [/\b(?:relieved?|relief)\b/i, "relieved"],
+  [/\b(?:scared?|scary|terrified|frightened)\b/i, "scared"],
+  [/\b(?:smug|smugly)\b/i, "smug"],
+  [/\b(?:worried?|worries|worry|worrying)\b/i, "worried"],
+  [/\b(?:cozy|cosy)\b/i, "cozy"],
+  [/\b(?:exhausted?|exhaustion)\b/i, "exhausted"],
+  // Intimate expressions require unambiguous positive evidence
+  [/\b(?:lovestruck)\b/i, "lovestruck"],
+  [/\b(?:lustful)\b/i, "lustful"],
+  [/\b(?:aroused)\b/i, "aroused"]
 ];
+
+function isNegatedInClause(text: string, matchIndex: number): boolean {
+  const prefix = text.slice(0, matchIndex);
+  const lastBoundary = Math.max(
+    prefix.lastIndexOf("."),
+    prefix.lastIndexOf(","),
+    prefix.lastIndexOf(";"),
+    prefix.lastIndexOf("!"),
+    prefix.lastIndexOf("?"),
+    prefix.search(/\b(?:but|however|although)\b[^.]*$/i)
+  );
+  const clausePrefix = lastBoundary >= 0 ? prefix.slice(lastBoundary) : prefix;
+  return /\b(?:not|n't|never|hardly|scarcely|barely|without|no)\b/i.test(clausePrefix);
+}
 
 function firstEntry(catalogue: readonly PoseExpressionDefinition[]): PoseExpressionDefinition {
   return catalogue[0] ?? FALLBACK_POSE;
@@ -424,9 +489,9 @@ function firstEntry(catalogue: readonly PoseExpressionDefinition[]): PoseExpress
 
 /**
  * Select a catalogue pose for a paragraph.
- * 1. Checks explicitly requested expression from the planner model (e.g. "sad", "smirk", "lovestruck").
- * 2. Falls back to keyword matching against the paragraph text.
- * 3. Falls back to catalogue[paragraphIndex % catalogue.length].
+ * 1. Checks explicitly requested expression using exact catalogue IDs and a small alias map.
+ * 2. Falls back to keyword matching using word boundaries, negation handling, and first-occurrence ordering.
+ * 3. Falls back to neutral pose ("idle") for non-empty narrative text, or index cycling on empty text.
  */
 export function selectPoseExpression(
   catalogue: readonly PoseExpressionDefinition[],
@@ -434,21 +499,40 @@ export function selectPoseExpression(
   text: string,
   preferredExpression?: string | null
 ): PoseExpressionDefinition {
-  if (preferredExpression) {
-    const norm = preferredExpression.trim().toLowerCase().replace(/[\s-]+/g, "_");
-    const direct = catalogue.find((entry) => entry.id === norm || entry.id === preferredExpression.trim().toLowerCase());
-    if (direct) return direct;
-    const partial = catalogue.find((entry) => norm.includes(entry.id) || entry.id.includes(norm));
-    if (partial) return partial;
-  }
-
-  const lower = text.toLowerCase();
-  for (const [keyword, id] of KEYWORD_TO_POSE) {
-    if (lower.includes(keyword)) {
-      const found = catalogue.find((entry) => entry.id === id);
-      if (found) return found;
+  if (preferredExpression && preferredExpression.trim()) {
+    const raw = preferredExpression.trim();
+    // Do not match negated requests (e.g. "not angry", "not smiling")
+    if (!/\b(?:not|never|no|un-)\b/i.test(raw)) {
+      const norm = raw.toLowerCase().replace(/[\s-]+/g, "_");
+      const direct = catalogue.find((entry) => entry.id === norm || entry.id === raw.toLowerCase());
+      if (direct) return direct;
+      const aliasTarget = EXPRESSION_ALIASES[norm] || EXPRESSION_ALIASES[raw.toLowerCase()];
+      if (aliasTarget) {
+        const aliased = catalogue.find((entry) => entry.id === aliasTarget);
+        if (aliased) return aliased;
+      }
     }
   }
+
+  if (text && text.trim()) {
+    let earliestMatch: { index: number; id: string } | null = null;
+    for (const [regex, id] of KEYWORD_PATTERNS) {
+      const m = regex.exec(text);
+      if (m && !isNegatedInClause(text, m.index)) {
+        if (!earliestMatch || m.index < earliestMatch.index) {
+          earliestMatch = { index: m.index, id };
+        }
+      }
+    }
+    if (earliestMatch) {
+      const found = catalogue.find((entry) => entry.id === earliestMatch.id);
+      if (found) return found;
+    }
+    // Neutral fallback for non-empty text without emotional matches
+    const idlePose = catalogue.find((entry) => entry.id === "idle");
+    return idlePose ?? firstEntry(catalogue);
+  }
+
   if (catalogue.length === 0) return FALLBACK_POSE;
   return catalogue[paragraphIndex % catalogue.length] ?? firstEntry(catalogue);
 }
@@ -464,8 +548,14 @@ export function poseById(
 ): PoseExpressionDefinition {
   if (!id) return firstEntry(catalogue);
   const norm = id.trim().toLowerCase().replace(/[\s-]+/g, "_");
-  const found = catalogue.find((entry) => entry.id === norm || entry.id === id);
-  return found ?? firstEntry(catalogue);
+  const found = catalogue.find((entry) => entry.id === norm || entry.id === id.trim().toLowerCase());
+  if (found) return found;
+  const aliasTarget = EXPRESSION_ALIASES[norm] || EXPRESSION_ALIASES[id.trim().toLowerCase()];
+  if (aliasTarget) {
+    const aliased = catalogue.find((entry) => entry.id === aliasTarget);
+    if (aliased) return aliased;
+  }
+  return firstEntry(catalogue);
 }
 
 export type SingleCharacterIdentity = {

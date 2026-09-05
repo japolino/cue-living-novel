@@ -22,6 +22,8 @@ type ScheduledAsset = {
   promise: Promise<AssetJob>;
   resolve: (job: AssetJob) => void;
   reject: (error: unknown) => void;
+  dependents: ScheduledAsset[];
+  parentJobId?: string;
 };
 
 const priorityRank: Record<AssetJobPriority, number> = { visible: 0, next: 1, background: 2 };
@@ -80,7 +82,56 @@ export class AssetScheduler {
     const promptKey = JSON.stringify([job.ownerTurnKey.chatId, job.ownerTurnKey.assistantMessageId, job.ownerTurnKey.swipeId, job.ownerTurnKey.revision, job.promptFingerprint]);
     const matchingJobId = this.promptOwners.get(promptKey);
     const matching = matchingJobId ? this.scheduled.get(matchingJobId) : undefined;
-    if (matching && !terminal(matching.job.status)) return { job: matching.job, promise: matching.promise, reused: true };
+
+    if (matching && matching.job.status === "generated") {
+      const timestamp = now();
+      const reusedJob = AssetJobSchema.parse({
+        ...job,
+        status: "generated",
+        imageId: matching.job.imageId,
+        imageUrl: matching.job.imageUrl,
+        startedAt: timestamp,
+        generatedAt: timestamp,
+        finishedAt: matching.job.finishedAt
+      });
+      const result = deferred<AssetJob>();
+      const item: ScheduledAsset = {
+        job: reusedJob,
+        executor,
+        controller: new AbortController(),
+        sequence: this.sequence++,
+        promise: result.promise,
+        resolve: result.resolve,
+        reject: result.reject,
+        dependents: []
+      };
+      this.scheduled.set(reusedJob.jobId, item);
+      this.emit(reusedJob);
+      result.resolve(reusedJob);
+      return { job: reusedJob, promise: result.promise, reused: true };
+    }
+
+    if (matching && !terminal(matching.job.status)) {
+      const result = deferred<AssetJob>();
+      const item: ScheduledAsset = {
+        job,
+        executor,
+        controller: new AbortController(),
+        sequence: this.sequence++,
+        promise: result.promise,
+        resolve: result.resolve,
+        reject: result.reject,
+        dependents: [],
+        parentJobId: matching.job.jobId
+      };
+      this.scheduled.set(job.jobId, item);
+      matching.dependents.push(item);
+      if (priorityRank[job.priority] < priorityRank[matching.job.priority]) {
+        this.reprioritize(matching.job.jobId, job.priority);
+      }
+      this.emit(job);
+      return { job, promise: result.promise, reused: true };
+    }
 
     const result = deferred<AssetJob>();
     const item: ScheduledAsset = {
@@ -90,7 +141,8 @@ export class AssetScheduler {
       sequence: this.sequence++,
       promise: result.promise,
       resolve: result.resolve,
-      reject: result.reject
+      reject: result.reject,
+      dependents: []
     };
     this.scheduled.set(job.jobId, item);
     this.promptOwners.set(promptKey, job.jobId);
@@ -121,11 +173,29 @@ export class AssetScheduler {
     const item = this.scheduled.get(jobId);
     if (!item || terminal(item.job.status)) return false;
     item.controller.abort(reason);
+    if (item.parentJobId) {
+      const parent = this.scheduled.get(item.parentJobId);
+      if (parent) {
+        parent.dependents = parent.dependents.filter((d) => d.job.jobId !== jobId);
+      }
+    }
     if (item.job.status === "queued") {
-      item.job = AssetJobSchema.parse({ ...item.job, status: "cancelled", error: null, finishedAt: now() });
+      item.job = AssetJobSchema.parse({
+        ...item.job,
+        status: "cancelled",
+        imageId: null,
+        imageUrl: null,
+        generatedAt: null,
+        readyAt: null,
+        error: null,
+        finishedAt: now()
+      });
       this.emit(item.job);
       item.resolve(item.job);
       this.drain(item.job.provider);
+    }
+    for (const dep of [...item.dependents]) {
+      this.cancel(dep.job.jobId, reason);
     }
     return true;
   }
@@ -161,7 +231,7 @@ export class AssetScheduler {
     let running = this.runningByProvider.get(provider) ?? 0;
     if (running >= policy.concurrency) return;
     const candidates = [...this.scheduled.values()]
-      .filter((item) => item.job.provider === provider && item.job.status === "queued")
+      .filter((item) => item.job.provider === provider && item.job.status === "queued" && !item.parentJobId)
       .sort((left, right) => priorityRank[left.job.priority] - priorityRank[right.job.priority] || left.sequence - right.sequence);
     for (const item of candidates) {
       if (running >= policy.concurrency) break;
@@ -180,32 +250,79 @@ export class AssetScheduler {
       this.cancel(item.job.jobId, item.controller.signal.reason);
       return;
     }
-    item.job = AssetJobSchema.parse({ ...item.job, status: "generating", startedAt: now() });
+    const started = now();
+    item.job = AssetJobSchema.parse({ ...item.job, status: "generating", startedAt: started });
     this.emit(item.job);
+    for (const dep of item.dependents) {
+      if (dep.job.status === "queued") {
+        dep.job = AssetJobSchema.parse({ ...dep.job, status: "generating", startedAt: started });
+        this.emit(dep.job);
+      }
+    }
     try {
       const result = await item.executor(item.job, item.controller.signal);
       if (item.controller.signal.aborted) throw abortError(item.controller.signal.reason);
+      const generated = now();
       item.job = AssetJobSchema.parse({
         ...item.job,
         status: "generated",
         imageId: result.imageId,
         imageUrl: result.imageUrl ?? null,
-        generatedAt: now()
+        generatedAt: generated
       });
       this.emit(item.job);
       item.resolve(item.job);
+
+      for (const dep of item.dependents) {
+        if (!terminal(dep.job.status)) {
+          dep.job = AssetJobSchema.parse({
+            ...dep.job,
+            status: "generated",
+            startedAt: dep.job.startedAt ?? started,
+            imageId: result.imageId,
+            imageUrl: result.imageUrl ?? null,
+            generatedAt: generated
+          });
+          this.emit(dep.job);
+          dep.resolve(dep.job);
+        }
+      }
     } catch (error) {
       const cancelled = isAbortError(error, item.controller.signal);
+      const finished = now();
       item.job = AssetJobSchema.parse({
         ...item.job,
         status: cancelled ? "cancelled" : "failed",
+        startedAt: item.job.startedAt ?? (cancelled ? null : finished),
+        imageId: null,
+        imageUrl: null,
+        generatedAt: null,
+        readyAt: null,
         error: cancelled ? null : error instanceof Error ? error.message : String(error),
-        finishedAt: now()
+        finishedAt: finished
       });
       this.emit(item.job);
       if (cancelled) item.resolve(item.job);
       else item.reject(error);
+
+      for (const dep of item.dependents) {
+        if (!terminal(dep.job.status)) {
+          dep.job = AssetJobSchema.parse({
+            ...dep.job,
+            status: cancelled ? "cancelled" : "failed",
+            startedAt: dep.job.startedAt ?? (cancelled ? null : finished),
+            imageId: null,
+            imageUrl: null,
+            generatedAt: null,
+            readyAt: null,
+            error: cancelled ? null : error instanceof Error ? error.message : String(error),
+            finishedAt: finished
+          });
+          this.emit(dep.job);
+          if (cancelled) dep.resolve(dep.job);
+          else dep.reject(error);
+        }
+      }
     }
   }
 }
-
