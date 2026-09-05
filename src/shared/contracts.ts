@@ -100,6 +100,8 @@ export const CameraLockSchema = z.object({
 }).strict();
 export type CameraLock = z.infer<typeof CameraLockSchema>;
 
+
+
 export const SceneStateSchema = z.object({
   sceneId: IdentifierSchema,
   revision: NonNegativeIntegerSchema,

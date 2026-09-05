@@ -5,6 +5,7 @@ import {
   AudioCueSchema,
   CameraLockSchema,
   ChoiceSchema,
+  ContinuityDeltaSchema,
   ContinuityStateSchema,
   SceneBoundaryProposalSchema,
   SceneEnvironmentSchema,
@@ -12,9 +13,14 @@ import {
   TurnKeySchema,
   TurnPlanSchema,
   VisualCueSchema,
+  type CharacterContinuity,
+  type CharacterContinuityPatch,
+  type IndexedContinuityDelta,
+  type SceneEnvironment,
   type SceneState,
   type TurnPlan
 } from "../../shared/contracts.js";
+import { reduceContinuity } from "../core/continuity.js";
 import { prepareNarrative } from "../core/paragraphs.js";
 import { decideSceneBoundary } from "../core/scene-boundary.js";
 import { validateTurnPlan } from "../core/turn-plan.js";
@@ -169,7 +175,14 @@ function plannerInstruction(config: VisualNovelConfig, visualContext?: VisualCon
   ].filter(Boolean).join("\n");
 }
 
+function isAttireReset(attire: string | null | undefined): boolean {
+  if (!attire) return false;
+  const lower = attire.trim().toLowerCase();
+  return ["baseline", "default", "original", "reset", "normal"].includes(lower);
+}
+
 function recentContext(messages: PlanTurnInput["recentMessages"], maximum: number): string {
+  if (maximum <= 0) return "";
   return messages.slice(-maximum).map((message) => {
     const role = message.is_user ? "User" : message.name || "Assistant";
     return `${role}: ${message.content}`;
@@ -261,6 +274,8 @@ function normalizeEnvironment(value: unknown): unknown {
   };
 }
 
+
+
 function normalizeScene(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const record = value as Record<string, unknown>;
@@ -273,7 +288,7 @@ function normalizeScene(value: unknown): unknown {
       : [],
     character: typeof record.character === "string" ? record.character.trim() : null,
     attire: typeof record.attire === "string" ? record.attire.trim() : null,
-    basePrompt: typeof record.basePrompt === "string" && record.basePrompt.trim() ? record.basePrompt.trim() : "a visual novel scene",
+      basePrompt: typeof record.basePrompt === "string" && record.basePrompt.trim() ? record.basePrompt.trim() : "a visual novel scene",
     compositionLock: typeof record.compositionLock === "string" ? record.compositionLock.trim() : "Character centered with clear negative space behind the dialogue window."
   };
 }
@@ -294,7 +309,7 @@ function normalizeCue(value: unknown): unknown {
     expression: typeof record.expression === "string" ? record.expression.trim() : null,
     character: typeof record.character === "string" ? record.character.trim() : null,
     attire: typeof record.attire === "string" ? record.attire.trim() : null,
-    promptDelta: typeof record.promptDelta === "string"
+      promptDelta: typeof record.promptDelta === "string"
       ? record.promptDelta.trim()
       : (typeof record.prompt_delta === "string" ? record.prompt_delta.trim() : ""),
     bgm: typeof record.bgm === "string" ? record.bgm.trim() : (typeof record.music === "string" ? record.music.trim() : null),
@@ -303,7 +318,7 @@ function normalizeCue(value: unknown): unknown {
 }
 
 function normalizeChoice(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
   const firstString = (...keys: string[]): string => {
     for (const key of keys) {
@@ -321,6 +336,7 @@ function normalizeChoice(value: unknown): unknown {
   if (!submission || /^\s*(?:\d+|choice[_-]?\d+|option\s*\d+)\s*$/i.test(submission)) {
     submission = label;
   }
+  if (!label || !submission) return null;
   return {
     label,
     submission
@@ -389,7 +405,12 @@ function normalizePlannerOutput(value: unknown): unknown {
   return {
     scenes,
     cues: rawCues.map(normalizeCue),
-    choices: Array.isArray(record.choices) ? record.choices.map(normalizeChoice) : [],
+    choices: Array.isArray(record.choices)
+      ? record.choices
+          .map(normalizeChoice)
+          .filter((c): c is { label: string; submission: string } => c !== null)
+          .slice(0, 6)
+      : [],
     characters: rawCharacters.map(normalizeCharacter),
     speakers: Array.isArray(record.speakers)
       ? record.speakers
@@ -424,11 +445,14 @@ function repairJsonString(candidate: string): string {
     .replace(/(?<!:)\/\/.*$/gm, "")
     .replace(/\/\*[\s\S]*?\*\//g, "");
 
-  // Convert python literals: True -> true, False -> false, None -> null
-  text = text
-    .replace(/\bTrue\b/g, "true")
-    .replace(/\bFalse\b/g, "false")
-    .replace(/\bNone\b/g, "null");
+  // Convert python literals outside strings: True -> true, False -> false, None -> null
+  text = text.replace(/("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(\b(?:True|False|None)\b)/g, (match, strVal, literal) => {
+    if (strVal) return strVal;
+    if (literal === "True") return "true";
+    if (literal === "False") return "false";
+    if (literal === "None") return "null";
+    return match;
+  });
 
   // Single-quoted keys: {'foo': 1} -> {"foo": 1}
   text = text.replace(/'([a-zA-Z0-9_\-\s]+)'\s*:/g, '"$1":');
@@ -758,6 +782,42 @@ function fallbackPlanner(input: PlanTurnInput, paragraphCount: number): z.infer<
   };
 }
 
+function environmentsEqual(a: SceneEnvironment, b: SceneEnvironment): boolean {
+  if (a.location !== b.location) return false;
+  if (a.timeOfDay !== b.timeOfDay) return false;
+  if (a.weather !== b.weather) return false;
+  if (a.lighting !== b.lighting) return false;
+  if (a.description !== b.description) return false;
+  if (a.persistentElements.length !== b.persistentElements.length) return false;
+  for (let i = 0; i < a.persistentElements.length; i++) {
+    if (a.persistentElements[i] !== b.persistentElements[i]) return false;
+  }
+  return true;
+}
+
+function mergeEnvironment(base: SceneEnvironment, proposal: SceneEnvironment): SceneEnvironment {
+  const persistentElements = proposal.persistentElements && proposal.persistentElements.length > 0
+    ? proposal.persistentElements
+    : base.persistentElements;
+  return SceneEnvironmentSchema.parse({
+    location: proposal.location?.trim() ? proposal.location : base.location,
+    timeOfDay: proposal.timeOfDay !== null ? proposal.timeOfDay : base.timeOfDay,
+    weather: proposal.weather !== null ? proposal.weather : base.weather,
+    lighting: proposal.lighting !== null ? proposal.lighting : base.lighting,
+    description: proposal.description?.trim() ? proposal.description : base.description,
+    persistentElements
+  });
+}
+
+function proposalForParagraph(proposals: Array<z.infer<typeof PlannerSceneSchema>>, paragraphIndex: number): z.infer<typeof PlannerSceneSchema> | undefined {
+  let active: z.infer<typeof PlannerSceneSchema> | undefined;
+  for (const proposal of proposals) {
+    if (proposal.startParagraph > paragraphIndex) break;
+    active = proposal;
+  }
+  return active;
+}
+
 function sceneForParagraph(scenes: SceneState[], paragraphIndex: number): SceneState {
   let active = scenes[0]!;
   for (const scene of scenes) {
@@ -975,6 +1035,33 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
   for (let attempt = 1; attempt <= PLANNER_ATTEMPTS; attempt += 1) {
     try {
       planner = await requestPlannerOutput(spindle, input, paragraphText, visualContext, plannerConnection);
+      // Require usable visual coverage when image generation is expected
+      if (narrative.paragraphs.length > 0) {
+        const validCues = planner.cues.filter(
+          (cue) => cue.paragraphIndex >= 0 && cue.paragraphIndex < narrative.paragraphs.length
+        );
+        if (validCues.length === 0) {
+          // If no valid cues were returned, repair with an opening cue at paragraph 0
+          planner.cues = [{
+            paragraphIndex: 0,
+            action: null,
+            expression: null,
+            character: planner.scenes[0]?.character ?? null,
+            attire: planner.scenes[0]?.attire ?? null,
+            promptDelta: ""
+          }];
+        } else if (!validCues.some((c) => c.paragraphIndex === 0)) {
+          // Repair missing opening cue (paragraph 0)
+          planner.cues.unshift({
+            paragraphIndex: 0,
+            action: null,
+            expression: null,
+            character: validCues[0]?.character ?? null,
+            attire: validCues[0]?.attire ?? null,
+            promptDelta: ""
+          });
+        }
+      }
       usedFallback = false;
       break;
     } catch (error) {
@@ -991,6 +1078,23 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
   const characterState = resolveSingleCharacter(input, planner, visualContext, usedFallback);
   const protagonistName = characterState.protagonist.name.trim();
   const identityBlock = singleCharacterTagBlock(characterState);
+
+  // Initialize mutable per-character attire state
+  const characterAttire = new Map<string, string | null>();
+  if (input.previousContinuity?.characters) {
+    for (const [name, cont] of Object.entries(input.previousContinuity.characters)) {
+      const att = cont.wardrobe?.attire;
+      if (typeof att === "string" && att.trim()) {
+        characterAttire.set(characterAppearanceKey(name), att.trim());
+      }
+    }
+  }
+  if (input.previousScene?.attire) {
+    const prevChar = characterAppearanceKey(input.previousScene.character || protagonistName || "");
+    if (prevChar && !characterAttire.has(prevChar)) {
+      characterAttire.set(prevChar, input.previousScene.attire.trim());
+    }
+  }
 
   const sourceFingerprint = stableHash(`${input.message.id}\0${input.message.swipe_id}\0${input.content}`);
   const revision = (input.previousScene?.revision ?? 0) + 1;
@@ -1019,12 +1123,42 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
     .sort((left, right) => left.startParagraph - right.startParagraph);
   if (proposals[0]?.startParagraph !== 0) proposals.unshift(fallbackPlanner(input, narrative.paragraphs.length).scenes[0]!);
 
+  // Pre-scan proposals to salvage character, cast, and attire metadata
+  // even if specific scene proposals are later discarded as non-boundary continuations
+  for (const proposal of proposals) {
+    const rawProposalChar = proposal.character && !isPersona(proposal.character) ? proposal.character : undefined;
+    const proposalChar = rawProposalChar || (proposal.cast && proposal.cast.find((c) => !isPersona(c)));
+    const proposalCharKey = characterAppearanceKey(proposalChar || "");
+    if (proposal.attire) {
+      if (isAttireReset(proposal.attire)) {
+        if (proposalCharKey) characterAttire.delete(proposalCharKey);
+      } else {
+        if (proposalCharKey) characterAttire.set(proposalCharKey, proposal.attire.trim());
+      }
+    }
+  }
+
   for (const proposal of proposals) {
     const decision = decideSceneBoundary(previous, proposal.boundary);
     if (scenes.length > 0 && !decision.startsNewScene) continue;
     const reusedScene = previous !== null && !decision.startsNewScene ? previous : null;
     const rawProposalChar = proposal.character && !isPersona(proposal.character) ? proposal.character : undefined;
     const activeChar = rawProposalChar || (proposal.cast && proposal.cast.find((c) => !isPersona(c))) || protagonistName;
+    const targetCharKey = characterAppearanceKey(activeChar || protagonistName || "");
+
+    let isProposalReset = false;
+    if (proposal.attire) {
+      if (isAttireReset(proposal.attire)) {
+        isProposalReset = true;
+        if (targetCharKey) characterAttire.delete(targetCharKey);
+      } else {
+        if (targetCharKey) characterAttire.set(targetCharKey, proposal.attire.trim());
+      }
+    }
+    const currentSceneAttire = isProposalReset
+      ? null
+      : ((targetCharKey ? characterAttire.get(targetCharKey) : null) ?? proposal.attire ?? null);
+
     let sceneIdentity = identityBlock;
     if (activeChar && characterAppearanceKey(activeChar) !== characterAppearanceKey(protagonistName)) {
       const globalKey = appearanceMapKeyFor(input.characterAppearance, activeChar);
@@ -1046,22 +1180,30 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
       ? proposal.cast.filter((c) => !isPersona(c))
       : (activeChar ? [activeChar] : (protagonistName ? [protagonistName] : []));
     if (sceneCast.length === 0 && protagonistName) sceneCast.push(protagonistName);
-    const sceneRevision = reusedScene ? reusedScene.revision : (previous?.revision ?? 0) + 1;
+
+    const mergedEnv = reusedScene ? mergeEnvironment(reusedScene.environment, proposal.environment) : proposal.environment;
+    const envChanged = reusedScene !== null && !environmentsEqual(reusedScene.environment, mergedEnv);
+    const sceneRevision = reusedScene
+      ? (envChanged ? reusedScene.revision + 1 : reusedScene.revision)
+      : (previous?.revision ?? 0) + 1;
+    const basePrompt = reusedScene
+      ? (envChanged ? proposal.basePrompt : reusedScene.basePrompt)
+      : proposal.basePrompt;
     const sceneId = reusedScene ? reusedScene.sceneId : id("scene", `${key.sourceFingerprint}:${proposal.startParagraph}:${proposal.environment.location}`);
     const scene = SceneStateSchema.parse({
       sceneId,
       revision: sceneRevision,
       startParagraph: proposal.startParagraph,
-      environment: reusedScene ? reusedScene.environment : proposal.environment,
+      environment: mergedEnv,
       cast: sceneCast,
       character: activeChar || null,
-      attire: proposal.attire || null,
+      attire: currentSceneAttire,
       continuity,
-      basePrompt: reusedScene ? reusedScene.basePrompt : proposal.basePrompt,
+      basePrompt,
       identityPrompt: sceneIdentity || null,
       cameraLock: FIXED_CAMERA,
       compositionLock: reusedScene ? reusedScene.compositionLock : proposal.compositionLock,
-      activeAssetId: reusedScene ? reusedScene.activeAssetId : null,
+      activeAssetId: reusedScene ? (envChanged ? null : reusedScene.activeAssetId) : null,
       priorSceneId: decision.startsNewScene ? previous?.sceneId ?? null : previous?.priorSceneId ?? null
     });
     scenes.push(scene);
@@ -1088,9 +1230,36 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
       const scene = sceneForParagraph(scenes, cue.paragraphIndex);
       const paragraph = narrative.paragraphs.find((candidate) => candidate.index === cue.paragraphIndex);
       const cueIsUser = isPersona(cue.character);
+      const matchingProposal = proposalForParagraph(proposals, cue.paragraphIndex);
+      const proposalChar = matchingProposal?.character && !isPersona(matchingProposal.character)
+        ? matchingProposal.character
+        : (matchingProposal?.cast && matchingProposal.cast.find((c) => !isPersona(c)));
+      const sceneChar = scene.character && !isPersona(scene.character) ? scene.character : undefined;
+      const explicitCueChar = cue.character && !isPersona(cue.character) ? cue.character : undefined;
       const assignedCharacter = cueIsUser
-        ? (scene.character && !isPersona(scene.character) ? scene.character : undefined)
-        : (cue.character && !isPersona(cue.character) ? cue.character : (scene.character && !isPersona(scene.character) ? scene.character : undefined));
+        ? (sceneChar || proposalChar || protagonistName)
+        : (explicitCueChar || proposalChar || sceneChar || protagonistName);
+      const targetCharKey = characterAppearanceKey(assignedCharacter || scene.character || protagonistName || "");
+
+      let isCueReset = false;
+      if (cue.attire) {
+        if (isAttireReset(cue.attire)) {
+          isCueReset = true;
+          if (targetCharKey) characterAttire.delete(targetCharKey);
+        } else {
+          if (targetCharKey) characterAttire.set(targetCharKey, cue.attire.trim());
+        }
+      }
+      const sceneAttireForChar = (!scene.character || characterAppearanceKey(scene.character) === targetCharKey)
+        ? (scene.attire || undefined)
+        : undefined;
+      const resolvedAttire = isCueReset
+        ? undefined
+        : ((targetCharKey ? characterAttire.get(targetCharKey) : undefined) ?? sceneAttireForChar);
+      if (scene.character && characterAppearanceKey(scene.character) === targetCharKey) {
+        scene.attire = resolvedAttire ?? null;
+      }
+
       // When a cue was erroneously aimed at the user/persona (e.g. user dialogue
       // or action), do not copy the user's expression or scan the user's speech
       // for companion poses. Default to an attentive listening pose.
@@ -1107,13 +1276,21 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
         expression: null,
         poseExpressionId: pose.id,
         character: assignedCharacter,
-        attire: cue.attire || scene.attire || undefined,
+        attire: resolvedAttire,
         promptDelta: "",
         assetJobId: id("asset", `${sourceFingerprint}:${cue.paragraphIndex}:${index}`),
         ...(cue.bgm ? { bgm: cue.bgm } : {}),
         ...(cue.sfx ? { sfx: cue.sfx } : {})
       });
     });
+
+  // Ensure scenes reflect the latest attire for their characters
+  for (const scene of scenes) {
+    const sCharKey = characterAppearanceKey(scene.character || protagonistName || "");
+    if (sCharKey && characterAttire.has(sCharKey)) {
+      scene.attire = characterAttire.get(sCharKey) ?? null;
+    }
+  }
 
   const audioCues = planner.cues
     .filter((cue) => Boolean(cue.bgm || cue.sfx))
@@ -1183,6 +1360,31 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
     (paragraph) => paragraphSpeakerByIndex.get(paragraph.index) ?? null
   );
 
+  // Build terminal continuity and deltas reflecting mutable character attire
+  const characterUpdates: Record<string, CharacterContinuityPatch> = {};
+  const allCharNames = new Set([
+    ...Object.keys(continuity.characters).map((k) => characterAppearanceKey(k)),
+    ...Array.from(characterAttire.keys())
+  ]);
+
+  for (const charKey of allCharNames) {
+    const existingEntry = Object.entries(continuity.characters).find(([k]) => characterAppearanceKey(k) === charKey);
+    const prevAttire = existingEntry ? existingEntry[1].wardrobe?.attire ?? null : null;
+    const nextAttire = characterAttire.get(charKey) ?? null;
+    if (nextAttire !== prevAttire) {
+      const displayName = existingEntry ? existingEntry[0] : (characterAppearanceKey(protagonistName) === charKey ? protagonistName : charKey);
+      characterUpdates[displayName] = {
+        wardrobe: { attire: nextAttire }
+      };
+    }
+  }
+
+  const continuityDeltas: IndexedContinuityDelta[] = Object.keys(characterUpdates).length > 0
+    ? [{ paragraphIndex: 0, delta: ContinuityDeltaSchema.parse({ characterUpdates, forgetCharacters: [], factUpdates: {} }) }]
+    : [];
+
+  const terminalContinuity = reduceContinuity(continuity, continuityDeltas);
+
   const plan = validateTurnPlan(TurnPlanSchema.parse({
     schemaVersion: 1,
     key,
@@ -1193,9 +1395,9 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
     audioCues,
     choices,
     initialContinuity: continuity,
-    continuityDeltas: [],
-    terminalContinuity: continuity,
-    planningStatus: usedFallback ? "partial" : "planned",
+    continuityDeltas,
+    terminalContinuity,
+    planningStatus: cues.length === 0 && narrative.paragraphs.length > 0 ? "partial" : (usedFallback ? "partial" : "planned"),
     createdAt: new Date().toISOString()
   }));
   const latestEnvironment = scenes.at(-1)?.environment.description;

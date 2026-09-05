@@ -615,3 +615,532 @@ test("fallback turns carry no paragraph speakers", async () => {
   assert.equal(result.usedFallback, true);
   assert.deepEqual(result.plan.paragraphSpeakers, [null, null]);
 });
+
+test("attire persists across cues, turns, and character switches, and resets on explicit keyword (audit #5)", async () => {
+  // 1. Turn A: Mira changes into pajamas on cue 1; cue 2 has missing attire -> stays in pajamas
+  let planA: any;
+  const spindleA: SpindleAPI = {
+    generate: {
+      raw: async () => ({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              scenes: [{
+                startParagraph: 0,
+                boundary: { claimedNewScene: false, reason: "none" },
+                environment: { location: "Bedroom", timeOfDay: "night", weather: "clear", lighting: "lamp", description: "A bedroom", persistentElements: [] },
+                cast: ["Mira"],
+                character: "Mira",
+                basePrompt: "bedroom at night",
+                compositionLock: "centered"
+              }],
+              cues: [
+                { paragraphIndex: 0, expression: "idle" },
+                { paragraphIndex: 1, expression: "idle", attire: "blue pajamas" },
+                { paragraphIndex: 2, expression: "idle" }
+              ],
+              characters: [{ name: "Mira", description: "silver hair, green eyes, red coat" }]
+            })
+          }
+        }]
+      })
+    },
+    log: { warn() {} }
+  } as unknown as SpindleAPI;
+
+  const resultA = await planTurn(spindleA, {
+    chatId: "chat",
+    message: { ...message, name: "Mira", content: "P0.\n\nP1.\n\nP2." },
+    content: "P0.\n\nP1.\n\nP2.",
+    previousScene: null,
+    previousContinuity: null,
+    recentMessages: [],
+    config: { ...DEFAULT_CONFIG, maxImagesPerTurn: 0, parserConnectionId: "parser" },
+    singleCharacter: emptySingleCharacter(),
+    characterAppearance: { Mira: "silver hair, green eyes, red coat" }
+  });
+
+  assert.equal(resultA.plan.visualCues[0]?.attire, undefined);
+  assert.equal(resultA.plan.visualCues[1]?.attire, "blue pajamas");
+  // Missing attire on cue 2 remains unchanged
+  assert.equal(resultA.plan.visualCues[2]?.attire, "blue pajamas");
+  assert.equal(resultA.plan.scenes[0]?.attire, "blue pajamas");
+  assert.equal(resultA.plan.terminalContinuity.characters["Mira"]?.wardrobe?.attire, "blue pajamas");
+
+  // 2. Turn B: Next turn without explicit attire inherits pajamas from previousScene / terminalContinuity
+  const spindleB: SpindleAPI = {
+    generate: {
+      raw: async () => ({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              scenes: [{
+                startParagraph: 0,
+                boundary: { claimedNewScene: false, reason: "none" },
+                environment: { location: "Bedroom", timeOfDay: "night", weather: "clear", lighting: "lamp", description: "A bedroom", persistentElements: [] },
+                cast: ["Mira"],
+                character: "Mira",
+                basePrompt: "bedroom at night",
+                compositionLock: "centered"
+              }],
+              cues: [{ paragraphIndex: 0, expression: "idle" }],
+              characters: [{ name: "Mira", description: "silver hair, green eyes, red coat" }]
+            })
+          }
+        }]
+      })
+    },
+    log: { warn() {} }
+  } as unknown as SpindleAPI;
+
+  const resultB = await planTurn(spindleB, {
+    chatId: "chat",
+    message: { ...message, name: "Mira", content: "P0 next turn." },
+    content: "P0 next turn.",
+    previousScene: resultA.plan.scenes[0] ?? null,
+    previousContinuity: resultA.plan.terminalContinuity,
+    recentMessages: [],
+    config: { ...DEFAULT_CONFIG, maxImagesPerTurn: 0, parserConnectionId: "parser" },
+    singleCharacter: resultA.singleCharacter,
+    characterAppearance: { Mira: "silver hair, green eyes, red coat" }
+  });
+
+  assert.equal(resultB.plan.visualCues[0]?.attire, "blue pajamas");
+
+  // 3. Turn C: Explicit reset returns to baseline outfit
+  const spindleC: SpindleAPI = {
+    generate: {
+      raw: async () => ({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              scenes: [{
+                startParagraph: 0,
+                boundary: { claimedNewScene: false, reason: "none" },
+                environment: { location: "Bedroom", timeOfDay: "night", weather: "clear", lighting: "lamp", description: "A bedroom", persistentElements: [] },
+                cast: ["Mira"],
+                character: "Mira",
+                basePrompt: "bedroom at night",
+                compositionLock: "centered"
+              }],
+              cues: [{ paragraphIndex: 0, expression: "idle", attire: "baseline" }],
+              characters: [{ name: "Mira", description: "silver hair, green eyes, red coat" }]
+            })
+          }
+        }]
+      })
+    },
+    log: { warn() {} }
+  } as unknown as SpindleAPI;
+
+  const resultC = await planTurn(spindleC, {
+    chatId: "chat",
+    message: { ...message, name: "Mira", content: "P0 reset." },
+    content: "P0 reset.",
+    previousScene: resultB.plan.scenes[0] ?? null,
+    previousContinuity: resultB.plan.terminalContinuity,
+    recentMessages: [],
+    config: { ...DEFAULT_CONFIG, maxImagesPerTurn: 0, parserConnectionId: "parser" },
+    singleCharacter: resultB.singleCharacter,
+    characterAppearance: { Mira: "silver hair, green eyes, red coat" }
+  });
+
+  assert.equal(resultC.plan.visualCues[0]?.attire, undefined);
+  assert.equal(resultC.plan.scenes[0]?.attire, null);
+});
+
+test("character switches preserve individual character attire independently (audit #5)", async () => {
+  const spindle: SpindleAPI = {
+    generate: {
+      raw: async () => ({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              scenes: [{
+                startParagraph: 0,
+                boundary: { claimedNewScene: false, reason: "none" },
+                environment: { location: "Living room", timeOfDay: "day", weather: "clear", lighting: "sun", description: "A room", persistentElements: [] },
+                cast: ["Mira", "Lyra"],
+                character: "Mira",
+                basePrompt: "living room",
+                compositionLock: "centered"
+              }],
+              cues: [
+                { paragraphIndex: 0, character: "Mira", expression: "idle", attire: "blue pajamas" },
+                { paragraphIndex: 1, character: "Lyra", expression: "idle" },
+                { paragraphIndex: 2, character: "Mira", expression: "smile" }
+              ],
+              characters: [
+                { name: "Mira", description: "silver hair, green eyes" },
+                { name: "Lyra", description: "blonde hair, blue eyes" }
+              ]
+            })
+          }
+        }]
+      })
+    },
+    log: { warn() {} }
+  } as unknown as SpindleAPI;
+
+  const result = await planTurn(spindle, {
+    chatId: "chat",
+    message: { ...message, name: "Mira", content: "P0.\n\nP1.\n\nP2." },
+    content: "P0.\n\nP1.\n\nP2.",
+    previousScene: null,
+    previousContinuity: null,
+    recentMessages: [],
+    config: { ...DEFAULT_CONFIG, maxImagesPerTurn: 0, parserConnectionId: "parser" },
+    singleCharacter: emptySingleCharacter(),
+    characterAppearance: { Mira: "silver hair", Lyra: "blonde hair" }
+  });
+
+  assert.equal(result.plan.visualCues[0]?.character, "Mira");
+  assert.equal(result.plan.visualCues[0]?.attire, "blue pajamas");
+  assert.equal(result.plan.visualCues[1]?.character, "Lyra");
+  assert.equal(result.plan.visualCues[1]?.attire, undefined); // Lyra baseline
+  assert.equal(result.plan.visualCues[2]?.character, "Mira");
+  assert.equal(result.plan.visualCues[2]?.attire, "blue pajamas"); // Mira still in pajamas
+});
+
+test("repairs missing opening cue and ensures usable visual coverage (audit #6)", async () => {
+  // Output with cues: [] is repaired with an opening cue at paragraph 0
+  const spindle: SpindleAPI = {
+    generate: {
+      raw: async () => ({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              scenes: [{
+                startParagraph: 0,
+                boundary: { claimedNewScene: false, reason: "none" },
+                environment: { location: "Garden", timeOfDay: "day", weather: "clear", lighting: "sun", description: "A garden", persistentElements: [] },
+                cast: ["Mira"],
+                character: "Mira",
+                basePrompt: "a beautiful garden",
+                compositionLock: "centered"
+              }],
+              cues: [],
+              characters: [{ name: "Mira", description: "silver hair, green eyes" }]
+            })
+          }
+        }]
+      })
+    },
+    log: { warn() {} }
+  } as unknown as SpindleAPI;
+
+  const result = await planTurn(spindle, {
+    chatId: "chat",
+    message: { ...message, content: "P0.\n\nP1." },
+    content: "P0.\n\nP1.",
+    previousScene: null,
+    previousContinuity: null,
+    recentMessages: [],
+    config: { ...DEFAULT_CONFIG, maxImagesPerTurn: 0, parserConnectionId: "parser" },
+    singleCharacter: emptySingleCharacter(),
+    characterAppearance: {}
+  });
+
+  // Repaired with usable visual coverage at paragraph 0
+  assert.equal(result.plan.visualCues.length, 1);
+  assert.equal(result.plan.visualCues[0]?.paragraphIndex, 0);
+  assert.equal(result.plan.planningStatus, "planned");
+});
+
+test("includeRecentMessages=0 does not pass recent messages into planner target (audit #12)", async () => {
+  let capturedTarget: string = "";
+  const spindle: SpindleAPI = {
+    generate: {
+      raw: async (req: any) => {
+        capturedTarget = req.messages?.[1]?.content ?? "";
+        return {
+          choices: [{
+            message: {
+              content: JSON.stringify({
+                scenes: [{
+                  startParagraph: 0,
+                  boundary: { claimedNewScene: false, reason: "none" },
+                  environment: { location: "Room", timeOfDay: "day", weather: "clear", lighting: "sun", description: "A room", persistentElements: [] },
+                  cast: ["Mira"],
+                  basePrompt: "room",
+                  compositionLock: "centered"
+                }],
+                cues: [{ paragraphIndex: 0 }],
+                characters: [{ name: "Mira", description: "silver hair" }]
+              })
+            }
+          }]
+        };
+      }
+    },
+    log: { warn() {} }
+  } as unknown as SpindleAPI;
+
+  await planTurn(spindle, {
+    chatId: "chat",
+    message: { ...message, content: "Active content." },
+    content: "Active content.",
+    previousScene: null,
+    previousContinuity: null,
+    recentMessages: [{ name: "Mira", content: "OBSOLETE_HISTORY_SENTINEL", is_user: false }],
+    config: { ...DEFAULT_CONFIG, includeRecentMessages: 0, parserConnectionId: "parser" },
+    singleCharacter: emptySingleCharacter(),
+    characterAppearance: {}
+  });
+
+  assert.equal(capturedTarget.includes("OBSOLETE_HISTORY_SENTINEL"), false);
+});
+
+test("choices:[null] does not discard valid visual scenes and character identities (audit #12)", async () => {
+  const spindle: SpindleAPI = {
+    generate: {
+      raw: async () => ({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              scenes: [{
+                startParagraph: 0,
+                boundary: { claimedNewScene: false, reason: "none" },
+                environment: { location: "Sanctuary", timeOfDay: "day", weather: "clear", lighting: "sun", description: "A holy sanctuary", persistentElements: [] },
+                cast: ["Mira"],
+                character: "Mira",
+                basePrompt: "holy sanctuary with stained glass",
+                compositionLock: "centered"
+              }],
+              cues: [{ paragraphIndex: 0, expression: "smile" }],
+              choices: [null],
+              characters: [{ name: "Mira", description: "silver hair, emerald eyes, white robes" }]
+            })
+          }
+        }]
+      })
+    },
+    log: { warn() {} }
+  } as unknown as SpindleAPI;
+
+  const result = await planTurn(spindle, {
+    chatId: "chat",
+    message: { ...message, content: "The light filters through." },
+    content: "The light filters through.",
+    previousScene: null,
+    previousContinuity: null,
+    recentMessages: [],
+    config: { ...DEFAULT_CONFIG, maxImagesPerTurn: 0, parserConnectionId: "parser" },
+    singleCharacter: emptySingleCharacter(),
+    characterAppearance: {}
+  });
+
+  // Valid scenes and cues are preserved; fallback is not triggered
+  assert.equal(result.usedFallback, false);
+  assert.equal(result.plan.scenes[0]?.environment.location, "Sanctuary");
+  assert.equal(result.plan.visualCues[0]?.poseExpressionId, "smile");
+  assert.deepEqual(result.plan.choices, []);
+});
+
+test("repaired JSON preserves Python-style literals inside quoted strings (audit #12)", async () => {
+  // Output with malformed unquoted key that requires repairJsonString
+  const malformedJson = '{\nscenes: [{\n  startParagraph: 0,\n  boundary: { claimedNewScene: false, reason: "none" },\n  environment: { location: "Hall", timeOfDay: "day", weather: "clear", lighting: "sun", description: "A hall", persistentElements: [] },\n  cast: ["Mira"],\n  character: "Mira",\n  basePrompt: "False ceiling, None logo, True blue wallpaper",\n  compositionLock: "centered"\n}],\ncues: [{ paragraphIndex: 0, expression: "idle" }],\ncharacters: [{ name: "Mira", description: "silver hair" }]\n}';
+
+  const spindle: SpindleAPI = {
+    generate: {
+      raw: async () => ({
+        choices: [{
+          message: {
+            content: malformedJson
+          }
+        }]
+      })
+    },
+    log: { warn() {} }
+  } as unknown as SpindleAPI;
+
+  const result = await planTurn(spindle, {
+    chatId: "chat",
+    message: { ...message, content: "Inside the hall." },
+    content: "Inside the hall.",
+    previousScene: null,
+    previousContinuity: null,
+    recentMessages: [],
+    config: { ...DEFAULT_CONFIG, maxImagesPerTurn: 0, parserConnectionId: "parser" },
+    singleCharacter: emptySingleCharacter(),
+    characterAppearance: {}
+  });
+
+  assert.equal(result.usedFallback, false);
+  // Python literals inside quotes are preserved with original casing
+  assert.equal(result.plan.scenes[0]?.basePrompt, "False ceiling, None logo, True blue wallpaper");
+});
+
+test("local environment patches are merged into reused continuing scene without losing identity (audit #10)", async () => {
+  const initialEnv = {
+    location: "Bedroom",
+    timeOfDay: "night",
+    weather: "clear",
+    lighting: "lamp light",
+    description: "bedroom with a closed window",
+    persistentElements: ["closed window"]
+  };
+
+  const initialSpindle: SpindleAPI = {
+    generate: {
+      raw: async () => ({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              scenes: [{
+                startParagraph: 0,
+                boundary: { claimedNewScene: true, reason: "initial", location: "Bedroom" },
+                environment: initialEnv,
+                cast: ["Mira"],
+                character: "Mira",
+                basePrompt: "bedroom, closed window, lamp light",
+                compositionLock: "centered"
+              }],
+              cues: [{ paragraphIndex: 0, expression: "idle" }],
+              characters: [{ name: "Mira", description: "silver hair, green eyes" }]
+            })
+          }
+        }]
+      })
+    },
+    log: { warn() {} }
+  } as unknown as SpindleAPI;
+
+  const resultA = await planTurn(initialSpindle, {
+    chatId: "chat",
+    message: { ...message, content: "Mira sits by the closed window." },
+    content: "Mira sits by the closed window.",
+    previousScene: null,
+    previousContinuity: null,
+    recentMessages: [],
+    config: { ...DEFAULT_CONFIG, maxImagesPerTurn: 0, parserConnectionId: "parser" },
+    singleCharacter: emptySingleCharacter(),
+    characterAppearance: { Mira: "silver hair, green eyes" }
+  });
+
+  const sceneA = resultA.plan.scenes[0]!;
+  assert.equal(sceneA.basePrompt, "bedroom, closed window, lamp light");
+  assert.deepEqual(sceneA.environment.persistentElements, ["closed window"]);
+
+  // Turn B proposes continuing scene (claimedNewScene: false, reason: 'none') with local patch (open window)
+  const patchedEnv = {
+    ...initialEnv,
+    description: "bedroom with an open window",
+    persistentElements: ["open window"]
+  };
+
+  const continuingSpindle: SpindleAPI = {
+    generate: {
+      raw: async () => ({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              scenes: [{
+                startParagraph: 0,
+                boundary: { claimedNewScene: false, reason: "none", location: "Bedroom" },
+                environment: patchedEnv,
+                cast: ["Mira"],
+                character: "Mira",
+                basePrompt: "bedroom, open window, lamp light",
+                compositionLock: "centered"
+              }],
+              cues: [{ paragraphIndex: 0, expression: "idle" }],
+              characters: [{ name: "Mira", description: "silver hair, green eyes" }]
+            })
+          }
+        }]
+      })
+    },
+    log: { warn() {} }
+  } as unknown as SpindleAPI;
+
+  const resultB = await planTurn(continuingSpindle, {
+    chatId: "chat",
+    message: { ...message, content: "Mira opens the window to let the night air in." },
+    content: "Mira opens the window to let the night air in.",
+    previousScene: sceneA,
+    previousContinuity: resultA.plan.terminalContinuity,
+    recentMessages: [],
+    config: { ...DEFAULT_CONFIG, maxImagesPerTurn: 0, parserConnectionId: "parser" },
+    singleCharacter: resultA.singleCharacter,
+    characterAppearance: { Mira: "silver hair, green eyes" }
+  });
+
+  const sceneB = resultB.plan.scenes[0]!;
+  // Scene identity is preserved
+  assert.equal(sceneB.sceneId, sceneA.sceneId);
+  // Revision is bumped because environment changed
+  assert.equal(sceneB.revision, sceneA.revision + 1);
+  // Patched environment details are merged in
+  assert.deepEqual(sceneB.environment.persistentElements, ["open window"]);
+  assert.equal(sceneB.environment.description, "bedroom with an open window");
+  assert.equal(sceneB.basePrompt, "bedroom, open window, lamp light");
+});
+
+test("salvages character and attire metadata from redundant same-setting scene proposals (audit #10)", async () => {
+  const content = "Mira enters the tearoom.\n\nRin steps forward wearing a ceremonial gown.";
+  const spindle: SpindleAPI = {
+    generate: {
+      raw: async () => ({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              scenes: [
+                {
+                  startParagraph: 0,
+                  boundary: { claimedNewScene: true, reason: "initial", location: "Tearoom" },
+                  environment: { location: "Tearoom", timeOfDay: "day", weather: "clear", lighting: "sunlight", description: "traditional tearoom", persistentElements: ["tatami"] },
+                  cast: ["Mira"],
+                  character: "Mira",
+                  basePrompt: "tearoom, tatami, sunlight",
+                  compositionLock: "centered"
+                },
+                {
+                  startParagraph: 1,
+                  boundary: { claimedNewScene: false, reason: "none", location: "Tearoom" },
+                  environment: { location: "Tearoom", timeOfDay: "day", weather: "clear", lighting: "sunlight", description: "traditional tearoom", persistentElements: ["tatami"] },
+                  cast: ["Rin"],
+                  character: "Rin",
+                  attire: "ceremonial blue kimono",
+                  basePrompt: "tearoom, tatami, sunlight",
+                  compositionLock: "centered"
+                }
+              ],
+              cues: [
+                { paragraphIndex: 0, expression: "idle" },
+                { paragraphIndex: 1, expression: "smile" }
+              ],
+              characters: [
+                { name: "Mira", description: "silver hair, green eyes" },
+                { name: "Rin", description: "black hair, blue eyes" }
+              ]
+            })
+          }
+        }]
+      })
+    },
+    log: { warn() {} }
+  } as unknown as SpindleAPI;
+
+  const result = await planTurn(spindle, {
+    chatId: "chat",
+    message: { ...message, content },
+    content,
+    previousScene: null,
+    previousContinuity: null,
+    recentMessages: [],
+    config: { ...DEFAULT_CONFIG, maxImagesPerTurn: 0, parserConnectionId: "parser" },
+    singleCharacter: emptySingleCharacter(),
+    characterAppearance: { Mira: "silver hair, green eyes", Rin: "black hair, blue eyes" }
+  });
+
+  // Redundant proposal at paragraph 1 collapsed into single continuous scene
+  assert.equal(result.plan.scenes.length, 1);
+  // Cue 0 is attributed to Mira
+  assert.equal(result.plan.visualCues[0]?.character, "Mira");
+  // Cue 1 salvages character and attire from the discarded proposal at paragraph 1
+  assert.equal(result.plan.visualCues[1]?.character, "Rin");
+  assert.equal(result.plan.visualCues[1]?.attire, "ceremonial blue kimono");
+});
+
+
