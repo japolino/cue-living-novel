@@ -34,9 +34,10 @@ export const VN_OUTER_CSS = `
   z-index: 10;
   top: max(0.75rem, env(safe-area-inset-top));
   right: max(0.75rem, env(safe-area-inset-right));
-  min-width: 2.75rem;
-  min-height: 2.75rem;
-  padding: 0.55rem 0.8rem;
+  min-width: 2.8rem;
+  min-height: 2.8rem;
+  padding: 0.55rem 0.95rem;
+  white-space: nowrap;
   border: 1px solid rgba(255, 255, 255, 0.65);
   border-radius: 999px;
   background: rgba(10, 11, 16, 0.82);

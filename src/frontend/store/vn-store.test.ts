@@ -30,10 +30,13 @@ test("previous restores reading state, preserves draft and invalidates future im
 });
 
 test("previous cannot rewind an in-flight submission or a user reply", () => {
-  for (const phase of ["planning", "submitting", "waiting-for-response", "error"] as const) {
+  for (const phase of ["planning", "submitting", "waiting-for-response"] as const) {
     const state = createInitialVnStageState({ phase, paragraphs, currentParagraphIndex: 1 });
     assert.equal(reduceVnStage(state, { type: "previous" }), state);
   }
+  // An error card no longer freezes rereading (see the error-phase tests below).
+  const errored = createInitialVnStageState({ phase: "error", paragraphs, currentParagraphIndex: 1, highestRevealedIndex: 1 });
+  assert.equal(reduceVnStage(errored, { type: "previous" }).currentParagraphIndex, 0);
   const user = createInitialVnStageState({ phase: "revealing", paragraphs, currentParagraphIndex: 1, isUserTurn: true });
   assert.equal(reduceVnStage(user, { type: "previous" }), user);
 });
@@ -237,4 +240,69 @@ test("present-user-paragraph action appends paragraph, sets phase revealing, and
   state = reduceVnStage(state, { type: "advance" });
   assert.equal(state.phase, "waiting-for-response");
   assert.equal(state.isUserTurn, false);
+});
+
+test("an error card keeps already revealed paragraphs rereadable without exposing unrevealed text", () => {
+  const three = [...paragraphs, { id: "p3", text: "Third" }];
+  let state = reduceVnStage(createInitialVnStageState(), { type: "load-turn", turn: { mode: "standard", paragraphs: three } });
+  state = reduceVnStage(state, { type: "advance" });
+  assert.equal(state.highestRevealedIndex, 1);
+  state = reduceVnStage(state, { type: "set-error", error: "The scene could not be planned." });
+  assert.equal(state.phase, "error");
+
+  let view = selectVnStageView(state);
+  assert.equal(view.canGoBack, true, "Previous stays available during an error");
+  assert.equal(view.canAdvance, false, "Continue must not reveal unread text during an error");
+  assert.equal(view.acceptsInput, false);
+  assert.equal(view.showStandardInput, false);
+  assert.equal(view.isBusy, false);
+
+  // Advancing at the revealed boundary is a no-op: no auto-advance, no awaiting-input, no submit.
+  assert.equal(reduceVnStage(state, { type: "advance" }), state);
+
+  state = reduceVnStage(state, { type: "previous" });
+  assert.equal(state.currentParagraphIndex, 0);
+  assert.equal(state.phase, "error", "rereading keeps the error card visible");
+  assert.equal(state.error, "The scene could not be planned.");
+  view = selectVnStageView(state);
+  assert.equal(view.canGoBack, false);
+  assert.equal(view.canAdvance, true, "already revealed paragraphs can be reread forward");
+
+  state = reduceVnStage(state, { type: "advance" });
+  assert.equal(state.currentParagraphIndex, 1);
+  assert.equal(state.phase, "error");
+  assert.equal(selectVnStageView(state).canAdvance, false);
+  assert.equal(state.highestRevealedIndex, 1, "rereading never raises the revealed boundary");
+});
+
+test("an error on the first paragraph offers neither Previous nor Continue", () => {
+  let state = reduceVnStage(createInitialVnStageState(), { type: "load-turn", turn: { mode: "standard", paragraphs } });
+  state = reduceVnStage(state, { type: "set-error", error: "boom" });
+  const view = selectVnStageView(state);
+  assert.equal(view.canGoBack, false);
+  assert.equal(view.canAdvance, false);
+  assert.equal(reduceVnStage(state, { type: "previous" }), state);
+  assert.equal(reduceVnStage(state, { type: "advance" }), state);
+});
+
+test("an error while reading the user's own paragraph does not allow rewinding into it", () => {
+  let state = reduceVnStage(createInitialVnStageState(), { type: "load-turn", turn: { mode: "standard", paragraphs } });
+  state = reduceVnStage(state, { type: "advance" });
+  state = reduceVnStage(state, { type: "present-user-paragraph", paragraph: { id: "u1", text: "Hello", speaker: "You" } });
+  state = reduceVnStage(state, { type: "set-error", error: "Your reply could not be sent." });
+  assert.equal(selectVnStageView(state).canGoBack, false);
+  assert.equal(selectVnStageView(state).canAdvance, false);
+});
+
+test("a new turn or phase from the host clears the error reread state", () => {
+  let state = reduceVnStage(createInitialVnStageState(), { type: "load-turn", turn: { mode: "standard", paragraphs } });
+  state = reduceVnStage(state, { type: "advance" });
+  state = reduceVnStage(state, { type: "set-error", error: "boom" });
+  const reloaded = reduceVnStage(state, { type: "load-turn", turn: { mode: "standard", paragraphs } });
+  assert.equal(reloaded.phase, "revealing");
+  assert.equal(reloaded.highestRevealedIndex, 0);
+  assert.equal(reloaded.error, null);
+  const planning = reduceVnStage(state, { type: "set-phase", phase: "planning" });
+  assert.equal(selectVnStageView(planning).canAdvance, false);
+  assert.equal(selectVnStageView(planning).canGoBack, false);
 });

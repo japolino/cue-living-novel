@@ -278,17 +278,29 @@ function buildStandardStageDOM(parent: MockNode) {
   const text = new MockNode("p");
   text.setAttribute("data-vn-dialogue-text", "");
 
+  const skipDescription = new MockNode("span");
+  skipDescription.setAttribute("data-vn-skip-description", "");
+  controls.append(skipDescription);
+
+  const footer = new MockNode("div");
+  footer.setAttribute("data-vn-dialogue-footer", "");
   const progress = new MockNode("span");
   progress.setAttribute("data-vn-progress", "");
+  const readingState = new MockNode("span");
+  readingState.setAttribute("data-vn-reading-state", "");
+  footer.append(progress, readingState);
 
   const cont = new MockNode("button");
   cont.setAttribute("data-vn-continue", "");
 
-  dialogue.append(controls, speaker, text, progress, cont);
+  dialogue.append(controls, speaker, text, footer, cont);
   narrative.append(dialogue);
 
   const interaction = new MockNode("section");
   interaction.setAttribute("data-vn-interaction", "");
+  const interactionHint = new MockNode("p");
+  interactionHint.setAttribute("data-vn-interaction-hint", "");
+  interaction.append(interactionHint);
   const choiceList = new MockNode("ol");
   choiceList.setAttribute("data-vn-choice-list", "");
   const inputForm = new MockNode("form");

@@ -4,6 +4,21 @@ export const SCENE_IMAGE_FITS = ["cover", "contain", "fill", "none", "scale-down
 export type VisualNovelSceneImageFit = (typeof SCENE_IMAGE_FITS)[number];
 
 /**
+ * How strongly one-shot stage effects (shake, flash, zoom) are presented.
+ * - "full": every planned effect plays (the pre-redesign behavior, the default);
+ * - "gentle": strong shakes and screen flashes are dropped or softened;
+ * - "off": no one-shot effects at all.
+ * The OS `prefers-reduced-motion` setting is honored by the theme CSS on top of
+ * this and is never overridden by it.
+ */
+export const EFFECT_INTENSITIES = ["off", "gentle", "full"] as const;
+export type VisualNovelEffectIntensity = (typeof EFFECT_INTENSITIES)[number];
+
+/** Dialogue text scale bounds (multiplier over the theme's dialogue font size). */
+export const TEXT_SCALE_MIN = 0.8;
+export const TEXT_SCALE_MAX = 1.6;
+
+/**
  * The canonical, host-neutral set of built-in visual-novel theme presets.
  *
  * These identifiers are the single source of truth shared by the backend config
@@ -69,6 +84,10 @@ export type VisualNovelConfig = {
   textSpeed: number;
   autoPlayDelay: number;
   skipMode: "read" | "all";
+  /** Presentation strength of one-shot stage effects. Default "full" keeps existing playback. */
+  effectIntensity: VisualNovelEffectIntensity;
+  /** Dialogue text size multiplier, 1 = the theme's own size. */
+  textScale: number;
   audioDirectory: string;
   bgmVolume: number;
   sfxVolume: number;
@@ -109,6 +128,8 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   textSpeed: 20,
   autoPlayDelay: 2000,
   skipMode: "read",
+  effectIntensity: "full",
+  textScale: 1,
   audioDirectory: "",
   bgmVolume: 0.7,
   sfxVolume: 0.8,
@@ -170,6 +191,17 @@ function promptPresetList(value: unknown): VisualNovelPromptPreset[] {
   return presets;
 }
 
+function effectIntensity(value: unknown): VisualNovelEffectIntensity {
+  return typeof value === "string" && (EFFECT_INTENSITIES as readonly string[]).includes(value)
+    ? value as VisualNovelEffectIntensity
+    : DEFAULT_CONFIG.effectIntensity;
+}
+
+function textScale(value: unknown): number {
+  const scale = floatBetween(value, TEXT_SCALE_MIN, TEXT_SCALE_MAX, DEFAULT_CONFIG.textScale);
+  return Math.round(scale * 100) / 100;
+}
+
 function sceneImageFit(value: unknown): VisualNovelSceneImageFit {
   return typeof value === "string" && (SCENE_IMAGE_FITS as readonly string[]).includes(value)
     ? value as VisualNovelSceneImageFit
@@ -228,6 +260,8 @@ export function normalizeConfig(value: unknown): VisualNovelConfig {
     textSpeed: integer(input.textSpeed, 0, 100, DEFAULT_CONFIG.textSpeed),
     autoPlayDelay: integer(input.autoPlayDelay, 500, 10000, DEFAULT_CONFIG.autoPlayDelay),
     skipMode: input.skipMode === "all" ? "all" : "read",
+    effectIntensity: effectIntensity(input.effectIntensity),
+    textScale: textScale(input.textScale),
     audioDirectory: stringValue(input.audioDirectory, DEFAULT_CONFIG.audioDirectory).trim(),
     bgmVolume: floatBetween(input.bgmVolume, 0, 1, DEFAULT_CONFIG.bgmVolume),
     sfxVolume: floatBetween(input.sfxVolume, 0, 1, DEFAULT_CONFIG.sfxVolume),

@@ -234,6 +234,12 @@ const GOLDEN_HOUR_CSS = `
   right: 2rem;
   gap: 0.35rem;
 }
+@media (max-width: 640px) {
+  [data-vn-root][data-vn-preset="golden-hour"] [data-vn-controls] {
+    top: calc(-1 * (var(--vn-control-size) + 1.5rem));
+    right: 1rem;
+  }
+}
 [data-vn-root][data-vn-preset="golden-hour"] [data-vn-control] {
   padding: 0.22rem 0.65rem;
   border: 1px solid rgba(226, 176, 106, 0.5);
@@ -564,6 +570,12 @@ const MIDNIGHT_NOIR_CSS = `
   right: 2rem;
   gap: 0.35rem;
 }
+@media (max-width: 640px) {
+  [data-vn-root][data-vn-preset="midnight-noir"] [data-vn-controls] {
+    top: calc(-1 * (var(--vn-control-size) + 1.5rem));
+    right: 1rem;
+  }
+}
 [data-vn-root][data-vn-preset="midnight-noir"] [data-vn-control] {
   padding: 0.22rem 0.65rem;
   border: 1px solid rgba(165, 150, 135, 0.5);
@@ -755,6 +767,13 @@ const YAMAKU_CLASSIC_CSS = `
   z-index: 5;
   gap: 0.2rem;
 }
+@media (max-width: 640px) {
+  [data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-controls] {
+    /* The handwritten nameplate hangs 2.75rem above the box. */
+    top: calc(-1 * (var(--vn-control-size) + 3rem));
+    right: 0.5rem;
+  }
+}
 [data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-control] {
   padding: 0.18rem 0.52rem;
   border: 1px solid rgba(226, 221, 211, 0.28);
@@ -919,6 +938,20 @@ const LITERATURE_CLUB_CSS = `
   transform: translateX(-50%);
   z-index: 3;
   gap: 1.05rem;
+}
+@media (max-width: 640px) {
+  [data-vn-root][data-vn-preset="literature-club"] [data-vn-controls] {
+    /* Left-aligned so the row never runs under the continue arrow. */
+    left: 1.2rem;
+    right: 3.2rem;
+    transform: none;
+    justify-content: flex-start;
+    gap: 0.5rem;
+  }
+
+  [data-vn-root][data-vn-preset="literature-club"] [data-vn-dialogue] {
+    padding-bottom: calc(var(--vn-control-size) + 1rem);
+  }
 }
 [data-vn-root][data-vn-preset="literature-club"] [data-vn-control] {
   padding: 0.1rem 0.2rem;

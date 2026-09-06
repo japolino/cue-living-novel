@@ -99,6 +99,13 @@ export interface VnStageState {
   showRerollPrompt: boolean;
   isUserTurn?: boolean;
   ambient: AmbientEffect | null;
+  /**
+   * Highest paragraph index the reader has already seen in this turn. While an
+   * error card is shown (phase "error") the reader may move Previous/Continue
+   * only within [0, highestRevealedIndex]; unrevealed text stays hidden and no
+   * input is accepted until the host sets a new phase.
+   */
+  highestRevealedIndex: number;
 }
 
 export interface VnTurnInput {
@@ -165,6 +172,7 @@ export const createInitialVnStageState = (
   showRerollPrompt: false,
   isUserTurn: false,
   ambient: null,
+  highestRevealedIndex: 0,
   ...values,
 });
 
@@ -186,8 +194,12 @@ export const selectVnStageView = (state: VnStageState): VnStageView => {
     paragraph,
     paragraphNumber: paragraph ? state.currentParagraphIndex + 1 : 0,
     paragraphCount: state.paragraphs.length,
-    canAdvance: state.phase === "revealing" && paragraph !== null,
-    canGoBack: (state.phase === "revealing" || state.phase === "awaiting-input") && !state.isUserTurn && state.currentParagraphIndex > 0,
+    canAdvance: paragraph !== null && (
+      state.phase === "revealing"
+      || (state.phase === "error" && state.currentParagraphIndex < state.highestRevealedIndex)
+    ),
+    canGoBack: (state.phase === "revealing" || state.phase === "awaiting-input" || state.phase === "error")
+      && !state.isUserTurn && state.currentParagraphIndex > 0,
     acceptsInput,
     showChoices: acceptsInput && state.mode === "cyoa",
     showStandardInput: acceptsInput && state.mode === "standard",
@@ -226,17 +238,25 @@ export const reduceVnStage = (
         showRerollPrompt: hasNoParagraphs,
         isUserTurn: false,
         ambient: action.turn.ambient !== undefined ? action.turn.ambient : state.ambient,
+        highestRevealedIndex: 0,
       };
     }
 
     case "advance": {
+      if (state.phase === "error") {
+        // Reread only: move within already revealed paragraphs, keep the error card.
+        if (!selectVnStageView(state).canAdvance) return state;
+        return { ...state, currentParagraphIndex: state.currentParagraphIndex + 1 };
+      }
       if (state.phase !== "revealing" || state.paragraphs.length === 0) return state;
 
       const finalIndex = state.paragraphs.length - 1;
       if (state.currentParagraphIndex < finalIndex) {
+        const nextIndex = state.currentParagraphIndex + 1;
         return {
           ...state,
-          currentParagraphIndex: state.currentParagraphIndex + 1,
+          currentParagraphIndex: nextIndex,
+          highestRevealedIndex: Math.max(state.highestRevealedIndex, nextIndex),
         };
       }
 
@@ -258,7 +278,9 @@ export const reduceVnStage = (
 
     case "previous": {
       if (!selectVnStageView(state).canGoBack) return state;
-      return { ...state, currentParagraphIndex: state.currentParagraphIndex - 1, phase: "revealing",
+      // Rereading during an error keeps the error card (and phase) visible.
+      const phase = state.phase === "error" ? "error" : "revealing";
+      return { ...state, currentParagraphIndex: state.currentParagraphIndex - 1, phase,
         turnFinished: false, showRerollPrompt: false, displayedImage: null, pendingImage: null, imageError: null };
     }
 
@@ -270,6 +292,7 @@ export const reduceVnStage = (
         currentParagraphIndex: paragraphs.length - 1,
         phase: "revealing",
         isUserTurn: true,
+        highestRevealedIndex: paragraphs.length - 1,
         turnFinished: false,
         noValidOutput: false,
         showRerollPrompt: false,

@@ -71,9 +71,12 @@ export function isAmbientEffect(value: unknown): value is AmbientEffect {
 }
 
 export const TEXT_SHAKE_HEURISTIC_REGEX = /\*\s*(?:thud|slam|crash|smack|shake)[!?.,]*\s*\*/i;
-import type {
-  VisualNovelSceneImageFit,
-  VisualNovelThemePreset,
+import {
+  TEXT_SCALE_MAX,
+  TEXT_SCALE_MIN,
+  type VisualNovelEffectIntensity,
+  type VisualNovelSceneImageFit,
+  type VisualNovelThemePreset,
 } from "../../config.js";
 import {
   applyVnUserCss,
@@ -136,49 +139,64 @@ const THEME_MARKUP = `
 
     <div data-vn-status-stack aria-live="polite" aria-atomic="false"></div>
     <div data-vn-empty-state>
-      This chat has no assistant reply to present yet. Use Exit, send the first message in normal chat, then open Visual novel again.
+      There is no reply to show yet. Go back to chat, send the first message, then open Visual novel again.
     </div>
 
     <section data-vn-narrative hidden aria-label="Dialogue">
       <div data-vn-dialogue>
-        <nav data-vn-controls aria-label="Dialogue controls">
-          <button data-vn-control="previous" type="button" aria-label="Previous paragraph" aria-keyshortcuts="ArrowLeft" title="Previous paragraph (Left Arrow)">Previous</button>
-          <button data-vn-control="log" type="button" aria-label="History Log">Log</button>
-          <button data-vn-control="auto" type="button" aria-label="Toggle auto play">
+        <nav data-vn-controls aria-label="Reading controls">
+          <button data-vn-control="previous" type="button" aria-label="Previous paragraph" aria-keyshortcuts="ArrowLeft" title="Previous paragraph (Left Arrow)">
+            <span data-vn-control-icon aria-hidden="true">&#8249;</span><span data-vn-control-label>Previous</span>
+          </button>
+          <button data-vn-control="log" type="button" aria-label="Open history" aria-keyshortcuts="L" title="History (L)">
+            <span data-vn-control-label>History</span>
+          </button>
+          <button data-vn-control="auto" type="button" aria-label="Auto play" aria-pressed="false" aria-keyshortcuts="A" title="Auto play (A)">
             <span data-vn-auto-ring aria-hidden="true">
               <svg viewBox="0 0 16 16" width="14" height="14">
                 <circle class="vn-auto-track" cx="8" cy="8" r="6" fill="none" stroke-width="2" />
                 <circle class="vn-auto-bar" cx="8" cy="8" r="6" fill="none" stroke-width="2" stroke-dasharray="37.7" stroke-dashoffset="37.7" />
               </svg>
             </span>
-            <span>Auto</span>
+            <span data-vn-control-label>Auto</span>
           </button>
-          <button data-vn-control="skip" type="button" aria-label="Toggle fast forward">Skip</button>
+          <button data-vn-control="skip" type="button" aria-label="Skip" aria-pressed="false" aria-describedby="vn-skip-description" aria-keyshortcuts="S" title="Skip (S)">
+            <span data-vn-control-label>Skip</span>
+          </button>
+          <span id="vn-skip-description" data-vn-skip-description hidden></span>
         </nav>
         <span data-vn-speaker hidden></span>
         <p data-vn-dialogue-text aria-live="polite" aria-atomic="true"></p>
-        <span data-vn-progress></span>
+        <div data-vn-dialogue-footer>
+          <span data-vn-progress></span>
+          <span data-vn-reading-state aria-live="polite"></span>
+        </div>
         <button
           data-vn-continue
           type="button"
           aria-label="Continue"
           aria-keyshortcuts="Enter Space ArrowRight"
+          title="Continue (Enter)"
         ></button>
       </div>
     </section>
 
-    <section data-vn-interaction hidden aria-label="Your response">
-      <ol data-vn-choice-list hidden aria-label="Choose a response"></ol>
+    <section data-vn-interaction hidden aria-labelledby="vn-interaction-title">
+      <div data-vn-interaction-heading>
+        <h2 id="vn-interaction-title" data-vn-interaction-title>Your turn</h2>
+        <p data-vn-interaction-hint></p>
+      </div>
+      <ol data-vn-choice-list hidden aria-label="Choose a reply"></ol>
       <form data-vn-input-form hidden>
-        <textarea data-vn-input aria-label="Your response"></textarea>
+        <textarea data-vn-input aria-label="Your reply"></textarea>
         <button data-vn-submit type="submit">Send</button>
       </form>
     </section>
 
-    <div data-vn-backlog hidden aria-modal="true" role="dialog" aria-label="Dialogue history">
+    <div data-vn-backlog hidden aria-modal="true" role="dialog" aria-label="History">
       <div data-vn-backlog-header>
-        <h3 data-vn-backlog-title>History Log</h3>
-        <button data-vn-backlog-close type="button" aria-label="Close history log">✕</button>
+        <h3 data-vn-backlog-title>History</h3>
+        <button data-vn-backlog-close type="button" aria-label="Close history">&#x2715;</button>
       </div>
       <div data-vn-backlog-content tabindex="0"></div>
     </div>
@@ -201,15 +219,73 @@ const isInteractiveTarget = (target: EventTarget | null): boolean =>
 const phaseLoadingLabel = (phase: VnPhase): string | null => {
   switch (phase) {
     case "waiting-for-response":
-      return "Generating message...";
+      return "Waiting for the reply\u2026";
     case "planning":
-      return "Planning scene...";
+      return "Preparing the scene\u2026";
     case "submitting":
-      return "Sending response...";
+      return "Sending your reply\u2026";
     default:
       return null;
   }
 };
+
+/** Where an error came from. Chooses the card title; the host decides. */
+export type VnStageErrorSource =
+  | "planner"
+  | "image"
+  | "generation"
+  | "permission"
+  | "submit"
+  | "other";
+
+/**
+ * Structured error input for setError. Plain strings keep working. The host
+ * computes `retryable` and `retryScope` truthfully from the turn; the stage
+ * never retries on its own and only shows "Try again" when `retryable` is
+ * true and a reroll callback exists.
+ */
+export interface VnStageErrorDetails {
+  message: string;
+  /** Raw technical text, shown inside a collapsed "Technical details" disclosure. */
+  detail?: string;
+  source?: VnStageErrorSource;
+  retryable?: boolean;
+  /** Plain sentence describing what a retry does, e.g. which images are kept. */
+  retryScope?: string;
+}
+
+export type VnStageErrorInput = string | VnStageErrorDetails | null;
+
+export type VnEffectIntensity = VisualNovelEffectIntensity;
+
+const errorTitle = (source: VnStageErrorSource | undefined): string => {
+  switch (source) {
+    case "planner":
+      return "Scene planning failed";
+    case "image":
+      return "Scene image could not be made";
+    case "generation":
+      return "Reply could not be generated";
+    case "permission":
+      return "Permission needed";
+    case "submit":
+      return "Reply not sent";
+    default:
+      return "Something went wrong";
+  }
+};
+
+/** True when a host message only restates the card title. */
+const restatesTitle = (message: string, title: string): boolean => {
+  const normalize = (text: string) =>
+    text.toLowerCase().replace(/[^a-z0-9 ]+/g, "").replace(/^(this|the|a) /, "").replace(/\s+/g, " ").trim();
+  return normalize(message) === normalize(title);
+};
+
+const skipDescription = (mode: "read" | "all"): string =>
+  mode === "all"
+    ? "Skips all text until your next reply."
+    : "Skips text you have already read and stops at new text.";
 
 function createBadgeIconSvg(icon: "spinner" | "image" | "check" | "alert" | "reroll"): SVGElement {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -315,6 +391,9 @@ export class VnStage {
   private readonly speaker: HTMLElement;
   private readonly dialogueText: HTMLElement;
   private readonly progress: HTMLElement;
+  private readonly readingState: HTMLElement;
+  private readonly interactionHint: HTMLElement;
+  private readonly skipDescriptionEl: HTMLElement;
   private readonly continueButton: HTMLButtonElement;
   private readonly previousButton: HTMLButtonElement;
   private isRewinding = false;
@@ -355,6 +434,13 @@ export class VnStage {
   private activeTextNodes: Array<{ node: Text; fullText: string }> = [];
   private currentRenderedParagraphId = "";
   private currentRenderedFormatted = "";
+  private effectIntensity: VnEffectIntensity = "full";
+  private textScale = 1;
+  /** Structured details for the error currently stored in state (message only). */
+  private errorDetails: VnStageErrorDetails | null = null;
+  /** Host-reported image failure that must not stop reading. */
+  private hostImageError: VnStageErrorDetails | null = null;
+  private lastSkipStop: "unread" | null = null;
 
   constructor(options: VnStageOptions) {
     this.state = options.initialState ?? createInitialVnStageState();
@@ -409,8 +495,8 @@ export class VnStage {
     this.exitButton = document.createElement("button");
     this.exitButton.type = "button";
     this.exitButton.setAttribute("data-vn-exit", "");
-    this.exitButton.setAttribute("aria-label", options.exitLabel ?? "Exit visual novel mode");
-    this.exitButton.textContent = "Exit";
+    this.exitButton.setAttribute("aria-label", options.exitLabel ?? "Back to chat");
+    this.exitButton.textContent = "Back to chat";
 
     shell.append(themeHost, this.exitButton);
     this.outerRoot.append(outerStyle, shell);
@@ -433,6 +519,9 @@ export class VnStage {
     this.speaker = queryRequired(this.themeRoot, "[data-vn-speaker]");
     this.dialogueText = queryRequired(this.themeRoot, "[data-vn-dialogue-text]");
     this.progress = queryRequired(this.themeRoot, "[data-vn-progress]");
+    this.readingState = queryRequired(this.themeRoot, "[data-vn-reading-state]");
+    this.interactionHint = queryRequired(this.themeRoot, "[data-vn-interaction-hint]");
+    this.skipDescriptionEl = queryRequired(this.themeRoot, "[data-vn-skip-description]");
     this.continueButton = queryRequired(this.themeRoot, "[data-vn-continue]");
     this.previousButton = queryRequired(this.themeRoot, "[data-vn-control='previous']");
     this.interaction = queryRequired(this.themeRoot, "[data-vn-interaction]");
@@ -451,8 +540,10 @@ export class VnStage {
     if (typeof options.textSpeed === "number") this.setTextSpeed(options.textSpeed);
     if (typeof options.autoPlayDelay === "number") this.setAutoPlayDelay(options.autoPlayDelay);
     if (options.skipMode) this.setSkipMode(options.skipMode);
+    this.skipDescriptionEl.textContent = skipDescription(this.skipMode);
 
     this.bindEvents();
+    this.updateControlButtons();
     this.render(null);
   }
 
@@ -487,10 +578,40 @@ export class VnStage {
 
   setSkipMode(mode: "read" | "all"): void {
     this.skipMode = mode === "all" ? "all" : "read";
+    this.skipDescriptionEl.textContent = skipDescription(this.skipMode);
+    this.skipButton.title = this.skipMode === "all" ? "Skip all text (S)" : "Skip read text (S)";
+  }
+
+  /** Reader text size multiplier (config `textScale`). Clamped to the config range. */
+  setTextScale(scale: number): void {
+    const next = Number.isFinite(scale) ? Math.min(TEXT_SCALE_MAX, Math.max(TEXT_SCALE_MIN, scale)) : 1;
+    this.textScale = Math.round(next * 100) / 100;
+    this.root.style.setProperty("--vn-text-scale", String(this.textScale));
+    this.root.dataset.vnTextScale = String(this.textScale);
+  }
+
+  getTextScale(): number {
+    return this.textScale;
+  }
+
+  /**
+   * Effect presentation level (config `effectIntensity`). The host already
+   * filters explicit paragraph effects; "off" additionally silences the text
+   * shake heuristic and any one-shot triggerEffect. Ambient overlays and the
+   * OS reduced-motion preference are untouched.
+   */
+  setEffectIntensity(level: VnEffectIntensity): void {
+    this.effectIntensity = level === "off" || level === "gentle" ? level : "full";
+    this.root.dataset.vnEffectIntensity = this.effectIntensity;
+  }
+
+  getEffectIntensity(): VnEffectIntensity {
+    return this.effectIntensity;
   }
 
   toggleAutoPlay(force?: boolean): void {
     if (this.destroyed) return;
+    this.lastSkipStop = null;
     this.isAutoPlay = force !== undefined ? force : !this.isAutoPlay;
     if (this.isAutoPlay) {
       this.isSkipping = false;
@@ -507,6 +628,7 @@ export class VnStage {
 
   toggleSkip(force?: boolean): void {
     if (this.destroyed) return;
+    this.lastSkipStop = null;
     this.isSkipping = force !== undefined ? force : !this.isSkipping;
     if (this.isSkipping) {
       this.isAutoPlay = false;
@@ -527,6 +649,7 @@ export class VnStage {
     if (this.destroyed) return;
     this.isBacklogOpen = true;
     this.backlogModal.hidden = false;
+    this.logButton.setAttribute("aria-expanded", "true");
     this.backlogContent.innerHTML = this.backlogEntries
       .map(
         (entry) => `
@@ -538,33 +661,65 @@ export class VnStage {
       )
       .join("");
     this.backlogContent.scrollTop = this.backlogContent.scrollHeight;
+    this.backlogClose.focus({ preventScroll: true });
   }
 
   closeBacklog(): void {
     if (this.destroyed) return;
     this.isBacklogOpen = false;
     this.backlogModal.hidden = true;
-    this.root.focus({ preventScroll: true });
+    this.logButton.setAttribute("aria-expanded", "false");
+    // Return focus to the control that opened the dialog so keyboard readers
+    // land where they left off; fall back to the stage root.
+    if (this.narrative.hidden) this.root.focus({ preventScroll: true });
+    else this.logButton.focus({ preventScroll: true });
   }
 
   private updateControlButtons(): void {
     this.autoButton.dataset.vnActive = String(this.isAutoPlay);
+    this.autoButton.setAttribute("aria-pressed", String(this.isAutoPlay));
+    this.autoButton.title = this.isAutoPlay ? "Pause auto play (A)" : "Auto play (A)";
+    const autoLabel = this.autoButton.querySelector<HTMLElement>("[data-vn-control-label]");
+    const autoText = this.isAutoPlay ? "Pause" : "Auto";
+    if (autoLabel && autoLabel.textContent !== autoText) autoLabel.textContent = autoText;
     this.skipButton.dataset.vnActive = String(this.isSkipping);
+    this.skipButton.setAttribute("aria-pressed", String(this.isSkipping));
     if (!this.isAutoPlay) {
       this.resetAutoRing();
     }
+    this.renderReadingState();
+  }
+
+  /** Footer line that names the current playback mode in plain words. */
+  private renderReadingState(): void {
+    let text = "";
+    let kind = "";
+    if (this.isAutoPlay) {
+      text = "Auto play on";
+      kind = "auto";
+    } else if (this.isSkipping) {
+      text = this.skipMode === "all" ? "Skipping all text" : "Skipping text you have read";
+      kind = "skip";
+    } else if (this.lastSkipStop === "unread") {
+      text = "Skip stopped: new text ahead";
+      kind = "skip-stopped";
+    }
+    if (this.readingState.textContent !== text) this.readingState.textContent = text;
+    if (kind) this.readingState.dataset.vnPlayback = kind;
+    else delete this.readingState.dataset.vnPlayback;
+    this.readingState.hidden = text.length === 0;
   }
 
   private updateContinueButton(): void {
     const view = selectVnStageView(this.state);
     const canAdvance = view.canAdvance;
     const isReady = canAdvance && !this.isTyping;
-    this.continueButton.hidden = !canAdvance;
+    // Keep the control in place so the layout does not jump between phases.
+    // It is only removed when there is no paragraph at all.
+    this.continueButton.hidden = view.paragraph === null;
+    this.continueButton.disabled = !canAdvance;
+    this.continueButton.setAttribute("aria-disabled", String(!canAdvance));
     this.previousButton.disabled = !view.canGoBack;
-    // The response overlay covers the dialogue controls at the end of a turn.
-    // Keep the same button reachable there, then return it to the reading bar.
-    const previousParent = view.acceptsInput ? this.interaction : queryRequired(this.themeRoot, "[data-vn-controls]");
-    if (this.previousButton.parentElement !== previousParent) previousParent.prepend(this.previousButton);
     this.continueButton.dataset.vnReady = String(isReady);
   }
 
@@ -596,6 +751,9 @@ export class VnStage {
     this.isTyping = false;
     this.currentRenderedParagraphId = "";
     this.currentRenderedFormatted = "";
+    this.errorDetails = null;
+    this.hostImageError = null;
+    this.lastSkipStop = null;
     this.updateControlButtons();
     this.updateContinueButton();
     this.dispatch({ type: "reset" });
@@ -604,6 +762,9 @@ export class VnStage {
   loadTurn(turn: VnTurnInput): void {
     this.resetZoom();
     this.ambientOverride = undefined;
+    this.errorDetails = null;
+    this.hostImageError = null;
+    this.lastSkipStop = null;
     this.dispatch({ type: "load-turn", turn });
     this.focus();
   }
@@ -665,8 +826,32 @@ export class VnStage {
     });
   }
 
-  setError(error: string | null): void {
-    this.dispatch({ type: "set-error", error });
+  /**
+   * Show an error. Strings keep the legacy behavior (the stage enters the
+   * "error" phase). Structured errors with `source: "image"` are shown as a
+   * card but never block reading: the paragraph, Continue and Previous stay
+   * usable while the host decides what to do next.
+   */
+  setError(error: VnStageErrorInput): void {
+    if (error === null) {
+      this.errorDetails = null;
+      this.hostImageError = null;
+      this.dispatch({ type: "set-error", error: null });
+      return;
+    }
+    if (typeof error === "string") {
+      this.errorDetails = null;
+      this.dispatch({ type: "set-error", error });
+      return;
+    }
+    const message = error.message.trim() || "The request failed.";
+    if (error.source === "image") {
+      this.hostImageError = { ...error, message };
+      this.render(this.state.phase);
+      return;
+    }
+    this.errorDetails = { ...error, message };
+    this.dispatch({ type: "set-error", error: message });
   }
 
   async setSceneImage(request: VnSceneImageRequest): Promise<boolean> {
@@ -726,6 +911,7 @@ export class VnStage {
 
   triggerEffect(effect: StageEffect): void {
     if (this.destroyed) return;
+    if (this.effectIntensity === "off") return;
     switch (effect) {
       case "shake":
         this.triggerShake();
@@ -1081,7 +1267,11 @@ export class VnStage {
       triggeredEffect = explicitEffect;
     }
 
-    if (triggeredEffect !== "shake" && TEXT_SHAKE_HEURISTIC_REGEX.test(paragraph.text)) {
+    if (
+      this.effectIntensity !== "off" &&
+      triggeredEffect !== "shake" &&
+      TEXT_SHAKE_HEURISTIC_REGEX.test(paragraph.text)
+    ) {
       this.triggerEffect("shake");
     }
 
@@ -1280,6 +1470,7 @@ export class VnStage {
     if (this.destroyed || this.isBacklogOpen || !selectVnStageView(this.state).canGoBack) return;
     this.isSkipping = false;
     this.isAutoPlay = false;
+    this.lastSkipStop = null;
     this.clearAllTimers();
     this.isTyping = false;
     this.activeTextNodes = [];
@@ -1298,6 +1489,10 @@ export class VnStage {
 
   private advance(): void {
     if (this.isBacklogOpen) return;
+    if (this.lastSkipStop !== null) {
+      this.lastSkipStop = null;
+      this.renderReadingState();
+    }
     if (this.isTyping) {
       this.completeTypewriter();
       return;
@@ -1311,6 +1506,16 @@ export class VnStage {
     if (!view.canAdvance) return;
 
     this.dispatch({ type: "advance" });
+    const stillReading = this.state.phase === "revealing" || this.state.phase === "error";
+    if (!stillReading && (this.isSkipping || this.isAutoPlay)) {
+      // Reading handed over to the reader (Your turn) or to the host: playback
+      // stops here and never submits on its own.
+      this.isSkipping = false;
+      this.isAutoPlay = false;
+      this.clearAutoPlayTimer();
+      this.clearSkipTimer();
+      this.updateControlButtons();
+    }
     this.callbacks.onAdvance?.(
       this.state.currentParagraphIndex,
       this.state.phase === "awaiting-input",
@@ -1522,6 +1727,7 @@ export class VnStage {
       const nextPara = this.state.paragraphs[nextIdx];
       if (nextPara && !this.readParagraphIds.has(nextPara.id)) {
         this.isSkipping = false;
+        this.lastSkipStop = "unread";
         this.updateControlButtons();
         return;
       }
@@ -1633,6 +1839,10 @@ export class VnStage {
       icon?: "spinner" | "image" | "check" | "alert" | "reroll";
       interactive?: boolean;
       action?: () => void;
+      /** Error-card extras. Presence forces a full rebuild instead of a text reconcile. */
+      title?: string;
+      detail?: string;
+      actions?: Array<{ label: string; action: () => void; note?: string }>;
     };
 
     const badges: BadgeSpec[] = [];
@@ -1644,11 +1854,11 @@ export class VnStage {
     if (this.state.assetProgress && this.state.assetProgress.total > 0) {
       badges.push({
         kind: "image",
-        label: `Generating images ${this.state.assetProgress.current}/${this.state.assetProgress.total}`,
+        label: `Creating image ${this.state.assetProgress.current} of ${this.state.assetProgress.total}`,
         icon: "spinner",
       });
     } else if (this.state.pendingImage) {
-      badges.push({ kind: "loading", label: "Loading scene image", icon: "spinner" });
+      badges.push({ kind: "loading", label: "Loading the scene image\u2026", icon: "spinner" });
     }
 
     if (this.state.activity) {
@@ -1670,43 +1880,83 @@ export class VnStage {
       });
     }
 
-    if (this.state.turnFinished) {
-      badges.push({ kind: "success", label: "Turn finished", icon: "check" });
-    }
-
     if (this.state.noValidOutput) {
-      badges.push({ kind: "warning", label: "No valid output produced", icon: "alert" });
+      badges.push({ kind: "warning", label: "This reply had no story text to show.", icon: "alert" });
     }
 
-    if (this.state.showRerollPrompt) {
-      const handleReroll = () => {
-        if (this.callbacks.onReroll) {
-          void this.callbacks.onReroll();
-        } else if (this.callbacks.onSwipe) {
-          void this.callbacks.onSwipe();
-        }
-      };
+    const canReroll = Boolean(this.callbacks.onReroll || this.callbacks.onSwipe);
+    const handleReroll = () => {
+      if (this.callbacks.onReroll) {
+        void this.callbacks.onReroll();
+      } else if (this.callbacks.onSwipe) {
+        void this.callbacks.onSwipe();
+      }
+    };
+
+    if (this.state.showRerollPrompt && canReroll) {
       badges.push({
         kind: "reroll",
-        label: "Swipe? (reroll the message)",
+        label: "Regenerate reply",
         icon: "reroll",
         interactive: true,
         action: handleReroll,
       });
     }
 
+    const errorCard = (message: string, details: VnStageErrorDetails | null, fallbackSource?: VnStageErrorSource): BadgeSpec => {
+      const spec: BadgeSpec = {
+        kind: "error",
+        title: errorTitle(details?.source ?? fallbackSource),
+        label: message,
+        icon: "alert",
+      };
+      if (details?.detail && details.detail.trim() && details.detail.trim() !== message) {
+        spec.detail = details.detail.trim();
+      }
+      if (Boolean(details?.retryable) && canReroll) {
+        spec.actions = [{ label: "Try again", action: handleReroll, ...(details?.retryScope ? { note: details.retryScope } : {}) }];
+      }
+      return spec;
+    };
+
     if (this.state.imageError) {
-      badges.push({ kind: "error", label: this.state.imageError, icon: "alert" });
+      badges.push(errorCard(this.state.imageError, null, "image"));
+    }
+    if (this.hostImageError) {
+      // Reading is not blocked, so the body says what the reader can do
+      // instead of restating the title.
+      const details = this.hostImageError;
+      const retryable = Boolean(details.retryable) && canReroll;
+      const guidance = retryable && !details.retryScope
+        ? "You can keep reading. Try again remakes only the unfinished image."
+        : "You can keep reading.";
+      const title = errorTitle(details.source);
+      const body = restatesTitle(details.message, title) ? guidance : `${details.message} ${guidance}`;
+      badges.push(errorCard(body, details));
     }
     if (this.state.error) {
-      badges.push({ kind: "error", label: this.state.error, icon: "alert" });
+      const details = this.errorDetails && this.errorDetails.message === this.state.error ? this.errorDetails : null;
+      // While the error card is shown the reader may still go back over the
+      // revealed text; say so when there is anything to reread.
+      const hasRevealedText = this.state.paragraphs.length > 0 && selectVnStageView(this.state).paragraph !== null;
+      const isSubmitFailure = this.state.phase === "awaiting-input";
+      const body = isSubmitFailure
+        ? `${this.state.error} Check your reply and send it again.`
+        : hasRevealedText
+          ? `${this.state.error} You can reread what has already been shown.`
+          : this.state.error;
+      badges.push(errorCard(body, details));
     }
+
+    const errorSignature = (b: Pick<BadgeSpec, "label"> & { title?: string | undefined; detail?: string | undefined; actions?: BadgeSpec["actions"] | undefined }): string =>
+      JSON.stringify([b.title ?? "", b.label, b.detail ?? "", (b.actions ?? []).map((a) => [a.label, a.note ?? ""])]);
 
     // Reconcile status badges in-place if structure matches to prevent restarting spinner/dash animations
     const currentElements = Array.from(this.statusStack.children) as HTMLElement[];
     const canReconcile = currentElements.length === badges.length &&
       currentElements.every((el, i) => {
         const b = badges[i]!;
+        if (b.kind === "error") return el.dataset.vnBadgeSignature === errorSignature(b);
         const hasInteractiveMatch = Boolean(b.interactive) === (el.tagName.toLowerCase() === "button");
         const hasKindMatch = el.dataset.vnBadgeKind === b.kind;
         const iconEl = el.querySelector("[data-vn-badge-icon]");
@@ -1716,14 +1966,15 @@ export class VnStage {
 
     if (canReconcile) {
       currentElements.forEach((el, i) => {
-        const textSpan = el.querySelector("span:not([data-vn-badge-icon])") ?? el.lastChild;
-        if (textSpan) textSpan.textContent = badges[i]!.label;
+        if (badges[i]!.kind === "error") return;
+        const textSpan = el.querySelector("[data-vn-badge-text]") ?? el.querySelector("span:not([data-vn-badge-icon])") ?? el.lastChild;
+        if (textSpan && textSpan.textContent !== badges[i]!.label) textSpan.textContent = badges[i]!.label;
       });
       return;
     }
 
     this.statusStack.replaceChildren(
-      ...badges.map(({ kind, label, icon, interactive, action }) => {
+      ...badges.map(({ kind, label, icon, interactive, action, title, detail, actions }) => {
         const badge = document.createElement(interactive ? "button" : "span");
         if (interactive) {
           (badge as HTMLButtonElement).type = "button";
@@ -1740,11 +1991,63 @@ export class VnStage {
         if (icon) {
           badge.appendChild(createBadgeIconSvg(icon));
         }
-        const textSpan = document.createElement("span");
-        textSpan.textContent = label;
-        badge.appendChild(textSpan);
+        if (kind !== "error") {
+          const textSpan = document.createElement("span");
+          textSpan.setAttribute("data-vn-badge-text", "");
+          textSpan.textContent = label;
+          badge.appendChild(textSpan);
+          return badge;
+        }
 
-        if (kind === "error") badge.setAttribute("role", "alert");
+        // Error card: title, message, optional technical details, optional actions.
+        badge.setAttribute("role", "alert");
+        badge.dataset.vnBadgeSignature = errorSignature({ label, title, detail, actions });
+        const body = document.createElement("span");
+        body.setAttribute("data-vn-badge-body", "");
+        if (title) {
+          const titleEl = document.createElement("strong");
+          titleEl.setAttribute("data-vn-badge-title", "");
+          titleEl.textContent = title;
+          body.appendChild(titleEl);
+        }
+        const textSpan = document.createElement("span");
+        textSpan.setAttribute("data-vn-badge-text", "");
+        textSpan.textContent = label;
+        body.appendChild(textSpan);
+        if (detail) {
+          const details = document.createElement("details");
+          details.setAttribute("data-vn-badge-details", "");
+          const summary = document.createElement("summary");
+          summary.textContent = "Technical details";
+          const pre = document.createElement("pre");
+          pre.textContent = detail;
+          details.append(summary, pre);
+          details.addEventListener("click", (e) => e.stopPropagation());
+          body.appendChild(details);
+        }
+        if (actions && actions.length > 0) {
+          const row = document.createElement("span");
+          row.setAttribute("data-vn-badge-actions", "");
+          for (const item of actions) {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.setAttribute("data-vn-badge-action", "");
+            button.textContent = item.label;
+            button.addEventListener("click", (e) => {
+              e.stopPropagation();
+              item.action();
+            });
+            row.appendChild(button);
+            if (item.note) {
+              const note = document.createElement("span");
+              note.setAttribute("data-vn-badge-note", "");
+              note.textContent = item.note;
+              row.appendChild(note);
+            }
+          }
+          body.appendChild(row);
+        }
+        badge.appendChild(body);
         return badge;
       }),
     );
@@ -1758,6 +2061,12 @@ export class VnStage {
     this.interaction.hidden = !showChoices && !showStandardInput;
     this.choiceList.hidden = !showChoices;
     this.inputForm.hidden = !showStandardInput;
+    const hint = showChoices
+      ? "Choose a reply."
+      : showStandardInput
+        ? "Write your reply. Ctrl+Enter sends it."
+        : "";
+    if (this.interactionHint.textContent !== hint) this.interactionHint.textContent = hint;
 
     if (showChoices) {
       this.choiceList.replaceChildren(

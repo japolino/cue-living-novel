@@ -4,7 +4,9 @@ import type { VisualNovelConfig } from "../../config.js";
 import {
   applyVisualConfigToStage,
   computeAssetProgress,
+  connectionCatalogStates,
   currentAssetError,
+  currentAssetFailure,
   decideTurnApplication,
   nameplateForParagraph,
   sameTurnIdentity,
@@ -72,6 +74,8 @@ const baseConfig: VisualNovelConfig = {
   textSpeed: 20,
   autoPlayDelay: 2000,
   skipMode: "read",
+  effectIntensity: "full",
+  textScale: 1,
   audioDirectory: "",
   bgmVolume: 0.7,
   sfxVolume: 0.8,
@@ -128,6 +132,48 @@ describe("applyVisualConfigToStage (live controller config application)", () => 
       "css:p { margin: 0; }",
       "regex:",
     ]);
+  });
+});
+
+
+describe("applyVisualConfigToStage (redesign presentation preferences)", () => {
+  test("pushes text scale and effect intensity to a stage that supports them", () => {
+    const calls: string[] = [];
+    const stage: VisualStageThemeTarget = {
+      ...spyStage(),
+      setTextScale(scale) { calls.push(`scale:${scale}`); },
+      setEffectIntensity(level) { calls.push(`fx:${level}`); },
+    };
+    applyVisualConfigToStage(stage, { ...baseConfig, textScale: 1.25, effectIntensity: "gentle" });
+    expect(calls).toEqual(["scale:1.25", "fx:gentle"]);
+  });
+
+  test("a stage without the new setters keeps working (setters are optional)", () => {
+    const stage = spyStage();
+    expect(() => applyVisualConfigToStage(stage, { ...baseConfig, textScale: 1.4, effectIntensity: "off" })).not.toThrow();
+    expect(stage.calls).toHaveLength(4);
+  });
+});
+
+describe("connectionCatalogStates (truthful readiness, never a probe)", () => {
+  const option = { id: "c1", name: "Main", provider: "openai", model: "gpt", isDefault: true };
+
+  test("a listed kind is ready with its options; ready means listed, not tested", () => {
+    const states = connectionCatalogStates({ planner: [option], image: [] });
+    expect(states.planner).toEqual({ status: "ready", options: [option] });
+    expect(states.image).toEqual({ status: "ready", options: [] });
+  });
+
+  test("a kind whose listing failed is reported as an error instead of an empty ready list", () => {
+    const states = connectionCatalogStates({ planner: [option], image: [], errors: { image: "image-gen offline" } });
+    expect(states.planner.status).toBe("ready");
+    expect(states.image).toEqual({ status: "error", options: [], error: "image-gen offline" });
+  });
+
+  test("both kinds can fail independently", () => {
+    const states = connectionCatalogStates({ errors: { planner: "a", image: "b" } });
+    expect(states.planner).toEqual({ status: "error", options: [], error: "a" });
+    expect(states.image).toEqual({ status: "error", options: [], error: "b" });
   });
 });
 
@@ -360,5 +406,51 @@ describe("stageTurnInput (production host-to-stage mapping)", () => {
     expect(input.paragraphs.map((paragraph) => paragraph.ambient)).toEqual(["rain", "rain", null]);
     expect(input.paragraphs[1]?.effect).toBe("flash_white");
     expect(input.paragraphs[1]?.id).toBe("feedface12345678:1");
+  });
+});
+
+describe("stageTurnInput (effect presentation preference)", () => {
+  const view = () => turn({
+    paragraphs: ["Boom.", "Flash.", "Danger."],
+    effects: ["shake_hard", "flash_white", "confetti"],
+    ambients: ["danger_pulse", "rain", null],
+  });
+
+  test("defaults to full so existing playback is unchanged", () => {
+    const input = stageTurnInput(view(), "standard", false);
+    expect(input.paragraphs.map((paragraph) => paragraph.effect)).toEqual(["shake_hard", "flash_white", "confetti"]);
+    expect(input.ambient).toBe("danger_pulse");
+  });
+
+  test("gentle softens strong shakes, drops flashes, keeps particles, and calms the danger pulse", () => {
+    const input = stageTurnInput(view(), "standard", false, "gentle");
+    expect(input.paragraphs.map((paragraph) => paragraph.effect)).toEqual(["shake", undefined, "confetti"]);
+    expect(input.paragraphs.map((paragraph) => paragraph.ambient)).toEqual(["vignette_dark", "rain", null]);
+    expect(input.ambient).toBe("vignette_dark");
+  });
+
+  test("off removes every one-shot effect but keeps atmospheric ambients", () => {
+    const input = stageTurnInput(view(), "standard", false, "off");
+    expect(input.paragraphs.every((paragraph) => paragraph.effect === undefined)).toBe(true);
+    expect(input.paragraphs[1]?.ambient).toBe("rain");
+  });
+});
+
+describe("currentAssetFailure (actionable, truthful retry scope)", () => {
+  test("describes the failed image at the cursor with detail and what retry keeps", () => {
+    const view = turn({
+      assets: [
+        { jobId: "a", cueId: "a", paragraphIndex: 0, status: "generated", imageUrl: "a.png" },
+        { jobId: "b", cueId: "b", paragraphIndex: 1, status: "failed", error: "No usable appearance" },
+      ],
+    });
+    expect(currentAssetFailure(view, 0)).toBeNull();
+    expect(currentAssetFailure(view, 1)).toEqual({
+      message: "This scene image could not be made.",
+      detail: "No usable appearance",
+      source: "image",
+      retryable: true,
+      retryScope: "Try again keeps 1 finished image and makes 1 unfinished image again.",
+    });
   });
 });

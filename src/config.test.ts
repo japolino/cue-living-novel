@@ -3,6 +3,9 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   DEFAULT_CONFIG,
+  EFFECT_INTENSITIES,
+  TEXT_SCALE_MAX,
+  TEXT_SCALE_MIN,
   normalizeConfig,
   SCENE_IMAGE_FITS,
   THEME_PRESET_IDS,
@@ -46,6 +49,53 @@ test("scene image fit preserves every supported mode and rejects unknown ones", 
   assert.equal(normalizeConfig({ sceneImageFit: "original" }).sceneImageFit, "cover");
 });
 
+
+test("normalizing an empty config yields exactly the defaults (backward compatible)", () => {
+  assert.deepEqual(normalizeConfig({}), DEFAULT_CONFIG);
+  assert.deepEqual(normalizeConfig(undefined), DEFAULT_CONFIG);
+});
+
+test("effect intensity defaults to full and rejects unknown levels", () => {
+  assert.equal(DEFAULT_CONFIG.effectIntensity, "full");
+  assert.deepEqual([...EFFECT_INTENSITIES], ["off", "gentle", "full"]);
+  assert.equal(normalizeConfig({}).effectIntensity, "full");
+  assert.equal(normalizeConfig({ effectIntensity: "gentle" }).effectIntensity, "gentle");
+  assert.equal(normalizeConfig({ effectIntensity: "off" }).effectIntensity, "off");
+  assert.equal(normalizeConfig({ effectIntensity: "extreme" }).effectIntensity, "full");
+  assert.equal(normalizeConfig({ effectIntensity: 2 }).effectIntensity, "full");
+});
+
+test("text scale defaults to 1 and clamps to the supported range", () => {
+  assert.equal(DEFAULT_CONFIG.textScale, 1);
+  assert.equal(normalizeConfig({}).textScale, 1);
+  assert.equal(normalizeConfig({ textScale: "1.25" }).textScale, 1.25);
+  assert.equal(normalizeConfig({ textScale: 5 }).textScale, TEXT_SCALE_MAX);
+  assert.equal(normalizeConfig({ textScale: 0.1 }).textScale, TEXT_SCALE_MIN);
+  assert.equal(normalizeConfig({ textScale: "big" }).textScale, 1);
+  assert.equal(normalizeConfig({ textScale: 1.23456 }).textScale, 1.23);
+});
+
+test("a pre-redesign stored config keeps its generation settings and gains only defaults", () => {
+  const legacy = {
+    generateImages: false,
+    useNativeCardImages: true,
+    imageConnectionId: "img-1",
+    imageModel: "sdxl",
+    maxImagesPerTurn: 2,
+    imageParameters: { steps: 30 },
+    customCss: "[data-vn-root] { color: red; }",
+  };
+  const config = normalizeConfig(legacy);
+  assert.equal(config.generateImages, false);
+  assert.equal(config.useNativeCardImages, true);
+  assert.equal(config.imageConnectionId, "img-1");
+  assert.equal(config.imageModel, "sdxl");
+  assert.equal(config.maxImagesPerTurn, 2);
+  assert.deepEqual(config.imageParameters, { steps: 30 });
+  assert.equal(config.customCss, legacy.customCss);
+  assert.equal(config.effectIntensity, "full");
+  assert.equal(config.textScale, 1);
+});
 
 test("the host-neutral preset id list is exactly the seven supported presets", () => {
   assert.deepEqual(

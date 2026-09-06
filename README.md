@@ -18,7 +18,7 @@ The preview includes:
 - swipe, edit, delete, duplicate-submit, and stale-image reconciliation
 - per-user and per-chat persisted continuity
 - a settings tab, a user-selectable scene-image fit (Cover / Contain / Stretch / Original size / Scale down), five built-in theme presets (Lumiverse, Golden hour, Boxed console, Paper novel, Midnight noir), and a shadow-DOM custom CSS contract that is always the final styling layer
-- an always-accessible Exit control that restores native Lumiverse
+- an always-accessible **Back to chat** control that restores native Lumiverse
 
 It targets Lumiverse staging `1.1.6`, audited at commit `33dfa9ee62999fa3e2567066ed5cdadf61635323`, and `lumiverse-spindle-types` `0.6.23`.
 

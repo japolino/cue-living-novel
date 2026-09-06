@@ -11,6 +11,10 @@ export const VN_BASE_CSS = `
   --vn-font-family: ui-rounded, "Segoe UI", system-ui, sans-serif;
   --vn-dialogue-font-size: clamp(1rem, 1.1vw + 0.75rem, 1.35rem);
   --vn-transition-duration: 280ms;
+  /* Reader text size multiplier (config textScale); the host sets it on the root. */
+  --vn-text-scale: 1;
+  /* Height of a toolbar chip. Grows to a 44px touch target on coarse pointers. */
+  --vn-control-size: 2rem;
   display: block;
   width: 100%;
   height: 100%;
@@ -173,7 +177,7 @@ textarea {
   top: max(0.85rem, env(safe-area-inset-top));
   left: max(0.85rem, env(safe-area-inset-left));
   display: flex;
-  max-width: min(36rem, calc(100vw - 9rem));
+  max-width: min(36rem, calc(100vw - 10rem));
   flex-wrap: wrap;
   gap: 0.45rem;
   pointer-events: none;
@@ -302,9 +306,106 @@ button[data-vn-badge]:active {
 }
 
 [data-vn-badge-kind="error"] {
+  align-items: flex-start;
+  max-width: min(28rem, 100%);
+  padding: 0.7rem 0.9rem;
   border-color: rgba(255, 132, 151, 0.7);
-  background: rgba(62, 10, 23, 0.88);
+  border-radius: 0.8rem;
+  background: rgba(62, 10, 23, 0.9);
   color: #fecdd3;
+  pointer-events: auto;
+  user-select: text;
+}
+
+[data-vn-badge-kind="error"] [data-vn-badge-icon] {
+  margin-top: 0.15rem;
+}
+
+[data-vn-badge-body] {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+[data-vn-badge-title] {
+  color: #fff;
+  font-size: 0.86rem;
+  font-weight: 750;
+}
+
+[data-vn-badge-kind="error"] [data-vn-badge-text] {
+  font-weight: 450;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+[data-vn-badge-details] {
+  font-size: 0.76rem;
+}
+
+[data-vn-badge-details] summary {
+  cursor: pointer;
+  color: rgba(254, 205, 211, 0.85);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+[data-vn-badge-details] pre {
+  max-height: 9rem;
+  margin: 0.35rem 0 0;
+  padding: 0.5rem 0.6rem;
+  overflow: auto;
+  border-radius: 0.4rem;
+  background: rgba(0, 0, 0, 0.35);
+  color: rgba(255, 255, 255, 0.85);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+[data-vn-badge-actions] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.7rem;
+  margin-top: 0.15rem;
+}
+
+[data-vn-badge-action] {
+  min-height: 2rem;
+  padding: 0.35rem 0.9rem;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+[data-vn-badge-action]:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+[data-vn-badge-note] {
+  color: rgba(254, 205, 211, 0.85);
+  font-size: 0.76rem;
+  font-weight: 450;
+}
+
+@media (pointer: coarse), (max-width: 640px) {
+  /* 2.8rem = 44.8px: stays >= 44px after device-pixel rounding on 2.x/3x screens. */
+  [data-vn-badge-action] {
+    min-height: 2.8rem;
+  }
+
+  [data-vn-badge][data-vn-badge-interactive="true"],
+  button[data-vn-badge] {
+    min-height: 2.8rem;
+  }
 }
 
 [data-vn-narrative] {
@@ -363,7 +464,7 @@ button[data-vn-badge]:active {
 [data-vn-dialogue-text] {
   margin: 0;
   color: var(--vn-text);
-  font-size: var(--vn-dialogue-font-size);
+  font-size: calc(var(--vn-dialogue-font-size) * var(--vn-text-scale, 1));
   line-height: 1.55;
   text-wrap: pretty;
   white-space: pre-wrap;
@@ -410,11 +511,33 @@ button[data-vn-badge]:active {
   filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.15));
 }
 
+[data-vn-dialogue-footer] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.9rem;
+  margin-top: 0.75rem;
+  min-height: 1.1rem;
+}
+
 [data-vn-progress] {
   display: block;
-  margin-top: 0.75rem;
   color: var(--vn-muted-text);
   font-size: 0.78rem;
+}
+
+/* Plain-words playback state: "Auto play on", "Skipping text you have read", ... */
+[data-vn-reading-state] {
+  display: inline-block;
+  color: var(--vn-accent);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+[data-vn-reading-state][data-vn-playback="skip-stopped"] {
+  color: var(--vn-muted-text);
+  font-weight: 500;
 }
 
 [data-vn-continue] {
@@ -447,6 +570,12 @@ button[data-vn-badge]:active {
   animation: vn-continue-bob 1.3s ease-in-out infinite;
 }
 
+/* The control keeps its place while it cannot advance; it only fades. */
+[data-vn-continue]:disabled {
+  cursor: default;
+  animation: none;
+}
+
 [data-vn-continue][data-vn-ready="true"]:hover {
   animation: none;
 }
@@ -463,7 +592,10 @@ button[data-vn-badge]:active {
 [data-vn-continue]:focus-visible,
 [data-vn-choice]:focus-visible,
 [data-vn-submit]:focus-visible,
-[data-vn-input]:focus-visible {
+[data-vn-input]:focus-visible,
+[data-vn-badge]:focus-visible,
+[data-vn-badge-action]:focus-visible,
+[data-vn-badge-details] summary:focus-visible {
   outline: 3px solid var(--vn-accent);
   outline-offset: 3px;
 }
@@ -473,13 +605,64 @@ button[data-vn-badge]:active {
   z-index: 4;
   inset: 0;
   display: grid;
-  place-items: center;
+  align-content: center;
+  justify-items: center;
+  gap: 0.9rem;
   padding:
     max(4.5rem, env(safe-area-inset-top))
     max(1.25rem, env(safe-area-inset-right))
     max(1.25rem, env(safe-area-inset-bottom))
     max(1.25rem, env(safe-area-inset-left));
   background: rgba(4, 5, 9, 0.34);
+  /* The scrim is only a visual; the reading toolbar beneath stays clickable. */
+  pointer-events: none;
+}
+
+[data-vn-interaction] > * {
+  pointer-events: auto;
+}
+
+/* "Your turn" heading: names the hand-off from reading to replying. */
+[data-vn-interaction-heading] {
+  display: grid;
+  gap: 0.2rem;
+  width: min(46rem, 100%);
+  padding: 0 0.5rem;
+  text-align: left;
+  pointer-events: none;
+}
+
+[data-vn-interaction-title] {
+  margin: 0;
+  color: var(--vn-text);
+  font-size: 1.05rem;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.6);
+}
+
+[data-vn-interaction-title]::before {
+  content: "";
+  display: inline-block;
+  width: 0.55em;
+  height: 0.55em;
+  margin-right: 0.55em;
+  border-radius: 999px;
+  background: var(--vn-accent);
+  box-shadow: 0 0 0.6rem var(--vn-accent);
+  vertical-align: 0.05em;
+}
+
+[data-vn-interaction-hint] {
+  margin: 0;
+  color: var(--vn-muted-text);
+  font-size: 0.85rem;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.6);
+}
+
+[data-vn-interaction-hint]:empty {
+  display: none;
 }
 
 [data-vn-choice-list] {
@@ -517,6 +700,10 @@ button[data-vn-badge]:active {
 [data-vn-input]:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+[data-vn-interaction]:has([data-vn-input-form]:not([hidden])) [data-vn-interaction-heading] {
+  width: min(52rem, 100%);
 }
 
 [data-vn-input-form] {
@@ -616,13 +803,19 @@ button[data-vn-badge]:active {
   }
 
   [data-vn-interaction] {
-    place-items: end center;
-    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+    align-content: end;
+    padding-top: max(3.5rem, env(safe-area-inset-top));
+    /* Leave the dialogue box and its toolbar reachable below the reply area. */
+    padding-bottom: calc(var(--vn-control-size) + 12rem + env(safe-area-inset-bottom, 0px));
   }
 
   [data-vn-choice-list] {
     width: 100%;
-    max-height: 62vh;
+    max-height: calc(100dvh - var(--vn-control-size) - 17rem);
+  }
+
+  [data-vn-input] {
+    min-height: 5.5rem;
   }
 
   [data-vn-input-form] {
@@ -888,16 +1081,40 @@ button[data-vn-badge]:active {
   user-select: none;
 }
 
-[data-vn-interaction] > [data-vn-control="previous"] {
-  position: absolute;
-  bottom: max(1rem, env(safe-area-inset-bottom));
-  left: max(1rem, env(safe-area-inset-left));
-}
-
 @media (max-width: 640px) {
   [data-vn-controls] {
-    top: -3.5rem;
+    /* Sit above the nameplate: chip height plus the nameplate overhang and a gap. */
+    top: calc(-1 * (var(--vn-control-size) + 1.5rem));
     right: 1rem;
+    gap: 0.3rem;
+  }
+}
+
+/*
+ * Touch: every reading control is at least 44 x 44 CSS px. Narrow screens
+ * get the same size even when pointer emulation is missing, because they are
+ * almost always touched. 2.8rem (44.8px) keeps a margin above 44px so
+ * device-pixel rounding on 2.x/3x screens never reports 43.99px.
+ */
+@media (pointer: coarse), (max-width: 640px) {
+  :host {
+    --vn-control-size: 2.8rem;
+  }
+
+  [data-vn-control] {
+    min-width: 2.8rem;
+    padding-right: 0.8rem;
+    padding-left: 0.8rem;
+  }
+
+  [data-vn-continue] {
+    width: 2.8rem;
+    height: 2.8rem;
+  }
+
+  [data-vn-backlog-close] {
+    width: 2.8rem;
+    height: 2.8rem;
   }
 }
 
@@ -906,6 +1123,7 @@ button[data-vn-badge]:active {
   align-items: center;
   justify-content: center;
   gap: 0.3rem;
+  min-height: var(--vn-control-size);
   padding: 0.25rem 0.65rem;
   border: 1px solid rgba(255, 255, 255, 0.22);
   border-radius: 0.5rem;
@@ -938,6 +1156,27 @@ button[data-vn-badge]:active {
 [data-vn-control]:focus-visible {
   outline: 2px solid var(--vn-accent);
   outline-offset: 2px;
+}
+
+[data-vn-control]:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+[data-vn-control]:disabled:hover {
+  background: rgba(14, 16, 26, 0.85);
+  color: var(--vn-muted-text);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+[data-vn-control-icon] {
+  display: inline-block;
+  font-size: 1.1em;
+  line-height: 1;
+}
+
+[data-vn-skip-description] {
+  display: none;
 }
 
 /*

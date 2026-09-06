@@ -1,6 +1,6 @@
 import type { SpindleFrontendContext } from "lumiverse-spindle-types";
-import type { VisualNovelConfig } from "../../config.js";
-import type { AssetView, BackendResponse, TurnView } from "../../protocol.js";
+import type { VisualNovelConfig, VisualNovelEffectIntensity } from "../../config.js";
+import type { AssetView, BackendResponse, ConnectionCatalogOption, TurnView } from "../../protocol.js";
 import { AudioEngine, VnStage, isAmbientEffect, isStageEffect } from "../stage/index.js";
 import type { AmbientEffect, StageEffect } from "../store/index.js";
 import { VisualNovelSettingsPanel } from "../settings/panel.js";
@@ -9,6 +9,13 @@ import { createVnHeaderLauncher } from "./manual-launcher.js";
 import { captureSimTrackerCards } from "./panel-capture.js";
 import { PanelDock } from "../stage/panel-dock.js";
 import { stagingContext, supportsVisualNovelOverlay, type ComponentOverrideHandle } from "./staging-context.js";
+import { presentAmbient, presentEffect } from "./effect-presentation.js";
+import {
+  describeImageFailure,
+  describeOperationError,
+  describePlanningFailure,
+  type HostStageError,
+} from "./turn-status.js";
 
 const CLEANUP_KEY = Symbol.for("visual-novel-preview.frontend-cleanup");
 
@@ -52,6 +59,17 @@ export function currentAssetError(turn: TurnView, paragraphIndex: number): strin
   const current = turn.assets.filter((asset) => asset.paragraphIndex <= paragraphIndex)
     .sort((a, b) => b.paragraphIndex - a.paragraphIndex)[0];
   return current?.status === "failed" ? current.error || "Image generation failed. Retry this turn." : null;
+}
+
+/**
+ * Structured form of `currentAssetError`: a friendly message, the raw backend
+ * text as detail, and a truthful statement of what "Try again" does (finished
+ * images are kept; the whole turn is retried, never a single image).
+ */
+export function currentAssetFailure(turn: TurnView, paragraphIndex: number): HostStageError | null {
+  const current = turn.assets.filter((asset) => asset.paragraphIndex <= paragraphIndex)
+    .sort((a, b) => b.paragraphIndex - a.paragraphIndex)[0];
+  return current?.status === "failed" ? describeImageFailure(turn, current.error) : null;
 }
 
 /**
@@ -116,39 +134,57 @@ export function nameplateForParagraph(view: TurnView, index: number): string {
   return attributed === undefined || attributed === null ? view.speaker : attributed;
 }
 
-/** The validated one-shot stage effect for a paragraph, as a spreadable object. */
-export function effectForParagraph(view: TurnView, index: number): { effect?: StageEffect } {
+/**
+ * The validated one-shot stage effect for a paragraph, as a spreadable object,
+ * after the user's effect-presentation preference ("full" keeps every effect).
+ */
+export function effectForParagraph(
+  view: TurnView,
+  index: number,
+  intensity: VisualNovelEffectIntensity = "full",
+): { effect?: StageEffect } {
   const effect = view.effects?.[index];
-  return isStageEffect(effect) ? { effect } : {};
+  if (!isStageEffect(effect)) return {};
+  const presented = presentEffect(effect, intensity);
+  return presented ? { effect: presented } : {};
 }
 
 /** The validated ambient effect for a paragraph, as a spreadable object. */
-export function ambientForParagraph(view: TurnView, index: number): { ambient?: AmbientEffect | null } {
+export function ambientForParagraph(
+  view: TurnView,
+  index: number,
+  intensity: VisualNovelEffectIntensity = "full",
+): { ambient?: AmbientEffect | null } {
   const ambient = view.ambients?.[index];
   if (ambient === null) return { ambient: null };
-  return isAmbientEffect(ambient) ? { ambient } : {};
+  return isAmbientEffect(ambient) ? { ambient: presentAmbient(ambient, intensity) } : {};
 }
 
 /** The turn-level opening ambient (paragraph 0's ambient, when valid). */
-export function firstAmbient(view: TurnView): AmbientEffect | null {
+export function firstAmbient(view: TurnView, intensity: VisualNovelEffectIntensity = "full"): AmbientEffect | null {
   const ambient = view.ambients?.[0];
-  return isAmbientEffect(ambient) ? ambient : null;
+  return isAmbientEffect(ambient) ? presentAmbient(ambient, intensity) : null;
 }
 
 /** Build the stage input without turning absent ambient data into a clear. */
-export function stageTurnInput(next: TurnView, mode: VnTurnInput["mode"], preserveImage: boolean): VnTurnInput {
+export function stageTurnInput(
+  next: TurnView,
+  mode: VnTurnInput["mode"],
+  preserveImage: boolean,
+  intensity: VisualNovelEffectIntensity = "full",
+): VnTurnInput {
   return {
     mode,
     paragraphs: next.paragraphs.map((text, index) => ({
       id: `${next.sourceFingerprint}:${index}`,
       text,
       speaker: nameplateForParagraph(next, index),
-      ...effectForParagraph(next, index),
-      ...ambientForParagraph(next, index)
+      ...effectForParagraph(next, index, intensity),
+      ...ambientForParagraph(next, index, intensity)
     })),
     choices: next.choices.map((choice) => ({ id: choice.id, label: choice.label, value: choice.value })),
     preserveImage,
-    ...(next.ambients !== undefined ? { ambient: firstAmbient(next) } : {})
+    ...(next.ambients !== undefined ? { ambient: firstAmbient(next, intensity) } : {})
   };
 }
 
@@ -207,6 +243,10 @@ export type VisualStageThemeTarget = Pick<
   setTextSpeed?: (speed: number) => void;
   setAutoPlayDelay?: (delay: number) => void;
   setSkipMode?: (mode: "read" | "all") => void;
+  /** Dialogue text size multiplier (stage sets `--vn-text-scale`). */
+  setTextScale?: (scale: number) => void;
+  /** Lets the stage also gate its own heuristic effects (text-triggered shake). */
+  setEffectIntensity?: (level: VisualNovelEffectIntensity) => void;
 };
 
 /**
@@ -227,6 +267,46 @@ export function applyVisualConfigToStage(
   stage.setTextSpeed?.(config.textSpeed);
   stage.setAutoPlayDelay?.(config.autoPlayDelay);
   stage.setSkipMode?.(config.skipMode);
+  stage.setTextScale?.(config.textScale);
+  stage.setEffectIntensity?.(config.effectIntensity);
+}
+
+/**
+ * The subset of the settings panel the host reports back into. Every member
+ * beyond the original three is optional so the host works with a panel that
+ * has not adopted the redesign feedback yet.
+ */
+export type SettingsFeedbackTarget = {
+  setConfig(config: VisualNovelConfig): void;
+  setConnectionCatalog(kind: "planner" | "image", state: ConnectionCatalogFeedback): void;
+  setAudioStatus(message: string): void;
+  /** Acknowledged save result: "saved" only after the backend echoes `vn_config`. */
+  setSaveStatus?(status: { kind: "saved" } | { kind: "error"; error: string }): void;
+  /** Exact library counts from the last scan/import. */
+  setAudioLibrary?(library: { bgmCount: number; sfxCount: number }): void;
+};
+
+export type ConnectionCatalogFeedback =
+  | { status: "idle" | "loading"; options: readonly ConnectionCatalogOption[] }
+  | { status: "ready"; options: readonly ConnectionCatalogOption[] }
+  | { status: "error"; options: readonly ConnectionCatalogOption[]; error: string };
+
+/**
+ * Truthful catalog states from a `vn_connection_catalog` response. A kind whose
+ * listing failed is reported as an error (the backend lists each kind with
+ * `allSettled`); "ready" only means "listed by Lumiverse", never "tested".
+ */
+export function connectionCatalogStates(message: {
+  planner?: ConnectionCatalogOption[];
+  image?: ConnectionCatalogOption[];
+  errors?: { planner?: string; image?: string };
+}): Record<"planner" | "image", ConnectionCatalogFeedback> {
+  const forKind = (kind: "planner" | "image"): ConnectionCatalogFeedback => {
+    const error = message.errors?.[kind];
+    if (error) return { status: "error", options: [], error };
+    return { status: "ready", options: message[kind] ?? [] };
+  };
+  return { planner: forKind("planner"), image: forKind("image") };
 }
 
 export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): () => void {
@@ -370,7 +450,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     keywords: ["visual novel", "cyoa", "images", "custom css"],
     position: "after-display"
   });
-  const settingsPanel = settingsHandle ? new VisualNovelSettingsPanel({
+  const settingsPanel: (VisualNovelSettingsPanel & SettingsFeedbackTarget) | null = settingsHandle ? new VisualNovelSettingsPanel({
     mount: settingsHandle.root,
     onOpenPreview: () => activate(),
     onRefreshConnections: () => requestConnectionCatalog(),
@@ -446,8 +526,21 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     ctx.sendToBackend({ type: "vn_get_state", chatId: chatId() });
   }
 
+  const connectionOptions: Record<"planner" | "image", readonly ConnectionCatalogOption[]> = { planner: [], image: [] };
   function requestConnectionCatalog(): void {
+    // Listing is free (no model call). Keep the previous options visible while loading.
+    settingsPanel?.setConnectionCatalog("planner", { status: "loading", options: connectionOptions.planner });
+    settingsPanel?.setConnectionCatalog("image", { status: "loading", options: connectionOptions.image });
     ctx.sendToBackend({ type: "vn_get_connection_catalog" });
+  }
+
+  /**
+   * Hand a host error to the stage as a structured `VnStageErrorInput`: the
+   * stage renders the title, a collapsed technical detail, and a user-initiated
+   * "Try again" only when `retryable` is true. Never retries by itself.
+   */
+  function reportStageError(error: HostStageError | null): void {
+    stage.setError(error);
   }
 
   function registerOverrides(): void {
@@ -525,8 +618,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
 
   async function syncImageForParagraph(paragraphIndex: number): Promise<void> {
     if (!turn) return;
-    const assetError = currentAssetError(turn, paragraphIndex);
-    if (assetError) stage.setError(assetError);
+    const assetFailure = currentAssetFailure(turn, paragraphIndex);
+    if (assetFailure) reportStageError(assetFailure);
     const asset = selectCurrentImage(turn, paragraphIndex);
     if (!asset?.imageUrl) {
       vnDebug("image sync", `p${paragraphIndex}`, "no decodable asset yet");
@@ -579,7 +672,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       return;
     }
     if (decision.kind === "error") {
-      stage.setError(decision.error);
+      reportStageError(describePlanningFailure(next));
       return;
     }
     if (decision.kind === "same-turn") {
@@ -592,7 +685,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     const mode = requestedMode === "cyoa" && next.choices.length > 0 ? "cyoa" : "standard";
     const preserveImage = shouldPreserveImage(previous, next);
     turnOpeningBgm = preserveImage ? currentBgm : null;
-    stage.loadTurn(stageTurnInput(next, mode, preserveImage));
+    stage.loadTurn(stageTurnInput(next, mode, preserveImage, configRef.current?.effectIntensity ?? "full"));
     void syncImageForParagraph(0);
     syncAudioForParagraph(next, 0);
   }
@@ -610,12 +703,16 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     }
     if (type && type !== "vn_asset") vnDebug("received", type, payload);
     if (type === "vn_connection_catalog" && message.type === "vn_connection_catalog") {
-      settingsPanel?.setConnectionCatalog("planner", { status: "ready", options: message.planner ?? [] });
-      settingsPanel?.setConnectionCatalog("image", { status: "ready", options: message.image ?? [] });
+      const states = connectionCatalogStates(message);
+      connectionOptions.planner = states.planner.options;
+      connectionOptions.image = states.image.options;
+      settingsPanel?.setConnectionCatalog("planner", states.planner);
+      settingsPanel?.setConnectionCatalog("image", states.image);
       return;
     }
     if (type === "vn_audio_scanned" && message.type === "vn_audio_scanned") {
       settingsPanel?.setAudioStatus(`Scanned ${message.bgmCount} BGM, ${message.sfxCount} SFX.`);
+      settingsPanel?.setAudioLibrary?.({ bgmCount: message.bgmCount, sfxCount: message.sfxCount });
       return;
     }
     if (type === "vn_state" && message.type === "vn_state") {
@@ -636,11 +733,14 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       return;
     }
     if (type === "vn_config" && message.type === "vn_config") {
+      // The echo of a persisted config is the only save acknowledgment the
+      // transport offers; "saved" is claimed here and nowhere earlier.
       configRef.current = message.config;
       applyVisualConfigToStage(stage, configRef.current);
       audioEngine.setBgmVolume(configRef.current.bgmVolume);
       audioEngine.setSfxVolume(configRef.current.sfxVolume);
       settingsPanel?.setConfig(configRef.current);
+      settingsPanel?.setSaveStatus?.({ kind: "saved" });
       return;
     }
     if (type === "vn_turn" && message.type === "vn_turn") {
@@ -674,19 +774,40 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
           stage.setPhase("waiting-for-response");
         }
       } else if (message.error) {
-        stage.setError(message.error);
+        reportStageError({
+          message: "The reply finished, but the scene could not be updated.",
+          detail: message.error,
+          source: "generation",
+          retryable: false,
+        });
       }
       return;
     }
     if (type === "vn_permission" && message.type === "vn_permission") {
       if (!message.granted) {
         deactivate();
-        stage.setError(`Permission revoked: ${message.permission}. Re-enable it before reopening visual novel mode.`);
+        reportStageError({
+          message: "Visual novel mode needs a permission that was turned off.",
+          detail: `Permission revoked: ${message.permission}. Re-enable it before reopening visual novel mode.`,
+          source: "permission",
+          retryable: false,
+        });
       }
       return;
     }
     if (type === "vn_error" && message.type === "vn_error") {
-      if (!message.chatId || message.chatId === chatId()) stage.setError(message.error);
+      if (message.operation === "vn_set_config") {
+        settingsPanel?.setSaveStatus?.({ kind: "error", error: message.error });
+        return;
+      }
+      if (message.operation === "vn_get_connection_catalog") {
+        settingsPanel?.setConnectionCatalog("planner", { status: "error", options: [], error: message.error });
+        settingsPanel?.setConnectionCatalog("image", { status: "error", options: [], error: message.error });
+        return;
+      }
+      if (!message.chatId || message.chatId === chatId()) {
+        reportStageError(describeOperationError(message.operation, message.error, turn));
+      }
     }
   }
 
