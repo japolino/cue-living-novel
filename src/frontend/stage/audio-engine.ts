@@ -73,17 +73,22 @@ function defaultAudioFactory(src: string): AudioPlayerElement {
   return createMockAudioPlayer(formatted);
 }
 
+export type TimerHandle = unknown;
+
 export interface AudioEngineOptions {
   bgmVolume?: number;
   sfxVolume?: number;
   crossfadeDuration?: number;
   audioFactory?: AudioFactory;
+  now?: () => number;
+  setInterval?: (handler: () => void, timeout?: number) => TimerHandle;
+  clearInterval?: (handle: TimerHandle) => void;
 }
 
 interface ActiveBgm {
   player: AudioPlayerElement;
   src: string;
-  fadeTimer?: ReturnType<typeof setInterval> | undefined;
+  fadeTimer?: TimerHandle | undefined;
 }
 
 const DEFAULT_CROSSFADE_DURATION_MS = 1500;
@@ -93,6 +98,9 @@ export class AudioEngine {
   private sfxVolume: number;
   private readonly crossfadeDuration: number;
   private readonly audioFactory: AudioFactory;
+  private readonly now: () => number;
+  private readonly setInterval: (handler: () => void, timeout?: number) => TimerHandle;
+  private readonly clearInterval: (handle: TimerHandle) => void;
   private activeBgm: ActiveBgm | null = null;
   private outgoingBgm: ActiveBgm | null = null;
   private activeSfx = new Set<AudioPlayerElement>();
@@ -103,6 +111,9 @@ export class AudioEngine {
     this.sfxVolume = Math.max(0, Math.min(1, options.sfxVolume ?? 0.8));
     this.crossfadeDuration = options.crossfadeDuration ?? DEFAULT_CROSSFADE_DURATION_MS;
     this.audioFactory = options.audioFactory ?? defaultAudioFactory;
+    this.now = options.now ?? (() => Date.now());
+    this.setInterval = options.setInterval ?? ((handler, timeout) => setInterval(handler, timeout));
+    this.clearInterval = options.clearInterval ?? ((handle) => clearInterval(handle as ReturnType<typeof setInterval>));
   }
 
   getBgmVolume(): number {
@@ -246,8 +257,8 @@ export class AudioEngine {
   }
 
   private clearFade(item: ActiveBgm): void {
-    if (item.fadeTimer) {
-      clearInterval(item.fadeTimer);
+    if (item.fadeTimer !== undefined) {
+      this.clearInterval(item.fadeTimer);
       item.fadeTimer = undefined;
     }
   }
@@ -260,11 +271,11 @@ export class AudioEngine {
     }
 
     const startVolume = item.player.volume;
-    const startTime = Date.now();
+    const startTime = this.now();
     const intervalMs = 25;
 
-    item.fadeTimer = setInterval(() => {
-      const elapsed = Date.now() - startTime;
+    item.fadeTimer = this.setInterval(() => {
+      const elapsed = this.now() - startTime;
       const progress = Math.min(1, elapsed / durationMs);
       const newVolume = startVolume + (targetVolume - startVolume) * progress;
       item.player.volume = Math.max(0, Math.min(1, newVolume));
@@ -287,11 +298,11 @@ export class AudioEngine {
     }
 
     const startVolume = item.player.volume;
-    const startTime = Date.now();
+    const startTime = this.now();
     const intervalMs = 25;
 
-    item.fadeTimer = setInterval(() => {
-      const elapsed = Date.now() - startTime;
+    item.fadeTimer = this.setInterval(() => {
+      const elapsed = this.now() - startTime;
       const progress = Math.min(1, elapsed / durationMs);
       const newVolume = startVolume * (1 - progress);
       item.player.volume = Math.max(0, Math.min(1, newVolume));
