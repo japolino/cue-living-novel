@@ -355,6 +355,9 @@ export async function generateAssets(
     const promises = plan.visualCues.map((cue) => {
       const existing = initialJobs.find((job) => job.jobId === cue.assetJobId);
       if (!existing) throw new Error(`Missing asset job ${cue.assetJobId}.`);
+      // A retry keeps finished images: such jobs are preserved as-is and never
+      // re-scheduled (the scheduler only accepts queued jobs).
+      if (existing.status === "generated" || existing.status === "browser_ready") return Promise.resolve(existing);
       const job = AssetJobSchema.parse({ ...existing, provider: providerKey });
       return scheduler.schedule(job, async (_scheduledJob, jobSignal) => {
         if (signal.aborted) throw abortError(signal);
