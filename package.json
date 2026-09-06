@@ -10,6 +10,8 @@
   "scripts": {
     "test": "bun test --isolate",
     "test:panels": "bun run ./scripts/test-panels-browser.ts",
+    "test:settings": "bun run ./scripts/test-settings-browser.ts",
+    "test:reading": "bun run ./scripts/test-reading-browser.ts",
     "typecheck": "tsc --project tsconfig.json --noEmit",
     "typecheck:build": "tsc --project tsconfig.build.json --noEmit",
     "build": "bun run typecheck:build && bun build ./src/backend.ts ./src/frontend.ts --outdir ./dist --target browser --format esm",

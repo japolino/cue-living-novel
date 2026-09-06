@@ -77,33 +77,16 @@ try {
   await page.reload();
   await page.locator('.pin').first().waitFor();
   assert.equal(await page.locator('iframe[title="Hero status"]').count(), 1, "only explicit snapshot survives before reveal after reload");
+  // Settings smoke check only: the full settings flow lives in scripts/test-settings-browser.ts.
   await page.goto(`http://127.0.0.1:${server.port}/?settings`);
   const settings = page.locator("[data-vn-settings]");
   assert.equal(await settings.locator('[name="mode"]').isVisible(), true);
-  assert.equal(await settings.locator('[name="imageConnectionId"]').isVisible(), true);
-  for (const name of ["parserParameters", "imageParameters", "customCss", "ignoredTags", "debugLogging", "imageModel", "referenceAnchoring"]) {
+  for (const name of ["parserParameters", "imageParameters", "customCss", "ignoredTags", "debugLogging", "imageModel"]) {
     assert.equal(await settings.locator(`[name="${name}"]`).isVisible(), false, name + " should be advanced");
   }
-  await settings.getByRole("button", { name: "Save settings", exact: true }).click();
-  const saved = await page.evaluate(() => (window as any).settingsFixture.saved);
-  assert.deepEqual(saved.imageParameters, { steps: 28 });
-  assert.equal(saved.customCss, "[data-vn-dialogue] { opacity: .9; }");
-  assert.equal(saved.ignoredTags, "status, inventory");
-  const advanced = settings.locator("[data-advanced-settings] > summary");
-  await advanced.focus(); await advanced.press("Enter");
-  await settings.getByText("Generation and storage", { exact: true }).click();
-  await settings.locator('[name="imageParameters"]').fill('{"steps":32}');
-  await advanced.click();
-  await settings.getByRole("button", { name: "Save settings", exact: true }).click();
-  assert.deepEqual(await page.evaluate(() => (window as any).settingsFixture.saved.imageParameters), { steps: 32 });
-  await advanced.click();
-  await settings.locator('[name="imageParameters"]').fill("invalid JSON");
-  await advanced.click();
-  await settings.getByRole("button", { name: "Save settings", exact: true }).click();
-  assert.equal(await settings.locator('[name="imageParameters"]').isVisible(), true, "invalid hidden fields must be revealed");
-  await settings.locator('[name="imageParameters"]').fill('{"steps":32}');
-  await advanced.click();
-  await settings.getByRole("button", { name: "Save settings", exact: true }).click();
+  await settings.getByRole("heading", { name: "Appearance", exact: true }).click();
+  await settings.locator('input[name="themePreset"][value="paper-novel"]').check();
+  assert.deepEqual(await page.evaluate(() => (window as any).settingsFixture.saved), { themePreset: "paper-novel" });
   await page.screenshot({ path: ".cache/settings-basic-mobile.png", fullPage: true });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, "settings fit mobile width");
   await page.setViewportSize({ width: 1000, height: 900 });
@@ -112,7 +95,7 @@ try {
   await page.emulateMedia({ reducedMotion: "reduce" });
   const previous = page.getByRole("button", { name: "Previous paragraph", exact: true });
   const next = page.getByRole("button", { name: "Continue", exact: true });
-  const skip = page.getByRole("button", { name: "Toggle fast forward" });
+  const skip = page.getByRole("button", { name: "Skip", exact: true });
   const position = () => page.evaluate(() => (window as any).navigationFixture.stage.getState().currentParagraphIndex);
   assert.equal(await previous.isDisabled(), true);
   await next.press("Enter"); await next.press("Enter");
@@ -133,9 +116,9 @@ try {
   await page.keyboard.press("ArrowLeft");
   assert.equal(await position(), 0);
   await next.press("Enter");
-  await page.getByRole("button", { name: "Toggle auto play" }).click();
+  await page.getByRole("button", { name: "Auto play", exact: true }).click();
   await previous.click();
-  assert.equal(await page.getByRole("button", { name: "Toggle auto play" }).getAttribute("data-vn-active"), "false");
+  assert.equal(await page.getByRole("button", { name: "Auto play", exact: true }).getAttribute("data-vn-active"), "false");
   assert.equal(await skip.getAttribute("data-vn-active"), "false");
   assert.deepEqual(await page.evaluate(() => (window as any).navigationFixture.previous), [1, 1, 0, 0]);
   await page.setViewportSize({ width: 360, height: 640 });
