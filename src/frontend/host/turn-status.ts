@@ -19,14 +19,16 @@ export type RetryScope = {
 };
 
 export function retryScopeForTurn(turn: Pick<TurnView, "status" | "assets"> | null): RetryScope {
-  if (!turn || turn.status === "failed" || turn.assets.length === 0) {
-    return { scope: "replan-turn", unfinished: turn?.assets.length ?? 0, kept: 0, automatic: false };
+  // Cache-served extra swaps are never remade or counted: they were never generated.
+  const assets = (turn?.assets ?? []).filter((asset) => asset.source !== "cache");
+  if (!turn || turn.status === "failed" || assets.length === 0) {
+    return { scope: "replan-turn", unfinished: assets.length, kept: 0, automatic: false };
   }
   let kept = 0;
-  for (const asset of turn.assets) {
+  for (const asset of assets) {
     if (asset.status === "generated" || asset.status === "browser_ready") kept += 1;
   }
-  return { scope: "unfinished-images", unfinished: turn.assets.length - kept, kept, automatic: false };
+  return { scope: "unfinished-images", unfinished: assets.length - kept, kept, automatic: false };
 }
 
 function plural(count: number, noun: string): string {

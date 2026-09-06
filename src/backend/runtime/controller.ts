@@ -15,7 +15,8 @@ import { isFrontendRequest } from "../../protocol.js";
 import { compareTurnKeys } from "../core/guards.js";
 import { PlanningQueue, isAbortError } from "../core/planning-queue.js";
 import { resolveNativeCardJobs } from "./native-assets.js";
-import { createAssetJobs, generateAssets } from "./images.js";
+import { CACHE_JOB_PROVIDER, createAssetJobs, generateAssets, resolveCacheCues, retainPlanEpisodes } from "./images.js";
+import { SceneImageCache, sceneImageScope } from "../core/scene-image-cache.js";
 import { fingerprintForMessage, planTurn } from "./planner.js";
 import { loadConnectionCatalog } from "./connections.js";
 import {
@@ -52,6 +53,40 @@ type NormalizedChatMessage = ChatMessageDTO & {
 const planningQueue = new PlanningQueue();
 const assetControllers = new Map<string, AbortController>();
 const activeTurnKeys = new Map<string, StoredTurnRecord["plan"]["key"]>();
+
+/**
+ * Temporary scene-image cache (one per backend worker). See
+ * `core/scene-image-cache.ts` for lifetime rules. Exposed for tests and
+ * diagnostics; production code reaches it only through this accessor.
+ */
+const sceneCache = new SceneImageCache();
+export function sceneImageCache(): SceneImageCache {
+  return sceneCache;
+}
+/** Last chat each user asked state for; a change releases the previous chat's cache scope. */
+const activeChatByUser = new Map<string, string>();
+
+/** Release cache admission for a chat whose turn/scene/swipe just changed. Entries stay; late results are rejected. */
+function releaseSceneCacheAdmission(spindle: SpindleAPI, userId: string | undefined, chatId: string, reason: string): void {
+  const scope = sceneImageScope(userId, chatId);
+  const epoch = sceneCache.bumpEpoch(scope, reason);
+  dbg(spindle, userId, `scene-cache admission released scope=${scope} epoch=${epoch} reason=${reason}`);
+}
+
+/** Explicit release of a whole chat scope (delete/reset/chat switch): entries dropped, late results rejected. */
+function releaseSceneCacheScope(spindle: SpindleAPI, userId: string | undefined, chatId: string, reason: "chat_switch" | "scope_cleared"): void {
+  const scope = sceneImageScope(userId, chatId);
+  const dropped = sceneCache.invalidateScope(scope, reason);
+  dbg(spindle, userId, `scene-cache scope released scope=${scope} reason=${reason} dropped=${dropped} generation=${sceneCache.generation(scope)}`);
+}
+
+/** Track the chat a user is viewing; switching chats releases the previous chat's scope. */
+function noteActiveChat(spindle: SpindleAPI, userId: string | undefined, chatId: string): void {
+  const userKey = userId ?? "owner";
+  const previous = activeChatByUser.get(userKey);
+  if (previous && previous !== chatId) releaseSceneCacheScope(spindle, userId, previous, "chat_switch");
+  if (chatId) activeChatByUser.set(userKey, chatId);
+}
 
 function runtimeKey(userId: string | undefined, chatId: string): string {
   return `${userId ?? "owner"}:${chatId}`;
@@ -209,12 +244,14 @@ function effectViews(record: StoredTurnRecord): Pick<TurnView, "effects" | "ambi
 }
 
 function assetView(record: StoredTurnRecord, job: StoredTurnRecord["jobs"][number]): AssetView {
-  const cue = record.plan.visualCues.find((candidate) => candidate.assetJobId === job.jobId);
+  const cue = record.plan.visualCues.find((candidate) => candidate.assetJobId === job.jobId)
+    ?? record.plan.cacheCues?.find((candidate) => candidate.assetJobId === job.jobId);
   return {
     jobId: job.jobId,
     cueId: cue?.cueId ?? job.jobId,
     paragraphIndex: job.paragraphIndex,
     status: job.status,
+    ...(job.provider === CACHE_JOB_PROVIDER ? { source: "cache" as const } : {}),
     ...(job.imageId ? { imageId: job.imageId } : {}),
     ...(job.imageUrl ? { imageUrl: job.imageUrl } : {}),
     ...(job.error ? { error: job.error } : {})
@@ -285,6 +322,8 @@ async function bootstrapLatestAssistantTurn(spindle: SpindleAPI, chatId: string,
 
 export async function sendState(spindle: SpindleAPI, chatId: string, userId?: string): Promise<void> {
   const config = await loadConfig(spindle, userId);
+  rememberDebugFlag(userId, config);
+  noteActiveChat(spindle, userId, chatId);
   if (!chatId) {
     spindle.sendToFrontend({ type: "vn_state", chatId: "", config, turn: null }, userId);
     return;
@@ -339,16 +378,23 @@ async function startAssets(
   spindle: SpindleAPI,
   record: StoredTurnRecord,
   path: string,
-  userId?: string
+  userId?: string,
+  options: { bypassJobIds?: Iterable<string> } = {}
 ): Promise<void> {
   const config = await loadConfig(spindle, userId);
   rememberDebugFlag(userId, config);
   if (!config.generateImages || record.jobs.length === 0) return;
-  dbg(spindle, userId, `assets starting: ${record.jobs.length} job(s) for chat=${record.plan.key.chatId} message=${record.plan.key.assistantMessageId} concurrency=${config.imageConcurrency}`);
+  const cacheServed = record.jobs.filter((job) => job.provider === CACHE_JOB_PROVIDER).length;
+  dbg(spindle, userId, `assets starting: ${record.jobs.length - cacheServed} generated job(s)${cacheServed ? ` + ${cacheServed} cache-served swap(s) (not generated)` : ""} for chat=${record.plan.key.chatId} message=${record.plan.key.assistantMessageId} concurrency=${config.imageConcurrency}`);
   const key = runtimeKey(userId, record.plan.key.chatId);
   assetControllers.get(key)?.abort("A newer turn replaced this asset batch.");
   const controller = new AbortController();
   assetControllers.set(key, controller);
+  // Every batch start supersedes the previous batch's cache admission, so a
+  // late result from the replaced batch can never populate the active cache.
+  releaseSceneCacheAdmission(spindle, userId, record.plan.key.chatId, "batch_start");
+  const scope = sceneImageScope(userId, record.plan.key.chatId);
+  const admission = sceneCache.admission(scope);
   let current = record;
 
   try {
@@ -371,7 +417,8 @@ async function startAssets(
           asset: assetView(current, changed)
         }, userId);
       },
-      userId
+      userId,
+      { sceneCache, admission, ...(options.bypassJobIds ? { bypassJobIds: options.bypassJobIds } : {}) }
     );
     const active = activeTurnKeys.get(key) ?? null;
     if (compareTurnKeys(active, record.plan.key).accepted) {
@@ -475,6 +522,19 @@ async function processAssistantMessage(
       }
     } else if (config.generateImages) {
       jobs = createAssetJobs(result.plan, config, characterAppearance);
+      // Reuse-only candidates beyond the image cap: deterministic cache lookup
+      // before the first vn_turn. Hits become terminal jobs; misses add nothing.
+      if (result.plan.cacheCues?.length) {
+        const scope = sceneImageScope(userId, chatId);
+        retainPlanEpisodes(sceneCache, scope, result.plan);
+        const extra = await resolveCacheCues(spindle, result.plan, config, characterAppearance, jobs, sceneCache, userId, {
+          log: (line) => dbg(spindle, userId, line)
+        });
+        if (extra.length > 0) {
+          dbg(spindle, userId, `scene-cache resolved ${extra.length} extra swap(s) beyond the image cap without requests (cap=${config.maxImagesPerTurn}, budgeted=${jobs.length})`);
+          jobs = [...jobs, ...extra];
+        }
+      }
     }
     let userSpeaker = "You";
     try {
@@ -642,6 +702,7 @@ async function retryTurn(
   const key = runtimeKey(userId, chatId);
   assetControllers.get(key)?.abort("Retrying turn.");
   planningQueue.cancelChat(userId, chatId);
+  releaseSceneCacheAdmission(spindle, userId, chatId, "retry");
 
   const path = turnPath(chatId, message.id, message.swipe_id);
   const existing = await loadTurnRecord(spindle, path, userId);
@@ -658,10 +719,16 @@ async function retryTurn(
   const freshJobs = createAssetJobs(existing.plan, config, characterAppearance);
   const freshJobMap = new Map(freshJobs.map((j) => [j.jobId, j]));
   const nowTime = new Date().toISOString();
+  // Forced regeneration: re-queued jobs bypass cache lookup (they still own and
+  // store their fresh render). Finished jobs, including cache-served ones
+  // (always `generated`), are kept exactly as before; unfinished jobs never
+  // carry an image id (schema invariant), so there is nothing to invalidate.
+  const bypassJobIds = new Set<string>();
   const updatedJobs = existing.jobs.map((job) => {
     if (job.status === "browser_ready" || job.status === "generated") {
       return job;
     }
+    bypassJobIds.add(job.jobId);
     const fresh = freshJobMap.get(job.jobId);
     return AssetJobSchema.parse({
       ...job,
@@ -687,6 +754,16 @@ async function retryTurn(
     imageConcurrency: config.imageConcurrency
   };
 
+  // Reuse-only candidates that have no job yet may hit now (cache only, no requests).
+  if (config.generateImages && !config.useNativeCardImages && existing.plan.cacheCues?.length) {
+    const scope = sceneImageScope(userId, chatId);
+    retainPlanEpisodes(sceneCache, scope, existing.plan);
+    const extra = await resolveCacheCues(spindle, existing.plan, config, characterAppearance, updatedJobs, sceneCache, userId, {
+      log: (line) => dbg(spindle, userId, line)
+    });
+    for (const job of extra) updatedJobs.push(job);
+  }
+
   const updatedRecord: StoredTurnRecord = {
     ...existing,
     status: "ready",
@@ -709,7 +786,7 @@ async function retryTurn(
   spindle.sendToFrontend({ type: "vn_turn", turn: await turnViewWithAudio(spindle, updatedRecord) }, userId);
 
   if (!config.useNativeCardImages && config.generateImages) {
-    void startAssets(spindle, updatedRecord, path, userId).catch((error) => {
+    void startAssets(spindle, updatedRecord, path, userId, { bypassJobIds }).catch((error) => {
       if (!isAbortError(error)) {
         spindle.log.error(`Visual novel asset pipeline retry failed: ${errorText(error)}`);
         spindle.sendToFrontend({ type: "vn_error", chatId, operation: "retry_turn", error: errorText(error) }, userId);
@@ -818,6 +895,7 @@ async function handleFrontendMessage(spindle: SpindleAPI, request: FrontendReque
     case "vn_cancel": {
       planningQueue.cancelChat(userId, request.chatId);
       assetControllers.get(runtimeKey(userId, request.chatId))?.abort("Cancelled from the visual novel UI.");
+      releaseSceneCacheAdmission(spindle, userId, request.chatId, "cancel");
       return;
     }
     case "vn_retry_turn": {
@@ -849,6 +927,9 @@ async function clearDeletedTurn(spindle: SpindleAPI, payload: unknown, userId?: 
   planningQueue.cancelChat(userId, candidate.chatId);
   assetControllers.get(runtimeKey(userId, candidate.chatId))?.abort("The source assistant message was deleted.");
   activeTurnKeys.delete(runtimeKey(userId, candidate.chatId));
+  // The chat's scene lineage restarts (latestScene becomes null): release the
+  // whole scope so the next "initial" episode never shares the old entries.
+  releaseSceneCacheScope(spindle, userId, candidate.chatId, "scope_cleared");
   await saveChatState(spindle, candidate.chatId, {
     schemaVersion: 1,
     activeTurnPath: null,
@@ -862,6 +943,7 @@ async function clearDeletedTurn(spindle: SpindleAPI, payload: unknown, userId?: 
 function reconcileMessageEvent(spindle: SpindleAPI, payload: unknown, userId?: string): void {
   const event = eventMessage(payload);
   if (!event || event.message.is_user) return;
+  releaseSceneCacheAdmission(spindle, userId, event.chatId, "message_changed");
   void processAssistantMessage(spindle, event.chatId, event.message, event.message.content, userId).catch((error) => {
     spindle.log.error(`Visual novel message reconciliation failed: ${errorText(error)}`);
   });
@@ -885,6 +967,7 @@ export function registerVisualNovelBackend(spindle: SpindleAPI): void {
     const key = runtimeKey(userId, payload.chatId);
     activeTurnKeys.delete(key);
     assetControllers.get(key)?.abort("A new generation started before this turn's assets settled.");
+    releaseSceneCacheAdmission(spindle, userId, payload.chatId, "generation_started");
     spindle.sendToFrontend({ type: "vn_generation", chatId: payload.chatId, active: true }, userId);
   });
   spindle.on("GENERATION_ENDED", (payload, userId) => {
@@ -908,6 +991,23 @@ export function registerVisualNovelBackend(spindle: SpindleAPI): void {
   spindle.on("MESSAGE_EDITED", (payload, userId) => {
     dbg(spindle, userId, "event MESSAGE_EDITED");
     reconcileMessageEvent(spindle, payload, userId);
+  });
+  spindle.on("CHAT_SWITCHED", (payload: unknown, userId?: string) => {
+    // Host-side notice of the active chat. The frontend also asks for state on
+    // CHAT_SWITCHED, so `vn_get_state` remains the fallback observation.
+    const candidate = payload && typeof payload === "object" ? payload as { chatId?: unknown } : {};
+    const chatId = typeof candidate.chatId === "string" ? candidate.chatId : "";
+    dbg(spindle, userId, `event CHAT_SWITCHED chat=${chatId || "(none)"}`);
+    noteActiveChat(spindle, userId, chatId);
+  });
+  spindle.on("IMAGE_DELETED", (payload: unknown) => {
+    // Best effort: a deleted gallery image must never be served from the cache again.
+    const candidate = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+    const imageId = [candidate.imageId, candidate.id, (candidate.image as Record<string, unknown> | undefined)?.id]
+      .find((value): value is string => typeof value === "string" && value.trim().length > 0);
+    if (!imageId) return;
+    const dropped = sceneCache.invalidateImage(imageId, "image_deleted");
+    if (dropped > 0) spindle.log.info(`[VN] scene-cache dropped ${dropped} entr${dropped === 1 ? "y" : "ies"} for deleted image ${imageId}`);
   });
   spindle.on("MESSAGE_DELETED", (payload, userId) => {
     dbg(spindle, userId, "event MESSAGE_DELETED");

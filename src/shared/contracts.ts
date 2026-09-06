@@ -291,6 +291,9 @@ export const EffectCueSchema = z.object({
 }).strict();
 export type EffectCue = z.infer<typeof EffectCueSchema>;
 
+/** Upper bound on reuse-only candidates kept per turn (beyond the image cap). */
+export const MAX_CACHE_CUES_PER_TURN = 16;
+
 export const TurnPlanSchema = z.object({
   schemaVersion: z.literal(1),
   key: TurnKeySchema,
@@ -304,6 +307,11 @@ export const TurnPlanSchema = z.object({
   paragraphSpeakers: z.array(z.string().nullable()).default([]),
   scenes: z.array(SceneStateSchema).min(1),
   visualCues: z.array(VisualCueSchema).default([]),
+  // Reuse-only candidates beyond `maxImagesPerTurn`. They never create a
+  // provider request or a job by themselves: an exact-compatible cached image
+  // turns one into a terminal `generated` job (provider "cache"); a miss
+  // produces nothing. Absent on turns planned before this field existed.
+  cacheCues: z.array(VisualCueSchema).max(MAX_CACHE_CUES_PER_TURN).optional(),
   audioCues: z.array(AudioCueSchema).default([]),
   // Uncapped paragraph effects. Absent on legacy records; [] is authoritative.
   effectCues: z.array(EffectCueSchema).optional(),
@@ -370,6 +378,24 @@ export const TurnPlanSchema = z.object({
     }
     if (cueIds.has(cue.cueId)) context.addIssue({ code: "custom", path: ["visualCues", index, "cueId"], message: "Cue IDs must be unique." });
     if (jobIds.has(cue.assetJobId)) context.addIssue({ code: "custom", path: ["visualCues", index, "assetJobId"], message: "Asset job IDs must be unique." });
+    cueIds.add(cue.cueId);
+    jobIds.add(cue.assetJobId);
+  }
+
+  const budgetedParagraphs = new Set(plan.visualCues.map((cue) => cue.paragraphIndex));
+  for (const [index, cue] of (plan.cacheCues ?? []).entries()) {
+    if (cue.paragraphIndex > finalParagraphIndex) {
+      context.addIssue({ code: "custom", path: ["cacheCues", index, "paragraphIndex"], message: "Cache cue points outside the turn." });
+    }
+    const scene = sceneAt(cue.paragraphIndex);
+    if (scene && (scene.sceneId !== cue.sceneId || scene.revision !== cue.sceneRevision)) {
+      context.addIssue({ code: "custom", path: ["cacheCues", index, "sceneId"], message: "Cache cue does not belong to the active scene." });
+    }
+    if (budgetedParagraphs.has(cue.paragraphIndex)) {
+      context.addIssue({ code: "custom", path: ["cacheCues", index, "paragraphIndex"], message: "Cache cues cannot share a paragraph with a budgeted visual cue." });
+    }
+    if (cueIds.has(cue.cueId)) context.addIssue({ code: "custom", path: ["cacheCues", index, "cueId"], message: "Cue IDs must be unique." });
+    if (jobIds.has(cue.assetJobId)) context.addIssue({ code: "custom", path: ["cacheCues", index, "assetJobId"], message: "Asset job IDs must be unique." });
     cueIds.add(cue.cueId);
     jobIds.add(cue.assetJobId);
   }

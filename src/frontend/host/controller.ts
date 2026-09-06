@@ -216,15 +216,18 @@ function replaceAsset(turn: TurnView, asset: AssetView): TurnView {
 
 export function computeAssetProgress(turn: TurnView | null): { current: number; total: number } | null {
   if (!turn || !turn.assets || turn.assets.length === 0) return null;
-  const total = turn.assets.length;
-  const done = turn.assets.filter(
+  // Cache-served extra swaps never generate; they must not inflate "n of m".
+  const budgeted = turn.assets.filter((a) => a.source !== "cache");
+  if (budgeted.length === 0) return null;
+  const total = budgeted.length;
+  const done = budgeted.filter(
     (a) =>
       a.status === "generated" ||
       a.status === "browser_ready" ||
       a.status === "failed" ||
       a.status === "cancelled",
   ).length;
-  const inFlight = turn.assets.filter((a) => a.status === "generating" || a.status === "queued").length;
+  const inFlight = budgeted.filter((a) => a.status === "generating" || a.status === "queued").length;
   if (inFlight > 0) {
     const current = Math.min(total, done + 1);
     return { current, total };

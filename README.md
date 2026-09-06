@@ -32,6 +32,96 @@ The pipeline never mutates canonical chat messages. It writes only extension-own
 
 As with any generative system, image-provider speed and visual identity quality depend on the selected model, provider, and prompt settings. Cue does not promise a specific provider result.
 
+## Scene image reuse (temporary cache)
+
+Cue keeps a small, in-memory cache of the scene images it generated so an
+exact-compatible cue can reuse an image instead of sending a new provider
+request. The cache is reuse-first and generate-on-miss; it never generates
+ahead of time and never relaxes a match.
+
+**What "exact compatible" means.** A cached image is reused only when all of
+these are identical: the durable character id and subject class (never just
+the display name), the resolved appearance tags and wardrobe, the effective
+environment (location, time and weather, lighting, description, persistent
+elements), the closed-catalogue pose/expression, the bounded action/prop, the
+camera framing, and the exact provider request (positive and negative prompt,
+connection and workflow, provider, model, your image parameters, prompt
+syntax, and the reference-anchoring toggle). Scene ids, cue ids, paragraph
+numbers, the turn key and free-form
+`promptDelta` are not part of the match, so alternating speakers (Mira, Alex,
+Mira) in the same room still reuse. Composition and camera locks are not
+rendered into prompts and are ignored. Cues whose planner run did not persist
+a character id, resolved appearance and subject class never use the cache.
+
+**Lifetime.**
+
+- Memory only, per backend worker. A Lumiverse restart starts empty. Nothing
+  is written to storage and no image bytes are held: entries are pointers
+  (image id, URL, provenance). Bounded to 256 entries / 1 MiB of metadata,
+  least-recently-used first.
+- Scoped to one user and one chat. Switching chats releases the previous
+  chat's entries. The backend learns the active chat from the host
+  `CHAT_SWITCHED` event and from the frontend's `vn_get_state` request (sent
+  on every chat switch); a chat that only ever produced generation events
+  without either signal is released when its message is deleted or the
+  worker restarts.
+- Scoped to one physical scene episode. The planner keeps `priorSceneId`
+  across speaker switches and changes it only on a real boundary (location
+  change, major time jump, environment replacement, forced). Entries from an
+  earlier episode are retired, so leaving a room and returning to an identical
+  room does not reuse the earlier visit. Deleting the active message (chat
+  scene lineage restarts) releases the whole chat scope.
+- Late results are never admitted. Every new generation, swipe, edit,
+  regeneration, cancel and asset batch start advances the chat's admission
+  epoch; a provider result that arrives afterwards is kept for its own turn
+  record but not cached.
+- Forced regeneration ("Regenerate reply" / "Try again"): unfinished jobs are
+  re-made without a lookup and any image they showed is dropped from the
+  cache. Finished images are kept, as before.
+- Missing assets: before a reuse the extension checks `images.get`; a deleted
+  or unverifiable image is dropped and normal generation runs. `IMAGE_DELETED`
+  host events drop entries too.
+- Eviction or invalidation never deletes an image and never rewrites a stored
+  turn; historical turns keep their image ids.
+
+**Extra swaps beyond the image cap.** The planner still generates at most
+`maxImagesPerTurn` images. Cues beyond the cap are kept as reuse-only
+candidates (`cacheCues`, up to 16). A candidate becomes an extra image only
+when an exact-compatible image is already cached: at planning time (it then
+appears in the first turn view) or later in the same turn when a budgeted image
+lands (it then arrives as a normal asset update). A candidate with no cached
+match produces nothing: no job, no request, no error, no retry. Such assets
+are marked `source: "cache"` and are excluded from generation progress and
+from the "Try again" wording.
+
+**Concurrent requests.** If two compatible cues are in flight at once (for
+example a superseded batch still running), only one owns the provider
+request; the other waits and shares the result. An aborted owner releases the
+waiter immediately; a failed owner fails the waiter once (no retry cascade).
+
+**Reference anchoring first.** The portrait decision runs before any reuse.
+A render that must capture a character's portrait (anchoring on, no
+compatible portrait yet) is always generated, never served from the cache; it
+is still stored for later cues. Toggling reference anchoring on or off changes
+compatibility, so images made under the other setting are not reused.
+
+**Limitations.** Exact match only. The captured portrait itself is not part
+of the match (only the toggle is), so once a portrait exists, renders anchored
+to it and the capture render of the same appearance count as compatible; your
+own reference or source settings in image parameters do count. A swipe that re-enters a room
+starts a new episode. The cache does not survive a restart. Reuse means the
+same Lumiverse image id is shown in several turns; deleting it from the
+gallery affects all of them, exactly as today.
+
+**Debugging.** With **Debug logging** on, `[VN] scene-cache ...` lines report
+each hit (with the source message and an estimate of the generation time
+avoided), each miss with its reason (`absent`, `evicted`, `invalidated`,
+`episode_retired`, `bypass`, `portrait_capture`, `asset_missing`,
+`asset_unverifiable`, `identity_unresolved`), each store and rejection (`stale_admission`,
+`aborted`, `no_image_id`), waits for in-flight owners, candidate resolutions,
+scope releases, and a per-batch summary (hits, shared, avoided, stores,
+misses, rejects, waits, evictions, entries, bytes).
+
 ## Run the standalone preview
 
 ```powershell

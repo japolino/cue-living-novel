@@ -7,6 +7,7 @@ import {
   CameraLockSchema,
   ChoiceSchema,
   ContinuityStateSchema,
+  MAX_CACHE_CUES_PER_TURN,
   SceneBoundaryProposalSchema,
   SceneEnvironmentSchema,
   SceneStateSchema,
@@ -2227,8 +2228,11 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
     });
   const cueLimit = input.config.maxImagesPerTurn;
   const selectedCues = cueLimit > 0 ? distinctCues.slice(0, cueLimit) : distinctCues;
-  const cues = selectedCues
-    .map((cue, index) => {
+  // Cues beyond the image cap are kept as reuse-only candidates. They never
+  // add a provider request: only an exact-compatible cached image can turn one
+  // into an extra swap (see runtime/images.ts resolveCacheCues).
+  const cacheCandidates = cueLimit > 0 ? distinctCues.slice(cueLimit, cueLimit + MAX_CACHE_CUES_PER_TURN) : [];
+  const materializeCue = (cue: typeof distinctCues[number], index: number) => {
       const scene = sceneForParagraph(scenes, cue.paragraphIndex);
       const paragraph = narrative.paragraphs.find((candidate) => candidate.index === cue.paragraphIndex);
       const cueIsUser = isPersona(cue.character);
@@ -2261,7 +2265,9 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
         ...(cue.bgm ? { bgm: cue.bgm } : {}),
         ...(cue.sfx ? { sfx: cue.sfx } : {})
       });
-    });
+    };
+  const cues = selectedCues.map((cue, index) => materializeCue(cue, index));
+  const cacheCues = cacheCandidates.map((cue, index) => materializeCue(cue, selectedCues.length + index));
 
   const audioCues = planner.cues
     .filter((cue) => Boolean(cue.bgm || cue.sfx))
@@ -2359,6 +2365,7 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
     paragraphSpeakers,
     scenes,
     visualCues: cues,
+    ...(cacheCues.length > 0 ? { cacheCues } : {}),
     audioCues,
     effectCues,
     choices,

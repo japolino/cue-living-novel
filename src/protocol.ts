@@ -30,6 +30,12 @@ export type AssetView = {
   imageId?: string;
   imageUrl?: string;
   error?: string;
+  /**
+   * "cache": an extra swap beyond the image cap, served from the temporary
+   * scene-image cache without a provider request. Such assets are always
+   * terminal; they never count toward generation progress or retry wording.
+   */
+  source?: "cache";
 };
 
 export type AudioCueView = {

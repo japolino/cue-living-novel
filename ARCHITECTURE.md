@@ -278,6 +278,34 @@ Props and physical interactions are modeled via a bounded, validated schema (`sr
 - **Compiler deterministic assembly**: `compileActionProp` renders action tags with underscores replaced by natural spaces (e.g. `resting_hand_on` becomes `"resting hand on"`). The compiled action tag is appended immediately after the catalogue pose suffix in both fixed and dynamic perspective modes. The pose catalogue expression is never overridden or replaced.
 - **Isolation from identity and memory**: Props live strictly on cue scope (`cue.action`). They are never appended to `resolvedIdentity`, `visibleTags`, scene `identityPrompt`, `terminalVisualState`, or `characterAppearance` memory, ensuring props never freeze into the character's durable appearance. `portraitIdentityFingerprint` does not include props (preventing spurious reference portrait recaptures), while `promptFingerprint` does include them so prop changes trigger fresh asset generation. Cues attributed to the user/persona discard companion actions.
 
+### Temporary scene-image cache (reuse-first, generate-on-miss)
+
+`core/scene-image-cache.ts` owns an in-memory, bounded (256 entries / 1 MiB
+metadata, LRU) cache of generated scene images, keyed by a structured
+exact-compatibility identity built in `runtime/images.ts`
+(`sceneImageIdentityFor`): durable character id + subject class, resolved
+appearance + wardrobe, effective environment, pose, bounded action, framing,
+and the exact provider request. Scene ids, turn keys and `promptDelta` are
+excluded; `cameraLock`/`compositionLock` are never rendered and excluded.
+Entries carry a physical scene episode (`priorSceneId ?? "initial:<scope
+generation>"`): speaker switches keep the episode, real boundaries retire
+earlier entries. Admission epochs (bumped by the controller on
+`GENERATION_STARTED`, message reconcile events, cancel, retry and every batch
+start) reject late results; `MESSAGE_DELETED` and chat switches release the
+whole scope; `IMAGE_DELETED` and failed `images.get` checks drop pointers.
+Eviction never deletes images or rewrites turn records.
+
+`generateAssets` looks the cache up inside the scheduled executor (scheduler
+priorities, concurrency and job states unchanged), claims single ownership of
+an in-flight key (waiters share the result; an aborted owner releases them,
+a failed owner fails them once), and stores successful normal generations.
+Cues beyond `maxImagesPerTurn` are kept by the planner as `TurnPlan.cacheCues`
+(max 16): `resolveCacheCues` turns a candidate into a terminal `generated` job
+with provider `cache` only on a verified hit (at planning time before the first
+`vn_turn`, on retry, and after every budgeted store in the same batch); a miss
+creates nothing. `AssetView.source: "cache"` lets the frontend exclude those
+swaps from progress and retry wording. See README "Scene image reuse".
+
 ## Audio pipeline
 
 Audio is optional and user-supplied. The settings panel imports audio files from any folder in chunks that fit the host's 4 MB message limit; `audio-catalog.ts` scans the stored library, classifies each file as BGM or SFX from its path keywords, and derives searchable tags from file and folder names. When a library is present, the planner is asked for optional per-cue `bgm` and `sfx` names, which the frontend `audio-engine` resolves against the catalog and plays with looped music and one-shot effects. Chats without an audio library skip all of this: the planner is not asked for audio cues.
