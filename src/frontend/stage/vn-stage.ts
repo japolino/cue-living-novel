@@ -1085,7 +1085,7 @@ export class VnStage {
       this.triggerEffect("shake");
     }
 
-    const paragraphAmbient = paragraph.ambient ?? paragraph.cue?.ambient;
+    const paragraphAmbient = paragraph.ambient !== undefined ? paragraph.ambient : paragraph.cue?.ambient;
     if (paragraphAmbient === null || isAmbientEffect(paragraphAmbient)) {
       this.ambientOverride = paragraphAmbient;
       this.applyAmbient(paragraphAmbient);

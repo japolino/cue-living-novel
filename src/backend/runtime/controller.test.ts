@@ -542,3 +542,46 @@ describe("Finding #3: vn_retry_turn recovery and settings snapshotting", () => {
     expect(saved.attempts && saved.attempts.length >= 1).toBe(true);
   });
 });
+
+describe("paragraph effects and scene ambients", () => {
+  function view(overrides: Record<string, unknown> = {}) {
+    const effectPlan = TurnPlanSchema.parse({
+      ...plan,
+      paragraphs: [0, 1, 2, 3].map((index) => ({ index, sourceIndex: index, text: `Beat ${index}.` })),
+      ...overrides
+    });
+    return turnView({ schemaVersion: 1, speaker: "Mira", status: "ready", plan: effectPlan, jobs: [], updatedAt: now });
+  }
+
+  test("uncapped effect cues reach paragraphs without image cues and override legacy effects", () => {
+    expect(view({
+      visualCues: [{ ...plan.visualCues[0], effect: "shake" }],
+      effectCues: [{ paragraphIndex: 3, effect: "confetti" }]
+    }).effects).toEqual([null, null, null, "confetti"]);
+  });
+
+  test("absent effectCues falls back to legacy cues, but [] does not", () => {
+    const visualCues = [{ ...plan.visualCues[0], effect: "shake" }];
+    expect(view({ visualCues }).effects).toEqual(["shake", null, null, null]);
+    expect(view({ visualCues, effectCues: [] }).effects).toBeUndefined();
+  });
+
+  test("scene boundaries change and clear ambient even without image cues", () => {
+    expect(view({ scenes: [
+      { ...plan.scenes[0], ambient: "rain" },
+      { ...plan.scenes[0], sceneId: "scene-2", priorSceneId: "scene", startParagraph: 1, ambient: "fog" },
+      { ...plan.scenes[0], sceneId: "scene-3", priorSceneId: "scene-2", startParagraph: 2, ambient: null }
+    ] }).ambients).toEqual(["rain", "fog", null, null]);
+  });
+
+  test("all-null ambients are clear instructions; legacy missing ambients remain omitted", () => {
+    expect(view({ scenes: [{ ...plan.scenes[0], ambient: null }] }).ambients).toEqual([null, null, null, null]);
+    expect(view().ambients).toBeUndefined();
+  });
+
+  test("effect cue schema rejects unknown effects and indexes outside the turn", () => {
+    expect(() => view({ effectCues: [{ paragraphIndex: 4, effect: "shake" }] })).toThrow();
+    expect(() => view({ effectCues: [{ paragraphIndex: 0, effect: "unknown" }] })).toThrow();
+    expect(() => view({ effectCues: [{ paragraphIndex: -1, effect: "shake" }] })).toThrow();
+  });
+});

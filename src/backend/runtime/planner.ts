@@ -51,6 +51,7 @@ import {
 } from "../../shared/identity.js";
 import { loadVisualContext, type VisualContextDiagnostics, type VisualContextSnapshot } from "./context.js";
 import { resolvePlannerConnection, type ResolvedPlannerConnection } from "./connections.js";
+import { normalizeStageEffect, normalizeAmbientEffect, deriveWeatherAmbient } from "./planner-effects.js";
 import { getAudioCatalog, getAudioCatalogPromptSummary } from "./audio-catalog.js";
 import { debugErrorSummary, debugJson, debugQuote, plannerDebugLogger, type PlannerDebugScope } from "./debug-trace.js";
 
@@ -144,6 +145,7 @@ const PlannerSpeakerSchema = z.object({
 const PlannerOutputSchema = z.object({
   scenes: z.array(PlannerSceneSchema).default([]),
   cues: z.array(PlannerCueSchema).default([]),
+  effects: z.array(z.object({ paragraphIndex: z.number().int().nonnegative(), effect: StageEffectSchema })).default([]),
   choices: z.array(PlannerChoiceSchema).max(6).default([]),
   characters: z.array(PlannerCharacterSchema).default([]),
   speakers: z.array(PlannerSpeakerSchema).default([])
@@ -239,6 +241,10 @@ function plannerInstruction(config: VisualNovelConfig, visualContext?: VisualCon
     config.maxImagesPerTurn > 0
       ? `Generate up to ${config.maxImagesPerTurn} distinct cues spread across key dialogue or action beats in the turn (always include paragraph 0 as the opening cue).`
       : "Generate cues spread across distinct visual or emotional beats (unlimited). Always include paragraph 0.",
+    `effect: Use sparse one-shot accents for meaningful story beats, usually 1–3 when the text calls for them; quiet turns need none. Choose ids from: ${StageEffectSchema.options.join(", ")}. Impact/explosion -> shake_hard; earthquake -> rumble; sudden reveal -> zoom_punch; shock -> flash_white; blackout/scene cut -> fade_to_black; lightning strike -> lightning; fear -> heartbeat; confession/kiss -> hearts_burst; celebration -> confetti.`,
+    "Return effects in a separate effects:[{paragraphIndex,effect}] list at ANY paragraph. Effects do not count toward the image cue limit. A cue's effect is also accepted. Do not add illustration cues just to carry effects.",
+    `ambient: Set a persistent weather or mood overlay using: ${AmbientEffectSchema.options.join(", ")}. Rain -> rain; downpour -> heavy_rain; snowfall -> snow; mist -> fog; flashback -> sepia_flashback; dream -> dream_haze; dread -> danger_pulse. Keep the current ambient shown in PREVIOUS SCENE unless weather or mood changes. Omit to keep it; set null only to clear it.`,
+    'Effects example: {"effects":[{"paragraphIndex":5,"effect":"shake_hard"}],"scenes":[{"startParagraph":0,"ambient":"heavy_rain"}]}. Keep other required scene fields.',
     config.mode === "cyoa" && config.generateChoices
       ? "choices: If the response does not contain authored Choice tags, return 2 to 4 contextual choices from the user's/persona's perspective. For each choice provide 'label' (a concise button text, e.g. 'Step closer and call her bluff') and 'submission' (a natural, descriptive action or dialogue sentence written in first-person prose from the user's perspective reacting to the scene, e.g. 'I take a slow step toward the desk, meeting her eyes with a quiet smirk. \"Are you really in a position to be making demands, Hina?\"'). NEVER return an index, number, or option code for submission."
       : "Return an empty choices array.",
@@ -250,11 +256,9 @@ function plannerInstruction(config: VisualNovelConfig, visualContext?: VisualCon
     "When the on-screen character is a KNOWN CHARACTER, also set 'characterId' on that scene or cue to the known id, even if the text calls them by a nickname or descriptive label. Keep 'character' as the label used in the text.",
     "attire: If the active character changes clothes (e.g. swimsuit, pajamas, armor, sundress, uniform), specify the new outfit tags in 'attire'; otherwise null.",
     "action: When the visible character interacts with a prominent visible prop or performs a bounded physical gesture, specify 'action' (e.g. 'holding brass key in right raised hand', or {action:'holding',object:'brass key',relationship:'in right raised hand'}); otherwise null. Free-form prose and injection tokens are forbidden.",
-    `effect: For a genuinely DRAMATIC beat only (impact, explosion, sudden reveal, blackout, jolt of fear, lightning strike, romantic rush), set the cue 'effect' to exactly one of: ${StageEffectSchema.options.join(", ")}. Otherwise null. Most paragraphs must have no effect.`,
-    `ambient: On each scene, set 'ambient' to exactly one of: ${AmbientEffectSchema.options.join(", ")} when the scene's weather or mood clearly calls for a persistent overlay (rain outside, snowfall, dense fog, a flashback, dread); otherwise null.`,
     "speakers: Attribute EVERY paragraph index to its literal on-screen nameplate name. Use the character's actual name for their dialogue and actions. When the text is written from the player's first-person point of view, use the player/persona name. Use \"Narrator\" for omniscient scene narration that belongs to no character. Never use the story or scenario card title as a speaker name.",
     hasAudio ? audioInstructions.join("\n") : "",
-    `Shape: {scenes:[{startParagraph,boundary:{claimedNewScene,reason,location,timeOfDay,majorTimeJump,environmentReplacement,forced},environment:{location,timeOfDay,weather,lighting,description,persistentElements,removedElements?},environmentChanges?:{description?,lighting?,timeOfDay?,weather?,addElements?,removeElements?,replaceElements?:[{from,to}],clearElements?,clearLighting?,clearWeather?},cast,character?,characterId?,attire?,ambient?,basePrompt,compositionLock}],cues:[{paragraphIndex,expression,action?,character?,characterId?,attire?,effect?${hasAudio ? ",bgm?,sfx?" : ""}}],choices:[{label,submission}],characters:[{name,description,species?,anatomy?,characterId?,aliases?,subjectCategory?}],speakers:[{paragraphIndex,name}]}`,
+    `Shape: {effects:[{paragraphIndex,effect}],scenes:[{startParagraph,boundary:{claimedNewScene,reason,location,timeOfDay,majorTimeJump,environmentReplacement,forced},environment:{location,timeOfDay,weather,lighting,description,persistentElements,removedElements?},environmentChanges?:{description?,lighting?,timeOfDay?,weather?,addElements?,removeElements?,replaceElements?:[{from,to}],clearElements?,clearLighting?,clearWeather?},cast,character?,characterId?,attire?,ambient?,basePrompt,compositionLock}],cues:[{paragraphIndex,expression,action?,character?,characterId?,attire?,effect?${hasAudio ? ",bgm?,sfx?" : ""}}],choices:[{label,submission}],characters:[{name,description,species?,anatomy?,characterId?,aliases?,subjectCategory?}],speakers:[{paragraphIndex,name}]}`,
     config.customPlannerInstructions ? config.customPlannerInstructions.trim() : ""
   ].filter(Boolean).join("\n");
 }
@@ -278,6 +282,7 @@ function previousSceneContext(scene: SceneState | null): string {
   return JSON.stringify({
     sceneId: scene.sceneId,
     environment: scene.environment,
+    ambient: scene.ambient,
     cast: scene.cast,
     basePrompt: scene.basePrompt,
     cameraLock: scene.cameraLock,
@@ -483,22 +488,6 @@ function normalizeEnvironment(value: unknown, defaultLoc?: string): unknown {
   };
 }
 
-/** Exact-enum stage-effect normalization: anything unknown becomes null. */
-function normalizeStageEffect(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const candidate = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
-  const parsed = StageEffectSchema.safeParse(candidate);
-  return parsed.success ? parsed.data : null;
-}
-
-/** Exact-enum ambient-effect normalization: anything unknown becomes null. */
-function normalizeAmbientEffect(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const candidate = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
-  const parsed = AmbientEffectSchema.safeParse(candidate);
-  return parsed.success ? parsed.data : null;
-}
-
 function normalizeScene(value: unknown, defaultLoc?: string): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const record = value as Record<string, unknown>;
@@ -516,7 +505,7 @@ function normalizeScene(value: unknown, defaultLoc?: string): unknown {
     character: typeof record.character === "string" ? record.character.trim() : null,
     characterId: normalizeCharacterId(record.characterId ?? record.character_id ?? record.id) || null,
     attire: typeof record.attire === "string" ? record.attire.trim() : null,
-    ambient: normalizeAmbientEffect(record.ambient),
+    ...(record.ambient !== undefined ? { ambient: normalizeAmbientEffect(record.ambient) } : {}),
     basePrompt: typeof record.basePrompt === "string" && record.basePrompt.trim() ? record.basePrompt.trim() : "a visual novel scene",
     compositionLock: typeof record.compositionLock === "string" ? record.compositionLock.trim() : "Character centered with clear negative space behind the dialogue window."
   };
@@ -614,7 +603,66 @@ function normalizeCharacter(value: unknown): unknown {
   };
 }
 
-function normalizePlannerOutput(value: unknown, defaultLoc?: string): unknown {
+type EffectTrace = (message: string) => void;
+const EFFECT_KEYS = ["effect", "effects", "stageEffect", "stage_effect", "screenEffect", "cueEffect", "fx"];
+const AMBIENT_KEYS = ["ambient", "ambientEffect", "ambient_effect", "atmosphere", "overlay", "weatherEffect"];
+function firstEffectValue(record: Record<string, unknown>, keys: string[]): unknown {
+  for (const key of keys) if (record[key] !== undefined) return record[key];
+  return undefined;
+}
+
+/** Route misplaced values before rebuilding the strict planner schema. */
+function routePlannerEffects(rawScenes: unknown[], rawCues: unknown[], top: Record<string, unknown>, trace: EffectTrace) {
+  const scenes = rawScenes.map((value) => ({ ...(value as Record<string, unknown>) }));
+  const cues = rawCues.map((value) => ({ ...(value as Record<string, unknown>) }));
+  const effects: Array<{ paragraphIndex: number; effect: StageEffect }> = [];
+  const route = (value: unknown, kind: "effect" | "ambient", paragraphIndex: number, scene?: Record<string, unknown>, cue?: Record<string, unknown>) => {
+    if (value === undefined) return;
+    const effect = normalizeStageEffect(value);
+    const ambient = normalizeAmbientEffect(value);
+    if ((kind === "effect" && effect) || (kind === "ambient" && !ambient && effect)) {
+      effects.push({ paragraphIndex, effect: effect! });
+      if (cue) cue.effect = effect;
+      return;
+    }
+    if (ambient) { if (scene) scene.ambient = ambient; return; }
+    const clear = value === null || typeof value === "string" && /^(?:none|null|no effect|no ambient|n\/a)?$/i.test(value.trim());
+    if (clear) { if (kind === "ambient" && scene) scene.ambient = null; return; }
+    trace(`dropped ${kind} ${debugJson(value)} at p${paragraphIndex}`);
+  };
+  for (const scene of scenes) {
+    const index = asNumber(scene.startParagraph) ?? 0;
+    const rawAmbient = firstEffectValue(scene, AMBIENT_KEYS);
+    const ambient = rawAmbient !== undefined ? rawAmbient : (scene.environment as Record<string, unknown> | undefined)?.ambient;
+    const effect = firstEffectValue(scene, EFFECT_KEYS);
+    delete scene.ambient;
+    route(ambient, "ambient", index, scene);
+    route(effect, "effect", index, scene);
+  }
+  const sceneAt = (index: number) => [...scenes].sort((a, b) => (asNumber(a.startParagraph) ?? 0) - (asNumber(b.startParagraph) ?? 0)).filter((scene) => (asNumber(scene.startParagraph) ?? 0) <= index).at(-1) ?? scenes[0];
+  for (const cue of cues) {
+    const index = (normalizeCue(cue) as { paragraphIndex: number }).paragraphIndex;
+    const effect = firstEffectValue(cue, EFFECT_KEYS);
+    delete cue.effect;
+    route(effect, "effect", index, sceneAt(index), cue);
+    route(firstEffectValue(cue, AMBIENT_KEYS), "ambient", index, sceneAt(index), cue);
+  }
+  const topEffects = Array.isArray(top.effects) ? top.effects : top.effects && typeof top.effects === "object"
+    ? Object.entries(top.effects).map(([paragraphIndex, effect]) => ({ paragraphIndex: Number(paragraphIndex), effect })) : [];
+  for (const value of topEffects) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      trace(`dropped effect ${debugJson(value)}: expected paragraph effect entry`);
+      continue;
+    }
+    const item = value as Record<string, unknown>;
+    const index = Math.max(0, Math.floor(asNumber(item.paragraphIndex ?? item.paragraph_index ?? item.paragraph) ?? 0));
+    route(firstEffectValue(item, EFFECT_KEYS), "effect", index, sceneAt(index));
+  }
+  route(firstEffectValue(top, AMBIENT_KEYS), "ambient", 0, scenes[0]);
+  return { scenes, cues, effects };
+}
+
+function normalizePlannerOutput(value: unknown, defaultLoc?: string, trace: EffectTrace = () => {}): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const record = value as Record<string, unknown>;
 
@@ -657,6 +705,9 @@ function normalizePlannerOutput(value: unknown, defaultLoc?: string): unknown {
               ? record.frames
               : [])))));
 
+  const routed = routePlannerEffects(rawScenes.length ? rawScenes : scenes, rawCues, record, trace);
+  scenes = routed.scenes.map((scene) => normalizeScene(scene, defaultLoc));
+
   let rawCharacters: unknown[] = [];
   if (Array.isArray(record.characters)) {
     rawCharacters = record.characters;
@@ -672,7 +723,8 @@ function normalizePlannerOutput(value: unknown, defaultLoc?: string): unknown {
 
   return {
     scenes,
-    cues: rawCues.map(normalizeCue),
+    cues: routed.cues.map(normalizeCue),
+    effects: routed.effects,
     choices: Array.isArray(record.choices)
       ? record.choices
           .map(normalizeChoice)
@@ -1049,7 +1101,7 @@ async function requestPlannerOutput(
     throw error;
   }
   debug.line(`parse ok extract=${parseTrace.extract ?? "?"} strategy=${parseTrace.strategy ?? "?"}${parseTrace.strategy && parseTrace.strategy !== "direct" ? " repaired=yes" : ""}`);
-  const normalized = normalizePlannerOutput(parsedObject, input.previousScene?.environment.location);
+  const normalized = normalizePlannerOutput(parsedObject, input.previousScene?.environment.location, (line) => debug.line(line));
   try {
     return PlannerOutputSchema.parse(normalized);
   } catch (error) {
@@ -1128,6 +1180,7 @@ function fallbackPlanner(input: PlanTurnInput, paragraphCount: number): z.infer<
       compositionLock: previous?.compositionLock ?? "Speaking character centered with the lower quarter clear for dialogue."
     }],
     cues,
+    effects: [],
     choices: [],
     characters: [],
     speakers: []
@@ -2130,7 +2183,11 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
         subjectCategory: timeline.snapshots[proposal.startParagraph]!.subjectCategory
       } : {}),
       attire: timeline.snapshots[proposal.startParagraph]!.attire,
-      ambient: normalizeAmbientEffect(proposal.ambient),
+      ambient: proposal.ambient !== undefined
+        ? normalizeAmbientEffect(proposal.ambient)
+        : reusedScene && reusedScene.environment.weather === mergedEnv.weather && reusedScene.ambient !== undefined
+          ? reusedScene.ambient
+          : deriveWeatherAmbient(mergedEnv.weather),
       continuity,
       basePrompt,
       identityPrompt: timeline.snapshots[proposal.startParagraph]!.identity || null,
@@ -2142,6 +2199,18 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
     scenes.push(scene);
     previous = scene;
   }
+
+  const effectMap = new Map<number, StageEffect>();
+  for (const cue of [...planner.cues, ...planner.effects]) {
+    const effect = normalizeStageEffect(cue.effect);
+    if (!effect) continue;
+    if (cue.paragraphIndex >= narrative.paragraphs.length) {
+      debug.line(`dropped effect ${debugJson(cue.effect)} at p${cue.paragraphIndex}: out of range`);
+      continue;
+    }
+    if (!effectMap.has(cue.paragraphIndex)) effectMap.set(cue.paragraphIndex, effect);
+  }
+  const effectCues = [...effectMap].sort(([a], [b]) => a - b).map(([paragraphIndex, effect]) => ({ paragraphIndex, effect }));
 
   // Dedupe cues by paragraph index so each visible paragraph maps to at most one
   // image. Duplicate cues at the same paragraph produce identical prompts and
@@ -2186,7 +2255,7 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
         attire: timeline.snapshots[cue.paragraphIndex]!.attire ?? undefined,
         resolvedIdentity: timeline.snapshots[cue.paragraphIndex]!.identity,
         resolvedAttire: timeline.snapshots[cue.paragraphIndex]!.attire,
-        ...(normalizeStageEffect(cue.effect) ? { effect: normalizeStageEffect(cue.effect) as StageEffect } : {}),
+        ...(effectMap.has(cue.paragraphIndex) ? { effect: effectMap.get(cue.paragraphIndex)! } : {}),
         promptDelta: "",
         assetJobId: id("asset", `${sourceFingerprint}:${cue.paragraphIndex}:${index}`),
         ...(cue.bgm ? { bgm: cue.bgm } : {}),
@@ -2291,6 +2360,7 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
     scenes,
     visualCues: cues,
     audioCues,
+    effectCues,
     choices,
     initialContinuity: continuity,
     continuityDeltas,

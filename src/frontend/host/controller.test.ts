@@ -10,6 +10,7 @@ import {
   sameTurnIdentity,
   selectCurrentImage,
   shouldPreserveImage,
+  stageTurnInput,
   type VisualStageThemeTarget,
 } from "./controller";
 import type { AssetView, TurnView } from "../../protocol.js";
@@ -336,5 +337,28 @@ describe("nameplateForParagraph (per-paragraph literal speaker)", () => {
     expect(nameplateForParagraph(view, 1)).toBe("");
     // null = unknown: today's behavior (card name).
     expect(nameplateForParagraph(view, 2)).toBe("Monster Musume Paradise");
+  });
+});
+
+describe("stageTurnInput (production host-to-stage mapping)", () => {
+  test("omits ambient only when the TurnView has no ambients array", () => {
+    expect(Object.hasOwn(stageTurnInput(turn(), "standard", true), "ambient")).toBe(false);
+    expect(stageTurnInput(turn({ ambients: [] }), "standard", true).ambient).toBeNull();
+    expect(stageTurnInput(turn({ ambients: [null] }), "standard", true).ambient).toBeNull();
+    expect(stageTurnInput(turn({ ambients: ["snow"] }), "standard", true).ambient).toBe("snow");
+  });
+
+  test("forwards paragraph metadata independently of image assets", () => {
+    const input = stageTurnInput(turn({
+      paragraphs: ["Rain.", "A flash.", "Inside."],
+      ambients: ["rain", "rain", null], effects: [null, "flash_white", null],
+      choices: [{ id: "go", label: "Go", value: "go" }]
+    }), "cyoa", false);
+    expect(input.mode).toBe("cyoa");
+    expect(input.preserveImage).toBe(false);
+    expect(input.choices).toEqual([{ id: "go", label: "Go", value: "go" }]);
+    expect(input.paragraphs.map((paragraph) => paragraph.ambient)).toEqual(["rain", "rain", null]);
+    expect(input.paragraphs[1]?.effect).toBe("flash_white");
+    expect(input.paragraphs[1]?.id).toBe("feedface12345678:1");
   });
 });

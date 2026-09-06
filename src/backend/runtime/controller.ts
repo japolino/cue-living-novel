@@ -177,36 +177,31 @@ function summarizeDiagnostics(diagnostics: {
  * comes from its visual cue; its persistent ambient comes from the scene that
  * owns the most recent cue at or before that paragraph (falling back to the
  * first scene). Both arrays are omitted when the turn has nothing to show so
- * old frontends and stored records stay byte-compatible.
+ * old records keep their legacy behavior. Explicit ambient nulls are sent to clear.
  */
 function effectViews(record: StoredTurnRecord): Pick<TurnView, "effects" | "ambients"> {
   const paragraphCount = record.plan.paragraphs.length;
   if (paragraphCount === 0) return {};
   const effects: Array<string | null> = new Array(paragraphCount).fill(null);
-  for (const cue of record.plan.visualCues) {
-    if (cue.effect && cue.paragraphIndex < paragraphCount) {
+  // An explicit empty list suppresses legacy effects; only old records fall back.
+  for (const cue of record.plan.effectCues ?? record.plan.visualCues) {
+    if (cue.effect && cue.paragraphIndex >= 0 && cue.paragraphIndex < paragraphCount) {
       effects[cue.paragraphIndex] = cue.effect;
     }
   }
-  const sceneAmbient = new Map<string, string | null>();
-  for (const scene of record.plan.scenes) {
-    sceneAmbient.set(scene.sceneId, scene.ambient ?? null);
-  }
   const ambients: Array<string | null> = new Array(paragraphCount).fill(null);
-  let current: string | null = record.plan.scenes.length > 0 ? (record.plan.scenes[0]!.ambient ?? null) : null;
-  const cuesByParagraph = new Map<number, string>();
-  for (const cue of record.plan.visualCues) {
-    cuesByParagraph.set(cue.paragraphIndex, cue.sceneId);
-  }
+  const scenes = record.plan.scenes;
+  let sceneIndex = 0;
   for (let index = 0; index < paragraphCount; index += 1) {
-    const sceneId = cuesByParagraph.get(index);
-    if (sceneId !== undefined && sceneAmbient.has(sceneId)) {
-      current = sceneAmbient.get(sceneId) ?? null;
+    // Scene boundaries are independent of the image budget and cue placement.
+    while (sceneIndex + 1 < scenes.length && scenes[sceneIndex + 1]!.startParagraph <= index) {
+      sceneIndex += 1;
     }
-    ambients[index] = current;
+    ambients[index] = scenes[sceneIndex]?.ambient ?? null;
   }
   const hasEffect = effects.some((value) => value !== null);
-  const hasAmbient = ambients.some((value) => value !== null);
+  // Explicit null is a clear instruction, not missing data.
+  const hasAmbient = scenes.some((scene) => scene.ambient !== undefined);
   return {
     ...(hasEffect ? { effects } : {}),
     ...(hasAmbient ? { ambients } : {})
@@ -446,6 +441,8 @@ async function processAssistantMessage(
       `scenes=${result.plan.scenes.length} (${result.plan.scenes.map((scene) => `${scene.sceneId}@p${scene.startParagraph} rev${scene.revision} "${scene.environment.location}"`).join(", ")})`,
       `cues=${result.plan.visualCues.length} [${result.plan.visualCues.map((cue) => `p${cue.paragraphIndex}:${cue.poseExpressionId ?? "?"}${cue.character ? `(${cue.character})` : ""}`).join(", ")}]`,
       `audio=${result.plan.audioCues.length} [${result.plan.audioCues.map((cue) => `p${cue.paragraphIndex}:${[cue.bgm ? `bgm=${cue.bgm}` : "", cue.sfx ? `sfx=${cue.sfx}` : ""].filter(Boolean).join("+")}`).join(", ")}]`,
+      `effects=[${(result.plan.effectCues ?? result.plan.visualCues).filter((cue) => cue.effect).map((cue) => `p${cue.paragraphIndex}:${cue.effect}`).join(", ")}]`,
+      `ambients=[${result.plan.scenes.map((scene) => `p${scene.startParagraph}:${scene.ambient === undefined ? "omitted" : scene.ambient}`).join(", ")}]`,
       `choices=${result.plan.choices.length}`,
       `protagonist="${result.singleCharacter.protagonist.name}" tags=${result.singleCharacter.protagonist.tags.length}`,
       `subject=${result.plan.terminalVisualState?.characterId ?? "?"}/${result.plan.terminalVisualState?.subjectCategory ?? "unknown"}`,

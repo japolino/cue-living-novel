@@ -7,6 +7,8 @@ import {
   type StageEffect,
 } from "./vn-stage";
 import type { VnTurnInput } from "../store";
+import type { TurnView } from "../../protocol";
+import { stageTurnInput } from "../host/controller";
 
 describe("stage effects heuristics & schemas", () => {
   test("isStageEffect validates only recognized stage effects", () => {
@@ -633,6 +635,67 @@ describe("extended stage effects & ambient overlays", () => {
     expect(overlay.innerHTML).toBe("");
     stage.applyAmbient(null);
     expect(overlay.dataset.vnAmbient).toBeUndefined();
+  });
+
+  function hostView(overrides: Partial<TurnView> = {}): TurnView {
+    return {
+      chatId: "chat", messageId: "message", swipeId: 0,
+      sourceFingerprint: "fp", revision: 1, speaker: "Mira",
+      paragraphs: ["Outside.", "Inside.", "Later."],
+      choices: [], assets: [], status: "ready", ...overrides
+    };
+  }
+
+  test("host stage input preserves omitted ambient data and forwards explicit clears", () => {
+    const stage = new VnStage({ mount, textSpeed: 0 });
+    try {
+      stage.loadTurn(stageTurnInput(hostView({ ambients: ["rain", "rain", "rain"] }), "standard", true));
+      expect(stage.getCurrentAmbient()).toBe("rain");
+      const omitted = stageTurnInput(hostView({ sourceFingerprint: "next" }), "standard", true);
+      expect(Object.hasOwn(omitted, "ambient")).toBe(false);
+      expect(Object.hasOwn(omitted.paragraphs[0]!, "ambient")).toBe(false);
+      stage.loadTurn(omitted);
+      expect(stage.getCurrentAmbient()).toBe("rain");
+      const cleared = stageTurnInput(hostView({ sourceFingerprint: "clear", ambients: [null, null, null] }), "standard", true);
+      expect(cleared.ambient).toBeNull();
+      stage.loadTurn(cleared);
+      expect(stage.getCurrentAmbient()).toBeNull();
+      expect((stage.getAmbientOverlay() as unknown as MockNode).innerHTML).toBe("");
+    } finally { stage.destroy(); }
+  });
+
+  test("host paragraph ambient clears on advance, restores on rewind, and clears again", () => {
+    const stage = new VnStage({ mount, textSpeed: 0 });
+    try {
+      stage.loadTurn(stageTurnInput(hostView({ ambients: ["rain", null, "snow"], effects: [null, "flash_white", null] }), "standard", true));
+      expect(stage.getCurrentAmbient()).toBe("rain");
+      (stage as any).advance();
+      expect(stage.getCurrentAmbient()).toBeNull();
+      expect((stage.getFlashOverlay() as unknown as MockNode).dataset.vnFlash).toBe("white");
+      stage.previous();
+      expect(stage.getCurrentAmbient()).toBe("rain");
+      expect((stage.getFlashOverlay() as unknown as MockNode).dataset.vnFlash).toBeUndefined();
+      (stage as any).advance();
+      expect(stage.getCurrentAmbient()).toBeNull();
+      (stage as any).advance();
+      expect(stage.getCurrentAmbient()).toBe("snow");
+    } finally { stage.destroy(); }
+  });
+
+  test("paragraph ambient null overrides cue ambient while omission falls back to cue", () => {
+    const stage = new VnStage({ mount, textSpeed: 0 });
+    try {
+      stage.loadTurn({ mode: "standard", ambient: "rain", paragraphs: [
+        { id: "clear", text: "Inside.", ambient: null, cue: { ambient: "snow" } },
+        { id: "cue", text: "Outside.", cue: { ambient: "fog" } },
+        { id: "keep", text: "Still outside." }
+      ] });
+      expect(stage.getCurrentAmbient()).toBeNull();
+      (stage as any).advance();
+      expect(stage.getCurrentAmbient()).toBe("fog");
+      (stage as any).advance();
+      expect(stage.getCurrentAmbient()).toBe("fog");
+    } finally { stage.destroy(); }
   });
 
   test("reset clears ambient state entirely", () => {

@@ -4,7 +4,7 @@ import type { AssetView, BackendResponse, TurnView } from "../../protocol.js";
 import { AudioEngine, VnStage, isAmbientEffect, isStageEffect } from "../stage/index.js";
 import type { AmbientEffect, StageEffect } from "../store/index.js";
 import { VisualNovelSettingsPanel } from "../settings/panel.js";
-import type { VnChoice } from "../store/index.js";
+import type { VnChoice, VnTurnInput } from "../store/index.js";
 import { createVnHeaderLauncher } from "./manual-launcher.js";
 import { captureSimTrackerCards } from "./panel-capture.js";
 import { PanelDock } from "../stage/panel-dock.js";
@@ -133,6 +133,23 @@ export function ambientForParagraph(view: TurnView, index: number): { ambient?: 
 export function firstAmbient(view: TurnView): AmbientEffect | null {
   const ambient = view.ambients?.[0];
   return isAmbientEffect(ambient) ? ambient : null;
+}
+
+/** Build the stage input without turning absent ambient data into a clear. */
+export function stageTurnInput(next: TurnView, mode: VnTurnInput["mode"], preserveImage: boolean): VnTurnInput {
+  return {
+    mode,
+    paragraphs: next.paragraphs.map((text, index) => ({
+      id: `${next.sourceFingerprint}:${index}`,
+      text,
+      speaker: nameplateForParagraph(next, index),
+      ...effectForParagraph(next, index),
+      ...ambientForParagraph(next, index)
+    })),
+    choices: next.choices.map((choice) => ({ id: choice.id, label: choice.label, value: choice.value })),
+    preserveImage,
+    ...(next.ambients !== undefined ? { ambient: firstAmbient(next) } : {})
+  };
 }
 
 export function decideTurnApplication(
@@ -575,19 +592,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     const mode = requestedMode === "cyoa" && next.choices.length > 0 ? "cyoa" : "standard";
     const preserveImage = shouldPreserveImage(previous, next);
     turnOpeningBgm = preserveImage ? currentBgm : null;
-    stage.loadTurn({
-      mode,
-      paragraphs: next.paragraphs.map((text, index) => ({
-        id: `${next.sourceFingerprint}:${index}`,
-        text,
-        speaker: nameplateForParagraph(next, index),
-        ...effectForParagraph(next, index),
-        ...ambientForParagraph(next, index)
-      })),
-      choices: next.choices.map((choice) => ({ id: choice.id, label: choice.label, value: choice.value })),
-      preserveImage,
-      ambient: firstAmbient(next)
-    });
+    stage.loadTurn(stageTurnInput(next, mode, preserveImage));
     void syncImageForParagraph(0);
     syncAudioForParagraph(next, 0);
   }

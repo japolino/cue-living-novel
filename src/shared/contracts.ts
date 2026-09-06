@@ -285,6 +285,12 @@ export const AudioCueSchema = z.object({
 }).strict();
 export type AudioCue = z.infer<typeof AudioCueSchema>;
 
+export const EffectCueSchema = z.object({
+  paragraphIndex: NonNegativeIntegerSchema,
+  effect: StageEffectSchema
+}).strict();
+export type EffectCue = z.infer<typeof EffectCueSchema>;
+
 export const TurnPlanSchema = z.object({
   schemaVersion: z.literal(1),
   key: TurnKeySchema,
@@ -299,6 +305,8 @@ export const TurnPlanSchema = z.object({
   scenes: z.array(SceneStateSchema).min(1),
   visualCues: z.array(VisualCueSchema).default([]),
   audioCues: z.array(AudioCueSchema).default([]),
+  // Uncapped paragraph effects. Absent on legacy records; [] is authoritative.
+  effectCues: z.array(EffectCueSchema).optional(),
   choices: z.array(ChoiceSchema).default([]),
   initialContinuity: ContinuityStateSchema,
   continuityDeltas: z.array(IndexedContinuityDeltaSchema).default([]),
@@ -364,6 +372,12 @@ export const TurnPlanSchema = z.object({
     if (jobIds.has(cue.assetJobId)) context.addIssue({ code: "custom", path: ["visualCues", index, "assetJobId"], message: "Asset job IDs must be unique." });
     cueIds.add(cue.cueId);
     jobIds.add(cue.assetJobId);
+  }
+
+  for (const [index, cue] of (plan.effectCues ?? []).entries()) {
+    if (cue.paragraphIndex > finalParagraphIndex) {
+      context.addIssue({ code: "custom", path: ["effectCues", index, "paragraphIndex"], message: "Effect cue points outside the turn." });
+    }
   }
 
   const choiceIds = new Set<string>();
