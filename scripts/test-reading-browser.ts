@@ -124,6 +124,17 @@ try {
   await page.evaluate(() => { const s = (window as any).readingFixture.stage; s.setPhase("waiting-for-response"); s.setAssetProgress({ current: 2, total: 3 }); });
   assert.equal(await page.getByText("Waiting for the reply…", { exact: true }).isVisible(), true);
   assert.equal(await page.getByText("Creating image 2 of 3", { exact: true }).isVisible(), true);
+  // The "Panels" launcher sits in the top-left corner; status badges must not be under it.
+  {
+    const launcher = page.getByRole("button", { name: /^Panels/ });
+    assert.equal(await launcher.isVisible(), true, "Panels launcher is mounted on the stage");
+    const l = (await launcher.boundingBox())!;
+    for (const text of ["Waiting for the reply…", "Creating image 2 of 3"]) {
+      const b = (await page.getByText(text, { exact: true }).boundingBox())!;
+      const overlaps = l.x < b.x + b.width && b.x < l.x + l.width && l.y < b.y + b.height && b.y < l.y + l.height;
+      assert.ok(!overlaps, `status badge "${text}" is not covered by the Panels launcher (launcher ${JSON.stringify(l)} badge ${JSON.stringify(b)})`);
+    }
+  }
   assert.equal(await page.locator("[data-vn-dialogue-text]").isVisible(), true, "the last paragraph stays readable while the reply prepares");
   await page.evaluate(() => (window as any).readingFixture.stage.setError({ source: "image", message: "This scene image could not be made.", detail: "HTTP 502 upstream timeout", retryable: true, retryScope: "Try again keeps 2 finished images and remakes 1." }));
   const card = page.getByRole("alert");

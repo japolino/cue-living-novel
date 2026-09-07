@@ -174,7 +174,11 @@ textarea {
 [data-vn-status-stack] {
   position: absolute;
   z-index: 3;
-  top: max(0.85rem, env(safe-area-inset-top));
+  /* The Panels launcher (panel-dock) sits at the top-left corner, 44px tall at
+     12px from the top. Start the status badges below it so they are never
+     covered by that button. */
+  --vn-status-top-clearance: 3.6rem;
+  top: calc(max(0.85rem, env(safe-area-inset-top)) + var(--vn-status-top-clearance));
   left: max(0.85rem, env(safe-area-inset-left));
   display: flex;
   max-width: min(36rem, calc(100 * var(--vn-vw, 1vw) - 10rem));

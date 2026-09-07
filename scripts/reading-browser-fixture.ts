@@ -1,5 +1,6 @@
 import { VnStage } from "../src/frontend/stage/vn-stage.js";
 import type { VnTurnInput } from "../src/frontend/store/index.js";
+import { PanelDock } from "../src/frontend/stage/panel-dock.js";
 
 const params = new URL(location.href).searchParams;
 // Emulate the Lumiverse host: body > * { zoom: var(--lumiverse-ui-scale) } and a
@@ -39,4 +40,6 @@ const turn: VnTurnInput = {
   ] : [],
 };
 stage.loadTurn(turn);
-Object.assign(window, { readingFixture: { stage, turn, counters } });
+// The host mounts the pinned-panel dock (with its "Panels" launcher) on the stage, as in src/frontend/host/controller.ts.
+const panels = new PanelDock(stage.panelMount);
+Object.assign(window, { readingFixture: { stage, turn, counters, panels } });
