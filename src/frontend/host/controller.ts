@@ -322,7 +322,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     position: "fixed",
     inset: "0",
     width: "100%",
-    height: "100dvh",
+    // Divide by the Lumiverse UI scale: the mount sits under `body > * { zoom }`.
+    height: "calc(100dvh / var(--lumiverse-ui-scale, 1))",
     zIndex: "9990"
   });
   app.setVisible(false);

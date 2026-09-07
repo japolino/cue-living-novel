@@ -7,9 +7,9 @@ export const VN_BASE_CSS = `
   --vn-muted-text: rgba(255, 255, 255, 0.76);
   --vn-dialogue-bg: linear-gradient(180deg, rgba(21, 16, 33, 0.78), rgba(8, 9, 15, 0.94));
   --vn-dialogue-border: rgba(255, 255, 255, 0.3);
-  --vn-dialogue-width: min(72rem, calc(100vw - 3rem));
+  --vn-dialogue-width: min(72rem, calc(100 * var(--vn-vw, 1vw) - 3rem));
   --vn-font-family: ui-rounded, "Segoe UI", system-ui, sans-serif;
-  --vn-dialogue-font-size: clamp(1rem, 1.1vw + 0.75rem, 1.35rem);
+  --vn-dialogue-font-size: clamp(1rem, 1.1 * var(--vn-vw, 1vw) + 0.75rem, 1.35rem);
   --vn-transition-duration: 280ms;
   /* Reader text size multiplier (config textScale); the host sets it on the root. */
   --vn-text-scale: 1;
@@ -42,7 +42,7 @@ textarea {
   isolation: isolate;
   width: 100%;
   height: 100%;
-  min-height: 100dvh;
+  min-height: calc(100 * var(--vn-dvh, 1dvh));
   overflow: hidden;
   background: #08090d;
   touch-action: manipulation;
@@ -177,7 +177,7 @@ textarea {
   top: max(0.85rem, env(safe-area-inset-top));
   left: max(0.85rem, env(safe-area-inset-left));
   display: flex;
-  max-width: min(36rem, calc(100vw - 10rem));
+  max-width: min(36rem, calc(100 * var(--vn-vw, 1vw) - 10rem));
   flex-wrap: wrap;
   gap: 0.45rem;
   pointer-events: none;
@@ -668,7 +668,7 @@ button[data-vn-badge]:active {
 [data-vn-choice-list] {
   display: grid;
   width: min(46rem, 100%);
-  max-height: min(70vh, 42rem);
+  max-height: min(70 * var(--vn-vh, 1vh), 42rem);
   gap: 0.8rem;
   margin: 0;
   padding: 0.5rem;
@@ -721,7 +721,7 @@ button[data-vn-badge]:active {
 [data-vn-input] {
   width: 100%;
   min-height: 7rem;
-  max-height: 35vh;
+  max-height: calc(35 * var(--vn-vh, 1vh));
   resize: vertical;
   padding: 0.9rem 1rem;
   border: 1px solid rgba(255, 255, 255, 0.3);
@@ -811,7 +811,7 @@ button[data-vn-badge]:active {
 
   [data-vn-choice-list] {
     width: 100%;
-    max-height: calc(100dvh - var(--vn-control-size) - 17rem);
+    max-height: calc(100 * var(--vn-dvh, 1dvh) - var(--vn-control-size) - 17rem);
   }
 
   [data-vn-input] {
@@ -1223,7 +1223,7 @@ button[data-vn-badge]:active {
   flex-direction: column;
   background: rgba(8, 9, 15, 0.92);
   backdrop-filter: blur(1.5rem);
-  padding: clamp(1.2rem, 3vw, 3rem);
+  padding: clamp(1.2rem, 3 * var(--vn-vw, 1vw), 3rem);
   color: var(--vn-text);
   animation: vn-fade-in 180ms ease forwards;
 }

@@ -183,5 +183,36 @@ try {
     await ctx.close();
   }
 
-  console.log("Reading browser checks passed: touch targets, toolbar bounds, keyboard focus, History focus return, Your turn hand-off, draft preservation, status labels, error card details/retry, custom CSS order, text scale, reduced motion, preset toolbars.");
+  // ---- Lumiverse UI scale: the stage must cover the whole viewport at any scale ----
+  // Regression for the Full HD report: at UI scale 0.9 the stage covered ~90% of the
+  // screen and left host chrome visible on the right and bottom.
+  for (const [w, h] of [[1920, 1080], [1920, 1015], [1366, 768], [2560, 1080], [3440, 1440]] as const) {
+    for (const scale of [1, 0.9, 0.8, 1.1] as const) {
+      const ctx = await browser.newContext({ viewport: { width: w, height: h } });
+      const p = await ctx.newPage();
+      await p.goto(url(`preset=literature-club&uiScale=${scale}`));
+      await p.locator("[data-vn-dialogue]").waitFor();
+      const rects = await p.evaluate(() => {
+        const host = document.querySelector("[data-vn-stage-host]") as HTMLElement | null;
+        const shell = host?.shadowRoot?.querySelector("[data-vn-shell]") as HTMLElement | null;
+        const root = host?.shadowRoot?.querySelector("[data-vn-theme-host]")?.shadowRoot?.querySelector("[data-vn-root]") as HTMLElement | null;
+        const dialogue = root?.querySelector("[data-vn-dialogue]") as HTMLElement | null;
+        const r = (el: HTMLElement | null) => { const b = el?.getBoundingClientRect(); return b ? { x: b.x, y: b.y, right: b.right, bottom: b.bottom, width: b.width, height: b.height } : null; };
+        return { shell: r(shell), root: r(root), dialogue: r(dialogue), scale: getComputedStyle(document.documentElement).getPropertyValue("--lumiverse-ui-scale").trim() };
+      });
+      const label = `${w}x${h} @ scale ${scale}`;
+      // Chromium reports getBoundingClientRect in screen pixels even inside a zoomed subtree.
+      const px = (v: number) => v;
+      assert.ok(rects.shell && rects.root, `${label}: stage rendered`);
+      assert.ok(Math.abs(px(rects.shell!.right) - w) <= 1, `${label}: stage reaches the right edge (right=${px(rects.shell!.right)})`);
+      assert.ok(Math.abs(px(rects.shell!.bottom) - h) <= 1, `${label}: stage reaches the bottom edge (bottom=${px(rects.shell!.bottom)})`);
+      assert.ok(Math.abs(px(rects.root!.right) - w) <= 1 && Math.abs(px(rects.root!.bottom) - h) <= 1, `${label}: theme root fills the stage`);
+      const center = px((rects.dialogue!.x + rects.dialogue!.right) / 2);
+      assert.ok(Math.abs(center - w / 2) <= 2, `${label}: dialogue is centered on the screen (center=${center})`);
+      if (w === 1920 && h === 1080 && scale === 0.9) await p.screenshot({ path: ".cache/ux-redesign/reading-1080p-uiscale-0.9.png" });
+      await ctx.close();
+    }
+  }
+
+  console.log("Reading browser checks passed: touch targets, toolbar bounds, keyboard focus, History focus return, Your turn hand-off, draft preservation, status labels, error card details/retry, custom CSS order, text scale, reduced motion, preset toolbars, Lumiverse UI scale coverage.");
 } finally { await browser?.close(); server.stop(); }

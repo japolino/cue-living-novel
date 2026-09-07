@@ -12,9 +12,9 @@ const LUMIVERSE_CSS = `
   --vn-muted-text: var(--lumiverse-text-muted, rgba(255, 255, 255, 0.76));
   --vn-dialogue-bg: var(--lumiverse-card-bg, linear-gradient(180deg, rgba(21, 16, 33, 0.78), rgba(8, 9, 15, 0.94)));
   --vn-dialogue-border: var(--lumiverse-border, rgba(255, 255, 255, 0.3));
-  --vn-dialogue-width: min(72rem, calc(100vw - 3rem));
+  --vn-dialogue-width: min(72rem, calc(100 * var(--vn-vw, 1vw) - 3rem));
   --vn-font-family: var(--lumiverse-font-family, ui-rounded, "Segoe UI", system-ui, sans-serif);
-  --vn-dialogue-font-size: clamp(1rem, 1.1vw + 0.75rem, 1.35rem);
+  --vn-dialogue-font-size: clamp(1rem, 1.1 * var(--vn-vw, 1vw) + 0.75rem, 1.35rem);
   --vn-transition-duration: 280ms;
 }
 
@@ -87,9 +87,9 @@ const GOLDEN_HOUR_CSS = `
   --vn-muted-text: rgba(255, 244, 218, 0.78);
   --vn-dialogue-bg: linear-gradient(180deg, rgba(36, 25, 17, 0.84), rgba(18, 12, 8, 0.94));
   --vn-dialogue-border: rgba(226, 176, 106, 0.9);
-  --vn-dialogue-width: min(96rem, calc(100vw - 3rem));
+  --vn-dialogue-width: min(96rem, calc(100 * var(--vn-vw, 1vw) - 3rem));
   --vn-font-family: ui-rounded, "Segoe UI", system-ui, sans-serif;
-  --vn-dialogue-font-size: clamp(1.05rem, 1.15vw + 0.76rem, 1.42rem);
+  --vn-dialogue-font-size: clamp(1.05rem, 1.15 * var(--vn-vw, 1vw) + 0.76rem, 1.42rem);
   --vn-transition-duration: 320ms;
 }
 [data-vn-root][data-vn-preset="golden-hour"] [data-vn-ornament-group][data-vn-preset="golden-hour"] { display: block; }
@@ -168,7 +168,7 @@ const GOLDEN_HOUR_CSS = `
 }
 [data-vn-root][data-vn-preset="golden-hour"] [data-vn-choice-list],
 [data-vn-root][data-vn-preset="golden-hour"] [data-vn-input-form] {
-  width: min(94rem, calc(100vw - 3rem));
+  width: min(94rem, calc(100 * var(--vn-vw, 1vw) - 3rem));
   padding: 2rem 3rem;
   border: 1px solid rgba(226, 176, 106, 0.9);
   outline: 1px solid rgba(255, 238, 200, 0.2);
@@ -294,7 +294,7 @@ const BOXED_CONSOLE_CSS = `
   --vn-muted-text: rgba(190, 222, 197, 0.74);
   --vn-dialogue-bg: linear-gradient(180deg, #0e1412, #080d0b);
   --vn-dialogue-border: #31483a;
-  --vn-dialogue-width: min(86rem, calc(100vw - 3rem));
+  --vn-dialogue-width: min(86rem, calc(100 * var(--vn-vw, 1vw) - 3rem));
   --vn-font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
   --vn-transition-duration: 180ms;
 }
@@ -398,9 +398,9 @@ const PAPER_NOVEL_CSS = `
   --vn-muted-text: rgba(70, 57, 48, 0.78);
   --vn-dialogue-bg: #efe6d3;
   --vn-dialogue-border: rgba(101, 75, 43, 0.46);
-  --vn-dialogue-width: min(78rem, calc(100vw - 3rem));
+  --vn-dialogue-width: min(78rem, calc(100 * var(--vn-vw, 1vw) - 3rem));
   --vn-font-family: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
-  --vn-dialogue-font-size: clamp(1.05rem, 1vw + 0.82rem, 1.35rem);
+  --vn-dialogue-font-size: clamp(1.05rem, 1 * var(--vn-vw, 1vw) + 0.82rem, 1.35rem);
   --vn-transition-duration: 360ms;
 }
 [data-vn-root][data-vn-preset="paper-novel"] [data-vn-ornament-group][data-vn-preset="paper-novel"] { display: block; color: #8a2f23; }
@@ -499,7 +499,7 @@ const MIDNIGHT_NOIR_CSS = `
   --vn-muted-text: rgba(222, 218, 207, 0.7);
   --vn-dialogue-bg: linear-gradient(180deg, rgba(28, 30, 34, 0.92) 0%, rgba(14, 16, 18, 0.96) 100%);
   --vn-dialogue-border: rgba(165, 150, 135, 0.75);
-  --vn-dialogue-width: min(86rem, calc(100vw - 2.5rem));
+  --vn-dialogue-width: min(86rem, calc(100 * var(--vn-vw, 1vw) - 2.5rem));
   --vn-font-family: Georgia, "Iowan Old Style", serif;
   --vn-transition-duration: 420ms;
 }
@@ -695,9 +695,9 @@ const YAMAKU_CLASSIC_CSS = `
   --vn-muted-text: rgba(255, 255, 255, 0.72);
   --vn-dialogue-bg: linear-gradient(to top, rgba(20, 17, 15, 0.88) 0%, rgba(25, 22, 19, 0.7) 50%, rgba(28, 24, 20, 0.45) 100%);
   --vn-dialogue-border: rgba(175, 160, 145, 0.7);
-  --vn-dialogue-width: min(78rem, calc(100vw - 1.8rem));
+  --vn-dialogue-width: min(78rem, calc(100 * var(--vn-vw, 1vw) - 1.8rem));
   --vn-font-family: "Segoe Print", "Comic Sans MS", "Trebuchet MS", cursive;
-  --vn-dialogue-font-size: clamp(1.18rem, 1.25vw + 0.75rem, 1.58rem);
+  --vn-dialogue-font-size: clamp(1.18rem, 1.25 * var(--vn-vw, 1vw) + 0.75rem, 1.58rem);
   --vn-transition-duration: 280ms;
 }
 [data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-ornament-group][data-vn-preset="yamaku-classic"] { display: block; }
@@ -886,9 +886,9 @@ const LITERATURE_CLUB_CSS = `
   --vn-muted-text: rgba(255, 235, 245, 0.85);
   --vn-dialogue-bg: linear-gradient(to bottom, rgba(255, 150, 197, 0.94) 0%, rgba(250, 146, 193, 0.86) 45%, rgba(229, 140, 184, 0.64) 100%);
   --vn-dialogue-border: #ffd9ea;
-  --vn-dialogue-width: min(74rem, calc(100vw - 2.5rem));
+  --vn-dialogue-width: min(74rem, calc(100 * var(--vn-vw, 1vw) - 2.5rem));
   --vn-font-family: "Comic Sans MS", "Comfortaa", "Nunito", "Trebuchet MS", ui-rounded, sans-serif;
-  --vn-dialogue-font-size: clamp(1.12rem, 1.2vw + 0.8rem, 1.46rem);
+  --vn-dialogue-font-size: clamp(1.12rem, 1.2 * var(--vn-vw, 1vw) + 0.8rem, 1.46rem);
   --vn-transition-duration: 260ms;
 }
 [data-vn-root][data-vn-preset="literature-club"] [data-vn-ornament-group][data-vn-preset="literature-club"] { display: block; }
@@ -960,7 +960,7 @@ const LITERATURE_CLUB_CSS = `
   background: transparent;
   color: #6a2b3e;
   font-family: var(--vn-font-family);
-  font-size: 0.82rem;
+  font-size: 0.95rem;
   font-weight: 700;
   text-transform: none;
   letter-spacing: 0.02em;

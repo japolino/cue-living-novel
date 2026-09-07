@@ -1,10 +1,22 @@
 import { VnStage } from "../src/frontend/stage/vn-stage.js";
 import type { VnTurnInput } from "../src/frontend/store/index.js";
 
-const mount = document.createElement("div");
-Object.assign(mount.style, { position: "fixed", inset: "0", background: "#08090d" });
-document.body.append(mount);
 const params = new URL(location.href).searchParams;
+// Emulate the Lumiverse host: body > * { zoom: var(--lumiverse-ui-scale) } and a
+// scale-compensated app root, exactly as frontend/src/App.module.css does.
+const uiScale = Number(params.get("uiScale") ?? "1") || 1;
+document.documentElement.style.setProperty("--lumiverse-ui-scale", String(uiScale));
+const zoomStyle = document.createElement("style");
+zoomStyle.textContent = "body > * { zoom: var(--lumiverse-ui-scale, 1); }";
+document.head.append(zoomStyle);
+const appRoot = document.createElement("div");
+appRoot.setAttribute("data-app-root", "");
+Object.assign(appRoot.style, { position: "fixed", inset: "0", width: "calc(100vw / var(--lumiverse-ui-scale, 1))", height: "calc(100dvh / var(--lumiverse-ui-scale, 1))", background: "#1a1a1a" });
+document.body.append(appRoot);
+const mount = document.createElement("div");
+// Same inline sizing the host controller applies to app.root (see src/frontend/host/controller.ts).
+Object.assign(mount.style, { position: "fixed", inset: "0", width: "100%", height: "calc(100dvh / var(--lumiverse-ui-scale, 1))", background: "#08090d" });
+appRoot.append(mount);
 const mode = params.get("mode") === "cyoa" ? "cyoa" : "standard";
 const counters = { rerolls: 0, submits: 0, choices: 0, exits: 0 };
 const stage = new VnStage({

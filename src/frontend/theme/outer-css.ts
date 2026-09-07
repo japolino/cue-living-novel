@@ -4,13 +4,21 @@
  */
 export const VN_OUTER_CSS = `
 :host {
+  /* Lumiverse scales its UI with body > * { zoom: var(--lumiverse-ui-scale) }.
+     Plain viewport units are measured before that zoom, so a 90% UI scale would
+     leave the stage covering 90% of the screen. Divide by the scale (the same
+     pattern Lumiverse uses for its own full-screen layers) so the stage always
+     covers the real viewport. */
+  --vn-vw: calc(1vw / var(--lumiverse-ui-scale, 1));
+  --vn-vh: calc(1vh / var(--lumiverse-ui-scale, 1));
+  --vn-dvh: calc(1dvh / var(--lumiverse-ui-scale, 1));
   position: fixed;
   inset: 0;
   z-index: 2147483000;
   display: block;
-  width: 100vw;
-  height: 100vh;
-  height: 100dvh;
+  width: calc(100 * var(--vn-vw));
+  height: calc(100 * var(--vn-vh));
+  height: calc(100 * var(--vn-dvh));
   overflow: hidden;
   color-scheme: dark;
 }
