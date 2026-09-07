@@ -380,3 +380,148 @@ export function jsonObject(value: string, label: string): Record<string, unknown
   }
   return parsed as Record<string, unknown>;
 }
+
+/* ------------------------------------------------------------------------ */
+/* NovelAI Parameters & Effective Connection                                 */
+/* ------------------------------------------------------------------------ */
+
+export function effectiveImageConnection(
+  state: ConnectionCatalogState,
+  selectedId: string | null,
+): ConnectionOption | null {
+  if (state.status !== "ready") return null;
+  if (selectedId) {
+    return state.options.find((option) => option.id === selectedId) ?? null;
+  }
+  return state.options.find((option) => option.isDefault) ?? null;
+}
+
+export function isNovelAiConnection(connection: ConnectionOption | null): boolean {
+  return Boolean(connection && connection.provider.trim().toLowerCase() === "novelai");
+}
+
+export type NovelAiSamplerOption = {
+  value: string;
+  label: string;
+};
+
+export const NOVELAI_SAMPLER_OPTIONS: readonly NovelAiSamplerOption[] = [
+  { value: "k_euler_ancestral", label: "Euler Ancestral (Recommended)" },
+  { value: "k_euler", label: "Euler" },
+  { value: "k_dpmpp_2m", label: "DPM++ 2M (Recommended)" },
+  { value: "k_dpmpp_2s_ancestral", label: "DPM++ 2S Ancestral" },
+  { value: "k_dpmpp_sde", label: "DPM++ SDE" },
+  { value: "ddim_v3", label: "DDIM" },
+];
+
+export const NOVELAI_DEFAULT_SAMPLER = "k_euler_ancestral";
+export const NOVELAI_DEFAULT_STEPS = 28;
+export const NOVELAI_DEFAULT_GUIDANCE = 5;
+export const NOVELAI_STEPS_MIN = 1;
+export const NOVELAI_STEPS_MAX = 50;
+export const NOVELAI_GUIDANCE_MIN = 1;
+export const NOVELAI_GUIDANCE_MAX = 20;
+
+export type NovelAiResolutionPresetId = "landscape" | "portrait" | "square" | "custom";
+
+export type NovelAiResolutionPreset = {
+  id: Exclude<NovelAiResolutionPresetId, "custom">;
+  label: string;
+  resolution: string;
+  width: number;
+  height: number;
+  help: string;
+};
+
+export const NOVELAI_RESOLUTION_PRESETS: readonly NovelAiResolutionPreset[] = [
+  { id: "landscape", label: "Landscape (1216×832)", resolution: "1216x832", width: 1216, height: 832, help: "1216×832 · Within Opus size limit" },
+  { id: "portrait", label: "Portrait (832×1216)", resolution: "832x1216", width: 832, height: 1216, help: "832×1216 · Within Opus size limit" },
+  { id: "square", label: "Square (1024×1024)", resolution: "1024x1024", width: 1024, height: 1024, help: "1024×1024 · Within Opus size limit" },
+];
+
+export const NOVELAI_DEFAULT_RESOLUTION = "1216x832";
+export const NOVELAI_NOTICE = "These sizes fit the Opus size limit. Free generation also depends on your plan, model usage limits, 28 steps or fewer, and generation mode. Reference images or custom settings may cost Anlas.";
+
+export function novelAiResolutionPresetFor(resolution: string | undefined | null): NovelAiResolutionPresetId {
+  const norm = (resolution ?? "").trim().toLowerCase();
+  const found = NOVELAI_RESOLUTION_PRESETS.find((p) => p.resolution.toLowerCase() === norm);
+  return found ? found.id : "custom";
+}
+
+export function snapDimension(value: number, fallback = 1024): number {
+  if (!Number.isFinite(value) || value <= 0) return fallback;
+  return Math.min(2048, Math.max(64, Math.round(value / 64) * 64));
+}
+
+export function parseDimensions(resolution: string | undefined | null): { width: number; height: number } {
+  const norm = (resolution ?? "").trim();
+  const parts = norm.split("x").map((part) => Number(part.trim()));
+  const w = parts[0];
+  const h = parts[1];
+  if (parts.length === 2 && typeof w === "number" && typeof h === "number" && Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) {
+    return { width: Math.round(w), height: Math.round(h) };
+  }
+  return { width: 1216, height: 832 };
+}
+
+export function buildNovelAiSamplerOptions(currentSampler: string): NovelAiSamplerOption[] {
+  const norm = currentSampler.trim();
+  const exists = NOVELAI_SAMPLER_OPTIONS.some((opt) => opt.value === norm);
+  if (exists || !norm) {
+    return [...NOVELAI_SAMPLER_OPTIONS];
+  }
+  return [
+    ...NOVELAI_SAMPLER_OPTIONS,
+    { value: norm, label: `Custom (${norm})` },
+  ];
+}
+
+export type NovelAiParameters = {
+  steps: number;
+  guidance: number;
+  sampler: string;
+  resolution: string;
+  preset: NovelAiResolutionPresetId;
+  width: number;
+  height: number;
+};
+
+export function readNovelAiParameters(params: Record<string, unknown> | undefined | null): NovelAiParameters {
+  const p = params ?? {};
+
+  let steps = NOVELAI_DEFAULT_STEPS;
+  if (typeof p.steps === "number" && Number.isFinite(p.steps)) {
+    steps = Math.min(NOVELAI_STEPS_MAX, Math.max(NOVELAI_STEPS_MIN, Math.round(p.steps)));
+  } else if (typeof p.steps === "string" && p.steps.trim() !== "") {
+    const num = Number(p.steps);
+    if (Number.isFinite(num)) {
+      steps = Math.min(NOVELAI_STEPS_MAX, Math.max(NOVELAI_STEPS_MIN, Math.round(num)));
+    }
+  }
+
+  let guidance = NOVELAI_DEFAULT_GUIDANCE;
+  const rawGuidance = p.guidance !== undefined ? p.guidance : p.scale;
+  if (typeof rawGuidance === "number" && Number.isFinite(rawGuidance)) {
+    guidance = Math.min(NOVELAI_GUIDANCE_MAX, Math.max(NOVELAI_GUIDANCE_MIN, rawGuidance));
+  } else if (typeof rawGuidance === "string" && rawGuidance.trim() !== "") {
+    const num = Number(rawGuidance);
+    if (Number.isFinite(num)) {
+      guidance = Math.min(NOVELAI_GUIDANCE_MAX, Math.max(NOVELAI_GUIDANCE_MIN, num));
+    }
+  }
+
+  const sampler = typeof p.sampler === "string" && p.sampler.trim() ? p.sampler.trim() : NOVELAI_DEFAULT_SAMPLER;
+  const resStr = typeof p.resolution === "string" && p.resolution.trim() ? p.resolution.trim() : NOVELAI_DEFAULT_RESOLUTION;
+  const preset = novelAiResolutionPresetFor(resStr);
+  const dims = parseDimensions(resStr);
+
+  return {
+    steps,
+    guidance,
+    sampler,
+    resolution: resStr,
+    preset,
+    width: dims.width,
+    height: dims.height,
+  };
+}

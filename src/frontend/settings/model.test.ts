@@ -19,6 +19,15 @@ import {
   resetPatch,
   themePreviewTokens,
   type ConnectionOption,
+  effectiveImageConnection,
+  isNovelAiConnection,
+  readNovelAiParameters,
+  novelAiResolutionPresetFor,
+  buildNovelAiSamplerOptions,
+  snapDimension,
+  NOVELAI_RESOLUTION_PRESETS,
+  NOVELAI_SAMPLER_OPTIONS,
+  NOVELAI_NOTICE,
 } from "./model";
 
 describe("image source", () => {
@@ -162,5 +171,117 @@ describe("jsonObject", () => {
   });
   test("arrays are rejected", () => {
     expect(() => jsonObject("[1]", "Image parameters")).toThrow(/JSON object/);
+  });
+});
+
+describe("NovelAI effective connection & parameters", () => {
+  const options: ConnectionOption[] = [
+    { id: "nai-1", name: "NovelAI V4.5", provider: "novelai", model: "nai-diffusion-4-5-full", isDefault: false },
+    { id: "stab-1", name: "Stability", provider: "stability", model: "sd3", isDefault: true },
+    { id: "comfy-1", name: "ComfyUI", provider: "comfyui", model: "anime", isDefault: false },
+  ];
+
+  test("effectiveImageConnection: strict isDefault check when selectedId is null", () => {
+    // With stab-1 as default, effective is stab-1 (not nai-1 even though nai-1 is first in options)
+    const effectiveDefault = effectiveImageConnection({ status: "ready", options }, null);
+    expect(effectiveDefault?.id).toBe("stab-1");
+    expect(isNovelAiConnection(effectiveDefault)).toBe(false);
+
+    // If no connection is marked isDefault, effective connection is null (never guesses options[0])
+    const noDefaultOptions: ConnectionOption[] = [
+      { id: "nai-first", name: "First NAI", provider: "novelai", model: "v4", isDefault: false },
+      { id: "other", name: "Other", provider: "comfyui", model: "c", isDefault: false },
+    ];
+    const unresolved = effectiveImageConnection({ status: "ready", options: noDefaultOptions }, null);
+    expect(unresolved).toBeNull();
+    expect(isNovelAiConnection(unresolved)).toBe(false);
+  });
+
+  test("effectiveImageConnection: resolves explicit selection", () => {
+    const explicitNai = effectiveImageConnection({ status: "ready", options }, "nai-1");
+    expect(explicitNai?.id).toBe("nai-1");
+    expect(isNovelAiConnection(explicitNai)).toBe(true);
+
+    const missing = effectiveImageConnection({ status: "ready", options }, "nonexistent");
+    expect(missing).toBeNull();
+    expect(isNovelAiConnection(missing)).toBe(false);
+  });
+
+  test("effectiveImageConnection: loading or error states yield null", () => {
+    expect(effectiveImageConnection({ status: "loading", options }, "nai-1")).toBeNull();
+    expect(effectiveImageConnection({ status: "error", options, error: "fail" }, "nai-1")).toBeNull();
+    expect(effectiveImageConnection({ status: "idle", options }, "nai-1")).toBeNull();
+  });
+
+  test("isNovelAiConnection: case-insensitivity and provider checks", () => {
+    expect(isNovelAiConnection({ id: "x", name: "X", provider: "novelai", model: "m", isDefault: false })).toBe(true);
+    expect(isNovelAiConnection({ id: "x", name: "X", provider: "NovelAI", model: "m", isDefault: false })).toBe(true);
+    expect(isNovelAiConnection({ id: "x", name: "X", provider: " NOVELAI ", model: "m", isDefault: false })).toBe(true);
+    expect(isNovelAiConnection({ id: "x", name: "X", provider: "comfyui", model: "m", isDefault: false })).toBe(false);
+    expect(isNovelAiConnection(null)).toBe(false);
+  });
+
+  test("resolution presets stay within 1024x1024 (1,048,576 px) Opus limit", () => {
+    const OPUS_MAX_PIXELS = 1024 * 1024;
+    for (const preset of NOVELAI_RESOLUTION_PRESETS) {
+      expect(preset.width * preset.height).toBeLessThanOrEqual(OPUS_MAX_PIXELS);
+      expect(preset.help).toMatch(/Within Opus size limit/);
+    }
+  });
+
+  test("novelAiResolutionPresetFor maps standard and custom resolutions", () => {
+    expect(novelAiResolutionPresetFor("1216x832")).toBe("landscape");
+    expect(novelAiResolutionPresetFor("832x1216")).toBe("portrait");
+    expect(novelAiResolutionPresetFor("1024x1024")).toBe("square");
+    expect(novelAiResolutionPresetFor("1536x1024")).toBe("custom");
+    expect(novelAiResolutionPresetFor("custom-anything")).toBe("custom");
+    expect(novelAiResolutionPresetFor("")).toBe("custom");
+  });
+
+  test("readNovelAiParameters defaults, clamps, and string coercion", () => {
+    const defaults = readNovelAiParameters({});
+    expect(defaults.steps).toBe(28);
+    expect(defaults.guidance).toBe(5);
+    expect(defaults.sampler).toBe("k_euler_ancestral");
+    expect(defaults.resolution).toBe("1216x832");
+    expect(defaults.preset).toBe("landscape");
+
+    // Clamping
+    const clamped = readNovelAiParameters({ steps: 99, guidance: 50 });
+    expect(clamped.steps).toBe(50);
+    expect(clamped.guidance).toBe(20);
+
+    const clampedLow = readNovelAiParameters({ steps: 0, guidance: 0 });
+    expect(clampedLow.steps).toBe(1);
+    expect(clampedLow.guidance).toBe(1);
+
+    // String coercion
+    const strings = readNovelAiParameters({ steps: "32", guidance: "7.5", sampler: "k_dpmpp_2m" });
+    expect(strings.steps).toBe(32);
+    expect(strings.guidance).toBe(7.5);
+    expect(strings.sampler).toBe("k_dpmpp_2m");
+
+    // Custom dimensions
+    const custom = readNovelAiParameters({ resolution: "1536x1024" });
+    expect(custom.preset).toBe("custom");
+    expect(custom.width).toBe(1536);
+    expect(custom.height).toBe(1024);
+  });
+
+  test("buildNovelAiSamplerOptions preserves unsupported or custom samplers", () => {
+    const standard = buildNovelAiSamplerOptions("k_euler_ancestral");
+    expect(standard.length).toBe(NOVELAI_SAMPLER_OPTIONS.length);
+
+    const custom = buildNovelAiSamplerOptions("custom_sampler_v2");
+    expect(custom.length).toBe(NOVELAI_SAMPLER_OPTIONS.length + 1);
+    expect(custom.some((opt) => opt.value === "custom_sampler_v2" && opt.label.includes("Custom"))).toBe(true);
+  });
+  test("snapDimension rounds to nearest multiple of 64 bounded to [64, 2048]", () => {
+    expect(snapDimension(1400)).toBe(1408); // 1408 is 22 * 64
+    expect(snapDimension(1024)).toBe(1024);
+    expect(snapDimension(830)).toBe(832);
+    expect(snapDimension(10)).toBe(64);     // minimum bound
+    expect(snapDimension(5000)).toBe(2048); // maximum bound
+    expect(snapDimension(NaN, 1216)).toBe(1216); // fallback
   });
 });

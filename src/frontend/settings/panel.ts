@@ -33,6 +33,20 @@ import {
   resetPatch,
   safeStorage,
   themePreviewTokens,
+  buildNovelAiSamplerOptions,
+  snapDimension,
+  effectiveImageConnection,
+  isNovelAiConnection,
+  readNovelAiParameters,
+  NOVELAI_DEFAULT_GUIDANCE,
+  NOVELAI_DEFAULT_SAMPLER,
+  NOVELAI_DEFAULT_STEPS,
+  NOVELAI_GUIDANCE_MAX,
+  NOVELAI_GUIDANCE_MIN,
+  NOVELAI_NOTICE,
+  NOVELAI_RESOLUTION_PRESETS,
+  NOVELAI_STEPS_MAX,
+  NOVELAI_STEPS_MIN,
   type ConnectionCatalogKind,
   type ConnectionCatalogState,
   type ImageSource,
@@ -103,6 +117,9 @@ input[type="text"], input[type="number"], select, textarea { width: 100%; min-he
 textarea { min-height: 9rem; resize: vertical; font-family: var(--lumiverse-font-mono, ui-monospace, monospace); font-size: .82rem; }
 input[type="range"] { width: 100%; height: 2.75rem; margin: 0; accent-color: var(--lumiverse-primary, #a986ff); cursor: pointer; }
 input[type="checkbox"], input[type="radio"] { width: 1.25rem; height: 1.25rem; margin: 0; accent-color: var(--lumiverse-primary, #a986ff); }
+
+[data-novelai-controls] { display: grid; gap: .9rem; margin-top: .75rem; padding: .85rem; border: 1px solid var(--lumiverse-border, rgba(255,255,255,.14)); border-radius: .7rem; background: var(--lumiverse-fill-subtle, rgba(255,255,255,.03)); }
+[data-novelai-controls] a { color: var(--lumiverse-primary, #a986ff); text-decoration: underline; text-underline-offset: 2px; }
 
 /* Cards and sections */
 [data-card] { border: 1px solid var(--lumiverse-border, rgba(255,255,255,.16)); border-radius: .9rem; background: var(--lumiverse-card-bg, rgba(255,255,255,.035)); }
@@ -396,6 +413,29 @@ export class VisualNovelSettingsPanel {
                 <div data-readiness="image" data-level="loading"><div><b data-readiness-title></b><small data-readiness-action></small><div data-actions hidden><button type="button" data-refresh-connections>Refresh</button></div></div></div>
                 <select name="imageConnectionId" data-connection-select="image" aria-label="Image connection"><option value="">Lumiverse default</option></select>
               </div>
+              <div data-novelai-controls hidden>
+                <fieldset data-live>
+                  <legend>NovelAI image dimensions</legend>
+                  ${segments("novelAiResolutionPreset", [
+                    { label: "Landscape (1216×832)", value: "landscape" },
+                    { label: "Portrait (832×1216)", value: "portrait" },
+                    { label: "Square (1024×1024)", value: "square" },
+                  ], true)}
+                  <div data-custom="novelAiDimensions" data-row hidden>
+                    <label data-field><span>Width</span><input name="novelAiWidth" type="number" min="64" max="2048" step="64" /></label>
+                    <label data-field><span>Height</span><input name="novelAiHeight" type="number" min="64" max="2048" step="64" /></label>
+                  </div>
+                  <small data-novelai-cost-notice>${esc(NOVELAI_NOTICE)} <a href="https://docs.novelai.net/en/subscription/" target="_blank" rel="noopener noreferrer">NovelAI subscription docs</a></small>
+                </fieldset>
+                <div data-row data-live>
+                  <label data-field><span>Sampling steps <small data-novelai-steps-help>(≤28 within Opus limit)</small></span><input name="novelAiSteps" type="number" min="${NOVELAI_STEPS_MIN}" max="${NOVELAI_STEPS_MAX}" step="1" /></label>
+                  <label data-field><span>Prompt guidance (CFG scale)</span><input name="novelAiGuidance" type="number" min="${NOVELAI_GUIDANCE_MIN}" max="${NOVELAI_GUIDANCE_MAX}" step="0.5" /></label>
+                </div>
+                <div data-field data-live>
+                  <span>Sampler</span>
+                  <select name="novelAiSampler" aria-label="NovelAI sampler"></select>
+                </div>
+              </div>
             </div>
           </div>
         </details>
@@ -640,6 +680,7 @@ export class VisualNovelSettingsPanel {
       if (this.resetTimer) clearTimeout(this.resetTimer);
       resetButton.removeAttribute("data-confirming");
       resetButton.textContent = "Reset defaults";
+      this.pendingEverydayFields = {};
       const patch = resetPatch(this.config);
       this.drafts.clear();
       this.save(patch, "Defaults restored.");
@@ -760,8 +801,138 @@ export class VisualNovelSettingsPanel {
         return preset ? { maxImagesPerTurn: preset.value } : null;
       }
       case "maxImagesPerTurn": return { maxImagesPerTurn: clamp(Math.round(Number(target.value)), 0, 12, DEFAULT_CONFIG.maxImagesPerTurn) };
+      case "novelAiSteps":
+      case "novelAiGuidance":
+      case "novelAiSampler":
+      case "novelAiResolutionPreset":
+      case "novelAiWidth":
+      case "novelAiHeight":
+        return this.buildNovelAiPatch(target);
       default: return null;
     }
+  }
+
+  private buildNovelAiPatch(target: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement): Partial<VisualNovelConfig> | null {
+    // 1. Everyday onSave merges into the acknowledged host config plus any in-flight
+    // pending everyday fields, without overwriting unrelated incoming keys.
+    const nextForHost = {
+      ...(this.config.imageParameters ?? {}),
+      ...this.pendingEverydayFields,
+    };
+    const changed = this.applyNovelAiField(target, nextForHost);
+    if (changed) {
+      this.pendingEverydayFields[changed.key] = changed.value;
+    }
+
+    // 2. Rebase or retain Advanced editor draft without wiping or submitting unrelated draft keys.
+    const hasDraft = this.drafts.has("imageParameters");
+    if (hasDraft) {
+      const editorText = this.control<HTMLTextAreaElement>("imageParameters").value;
+      try {
+        const parsedDraft = jsonObject(editorText, "Image parameters");
+        // Valid draft: rebase the everyday field while keeping unrelated draft keys unapplied.
+        const rebasedDraft = { ...parsedDraft };
+        this.applyNovelAiField(target, rebasedDraft);
+        this.control<HTMLTextAreaElement>("imageParameters").value = JSON.stringify(rebasedDraft, null, 2);
+      } catch {
+        // Invalid draft: retain it completely untouched in the editor.
+      }
+      // Update the synced baseline to the new host save so the draft remains dirty.
+      this.synced.set("imageParameters", JSON.stringify(nextForHost, null, 2));
+      this.markDraft("imageParameters");
+    } else {
+      const formatted = JSON.stringify(nextForHost, null, 2);
+      this.control<HTMLTextAreaElement>("imageParameters").value = formatted;
+      this.synced.set("imageParameters", formatted);
+      this.drafts.delete("imageParameters");
+    }
+    this.refreshStatus();
+
+    return { imageParameters: nextForHost };
+  }
+
+  private applyNovelAiField(
+    target: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement,
+    params: Record<string, unknown>,
+  ): { key: string; value: unknown } | null {
+    switch (target.name) {
+      case "novelAiSteps": {
+        const val = clamp(Math.round(Number(target.value)), NOVELAI_STEPS_MIN, NOVELAI_STEPS_MAX, NOVELAI_DEFAULT_STEPS);
+        params.steps = val;
+        return { key: "steps", value: val };
+      }
+      case "novelAiGuidance": {
+        const val = clamp(Number(target.value), NOVELAI_GUIDANCE_MIN, NOVELAI_GUIDANCE_MAX, NOVELAI_DEFAULT_GUIDANCE);
+        params.guidance = val;
+        return { key: "guidance", value: val };
+      }
+      case "novelAiSampler": {
+        const val = target.value.trim() || NOVELAI_DEFAULT_SAMPLER;
+        params.sampler = val;
+        return { key: "sampler", value: val };
+      }
+      case "novelAiResolutionPreset": {
+        if (target.value === "custom") {
+          this.showCustom("novelAiDimensions", true);
+          if (!params.resolution) {
+            const w = snapDimension(Number(this.control<HTMLInputElement>("novelAiWidth").value), 1216);
+            const h = snapDimension(Number(this.control<HTMLInputElement>("novelAiHeight").value), 832);
+            params.resolution = `${w}x${h}`;
+            return { key: "resolution", value: params.resolution };
+          }
+          return { key: "resolution", value: params.resolution };
+        } else {
+          this.showCustomQuiet("novelAiDimensions", false);
+          const preset = NOVELAI_RESOLUTION_PRESETS.find((p) => p.id === target.value);
+          if (preset) {
+            params.resolution = preset.resolution;
+            this.control<HTMLInputElement>("novelAiWidth").value = String(preset.width);
+            this.control<HTMLInputElement>("novelAiHeight").value = String(preset.height);
+            return { key: "resolution", value: preset.resolution };
+          }
+          return null;
+        }
+      }
+      case "novelAiWidth":
+      case "novelAiHeight": {
+        const w = snapDimension(Number(this.control<HTMLInputElement>("novelAiWidth").value), 1216);
+        const h = snapDimension(Number(this.control<HTMLInputElement>("novelAiHeight").value), 832);
+        params.resolution = `${w}x${h}`;
+        this.control<HTMLInputElement>("novelAiWidth").value = String(w);
+        this.control<HTMLInputElement>("novelAiHeight").value = String(h);
+        return { key: "resolution", value: params.resolution };
+      }
+      default:
+        return null;
+    }
+  }
+
+  private syncNovelAiControls(config: VisualNovelConfig, source: ImageSource): void {
+    const container = this.root.querySelector<HTMLElement>("[data-novelai-controls]");
+    if (!container) return;
+    const effective = effectiveImageConnection(this.connectionStates.image, config.imageConnectionId);
+    const isNovelAi = source === "generated" && isNovelAiConnection(effective);
+    container.hidden = !isNovelAi;
+    if (!isNovelAi) return;
+
+    const params = readNovelAiParameters(config.imageParameters);
+    this.control<HTMLInputElement>("novelAiSteps").value = String(params.steps);
+    this.control<HTMLInputElement>("novelAiGuidance").value = String(params.guidance);
+
+    const samplerSelect = this.control<HTMLSelectElement>("novelAiSampler");
+    const samplerOptions = buildNovelAiSamplerOptions(params.sampler);
+    samplerSelect.replaceChildren(...samplerOptions.map((opt) => {
+      const option = document.createElement("option");
+      option.value = opt.value;
+      option.textContent = opt.label;
+      return option;
+    }));
+    samplerSelect.value = params.sampler;
+
+    this.setRadio("novelAiResolutionPreset", params.preset);
+    this.showCustomQuiet("novelAiDimensions", params.preset === "custom");
+    this.control<HTMLInputElement>("novelAiWidth").value = String(params.width);
+    this.control<HTMLInputElement>("novelAiHeight").value = String(params.height);
   }
 
   private showCustom(name: string, visible: boolean): void {
@@ -788,13 +959,21 @@ export class VisualNovelSettingsPanel {
   }
 
   private pendingSavedMessage = "Saved";
+  private pendingEverydayFields: Record<string, unknown> = {};
 
   /** Host acknowledgement of the last save. Optional: older hosts never call it. */
   setSaveStatus(status: SaveStatus): void {
     if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null; }
     if (status.kind === "saved") {
-      this.setStatus(this.pendingSavedMessage, "saved", 3000);
+      if (Object.keys(this.pendingEverydayFields).length > 0) {
+        // In-flight edits still pending later echo: keep honest saving status
+        this.setStatus("Saving…", "saving");
+      } else {
+        this.setStatus(this.pendingSavedMessage, "saved", 3000);
+      }
     } else {
+      // Save error: clear pending fields so rejected edits never become phantom state
+      this.pendingEverydayFields = {};
       this.setStatus(`Could not save: ${status.error}`, "error");
     }
   }
@@ -840,6 +1019,7 @@ export class VisualNovelSettingsPanel {
       this.setStatus(error instanceof Error ? error.message : String(error), "error");
       return;
     }
+    this.pendingEverydayFields = {};
     this.config = { ...this.config, ...patch };
     this.drafts.clear();
     this.refreshStatus();
@@ -876,8 +1056,24 @@ export class VisualNovelSettingsPanel {
 
   /** Host-driven update. Advanced controls with unapplied drafts keep their draft text. */
   setConfig(config: VisualNovelConfig): void {
-    this.config = config;
-    this.syncFromConfig(config);
+    const incoming = config.imageParameters ?? {};
+    for (const [k, v] of Object.entries(this.pendingEverydayFields)) {
+      if (incoming[k] === v) {
+        delete this.pendingEverydayFields[k];
+      }
+    }
+    if (Object.keys(this.pendingEverydayFields).length > 0) {
+      this.config = {
+        ...config,
+        imageParameters: { ...incoming, ...this.pendingEverydayFields },
+      };
+    } else {
+      this.config = config;
+      if (this.status.dataset.kind === "saving") {
+        this.setStatus(this.pendingSavedMessage, "saved", 3000);
+      }
+    }
+    this.syncFromConfig(this.config);
   }
 
   private syncFromConfig(config: VisualNovelConfig): void {
@@ -955,6 +1151,7 @@ export class VisualNovelSettingsPanel {
 
     this.renderConnectionSelects("planner", config.parserConnectionId);
     this.renderConnectionSelects("image", config.imageConnectionId);
+    this.syncNovelAiControls(config, source);
     this.updateSummaries(config);
     this.updateSample(config);
   }
@@ -1050,7 +1247,10 @@ export class VisualNovelSettingsPanel {
   setConnectionCatalog(kind: ConnectionCatalogKind, state: ConnectionCatalogState): void {
     this.connectionStates[kind] = state;
     this.renderConnectionSelects(kind, kind === "planner" ? this.config.parserConnectionId : this.config.imageConnectionId);
-    if (kind === "image") this.updateImageModelHint();
+    if (kind === "image") {
+      this.updateImageModelHint();
+      this.syncNovelAiControls(this.config, imageSourceFromConfig(this.config));
+    }
   }
 
   private renderConnectionSelects(kind: ConnectionCatalogKind, selectedId: string | null): void {
