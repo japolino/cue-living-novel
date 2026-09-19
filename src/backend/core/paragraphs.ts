@@ -86,17 +86,46 @@ function stripIgnoredTags(content: string, tags: readonly string[]): string {
   return output;
 }
 
-// `<pimg="name">` is RisuAI/LumiRealm's inline card image tag; treat it exactly like `<img="name">`.
-const INLINE_IMG_REGEX = /<p?img\s*=\s*["']([^"']+)["']\s*\/?>|<p?img\s*=\s*([^\s"'>][^\s>]*?)[\s>]|<p?img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["'][^>]*?\/?>|\{\{img::([^\}]+)\}\}/gi;
+// Inline card image tags supported across RisuAI, LumiRealm, and custom card formats:
+// - Direct assignments: `<img="name">`, `<pimg="name">`, `<img=name>`, `<pimg=name>`
+// - Attributes: `<img cmd="name">`, `<img src="name">`, `<pimg cmd="name">`, `<pimg src="name">`
+//   Supports double/single/curly quotes or unquoted, with extra attributes and whitespace.
+// - CBS/Risu macro tokens: `{{img::name}}`
+const INLINE_IMG_REGEX =
+  /<p?img\s*=\s*["'“”][^"'“”]+["'“”]\s*\/?>|<p?img\s*=\s*[^\s"'“”>][^\s>]*?[\s>]|<p?img\b[^>]*?\b(?:cmd|src)\s*=\s*["'“”][^"'“”]+["'“”][^>]*?\/?>|<p?img\b[^>]*?\b(?:cmd|src)\s*=\s*[^\s"'“”>]+[^>]*?\/?>|\{\{img::[^\}]+\}\}/gi;
+
+/** Extract the referenced asset/expression name from any supported inline image tag. */
+export function extractTagAssetName(tag: string): string {
+  const direct =
+    tag.match(/^<p?img\s*=\s*["'“”]([^"'“”]+)["'“”]\s*\/?>/i) ||
+    tag.match(/^<p?img\s*=\s*([^\s"'“”>][^\s>]*?)[\s>]/i);
+  if (direct?.[1]) return direct[1].trim();
+
+  const macro = tag.match(/^\{\{img::([^\}]+)\}\}/i);
+  if (macro?.[1]) return macro[1].trim();
+
+  // For attribute-based tags, prefer `cmd` (the card expression/costume command) over `src`
+  const cmd =
+    tag.match(/\bcmd\s*=\s*["'“”]([^"'“”]+)["'“”]/i) ||
+    tag.match(/\bcmd\s*=\s*([^\s"'“”>]+)/i);
+  if (cmd?.[1]) return cmd[1].trim();
+
+  const src =
+    tag.match(/\bsrc\s*=\s*["'“”]([^"'“”]+)["'“”]/i) ||
+    tag.match(/\bsrc\s*=\s*([^\s"'“”>]+)/i);
+  if (src?.[1]) return src[1].trim();
+
+  return "";
+}
 
 /**
- * Extract inline card asset references like `<img="asset_name">`,
+ * Extract inline card asset references like `<img cmd="asset_name">`, `<img="asset_name">`,
  * `<pimg="asset_name">` (RisuAI/LumiRealm), `<img src="asset_name">`, or `{{img::asset_name}}`.
  */
 export function extractInlineCardImages(text: string): { text: string; assetNames: string[] } {
   const assetNames: string[] = [];
-  const cleaned = text.replace(INLINE_IMG_REGEX, (_match, p1, p2, p3, p4) => {
-    const name = (p1 || p2 || p3 || p4 || "").trim();
+  const cleaned = text.replace(INLINE_IMG_REGEX, (match) => {
+    const name = extractTagAssetName(match);
     if (name) assetNames.push(name);
     return "";
   });
@@ -137,7 +166,7 @@ export function extractInlineCardImagesWithParagraphs(
     const paragraphIndex = sawParagraph ? lastKnownParaIndex : 0;
 
     for (const match of matches) {
-      const name = (match[1] || match[2] || match[3] || match[4] || "").trim();
+      const name = extractTagAssetName(match[0]);
       if (name) {
         results.push({ name, paragraphIndex });
       }

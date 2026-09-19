@@ -10,8 +10,30 @@ import { extractInlineCardImagesWithParagraphs } from "../core/paragraphs.js";
  * 3. char.extensions.lumirealm.emotion_index
  * 4. char.extensions.expressions.mappings
  */
+/**
+ * Match asset keys case-insensitively, optionally stripping file extension
+ * and normalizing separating characters (_ - . and whitespace).
+ */
+function matchesAssetName(key: string, normalized: string, nameWithoutExt: string): boolean {
+  const normKey = key.trim().toLowerCase();
+  const keyWithoutExt = normKey.replace(/\.[a-zA-Z0-9]+$/, "");
+  if (normKey === normalized || keyWithoutExt === nameWithoutExt) return true;
+
+  const keySimplified = keyWithoutExt.replace(/[_ \-.]/g, "");
+  const targetSimplified = nameWithoutExt.replace(/[_ \-.]/g, "");
+  return keySimplified.length > 0 && keySimplified === targetSimplified;
+}
+
 export function resolveCharacterAssetImageId(character: CharacterDTO, assetName: string): string | null {
-  if (!assetName || !character.extensions) return null;
+  if (!assetName) return null;
+
+  // 0. Direct image ID or /api/v1/images/<id> URL match
+  const directIdMatch = assetName.match(/^(?:\/api\/v1\/images\/)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);
+  if (directIdMatch) {
+    return directIdMatch[1]!;
+  }
+
+  if (!character.extensions) return null;
   const normalized = assetName.trim().toLowerCase();
   const nameWithoutExt = normalized.replace(/\.[a-zA-Z0-9]+$/, "");
 
@@ -20,9 +42,7 @@ export function resolveCharacterAssetImageId(character: CharacterDTO, assetName:
   if (risuMap && typeof risuMap === "object") {
     for (const [key, id] of Object.entries(risuMap)) {
       if (typeof id !== "string" || !id) continue;
-      const normKey = key.trim().toLowerCase();
-      const keyWithoutExt = normKey.replace(/\.[a-zA-Z0-9]+$/, "");
-      if (normKey === normalized || keyWithoutExt === nameWithoutExt) {
+      if (matchesAssetName(key, normalized, nameWithoutExt)) {
         return id;
       }
     }
@@ -36,9 +56,7 @@ export function resolveCharacterAssetImageId(character: CharacterDTO, assetName:
       if (!index || typeof index !== "object") continue;
 
       for (const [key, val] of Object.entries(index)) {
-        const normKey = key.trim().toLowerCase();
-        const keyWithoutExt = normKey.replace(/\.[a-zA-Z0-9]+$/, "");
-        if (normKey === normalized || keyWithoutExt === nameWithoutExt) {
+        if (matchesAssetName(key, normalized, nameWithoutExt)) {
           if (typeof val === "string" && val) return val;
           if (val && typeof val === "object" && "imageIds" in val) {
             const ids = (val as { imageIds?: string[] }).imageIds;
@@ -56,9 +74,7 @@ export function resolveCharacterAssetImageId(character: CharacterDTO, assetName:
     if (mappings && typeof mappings === "object") {
       for (const [key, id] of Object.entries(mappings)) {
         if (typeof id !== "string" || !id) continue;
-        const normKey = key.trim().toLowerCase();
-        const keyWithoutExt = normKey.replace(/\.[a-zA-Z0-9]+$/, "");
-        if (normKey === normalized || keyWithoutExt === nameWithoutExt) {
+        if (matchesAssetName(key, normalized, nameWithoutExt)) {
           return id;
         }
       }

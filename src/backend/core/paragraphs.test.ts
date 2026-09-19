@@ -60,6 +60,21 @@ describe("narrative preparation", () => {
     expect(placed).toEqual([{ name: "aurelia", paragraphIndex: 0 }, { name: "elizabeth_smirking", paragraphIndex: 1 }]);
   });
 
+  test("extractInlineCardImages supports cmd attribute tags and trims trailing whitespace", () => {
+    const raw = 'Morgan stands before you.\n\n<img cmd="Morgan_dress">\n\nShe smiles softly.\n\n<img cmd="Morgan_dress ">';
+    const extracted = extractInlineCardImages(raw);
+    expect(extracted.assetNames).toEqual(["Morgan_dress", "Morgan_dress"]);
+    expect(extracted.text).not.toContain("img");
+    expect(extracted.text).not.toContain("cmd");
+    const prepared = prepareNarrative(raw);
+    expect(prepared.paragraphs.map((p) => p.text)).toEqual(["Morgan stands before you.", "She smiles softly."]);
+    const placed = extractInlineCardImagesWithParagraphs(raw, prepared.paragraphs);
+    expect(placed).toEqual([
+      { name: "Morgan_dress", paragraphIndex: 0 },
+      { name: "Morgan_dress", paragraphIndex: 1 },
+    ]);
+  });
+
   test("extractInlineCardImages supports unquoted img=expression tags", () => {
     const raw = 'An expression: <img=neeko_curious> and quoted <img="neeko_happy">';
     const extracted = extractInlineCardImages(raw);

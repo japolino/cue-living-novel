@@ -233,3 +233,64 @@ test("falls back to avatar or default expression at paragraph 0 when text has no
   assert.equal(jobs[0]!.paragraphIndex, 0);
   assert.equal(jobs[0]!.status, "browser_ready");
 });
+
+test("resolves image ID with normalized punctuation (spaces, underscores, hyphens)", () => {
+  const charWithSpacedAsset: CharacterDTO = {
+    ...mockCharacter,
+    extensions: {
+      risu_asset_map: {
+        "Morgan dress.png": "img-morgan-dress",
+      },
+    },
+  };
+  // Matches exact, underscore, or trailing space variations
+  assert.equal(resolveCharacterAssetImageId(charWithSpacedAsset, "Morgan_dress"), "img-morgan-dress");
+  assert.equal(resolveCharacterAssetImageId(charWithSpacedAsset, "Morgan_dress "), "img-morgan-dress");
+  assert.equal(resolveCharacterAssetImageId(charWithSpacedAsset, "Morgan-dress"), "img-morgan-dress");
+  assert.equal(resolveCharacterAssetImageId(charWithSpacedAsset, "morgan dress"), "img-morgan-dress");
+});
+
+test("resolves native card jobs from <img cmd=\"...\"> tags", async () => {
+  const charWithMorgan: CharacterDTO = {
+    ...mockCharacter,
+    extensions: {
+      risu_asset_map: {
+        "Morgan_dress.png": "img-morgan-dress",
+      },
+    },
+  };
+
+  const plan = createMockPlan([
+    { index: 0, sourceIndex: 0, text: "Morgan looks at you." },
+  ]);
+
+  const content = 'Morgan looks at you.\n\n<img cmd="Morgan_dress ">';
+
+  const mockSpindle: any = {
+    chats: {
+      get: async () => ({ id: "chat-1", character_id: "char-123" }),
+    },
+    characters: {
+      get: async () => charWithMorgan,
+      list: async () => ({ data: [charWithMorgan], total: 1 }),
+    },
+    images: {
+      get: async (id: string) => ({ id, url: `/api/v1/images/${id}` }),
+    },
+  };
+
+  const jobs = await resolveNativeCardJobs({
+    spindle: mockSpindle,
+    chatId: "chat-1",
+    plan,
+    content,
+    speakerName: "Morgan",
+  });
+
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0]!.imageId, "img-morgan-dress");
+  assert.equal(jobs[0]!.imageUrl, "/api/v1/images/img-morgan-dress");
+  assert.equal(jobs[0]!.paragraphIndex, 0);
+  assert.equal(jobs[0]!.status, "browser_ready");
+  assert.equal(jobs[0]!.provider, "native_card");
+});
