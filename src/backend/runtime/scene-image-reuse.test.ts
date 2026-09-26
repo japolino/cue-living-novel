@@ -7,6 +7,7 @@ import {
   CACHE_JOB_PROVIDER,
   cacheEligibleCue,
   createAssetJobs,
+  prepareAssetJobs,
   generateAssets,
   resolveCacheCues,
   sceneImageIdentityFor
@@ -177,6 +178,58 @@ async function run(
 }
 
 const scope = sceneImageScope(undefined, "chat-1");
+
+describe("classifier generation budget after cache lookup", () => {
+  test("warm swaps spend no slots, distinct misses spend two, duplicate misses reuse, and surplus misses stay absent", async () => {
+    const cache = new SceneImageCache();
+    const { spindle, calls } = harness();
+    const setting = scene("library", MIRA);
+    await run(spindle, plan("seed", 1, [setting], [cue("seed", "library", MIRA)]), cache);
+    const poses = ["smile", "listen", "smile", "listen", "idle", "angry", "smile"];
+    const turn = plan("classifier", 1, [setting], poses.map((pose, paragraphIndex) => cue(`c${paragraphIndex}`, "library", MIRA, { paragraphIndex, pose })));
+    turn.classifierVisuals = true;
+    const enabled = { ...config, systemOneMode: "on" as const, maxImagesPerTurn: 2 };
+    const jobs = await prepareAssetJobs(spindle, turn, enabled, undefined, cache);
+    expect(jobs.filter((job) => job.status === "queued").map((job) => job.paragraphIndex)).toEqual([1, 4]);
+    const finished = await run(spindle, turn, cache, { config: enabled, jobs });
+    expect(calls).toHaveLength(3); // one seed, two new images
+    expect(finished.map((job) => job.paragraphIndex).sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 6]);
+    expect(finished.find((job) => job.paragraphIndex === 3)?.imageId).toBe(finished.find((job) => job.paragraphIndex === 1)?.imageId);
+    expect(finished.every((job) => job.status === "generated")).toBe(true);
+    const retry = await run(spindle, turn, cache, { config: enabled, jobs: finished });
+    expect(calls).toHaveLength(3);
+    expect(retry.some((job) => job.paragraphIndex === 5)).toBe(false);
+  });
+
+  test("a fully warm classifier turn makes zero new provider calls", async () => {
+    const cache = new SceneImageCache();
+    const { spindle, calls } = harness();
+    const setting = scene("library", MIRA);
+    await run(spindle, plan("seed", 1, [setting], [cue("seed", "library", MIRA)]), cache);
+    const turn = plan("warm", 1, [setting], Array.from({ length: 24 }, (_, paragraphIndex) => cue(`warm${paragraphIndex}`, "library", MIRA, { paragraphIndex })));
+    turn.classifierVisuals = true;
+    const enabled = { ...config, systemOneMode: "on" as const, maxImagesPerTurn: 1 };
+    const jobs = await prepareAssetJobs(spindle, turn, enabled, undefined, cache);
+    expect(jobs).toHaveLength(24);
+    await run(spindle, turn, cache, { config: enabled, jobs });
+    expect(calls).toHaveLength(1);
+  });
+
+  test("a changed outfit misses the cache and remains within the new-generation budget", async () => {
+    const cache = new SceneImageCache();
+    const { spindle, calls } = harness();
+    const setting = scene("library", MIRA);
+    await run(spindle, plan("seed", 1, [setting], [cue("seed", "library", MIRA)]), cache);
+    const turn = plan("wardrobe", 1, [setting], [cue("new", "library", MIRA, { attire: "blue dress" }), cue("other", "library", MIRA, { paragraphIndex: 1, pose: "idle", attire: "blue dress" })]);
+    turn.classifierVisuals = true;
+    const enabled = { ...config, systemOneMode: "on" as const, maxImagesPerTurn: 1 };
+    const jobs = await prepareAssetJobs(spindle, turn, enabled, undefined, cache);
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]?.status).toBe("queued");
+    await run(spindle, turn, cache, { config: enabled, jobs });
+    expect(calls).toHaveLength(2);
+  });
+});
 
 /* ------------------------------------------------------------------ */
 

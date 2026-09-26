@@ -307,6 +307,9 @@ export const TurnPlanSchema = z.object({
   paragraphSpeakers: z.array(z.string().nullable()).default([]),
   scenes: z.array(SceneStateSchema).min(1),
   visualCues: z.array(VisualCueSchema).default([]),
+  // Classifier decisions cover paragraphs independently of the paid-image budget.
+  // Only jobs allocated after cache lookup may generate; other cues are reuse-only.
+  classifierVisuals: z.literal(true).optional(),
   // Reuse-only candidates beyond `maxImagesPerTurn`. They never create a
   // provider request or a job by themselves: an exact-compatible cached image
   // turns one into a terminal `generated` job (provider "cache"); a miss

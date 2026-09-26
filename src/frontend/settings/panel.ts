@@ -1213,7 +1213,9 @@ export class VisualNovelSettingsPanel {
     this.setRadio("budgetPreset", budget);
     this.control<HTMLInputElement>("maxImagesPerTurn").value = String(config.maxImagesPerTurn);
     this.showCustomQuiet("maxImagesPerTurn", budget === "custom");
-    this.root.querySelector<HTMLElement>("[data-budget-help]")!.textContent = describeBudget(config.maxImagesPerTurn);
+    this.root.querySelector<HTMLElement>("[data-budget-help]")!.textContent = config.systemOneMode === "on" && !config.useNativeCardImages
+      ? `${config.maxImagesPerTurn > 0 ? `Up to ${config.maxImagesPerTurn} new pictures per reply.` : "No limit on new pictures."} With confident System One expressions, cached pictures can appear on additional paragraphs without using this allowance.`
+      : describeBudget(config.maxImagesPerTurn);
 
     this.control<HTMLInputElement>("bgmVolume").value = String(config.bgmVolume);
     this.control<HTMLInputElement>("sfxVolume").value = String(config.sfxVolume);

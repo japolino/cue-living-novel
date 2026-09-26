@@ -118,6 +118,35 @@ async function settle(condition: () => boolean, rounds = 400): Promise<void> {
 }
 
 describe("controller wiring: extra swaps beyond the cap without extra requests", () => {
+  test("classifier turns spend one new-image slot after warm lookups and persist extra swaps", async () => {
+    sceneImageCache().clear();
+    const expanded = Array.from({ length: 6 }, () => "Mira waits in the observatory.").join("\n\n");
+    const { spindle, fire, data, calls } = fixture([{ id: "seed", content: "Mira smiles." }, { id: "classified", content: expanded }]);
+    registerVisualNovelBackend(spindle);
+    viewRegistry().open("user-1", "chat");
+    const active = () => {
+      const state = data.get(chatStatePath("chat")) as StoredChatState | undefined;
+      return state?.activeTurnPath ? data.get(state.activeTurnPath) as StoredTurnRecord : undefined;
+    };
+    fire("GENERATION_ENDED", { chatId: "chat", messageId: "seed", content: "Mira smiles." }, "user-1");
+    await settle(() => active()?.jobs[0]?.status === "generated");
+    expect(calls).toHaveLength(1);
+    data.set("config.json", { ...(data.get("config.json") as object), systemOneMode: "on" });
+    Object.assign(spindle, {
+      enclave: { get: async () => "test-key" },
+      cors: async () => ({ status: 200, body: JSON.stringify({ model: "jev-latest", answers: {
+        scene_change: { type: "noul", noul: 0.01 }, needs_description: { type: "noul", noul: 0.01 },
+        ...Object.fromEntries(["smile", "listen", "smile", "listen", "idle", "smile"].map((pose, index) =>
+          [`expression_${index}`, { type: "choice", choice: pose, confidence: 0.95, probabilities: { [pose]: 0.95 } }]))
+      } }) })
+    });
+    fire("GENERATION_ENDED", { chatId: "chat", messageId: "classified", content: expanded }, "user-1");
+    await settle(() => active()?.plan.key.assistantMessageId === "classified" && active()?.jobs.length === 5 && active()?.jobs.every((job) => job.status === "generated") === true);
+    expect(active()!.plan.classifierVisuals).toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(turnView(active()!).assets.map((asset) => asset.paragraphIndex).sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 5]);
+  });
+
   test("the second cue is a cache candidate, gets the budgeted image once it lands, and never adds a provider call", async () => {
     sceneImageCache().clear();
     const { spindle, fire, data, sent, calls } = fixture([{ id: "assistant-1", content }]);

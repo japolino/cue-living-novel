@@ -49,7 +49,7 @@ function spindle(raw: () => Promise<unknown>, logs: string[], response: unknown,
   } as unknown as SpindleAPI;
 }
 
-function input(mode: "compare" | "on") {
+function input(mode: "off" | "compare" | "on") {
   return {
     chatId: "c1", message, content: message.content, previousScene: scene, previousContinuity: continuity, recentMessages: [],
     config: { ...DEFAULT_CONFIG, systemOneMode: mode }, singleCharacter: emptySingleCharacter(), characterAppearance: {},
@@ -113,4 +113,32 @@ test("a confident audio choice adds a playback cue without adding an image cue",
   assert.equal(result.plan.audioCues[0]?.bgm, "music/calm");
   assert.equal(result.plan.visualCues.length, 1);
   clearAudioCatalogCache();
+});
+
+test("classifier continuation covers expressions beyond the image cap and holds uncertain paragraphs", async () => {
+  const response = structuredClone(decisions) as any;
+  const expressions = ["listen", "listen", "smile", "idle", "listen"];
+  for (const [index, expression] of expressions.entries()) {
+    response.answers[`expression_${index}`] = { type: "choice", choice: expression, confidence: index === 3 ? 0.2 : 0.95, probabilities: { [expression]: 0.95 } };
+  }
+  const args = input("on");
+  args.content = expressions.map(() => "Mira waits in the library.").join("\n\n");
+  args.config = { ...args.config, maxImagesPerTurn: 1, generateImages: true };
+  const result = await planTurn(spindle(async () => { throw new Error("planner should not run"); }, [], response), args);
+  assert.equal(result.plan.classifierVisuals, true);
+  assert.deepEqual(result.plan.visualCues.map((cue) => [cue.paragraphIndex, cue.poseExpressionId]), [[0, "listen"], [2, "smile"], [4, "listen"]]);
+});
+
+test("off, compare, missing key, invalid response, and native art preserve the original cue budget", async () => {
+  const response = structuredClone(decisions) as any;
+  response.answers.expression_1 = { type: "choice", choice: "smile", confidence: 0.95, probabilities: { smile: 0.95 } };
+  for (const scenario of ["off", "compare", "missing-key", "invalid", "native", "uncertain"] as const) {
+    const args = input(scenario === "compare" ? "compare" : "on");
+    args.content = "Mira waits.\n\nMira smiles.";
+    args.config = { ...args.config, maxImagesPerTurn: 1, generateImages: true, useNativeCardImages: scenario === "native", systemOneMode: scenario === "off" ? "off" : args.config.systemOneMode };
+    const result = await planTurn(spindle(async () => { throw new Error("use deterministic fallback"); }, [],
+      scenario === "invalid" ? {} : scenario === "uncertain" ? { ...response, answers: {} } : response, scenario !== "missing-key"), args);
+    assert.equal(result.plan.classifierVisuals, undefined, scenario);
+    assert.equal(result.plan.visualCues.length, 1, scenario);
+  }
 });

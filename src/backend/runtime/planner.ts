@@ -2135,6 +2135,9 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
       for (const [paragraphIndex, expression] of systemOne.expressions) {
         const cue = planner.cues.find((entry) => entry.paragraphIndex === paragraphIndex);
         if (cue) cue.expression = expression;
+        else if (input.config.generateImages && !input.config.useNativeCardImages) {
+          planner.cues.push({ paragraphIndex, expression, action: null, promptDelta: "" });
+        }
       }
       spindle.log.info(`[VN] System One ${useContinuation ? "continuation" : "augmentation"} durationMs=${systemOne.durationMs} inputTokens=${systemOne.inputTokens}`);
     }
@@ -2278,11 +2281,13 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
       return true;
     });
   const cueLimit = input.config.maxImagesPerTurn;
-  const selectedCues = cueLimit > 0 ? distinctCues.slice(0, cueLimit) : distinctCues;
+  const classifierVisuals = input.config.systemOneMode === "on" && Boolean(systemOne?.expressions.size)
+    && input.config.generateImages && !input.config.useNativeCardImages;
+  const selectedCues = classifierVisuals ? distinctCues : cueLimit > 0 ? distinctCues.slice(0, cueLimit) : distinctCues;
   // Cues beyond the image cap are kept as reuse-only candidates. They never
   // add a provider request: only an exact-compatible cached image can turn one
   // into an extra swap (see runtime/images.ts resolveCacheCues).
-  const cacheCandidates = cueLimit > 0 ? distinctCues.slice(cueLimit, cueLimit + MAX_CACHE_CUES_PER_TURN) : [];
+  const cacheCandidates = !classifierVisuals && cueLimit > 0 ? distinctCues.slice(cueLimit, cueLimit + MAX_CACHE_CUES_PER_TURN) : [];
   const materializeCue = (cue: typeof distinctCues[number], index: number) => {
       const scene = sceneForParagraph(scenes, cue.paragraphIndex);
       const paragraph = narrative.paragraphs.find((candidate) => candidate.index === cue.paragraphIndex);
@@ -2317,7 +2322,20 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
         ...(cue.sfx ? { sfx: cue.sfx } : {})
       });
     };
-  const cues = selectedCues.map((cue, index) => materializeCue(cue, index));
+  let cues = selectedCues.map((cue, index) => materializeCue(cue, index));
+  if (classifierVisuals) {
+    // An uncertain continuation holds the current image. Keep an opening cue,
+    // and preserve planner-authored changes when a full visual plan was needed.
+    if (useContinuation) cues = cues.filter((cue) => cue.paragraphIndex === 0 || systemOne!.expressions.has(cue.paragraphIndex));
+    let previousVisual: string | undefined;
+    cues = cues.filter((cue) => {
+      const visual = JSON.stringify([cue.sceneId, cue.sceneRevision, cue.characterId, cue.resolvedIdentity,
+        cue.resolvedAttire, cue.poseExpressionId, cue.action]);
+      const changed = visual !== previousVisual;
+      previousVisual = visual;
+      return changed;
+    });
+  }
   const cacheCues = cacheCandidates.map((cue, index) => materializeCue(cue, selectedCues.length + index));
 
   const audioCues = planner.cues
@@ -2428,6 +2446,7 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
     paragraphSpeakers,
     scenes,
     visualCues: cues,
+    ...(classifierVisuals ? { classifierVisuals: true } : {}),
     ...(cacheCues.length > 0 ? { cacheCues } : {}),
     audioCues,
     effectCues,

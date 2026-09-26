@@ -17,7 +17,7 @@ import { compareTurnKeys, turnKeyEquals } from "../core/guards.js";
 import { PlanningQueue, isAbortError } from "../core/planning-queue.js";
 import { resolveNativeCardJobs } from "./native-assets.js";
 import { handleReferenceImageResponse } from "./reference-source.js";
-import { CACHE_JOB_PROVIDER, createAssetJobs, generateAssets, resolveCacheCues, retainPlanEpisodes } from "./images.js";
+import { CACHE_JOB_PROVIDER, createAssetJobs, prepareAssetJobs, generateAssets, resolveCacheCues, retainPlanEpisodes } from "./images.js";
 import { SceneImageCache, sceneImageScope } from "../core/scene-image-cache.js";
 import { fingerprintForMessage, planTurn } from "./planner.js";
 import {
@@ -844,7 +844,7 @@ async function processAssistantMessage(
         if (config.debugLogging) spindle.log.warn(`Native card image resolution failed: ${errorText(err)}`);
       }
     } else if (config.generateImages) {
-      jobs = createAssetJobs(result.plan, config, characterAppearance);
+      jobs = await prepareAssetJobs(spindle, result.plan, config, characterAppearance, sceneCache, userId, sourceTextOption({ resolvedSourceText: resolved }));
       // Reuse-only candidates beyond the image cap: deterministic cache lookup
       // before the first vn_turn. Hits become terminal jobs; misses add nothing.
       if (result.plan.cacheCues?.length) {
@@ -1103,7 +1103,7 @@ async function retryTurn(
   };
 
   // Reuse-only candidates that have no job yet may hit now (cache only, no requests).
-  if (config.generateImages && !config.useNativeCardImages && existing.plan.cacheCues?.length) {
+  if (config.generateImages && !config.useNativeCardImages && (existing.plan.cacheCues?.length || existing.plan.classifierVisuals)) {
     const scope = sceneImageScope(userId, chatId);
     retainPlanEpisodes(sceneCache, scope, existing.plan);
     const extra = await resolveCacheCues(spindle, existing.plan, config, characterAppearance, updatedJobs, sceneCache, userId, {

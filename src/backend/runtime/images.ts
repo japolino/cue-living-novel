@@ -459,7 +459,9 @@ export async function resolveCacheCues(
   userId?: string,
   options: { resolvedSourceText?: string; provider?: string | null; verifyImage?: SceneImageVerifier; log?: (line: string) => void } = {}
 ): Promise<AssetJob[]> {
-  const candidates = plan.cacheCues ?? [];
+  const candidates = plan.classifierVisuals && config.systemOneMode === "on"
+    ? [...plan.visualCues, ...(plan.cacheCues ?? [])]
+    : plan.cacheCues ?? [];
   if (candidates.length === 0) return [];
   const scope = sceneImageScope(userId, plan.key.chatId);
   const haveJob = new Set(existingJobs.map((job) => job.jobId));
@@ -628,6 +630,54 @@ export function createAssetJobs(
 
 function replaceJob(jobs: AssetJob[], next: AssetJob): AssetJob[] {
   return jobs.map((job) => job.jobId === next.jobId ? next : job);
+}
+
+/** Allocate classifier turns after cache lookup. Only distinct misses spend slots. */
+export async function prepareAssetJobs(
+  spindle: SpindleAPI,
+  plan: TurnPlan,
+  config: VisualNovelConfig,
+  characterAppearance: CharacterAppearanceMap | undefined,
+  cache: SceneImageCache,
+  userId?: string,
+  options: Pick<SceneCacheOptions, "resolvedSourceText" | "verifyImage"> = {}
+): Promise<AssetJob[]> {
+  const candidates = createAssetJobs(plan, config, characterAppearance);
+  if (!plan.classifierVisuals || config.systemOneMode !== "on") return candidates;
+  const scope = sceneImageScope(userId, plan.key.chatId);
+  retainPlanEpisodes(cache, scope, plan);
+  const profile = await resolveImageProfile(spindle, config, userId);
+  const provider = profile.provider;
+  if (provider === "novelai") config = { ...config, imageModel: config.imageModel || profile.model || "nai-diffusion-4-5-full" };
+  let warm = await resolveCacheCues(spindle, plan, config, characterAppearance, [], cache, userId, { ...options, provider });
+  // Preserve the normal path's requirement to acquire a missing reference portrait.
+  if (referenceAnchoringEnabled(config) && provider && REFERENCE_PROVIDERS.has(provider)) {
+    const portraits = await loadPortraits(spindle, plan.key.chatId, userId).catch(() => ({} as Record<string, StoredPortrait>));
+    warm = warm.filter((job) => {
+      const cue = plan.visualCues.find((cue) => cue.assetJobId === job.jobId);
+      if (!cue) return false;
+      const state = resolveCueCharacterVisualState(sceneForCue(plan, cue), cue, characterAppearance);
+      return Boolean(config.referenceSource === "card" && cardPortraitFor(portraits, state.characterKey))
+        || Boolean(compatiblePortrait(portraits[state.characterKey], portraitIdentityFingerprint(state.characterName, state.baseIdentity, config, provider)));
+    });
+  }
+  const warmById = new Map(warm.map((job) => [job.jobId, job]));
+  const selected: AssetJob[] = [];
+  const missingKeys = new Set<string>();
+  const limit = config.maxImagesPerTurn > 0 ? config.maxImagesPerTurn : Infinity;
+  for (const job of candidates) {
+    const hit = warmById.get(job.jobId);
+    if (hit) { selected.push(hit); continue; }
+    const cue = plan.visualCues.find((cue) => cue.assetJobId === job.jobId)!;
+    const scene = sceneForCue(plan, cue);
+    const key = cacheEligibleCue(cue)
+      ? `${sceneEpisodeOf(scene, cache.generation(scope))}:${sceneImageCacheKey(sceneImageIdentityFor(config, scene, cue, characterAppearance, provider))}`
+      : job.jobId;
+    if (missingKeys.has(key) || missingKeys.size >= limit) continue;
+    missingKeys.add(key);
+    selected.push(job);
+  }
+  return selected;
 }
 
 function abortError(signal: AbortSignal): Error {
@@ -859,7 +909,7 @@ export async function generateAssets(
   /** After a budgeted store, reuse-only candidates may now hit. Deterministic, no requests. */
   let resolvingCandidates: Promise<void> = Promise.resolve();
   const resolveCandidatesNow = (): Promise<void> => {
-    if (!cache || !plan.cacheCues?.length) return Promise.resolve();
+    if (!cache || (!plan.cacheCues?.length && !plan.classifierVisuals)) return Promise.resolve();
     resolvingCandidates = resolvingCandidates.then(async () => {
       if (!stillAdmitted()) return;
       const extra = await resolveCacheCues(spindle, plan, config, characterAppearance, jobs, cache, userId, { ...cacheOptions, provider, verifyImage: verify, log: cacheLog });
@@ -886,8 +936,11 @@ export async function generateAssets(
   signal.addEventListener("abort", abort, { once: true });
 
   try {
-    if (cache && plan.cacheCues?.length) await resolveCandidatesNow();
-    const promises = plan.visualCues.map((cue) => {
+    if (cache && (plan.cacheCues?.length || plan.classifierVisuals)) await resolveCandidatesNow();
+    const scheduledCues = plan.classifierVisuals
+      ? plan.visualCues.filter((cue) => initialJobs.some((job) => job.jobId === cue.assetJobId))
+      : plan.visualCues;
+    const promises = scheduledCues.map((cue) => {
       const existing = initialJobs.find((job) => job.jobId === cue.assetJobId);
       if (!existing) throw new Error(`Missing asset job ${cue.assetJobId}.`);
       // A retry keeps finished images: such jobs are preserved as-is and never
