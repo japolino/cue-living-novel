@@ -332,6 +332,7 @@ export function applyVisualConfigToStage(
 export type SettingsFeedbackTarget = {
   setConfig(config: VisualNovelConfig): void;
   setConnectionCatalog(kind: "planner" | "image", state: ConnectionCatalogFeedback): void;
+  setSystemOneKeyStatus(saved: boolean, message?: string): void;
   setAudioStatus(message: string): void;
   /** Acknowledged save result: "saved" only after the backend echoes `vn_config`. */
   setSaveStatus?(status: { kind: "saved" } | { kind: "error"; error: string }): void;
@@ -575,6 +576,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     mount: settingsHandle.root,
     onOpenPreview: () => activate(),
     onRefreshConnections: () => requestConnectionCatalog(),
+    onSaveSystemOneKey: (key) => ctx.sendToBackend({ type: "vn_set_system_one_key", key }),
+    onClearSystemOneKey: () => ctx.sendToBackend({ type: "vn_clear_system_one_key" }),
     onScanAudio: (directory) => {
       ctx.sendToBackend({ type: "vn_scan_audio", directory });
     },
@@ -874,6 +877,10 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       settingsPanel?.setConnectionCatalog("image", states.image);
       return;
     }
+    if (type === "vn_system_one_key_status" && message.type === "vn_system_one_key_status") {
+      settingsPanel?.setSystemOneKeyStatus(message.saved);
+      return;
+    }
     if (type === "vn_audio_scanned" && message.type === "vn_audio_scanned") {
       settingsPanel?.setAudioStatus(`Scanned ${message.bgmCount} BGM, ${message.sfxCount} SFX.`);
       settingsPanel?.setAudioLibrary?.({ bgmCount: message.bgmCount, sfxCount: message.sfxCount });
@@ -1000,6 +1007,10 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
         settingsPanel?.setSaveStatus?.({ kind: "error", error: message.error });
         return;
       }
+      if (message.operation === "vn_set_system_one_key" || message.operation === "vn_clear_system_one_key" || message.operation === "vn_get_system_one_key_status") {
+        settingsPanel?.setSystemOneKeyStatus(false, message.error);
+        return;
+      }
       if (message.operation === "vn_get_connection_catalog") {
         settingsPanel?.setConnectionCatalog("planner", { status: "error", options: [], error: message.error });
         settingsPanel?.setConnectionCatalog("image", { status: "error", options: [], error: message.error });
@@ -1038,6 +1049,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   });
 
   requestConnectionCatalog();
+  ctx.sendToBackend({ type: "vn_get_system_one_key_status" });
   requestState({ boot: true });
   ctx.ready();
 

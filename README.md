@@ -17,7 +17,7 @@ Under Advanced, NovelAI has toggles for model-specific quality tags and default 
 - previous-image retention and decode-before-swap so a late image never blanks the stage
 - exactly one centered protagonist per frame: no second character, crowd, or bystander
 - a frozen per-chat character-identity/tag block, migrated automatically from the legacy visual-profile record
-- a closed deterministic pose/expression catalogue chosen purely by paragraph index and text
+- a closed pose/expression catalogue, with deterministic selection by default
 - fixed 16:9 camera scene planning and explicit scene-boundary checks
 - swipe, edit, delete, duplicate-submit, and stale-image reconciliation
 - view-gated generation: Cue only plans turns and generates images for chats whose Cue view is open; closing the view (or leaving the chat) aborts the in-flight image batch and marks it cancelled, opening the view plans the latest reply only when nothing current is stored, and cancelled images wait for a manual Retry instead of resuming on their own
@@ -27,11 +27,17 @@ Under Advanced, NovelAI has toggles for model-specific quality tags and default 
 
 It targets Lumiverse staging `1.1.6`, audited at commit `33dfa9ee62999fa3e2567066ed5cdadf61635323`, and `lumiverse-spindle-types` `0.6.23`.
 
+## Optional System One decisions
+
+Advanced settings configure Cue's own System One URL and model. Save the API key in Cue's settings; Lumiverse encrypts it in Cue's private enclave. Cue sends Jev's typed `state` and `questions` request through the Spindle HTTP proxy. This requires the `cors_proxy` permission. If no key is saved or the request fails, Cue uses its existing story reader.
+
+**Compare** logs decision latency, input tokens, and speaker/expression agreement without changing the turn. **Use for presentation and familiar scenes** applies confident speaker, expression, and audio decisions. For replies of up to seven short paragraphs, Cue can reuse a known scene without calling the prose planner when Jev finds no scene or visual change. Longer replies use the story reader and split Jev's presentation questions into requests that fit the API limits. This setting is off by default.
+
 ## Image pipeline and identity
 
 Generated scene images come from the one built-in path: `src/backend/runtime/planner.ts`, then `src/backend/runtime/images.ts`, then the per-provider `AssetScheduler`. The sidecar planner proposes only scene boundaries, environments, and paragraph cues. It never supplies free-form pose, expression, or a prompt delta; those fields are emitted empty and ignored by the prompt compiler.
 
-Every image shows exactly one centered protagonist composed from a stable identity/tag block and a pose suffix from a finite catalogue. The tag block is frozen per chat and is never auto-updated by a later turn. Pose is selected by a pure function of paragraph index and text, so a given paragraph always produces the same image. The camera is fixed to a centered, eye-level, medium-wide 16:9 composition with the lower quarter clear for the dialogue surface.
+Every image shows exactly one centered protagonist composed from a stable identity/tag block and a pose suffix from a finite catalogue. The tag block is frozen per chat and is never auto-updated by a later turn. By default, pose is selected by a pure function of paragraph index and text; optional System One decisions can choose another pose from the same catalogue. The camera is fixed to a centered, eye-level, medium-wide 16:9 composition with the lower quarter clear for the dialogue surface.
 
 The pipeline never mutates canonical chat messages. It writes only extension-owned projections: per-turn records, per-chat state, and the single-character visual-state identity record.
 

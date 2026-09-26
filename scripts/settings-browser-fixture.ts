@@ -19,6 +19,8 @@ const fixture = {
   previews: 0,
   refreshes: 0,
   scans: [] as string[],
+  savedSystemOneKeys: [] as string[],
+  clearedSystemOneKeys: 0,
   panel: null as VisualNovelSettingsPanel | null,
 };
 const panel = new VisualNovelSettingsPanel({
@@ -32,6 +34,8 @@ const panel = new VisualNovelSettingsPanel({
   },
   onOpenPreview: () => { fixture.previews += 1; },
   onRefreshConnections: () => { fixture.refreshes += 1; },
+  onSaveSystemOneKey: (key) => { fixture.savedSystemOneKeys.push(key); panel.setSystemOneKeyStatus(true); },
+  onClearSystemOneKey: () => { fixture.clearedSystemOneKeys += 1; panel.setSystemOneKeyStatus(false); },
   onScanAudio: (directory) => { fixture.scans.push(directory); return { bgmCount: 3, sfxCount: 12 }; },
   onImportAudio: () => {},
 });

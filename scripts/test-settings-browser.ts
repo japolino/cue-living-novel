@@ -9,10 +9,10 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: (request) => n
   ? new Response(bundle, { headers: { "Content-Type": "application/javascript" } })
   : new Response('<html><body style="margin:0"><script type="module" src="/fixture.js"></script></body></html>', { headers: { "Content-Type": "text/html" } }) });
 
-type Fixture = { patches: Array<Record<string, unknown>>; config: Record<string, unknown>; previews: number; refreshes: number; scans: string[] };
+type Fixture = { patches: Array<Record<string, unknown>>; config: Record<string, unknown>; previews: number; refreshes: number; scans: string[]; savedSystemOneKeys: string[]; clearedSystemOneKeys: number };
 const fixture = (page: Page) => page.evaluate(() => {
-  const { patches, config, previews, refreshes, scans } = (window as any).settingsFixture;
-  return { patches, config, previews, refreshes, scans } as Fixture;
+  const { patches, config, previews, refreshes, scans, savedSystemOneKeys, clearedSystemOneKeys } = (window as any).settingsFixture;
+  return { patches, config, previews, refreshes, scans, savedSystemOneKeys, clearedSystemOneKeys } as Fixture;
 });
 const lastPatch = async (page: Page) => (await fixture(page)).patches.at(-1);
 
@@ -118,6 +118,12 @@ try {
   const advanced = settings.locator("[data-advanced-settings] > summary");
   await advanced.focus(); await advanced.press("Enter");
   await settings.getByRole("heading", { name: "Connections and models", exact: true }).click();
+  await settings.locator('[name="systemOneMode"]').selectOption("compare");
+  await settings.locator('[name="systemOneModel"]').fill("jev-latest");
+  await settings.locator('[name="systemOneApiKey"]').fill("test-key-123");
+  await settings.locator('[data-save-system-one-key]').click();
+  assert.deepEqual((await fixture(page)).savedSystemOneKeys, ["test-key-123"]);
+  assert.equal(await settings.locator('[name="systemOneApiKey"]').inputValue(), "");
   await settings.locator('[name="imageParameters"]').fill('{"steps":32}');
   assert.match(await settings.locator("[data-status]").innerText(), /not applied/);
   await settings.locator('input[name="textSpeedStep"][value="10"]').check();
@@ -129,6 +135,9 @@ try {
   await settings.locator("[data-apply]").click();
   const applied = await lastPatch(page);
   assert.deepEqual(applied?.imageParameters, { steps: 32 });
+  assert.equal(applied?.systemOneMode, "compare");
+  assert.equal(applied?.systemOneModel, "jev-latest");
+  assert.equal("systemOneApiKey" in applied!, false);
   assert.equal(applied?.customCss, "/* host */", "apply carries current values, not stale ones");
   assert.equal(applied?.ignoredTags, "status, inventory", "hidden untouched values are preserved");
   assert.equal("themePreset" in applied!, false, "apply never touches everyday keys");

@@ -7,6 +7,16 @@ export type ConnectionCatalog = {
   errors?: ConnectionCatalogErrors;
 };
 
+/** System One profiles share Lumiverse's connection store but cannot generate prose. */
+export function isSystemOneProfile(connection: Pick<ConnectionProfileDTO, "provider" | "model" | "metadata">): boolean {
+  const provider = text(connection.provider).toLowerCase();
+  const model = text(connection.model).toLowerCase();
+  const kind = connection.metadata?.connectionType;
+  return provider.includes("typesafe") || /system[-_]?one/.test(provider)
+    || /^jev(?:-|$)/.test(model)
+    || kind === "system_one" || kind === "systemOne";
+}
+
 function text(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -88,12 +98,13 @@ export async function resolvePlannerConnection(
   // Honor the user's explicitly chosen planner connection first.
   if (config.parserConnectionId) {
     const chosen = await spindle.connections?.get?.(config.parserConnectionId, userId);
-    if (chosen) return { id: chosen.id, provider: chosen.provider, model: chosen.model };
+    if (chosen && !isSystemOneProfile(chosen)) return { id: chosen.id, provider: chosen.provider, model: chosen.model };
   }
   // Otherwise fall back to the default connection so "Lumiverse default" works instead of failing.
   const connections = await spindle.connections?.list?.(userId);
   if (!connections) return null;
-  const fallback = connections.find((connection) => connection.is_default) ?? connections[0];
+  const plannerConnections = connections.filter((connection) => !isSystemOneProfile(connection));
+  const fallback = plannerConnections.find((connection) => connection.is_default) ?? plannerConnections[0];
   if (!fallback) return null;
   return { id: fallback.id, provider: fallback.provider, model: fallback.model };
 }
@@ -107,7 +118,7 @@ export async function loadConnectionCatalog(spindle: SpindleAPI, userId?: string
   if (plannerResult.status === "rejected") errors.planner = errorText(plannerResult.reason);
   if (imageResult.status === "rejected") errors.image = errorText(imageResult.reason);
   return {
-    planner: plannerResult.status === "fulfilled" ? normalizedOptions(plannerResult.value) : [],
+    planner: plannerResult.status === "fulfilled" ? normalizedOptions(plannerResult.value.filter((connection) => !isSystemOneProfile(connection))) : [],
     image: imageResult.status === "fulfilled" ? normalizedOptions(imageResult.value) : [],
     ...(Object.keys(errors).length ? { errors } : {})
   };

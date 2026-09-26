@@ -71,6 +71,9 @@ export type VisualNovelConfig = {
   referenceSource: VisualNovelReferenceSource;
   generateChoices: boolean;
   parserConnectionId: string | null;
+  systemOneMode: "off" | "compare" | "on";
+  systemOneApiUrl: string;
+  systemOneModel: string;
   parserParameters: Record<string, unknown>;
   imageConnectionId: string | null;
   imageModel: string;
@@ -122,6 +125,9 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   referenceSource: "captured",
   generateChoices: true,
   parserConnectionId: null,
+  systemOneMode: "off",
+  systemOneApiUrl: "https://api.typesafe.ai",
+  systemOneModel: "jev-latest",
   parserParameters: {},
   imageConnectionId: null,
   imageModel: "",
@@ -264,6 +270,9 @@ export function normalizeConfig(value: unknown): VisualNovelConfig {
     referenceSource: referenceSource(input.referenceSource),
     generateChoices: bool(input.generateChoices, DEFAULT_CONFIG.generateChoices),
     parserConnectionId: nullableString(input.parserConnectionId),
+    systemOneMode: input.systemOneMode === "compare" || input.systemOneMode === "on" ? input.systemOneMode : "off",
+    systemOneApiUrl: stringValue(input.systemOneApiUrl, DEFAULT_CONFIG.systemOneApiUrl).trim() || DEFAULT_CONFIG.systemOneApiUrl,
+    systemOneModel: stringValue(input.systemOneModel, DEFAULT_CONFIG.systemOneModel).trim() || DEFAULT_CONFIG.systemOneModel,
     parserParameters: record(input.parserParameters),
     imageConnectionId: nullableString(input.imageConnectionId),
     imageModel: stringValue(input.imageModel, DEFAULT_CONFIG.imageModel),

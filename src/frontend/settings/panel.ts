@@ -76,6 +76,8 @@ export type SettingsPanelOptions = {
   onSave: (patch: Partial<VisualNovelConfig>) => void;
   onOpenPreview: () => void;
   onRefreshConnections: () => void;
+  onSaveSystemOneKey?: (key: string) => void;
+  onClearSystemOneKey?: () => void;
   onScanAudio?: (directory: string) => Promise<{ bgmCount: number; sfxCount: number } | void> | void;
   /** Import user-picked audio files into the extension's scoped storage. */
   onImportAudio?: (files: readonly File[]) => Promise<void> | void;
@@ -86,7 +88,7 @@ export type SettingsPanelOptions = {
 /** Keys the Advanced section owns. Everything else saves as soon as it changes. */
 const ADVANCED_KEYS = [
   "novelAiQualityTags", "novelAiUseDefaultNegative",
-  "imageModel", "imageConcurrency", "parserParameters", "imageParameters", "audioDirectory",
+  "imageModel", "imageConcurrency", "parserParameters", "imageParameters", "audioDirectory", "systemOneMode", "systemOneApiUrl", "systemOneModel",
   "includeRecentMessages", "includeCharacterContext", "includePersonaContext", "includeLorebookContext", "debugLogging",
   "promptPrefix", "promptSuffix", "negativePrompt", "originalReference", "originalCreationName", "customPlannerInstructions",
   "ignoredTags", "displayRegexRules", "customCss",
@@ -488,6 +490,10 @@ export class VisualNovelSettingsPanel {
                   <select name="parserConnectionId" data-connection-select="planner" aria-label="Story reader connection"><option value="">Lumiverse default</option></select>
                   <small>Saves when changed. Reads the conversation to choose images and speakers.</small>
                 </div>
+                <label data-field><span>System One decisions</span><select name="systemOneMode"><option value="off">Off</option><option value="compare">Compare with story reader</option><option value="on">Use for presentation and familiar scenes</option></select><small>Jev makes bounded speaker, expression, audio, and scene decisions. Compare logs agreement without changing the turn.</small></label>
+                <label data-field><span>System One API URL</span><input name="systemOneApiUrl" type="url" placeholder="https://api.typesafe.ai" /><small>Cue sends requests to this endpoint through Lumiverse's HTTP proxy.</small></label>
+                <label data-field><span>System One model</span><input name="systemOneModel" type="text" placeholder="jev-latest" /></label>
+                <div data-field><span>System One API key</span><input name="systemOneApiKey" type="password" autocomplete="new-password" placeholder="Enter key" /><div data-actions><button type="button" data-save-system-one-key>Save key</button><button type="button" data-clear-system-one-key>Remove key</button></div><small data-system-one-key-status>Checking saved key…</small><small>Stored encrypted for this extension. The key is never included in Cue settings.</small></div>
                 <div data-actions><button type="button" data-refresh-connections>Refresh connection list</button><small>Refreshing is free. Connections are listed, not tested.</small></div>
                 <label data-field><span>Image model override</span><input name="imageModel" type="text" placeholder="Use the selected connection model" /><small data-image-model-hint>Leave blank to use the model configured on the selected image connection.</small></label>
                 <label data-field><span>Images generated at the same time</span><input name="imageConcurrency" type="number" min="1" max="6" step="1" /></label>
@@ -632,6 +638,19 @@ export class VisualNovelSettingsPanel {
     this.form.addEventListener("submit", (event) => {
       event.preventDefault();
       this.applyAdvanced();
+    });
+    this.root.querySelector<HTMLButtonElement>("[data-save-system-one-key]")?.addEventListener("click", () => {
+      const field = this.control<HTMLInputElement>("systemOneApiKey");
+      const key = field.value.trim();
+      if (!key) { this.setSystemOneKeyStatus(false, "Enter a key first."); return; }
+      this.setSystemOneKeyStatus(false, "Saving key…");
+      this.options.onSaveSystemOneKey?.(key);
+      field.value = "";
+    });
+    this.root.querySelector<HTMLButtonElement>("[data-clear-system-one-key]")?.addEventListener("click", () => {
+      this.setSystemOneKeyStatus(false, "Removing key…");
+      this.options.onClearSystemOneKey?.();
+      this.control<HTMLInputElement>("systemOneApiKey").value = "";
     });
     this.form.addEventListener("keydown", (event) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
@@ -1070,6 +1089,9 @@ export class VisualNovelSettingsPanel {
       imageModel: this.control<HTMLInputElement>("imageModel").value.trim(),
       imageConcurrency: clamp(Math.round(Number(this.control<HTMLInputElement>("imageConcurrency").value)), 1, 6, DEFAULT_CONFIG.imageConcurrency),
       parserParameters: jsonObject(this.control<HTMLTextAreaElement>("parserParameters").value, "Story reader parameters"),
+      systemOneMode: this.control<HTMLSelectElement>("systemOneMode").value as VisualNovelConfig["systemOneMode"],
+      systemOneApiUrl: this.control<HTMLInputElement>("systemOneApiUrl").value.trim() || DEFAULT_CONFIG.systemOneApiUrl,
+      systemOneModel: this.control<HTMLInputElement>("systemOneModel").value.trim() || DEFAULT_CONFIG.systemOneModel,
       imageParameters: jsonObject(this.control<HTMLTextAreaElement>("imageParameters").value, "Image parameters"),
       audioDirectory: this.control<HTMLInputElement>("audioDirectory").value.trim(),
       includeRecentMessages: clamp(Math.round(Number(this.control<HTMLInputElement>("includeRecentMessages").value)), 0, 30, DEFAULT_CONFIG.includeRecentMessages),
@@ -1127,6 +1149,9 @@ export class VisualNovelSettingsPanel {
     set("imageModel", () => { this.control<HTMLInputElement>("imageModel").value = config.imageModel; });
     set("imageConcurrency", () => { this.control<HTMLInputElement>("imageConcurrency").value = String(config.imageConcurrency); });
     set("parserParameters", () => { this.control<HTMLTextAreaElement>("parserParameters").value = JSON.stringify(config.parserParameters, null, 2); });
+    set("systemOneMode", () => { this.control<HTMLSelectElement>("systemOneMode").value = config.systemOneMode; });
+    set("systemOneApiUrl", () => { this.control<HTMLInputElement>("systemOneApiUrl").value = config.systemOneApiUrl; });
+    set("systemOneModel", () => { this.control<HTMLInputElement>("systemOneModel").value = config.systemOneModel; });
     set("imageParameters", () => { this.control<HTMLTextAreaElement>("imageParameters").value = JSON.stringify(config.imageParameters, null, 2); });
     set("audioDirectory", () => { this.control<HTMLInputElement>("audioDirectory").value = config.audioDirectory; });
     set("includeRecentMessages", () => { this.control<HTMLInputElement>("includeRecentMessages").value = String(config.includeRecentMessages); });
@@ -1291,11 +1316,17 @@ export class VisualNovelSettingsPanel {
 
   setConnectionCatalog(kind: ConnectionCatalogKind, state: ConnectionCatalogState): void {
     this.connectionStates[kind] = state;
-    this.renderConnectionSelects(kind, kind === "planner" ? this.config.parserConnectionId : this.config.imageConnectionId);
+    this.renderConnectionSelects(kind, kind === "planner" ? this.config.parserConnectionId
+        : this.config.imageConnectionId);
     if (kind === "image") {
       this.updateImageModelHint();
       this.syncNovelAiControls(this.config, imageSourceFromConfig(this.config));
     }
+  }
+
+  setSystemOneKeyStatus(saved: boolean, message?: string): void {
+    const status = this.root.querySelector<HTMLElement>("[data-system-one-key-status]");
+    if (status) status.textContent = message ?? (saved ? "API key saved." : "No API key saved.");
   }
 
   private renderConnectionSelects(kind: ConnectionCatalogKind, selectedId: string | null): void {

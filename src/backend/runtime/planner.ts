@@ -55,6 +55,7 @@ import { resolvePlannerConnection, type ResolvedPlannerConnection } from "./conn
 import { normalizeStageEffect, normalizeAmbientEffect, deriveWeatherAmbient } from "./planner-effects.js";
 import { getAudioCatalog, getAudioCatalogPromptSummary } from "./audio-catalog.js";
 import { debugErrorSummary, debugJson, debugQuote, plannerDebugLogger, type PlannerDebugScope } from "./debug-trace.js";
+import { decidePresentation, type SystemOneDecisions } from "./system-one.js";
 
 export const PlannerEnvironmentChangesSchema = z.object({
   description: z.string().trim().min(1).optional(),
@@ -2042,6 +2043,20 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
   const plannerConnection = await resolvePlannerConnection(spindle, input.config, input.userId);
   const paragraphText = narrative.paragraphs.map((paragraph) => `[${paragraph.index}] ${paragraph.text}`).join("\n\n");
   const debug = plannerDebugLogger(spindle, input.config, plannerDebugScope(input));
+  const systemOnePromise: Promise<SystemOneDecisions | null> = input.config.systemOneMode === "off"
+    ? Promise.resolve(null)
+    : decidePresentation(spindle, {
+        paragraphs: narrative.paragraphs,
+        previousScene: input.previousScene,
+        names: [...Object.values(seedRegistry).map((entry) => entry.name), ...Object.values(seedRegistry).flatMap((entry) => entry.aliases), ...(input.previousScene?.cast ?? []), input.message.name, input.singleCharacter.protagonist.name].filter((name): name is string => Boolean(name)),
+        ...(personaName ? { personaName } : {}),
+        config: input.config,
+        ...(input.userId ? { userId: input.userId } : {}),
+      }).catch((error: unknown) => {
+        spindle.log.warn(`System One decision failed; using story reader: ${debugErrorSummary(error)}`);
+        return null;
+      });
+  let systemOne = input.config.systemOneMode === "on" ? await systemOnePromise : null;
   let failedAttempts = 0;
   // The deterministic fallback is a last resort, not a peer: transient sidecar
   // failures (empty responses, truncation, malformed JSON) get one retry
@@ -2050,7 +2065,13 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
   let lastError: unknown = null;
   planner = fallbackPlanner(input, narrative.paragraphs.length);
   usedFallback = true;
-  for (let attempt = 1; attempt <= PLANNER_ATTEMPTS; attempt += 1) {
+  const useContinuation = input.config.systemOneMode === "on" && systemOne !== null && input.previousScene !== null
+    && !systemOne.sceneChange && !systemOne.needsDescription
+    && narrative.paragraphs.length <= 7
+    && (Boolean(input.previousScene.identityPrompt) || isUsableIdentity(input.singleCharacter.protagonist.name, input.singleCharacter.protagonist.tags))
+    && (input.config.mode !== "cyoa" || narrative.choices.length > 0);
+  if (useContinuation) usedFallback = false;
+  for (let attempt = 1; !useContinuation && attempt <= PLANNER_ATTEMPTS; attempt += 1) {
     try {
       planner = await requestPlannerOutput(spindle, input, paragraphText, visualContext, plannerConnection, seedRegistry);
       // Require usable visual coverage when image generation is expected
@@ -2093,6 +2114,27 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
   }
   if (usedFallback && lastError !== null) {
     spindle.log.warn(`Visual planner fallback after ${PLANNER_ATTEMPTS} attempts: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+  }
+  if (input.config.systemOneMode === "compare") systemOne = await systemOnePromise;
+  if (systemOne) {
+    if (input.config.systemOneMode === "compare") {
+      const speakerAgreement = planner.speakers.filter((entry) => systemOne.speakers.has(entry.paragraphIndex))
+        .filter((entry) => systemOne.speakers.get(entry.paragraphIndex)?.toLowerCase() === entry.name.toLowerCase()).length;
+      const expressionAgreement = planner.cues.filter((cue) => cue.expression && systemOne.expressions.has(cue.paragraphIndex))
+        .filter((cue) => systemOne.expressions.get(cue.paragraphIndex) === cue.expression).length;
+      spindle.log.info(`[VN] System One compare durationMs=${systemOne.durationMs} inputTokens=${systemOne.inputTokens} speakers=${speakerAgreement}/${systemOne.speakers.size} expressions=${expressionAgreement}/${systemOne.expressions.size} sceneChange=${systemOne.sceneChange} description=${systemOne.needsDescription}`);
+    } else if (input.config.systemOneMode === "on") {
+      for (const [paragraphIndex, name] of systemOne.speakers) {
+        const existing = planner.speakers.find((entry) => entry.paragraphIndex === paragraphIndex);
+        if (existing) existing.name = name;
+        else planner.speakers.push({ paragraphIndex, name });
+      }
+      for (const [paragraphIndex, expression] of systemOne.expressions) {
+        const cue = planner.cues.find((entry) => entry.paragraphIndex === paragraphIndex);
+        if (cue) cue.expression = expression;
+      }
+      spindle.log.info(`[VN] System One ${useContinuation ? "continuation" : "augmentation"} durationMs=${systemOne.durationMs} inputTokens=${systemOne.inputTokens}`);
+    }
   }
   debug.line(usedFallback
     ? `outcome=fallback attempts=${failedAttempts}/${PLANNER_ATTEMPTS} deterministic plan: scenes=${planner.scenes.length} cues=${planner.cues.length}`
@@ -2288,6 +2330,18 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
         sfx: cue.sfx || null
       });
     });
+  if (input.config.systemOneMode === "on" && systemOne) {
+    for (const paragraph of narrative.paragraphs) {
+      const bgm = systemOne.bgm.get(paragraph.index);
+      const sfx = systemOne.sfx.get(paragraph.index);
+      if (!bgm && !sfx) continue;
+      const existing = audioCues.find((cue) => cue.paragraphIndex === paragraph.index);
+      if (existing) {
+        if (bgm) existing.bgm = bgm;
+        if (sfx) existing.sfx = sfx;
+      } else audioCues.push(AudioCueSchema.parse({ paragraphIndex: paragraph.index, bgm: bgm ?? null, sfx: sfx ?? null }));
+    }
+  }
 
   const finalParagraph = narrative.paragraphs.length - 1;
   const choices = narrative.choices.length > 0

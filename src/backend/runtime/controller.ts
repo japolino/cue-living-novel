@@ -30,6 +30,7 @@ import {
   type MessageResolutionCache
 } from "./message-text.js";
 import { loadConnectionCatalog } from "./connections.js";
+import { SYSTEM_ONE_KEY } from "./system-one.js";
 import {
   clearAudioCatalogCache,
   normalizeAudioStoragePrefix,
@@ -1170,6 +1171,20 @@ async function handleFrontendMessage(spindle: SpindleAPI, request: FrontendReque
       spindle.sendToFrontend({ type: "vn_connection_catalog", ...catalog }, userId);
       return;
     }
+    case "vn_get_system_one_key_status":
+      spindle.sendToFrontend({ type: "vn_system_one_key_status", saved: await spindle.enclave.has(SYSTEM_ONE_KEY, userId) }, userId);
+      return;
+    case "vn_set_system_one_key": {
+      const key = request.key.trim();
+      if (!key || key.length > 8192) throw new Error("Enter a valid System One API key");
+      await spindle.enclave.put(SYSTEM_ONE_KEY, key, userId);
+      spindle.sendToFrontend({ type: "vn_system_one_key_status", saved: true }, userId);
+      return;
+    }
+    case "vn_clear_system_one_key":
+      await spindle.enclave.delete(SYSTEM_ONE_KEY, userId);
+      spindle.sendToFrontend({ type: "vn_system_one_key_status", saved: false }, userId);
+      return;
     case "vn_set_config": {
       const config = await updateConfig(spindle, request.patch, userId);
       rememberDebugFlag(userId, config);
