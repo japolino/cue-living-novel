@@ -1027,7 +1027,10 @@ async function requestPlannerOutput(
     // tokens count against maxOutputTokens, so a long scene can exhaust the
     // whole budget and return empty text (finishReason MAX_TOKENS). Pin the
     // lightest supported thinking explicitly; parserParameters can override.
-    if (/gemini-3/i.test(model)) {
+    if (/gemini-3\.8/i.test(model)) {
+      // Gemini 3.8 Flash rejects "minimal"; "low" is its lightest level.
+      defaultParameters.thinkingConfig = { thinkingLevel: "low" };
+    } else if (/gemini-3/i.test(model)) {
       defaultParameters.thinkingConfig = { thinkingLevel: "minimal" };
     } else if (/gemini-2\.5/i.test(model)) {
       defaultParameters.thinkingConfig = { thinkingBudget: 0 };

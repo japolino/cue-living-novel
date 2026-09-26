@@ -419,12 +419,13 @@ test("planner tolerant parse recovers choices in alternate (choice/option/text) 
 
   test("passes default max_tokens, thinking pin, and JSON structured output to planner generation", async () => {
     let capturedParams: any = null;
+    let model = "gemini-3.5-flash-lite";
     const spindle: any = {
       chats: { get: async () => ({ character_id: "character-1" }) },
       characters: { get: async () => ({ id: "character-1", name: "Sandra", description: "", tags: [], extensions: {} }) },
       personas: { getActive: async () => null },
       connections: {
-        get: async () => ({ id: "conn", provider: "google", model: "gemini-3.5-flash-lite", is_default: true }),
+        get: async () => ({ id: "conn", provider: "google", model, is_default: true }),
         list: async () => []
       },
       generate: {
@@ -449,9 +450,22 @@ test("planner tolerant parse recovers choices in alternate (choice/option/text) 
     expect(result.usedFallback).toBe(false);
     expect(capturedParams?.max_tokens).toBe(16000);
     expect(capturedParams?.responseMimeType).toBe("application/json");
-    // Gemini 3.x: thinking pinned to minimal so thought tokens cannot eat the
-    // whole output budget and return empty content (finishReason MAX_TOKENS).
+    // Gemini 3.5 uses minimal thinking to protect the output budget.
     expect(capturedParams?.thinkingConfig).toEqual({ thinkingLevel: "minimal" });
+
+    model = "gemini-3.8-flash";
+    await planTurn(spindle, {
+      chatId: "chat-1",
+      message: { ...message, content: "P0." },
+      content: "P0.",
+      previousScene: null,
+      previousContinuity: null,
+      recentMessages: [],
+      config: { ...DEFAULT_CONFIG, maxImagesPerTurn: 1, parserConnectionId: "conn" },
+      singleCharacter: emptySingleCharacter(),
+      characterAppearance: {}
+    });
+    expect(capturedParams?.thinkingConfig).toEqual({ thinkingLevel: "low" });
   });
 
 });

@@ -1,6 +1,6 @@
 {
   "name": "cue-living-novel",
-  "version": "1.5.0-beta",
+  "version": "1.6.0-beta",
   "private": true,
   "type": "module",
   "packageManager": "bun@1.4.0",
