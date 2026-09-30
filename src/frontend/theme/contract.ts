@@ -20,6 +20,8 @@ export const VN_THEME_SELECTORS = {
   interaction: "[data-vn-interaction]",
   choiceList: "[data-vn-choice-list]",
   choice: "[data-vn-choice]",
+  gameChoices: "[data-vn-game-choices]",
+  gameChoice: "[data-vn-game-choice]",
   inputForm: "[data-vn-input-form]",
   input: "[data-vn-input]",
   submit: "[data-vn-submit]",

@@ -669,6 +669,77 @@ button[data-vn-badge]:active {
   display: none;
 }
 
+/* Moves from a game-engine extension (Warp etc.): compact chips above the reply options. */
+[data-vn-game-choices] {
+  display: grid;
+  width: min(52rem, 100%);
+  max-height: min(34 * var(--vn-vh, 1vh), 20rem);
+  gap: 0.55rem;
+  padding: 0.25rem 0.5rem;
+  overflow: auto;
+}
+
+[data-vn-game-group] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+[data-vn-game-group-label] {
+  flex-basis: 100%;
+  color: var(--vn-muted-text);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.6);
+}
+
+[data-vn-game-choice] {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.5rem;
+  padding: 0.45rem 0.85rem;
+  border: 1px solid rgba(255, 255, 255, 0.34);
+  border-radius: 999px;
+  background: rgba(16, 14, 26, 0.88);
+  color: var(--vn-text);
+  font: inherit;
+  font-size: 0.92rem;
+  cursor: pointer;
+  box-shadow: 0 0.35rem 1rem rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(0.8rem);
+}
+
+[data-vn-game-choice]:hover:not(:disabled) {
+  border-color: var(--vn-accent);
+  background: rgba(35, 27, 50, 0.96);
+}
+
+[data-vn-game-choice]:focus-visible {
+  outline: 3px solid var(--vn-accent);
+  outline-offset: 3px;
+}
+
+[data-vn-game-choice]:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+[data-vn-game-odds] {
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+[data-vn-game-odds="good"] { color: #8fe0a8; }
+[data-vn-game-odds="fair"] { color: #f0cf7a; }
+[data-vn-game-odds="poor"] { color: #f19a9a; }
+
 [data-vn-choice-list] {
   display: grid;
   width: min(46rem, 100%);

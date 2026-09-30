@@ -8,6 +8,7 @@ import { VisualNovelSettingsPanel } from "../settings/panel.js";
 import type { VnChoice, VnTurnInput } from "../store/index.js";
 import { createVnHeaderLauncher } from "./manual-launcher.js";
 import { captureSimTrackerCards } from "./panel-capture.js";
+import { GameBridge } from "./game-bridge.js";
 import { PanelDock } from "../stage/panel-dock.js";
 import { stagingContext, supportsVisualNovelOverlay, type ComponentOverrideHandle } from "./staging-context.js";
 import { presentAmbient, presentEffect } from "./effect-presentation.js";
@@ -453,6 +454,14 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     }
   }
 
+  // Moves from game-engine extensions (Warp etc.): shown on the stage, picked back to their owner.
+  let gameBridge: GameBridge | null = null;
+  const syncGameChoices = (): void => {
+    const id = chatId();
+    const choices = gameBridge?.choicesFor(id) ?? [];
+    stage.setGameChoices(choices.map(({ id: choiceId, label, group, detail, odds }) => ({ id: choiceId, label, group, detail, odds })), gameBridge?.busyFor(id) ?? false);
+  };
+
   const stage = new VnStage({
     mount: app.root,
     themePreset: configRef.current?.themePreset ?? "lumiverse",
@@ -488,6 +497,14 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     },
     onSubmit: async (content: string) => {
       await handleUserSubmission(content);
+    },
+    onGameChoice: async (choice) => {
+      const activeChatId = chatId();
+      const picked = gameBridge?.choicesFor(activeChatId).find((entry) => entry.id === choice.id);
+      if (!picked || !gameBridge) throw new Error("That move isn't available anymore.");
+      speech.setCursor(null);
+      stage.presentUserParagraph(picked.label, turn?.userSpeaker || "You");
+      gameBridge.pick(activeChatId, picked);
     },
     onReroll: () => {
       const activeChatId = chatId();
@@ -537,6 +554,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       }
     },
   });
+
+  gameBridge = new GameBridge(window, syncGameChoices);
 
   const panels = new PanelDock(stage.panelMount);
   const panelRequests = new Map<string, { resolve: (template: string) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
@@ -672,6 +691,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     }
     lastAnnouncedChatId = current;
     for (const message of viewStateMessages(current, options.boot ? undefined : active)) ctx.sendToBackend(message);
+    syncGameChoices();
+    gameBridge?.request(current);
   }
 
   const connectionOptions: Record<"planner" | "image", readonly ConnectionCatalogOption[]> = { planner: [], image: [] };
@@ -1072,6 +1093,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     settingsHandle?.destroy();
     audioEngine.destroy();
     panels.destroy();
+    gameBridge?.destroy();
     for (const pending of panelRequests.values()) { clearTimeout(pending.timer); pending.reject(new Error("Panel layer closed.")); }
     panelRequests.clear();
     stage.destroy();

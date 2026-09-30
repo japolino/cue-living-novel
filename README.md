@@ -184,6 +184,14 @@ Frames allow CSS layouts, SVG drawings, and CSS-only checkbox/radio interactions
 
 For stock SimTracker, let its card render in normal chat, open VN, then choose **Capture SimTracker snapshot**. This captures markup and checkbox state, not JavaScript behavior. Live updates require the companion adapter in [integrations/simtracker-vn-bridge.ts](./integrations/simtracker-vn-bridge.ts), wired to SimTracker's own template output. It is not installed into SimTracker automatically. The adapter must return only the requested chat/message/swipe's cards, call `refresh()` after updates, and `destroy()` on teardown. No DOM nodes are moved between extensions.
 
+### Game engine extensions
+
+A rules engine such as Warp can play alongside VN mode:
+
+- **Moves on the stage.** Its choices (with success odds) appear as chips at **Your turn**, above your own reply options, in both standard and CYOA mode. Picking one shows it as your line and hands it back to the engine, which rolls and sends the message. The contract lives in [src/frontend/host/game-bridge.ts](./src/frontend/host/game-bridge.ts): the engine sends `vn-game-state-v1` (`{ version: 1, provider, chatId, choices: [{ id, label, group?, detail?, odds? }], busy? }`), VN answers picks with `vn-game-pick-v1` and asks for a fresh state with `vn-game-request-v1`. Up to 12 moves are shown.
+- **Live status cards.** Providers named `warp` (as well as `simtracker`) may publish **Keep it updated** cards over the panel bridge above.
+- **Moods for expressions.** An engine may leave `metadata.vn_hints = { moods: { Name: "flustered" }, notes: [...] }` on a reply or on the player message it answers. The planner reads it as data and prefers expressions that match.
+
 Browser regression checks:
 
 ```powershell

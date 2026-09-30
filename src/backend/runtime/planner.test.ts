@@ -4,7 +4,7 @@ import type { ChatMessageDTO, PersonaDTO, SpindleAPI } from "lumiverse-spindle-t
 import { DEFAULT_CONFIG } from "../../config";
 import { ContinuityStateSchema, SceneStateSchema } from "../../shared/contracts";
 import { emptySingleCharacter } from "../core/visual-state";
-import { parseIgnoredTags, planTurn } from "./planner";
+import { gameHintsForTurn, parseIgnoredTags, planTurn } from "./planner";
 
 const message: ChatMessageDTO & { role: "assistant" } = {
   id: "assistant-1",
@@ -1245,4 +1245,16 @@ test("absent effect and ambient stay absent (screen effects)", async () => {
 
   assert.equal(result.plan.scenes[0]?.ambient ?? null, null);
   assert.equal(result.plan.visualCues[0]?.effect, undefined);
+});
+
+test("game-engine hints come from the reply or the player message it answers", () => {
+  const messages = [
+    { id: "u1", is_user: true, metadata: { vn_hints: { moods: { Robin: "flustered" }, notes: ["On a date at the café"] } } },
+    { id: "a1", is_user: false },
+    { id: "a2", is_user: false, metadata: { vn_hints: { moods: { Robin: "angry", Bad: 5 } } } },
+  ];
+  assert.equal(gameHintsForTurn(messages, "a1"), "- Robin: flustered\n- On a date at the café");
+  assert.equal(gameHintsForTurn(messages, "a2"), "- Robin: angry");
+  assert.equal(gameHintsForTurn(messages, "missing"), "");
+  assert.equal(gameHintsForTurn([{ id: "a", is_user: false, metadata: { vn_hints: "nope" } }], "a"), "");
 });

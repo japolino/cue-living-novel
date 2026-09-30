@@ -301,6 +301,8 @@ function buildStandardStageDOM(parent: MockNode) {
   const interactionHint = new MockNode("p");
   interactionHint.setAttribute("data-vn-interaction-hint", "");
   interaction.append(interactionHint);
+  const gameChoices = new MockNode("div");
+  gameChoices.setAttribute("data-vn-game-choices", "");
   const choiceList = new MockNode("ol");
   choiceList.setAttribute("data-vn-choice-list", "");
   const inputForm = new MockNode("form");
@@ -310,7 +312,7 @@ function buildStandardStageDOM(parent: MockNode) {
   const submit = new MockNode("button");
   submit.setAttribute("data-vn-submit", "");
   inputForm.append(input, submit);
-  interaction.append(choiceList, inputForm);
+  interaction.append(gameChoices, choiceList, inputForm);
 
   const backlog = new MockNode("div");
   backlog.setAttribute("data-vn-backlog", "");

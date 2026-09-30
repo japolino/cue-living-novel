@@ -6,6 +6,8 @@ import { renderPanelRule, type PanelRule } from "./panel-rules.js";
 type Pin = { key: string; follow: string | null; card: PanelArtifact; message: string; fingerprint: string; x: number; y: number; width: number; height: number; collapsed: boolean; remote: boolean };
 type Capture = { title: string; html: string };
 const PIN_ICON = "📌";
+/** Extensions allowed to publish live cards over the panel bridge. */
+const BRIDGE_PROVIDERS = new Set(["simtracker", "warp"]);
 
 export function clampPanel(value: number, maximum: number): number {
   return Math.max(0, Math.min(Number.isFinite(value) ? value : 0, Math.max(0, maximum)));
@@ -288,9 +290,9 @@ export class PanelDock {
     // Explicit versioned companion contract. Never treat arbitrary window messages as cards.
     const data = (event as CustomEvent).detail;
     const turn = this.turn;
-    if (!turn || !data || data.version !== 1 || data.provider !== "simtracker" || data.chatId !== turn.chatId || data.messageId !== turn.messageId || data.sourceFingerprint !== turn.sourceFingerprint || data.swipeId !== turn.swipeId) return;
+    if (!turn || !data || data.version !== 1 || !BRIDGE_PROVIDERS.has(data.provider) || data.chatId !== turn.chatId || data.messageId !== turn.messageId || data.sourceFingerprint !== turn.sourceFingerprint || data.swipeId !== turn.swipeId) return;
     if (typeof data.cardId !== "string" || data.cardId.length > 100 || !Number.isSafeInteger(data.revision) || data.revision < 0) return;
-    const key = `simtracker:${data.cardId}`;
+    const key = `${data.provider}:${data.cardId}`;
     if (!this.bridgeRevision.has(key) && this.bridgeRevision.size >= MAX_PANELS) return;
     if (data.revision <= (this.bridgeRevision.get(key) ?? -1)) return;
     if (data.status !== "removed" && data.status !== "ready") return;

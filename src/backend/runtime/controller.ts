@@ -19,7 +19,7 @@ import { resolveNativeCardJobs } from "./native-assets.js";
 import { handleReferenceImageResponse } from "./reference-source.js";
 import { CACHE_JOB_PROVIDER, createAssetJobs, prepareAssetJobs, generateAssets, resolveCacheCues, retainPlanEpisodes } from "./images.js";
 import { SceneImageCache, sceneImageScope } from "../core/scene-image-cache.js";
-import { fingerprintForMessage, planTurn } from "./planner.js";
+import { fingerprintForMessage, gameHintsForTurn, planTurn } from "./planner.js";
 import {
   isUnselectedGreeting,
   needsResolution,
@@ -801,6 +801,7 @@ async function processAssistantMessage(
       singleCharacter,
       characterAppearance,
       characterRegistry,
+      gameHints: gameHintsForTurn(messages, message.id),
       ...(userId ? { userId } : {})
     });
     if (operation.controller.signal.aborted) return;

@@ -93,10 +93,21 @@ import {
   type VnImageFactory,
 } from "./image-loader";
 
+/** A move offered by a game-engine extension (see host/game-bridge.ts). */
+export interface VnGameChoice {
+  id: string;
+  label: string;
+  group: string | null;
+  detail: string | null;
+  /** 0–1 chance of success, shown as a badge. */
+  odds: number | null;
+}
+
 export interface VnStageCallbacks {
   onAdvance?: (paragraphIndex: number, inputUnlocked: boolean) => void;
   onPrevious?: (paragraphIndex: number) => void;
   onChoice?: (choice: VnChoice) => void | Promise<void>;
+  onGameChoice?: (choice: VnGameChoice) => void | Promise<void>;
   onSubmit?: (text: string) => void | Promise<void>;
   onExit?: () => void;
   onReroll?: () => void | Promise<void>;
@@ -188,6 +199,7 @@ const THEME_MARKUP = `
         <h2 id="vn-interaction-title" data-vn-interaction-title>Your turn</h2>
         <p data-vn-interaction-hint></p>
       </div>
+      <div data-vn-game-choices hidden aria-label="Game moves"></div>
       <ol data-vn-choice-list hidden aria-label="Choose a reply"></ol>
       <form data-vn-input-form hidden>
         <textarea data-vn-input aria-label="Your reply"></textarea>
@@ -404,6 +416,9 @@ export class VnStage {
   private isRewinding = false;
   private readonly interaction: HTMLElement;
   private readonly choiceList: HTMLOListElement;
+  private readonly gameChoiceList: HTMLElement;
+  private gameChoices: readonly VnGameChoice[] = [];
+  private gameBusy = false;
   private readonly inputForm: HTMLFormElement;
   private readonly input: HTMLTextAreaElement;
   private readonly submitButton: HTMLButtonElement;
@@ -533,6 +548,7 @@ export class VnStage {
     this.previousButton = queryRequired(this.themeRoot, "[data-vn-control='previous']");
     this.interaction = queryRequired(this.themeRoot, "[data-vn-interaction]");
     this.choiceList = queryRequired(this.themeRoot, "[data-vn-choice-list]");
+    this.gameChoiceList = queryRequired(this.themeRoot, "[data-vn-game-choices]");
     this.inputForm = queryRequired(this.themeRoot, "[data-vn-input-form]");
     this.input = queryRequired(this.themeRoot, "[data-vn-input]");
     this.submitButton = queryRequired(this.themeRoot, "[data-vn-submit]");
@@ -747,6 +763,14 @@ export class VnStage {
   private applyThemePreset(preset: VisualNovelThemePreset): void {
     this.presetStyle.textContent = THEME_PRESET_CSS[preset] ?? "";
     this.root.dataset.vnPreset = preset;
+  }
+
+  /** Moves from a game-engine extension, shown with the reply options whenever it's the player's turn. */
+  setGameChoices(choices: readonly VnGameChoice[], busy = false): void {
+    this.gameChoices = [...choices];
+    this.gameBusy = busy;
+    const view = selectVnStageView(this.state);
+    this.renderInteraction(view.showChoices, view.showStandardInput, view.isBusy);
   }
 
   reset(): void {
@@ -1450,6 +1474,16 @@ export class VnStage {
       if (choice) void this.submitChoice(choice);
     });
 
+    this.gameChoiceList.addEventListener("click", (event) => {
+      const button =
+        event.target instanceof Element
+          ? event.target.closest<HTMLButtonElement>("[data-vn-game-choice]")
+          : null;
+      if (!button || button.disabled) return;
+      const choice = this.gameChoices.find((item) => item.id === button.dataset.vnGameChoiceId);
+      if (choice) void this.submitGameChoice(choice);
+    });
+
     this.input.addEventListener("input", () => {
       this.dispatch({ type: "set-draft", draft: this.input.value });
     });
@@ -1537,6 +1571,17 @@ export class VnStage {
 
     try {
       await this.callbacks.onChoice(choice);
+    } catch (error) {
+      this.dispatch({ type: "submit-failed", error: errorMessage(error) });
+    }
+  }
+
+  private async submitGameChoice(choice: VnGameChoice): Promise<void> {
+    const view = selectVnStageView(this.state);
+    if (!view.acceptsInput || view.isBusy || this.gameBusy || !this.callbacks.onGameChoice) return;
+    this.dispatch({ type: "submit-started" });
+    try {
+      await this.callbacks.onGameChoice(choice);
     } catch (error) {
       this.dispatch({ type: "submit-failed", error: errorMessage(error) });
     }
@@ -2096,18 +2141,64 @@ export class VnStage {
     );
   }
 
+  private renderGameChoices(show: boolean, isBusy: boolean): void {
+    if (!show) {
+      if (this.gameChoiceList.childElementCount > 0) this.gameChoiceList.replaceChildren();
+      return;
+    }
+    const groups = new Map<string, VnGameChoice[]>();
+    for (const choice of this.gameChoices) {
+      const key = choice.group ?? "";
+      groups.set(key, [...(groups.get(key) ?? []), choice]);
+    }
+    this.gameChoiceList.replaceChildren(
+      ...[...groups].map(([group, choices]) => {
+        const section = document.createElement("div");
+        section.setAttribute("data-vn-game-group", "");
+        if (group && groups.size > 1) {
+          const heading = document.createElement("span");
+          heading.setAttribute("data-vn-game-group-label", "");
+          heading.textContent = group;
+          section.append(heading);
+        }
+        for (const choice of choices) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.setAttribute("data-vn-game-choice", "");
+          button.dataset.vnGameChoiceId = choice.id;
+          button.disabled = isBusy;
+          if (choice.detail) button.title = choice.detail;
+          const label = document.createElement("span");
+          label.textContent = choice.label;
+          button.append(label);
+          if (choice.odds !== null) {
+            const odds = document.createElement("span");
+            odds.setAttribute("data-vn-game-odds", choice.odds >= 0.67 ? "good" : choice.odds >= 0.34 ? "fair" : "poor");
+            odds.textContent = `${Math.round(choice.odds * 100)}%`;
+            button.append(odds);
+          }
+          section.append(button);
+        }
+        return section;
+      }),
+    );
+  }
+
   private renderInteraction(
     showChoices: boolean,
     showStandardInput: boolean,
     isBusy: boolean,
   ): void {
+    const showGame = (showChoices || showStandardInput) && this.gameChoices.length > 0;
     this.interaction.hidden = !showChoices && !showStandardInput;
     this.choiceList.hidden = !showChoices;
+    this.gameChoiceList.hidden = !showGame;
+    this.renderGameChoices(showGame, isBusy || this.gameBusy);
     this.inputForm.hidden = !showStandardInput;
     const hint = showChoices
-      ? "Choose a reply."
+      ? showGame ? "Pick a move or choose a reply." : "Choose a reply."
       : showStandardInput
-        ? "Write your reply. Ctrl+Enter sends it."
+        ? showGame ? "Pick a move, or write your own reply. Ctrl+Enter sends it." : "Write your reply. Ctrl+Enter sends it."
         : "";
     if (this.interactionHint.textContent !== hint) this.interactionHint.textContent = hint;
 
