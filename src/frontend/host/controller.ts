@@ -9,6 +9,7 @@ import type { VnChoice, VnTurnInput } from "../store/index.js";
 import { createVnHeaderLauncher } from "./manual-launcher.js";
 import { captureSimTrackerCards } from "./panel-capture.js";
 import { GameBridge } from "./game-bridge.js";
+import { connectImageBridge } from "./image-bridge.js";
 import { PanelDock } from "../stage/panel-dock.js";
 import { stagingContext, supportsVisualNovelOverlay, type ComponentOverrideHandle } from "./staging-context.js";
 import { presentAmbient, presentEffect } from "./effect-presentation.js";
@@ -556,6 +557,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   });
 
   gameBridge = new GameBridge(window, syncGameChoices);
+  const imageBridge = connectImageBridge(window, chatId, (request) => ctx.sendToBackend(request));
 
   const panels = new PanelDock(stage.panelMount);
   const panelRequests = new Map<string, { resolve: (template: string) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
@@ -881,6 +883,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   function routeBackend(payload: unknown): void {
     const type = messageType(payload);
     const message = payload as BackendResponse;
+    if (message.type === "vn_external_image") { imageBridge.result(message.result); return; }
     if (message.type === "vn_panel_template") {
       const pending = panelRequests.get(message.requestId);
       if (!pending) return;
@@ -909,6 +912,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     }
     if (type === "vn_state" && message.type === "vn_state") {
       configRef.current = message.config;
+      imageBridge.fit(message.config.sceneImageFit);
       applyVisualConfigToStage(stage, configRef.current);
       audioEngine.setBgmVolume(configRef.current.bgmVolume);
       audioEngine.setSfxVolume(configRef.current.sfxVolume);
@@ -937,6 +941,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       return;
     }
     if (type === "vn_config" && message.type === "vn_config") {
+      imageBridge.fit(message.config.sceneImageFit);
       // The echo of a persisted config is the only save acknowledgment the
       // transport offers; "saved" is claimed here and nowhere earlier.
       configRef.current = message.config;
@@ -1094,6 +1099,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     audioEngine.destroy();
     panels.destroy();
     gameBridge?.destroy();
+    imageBridge.destroy();
     for (const pending of panelRequests.values()) { clearTimeout(pending.timer); pending.reject(new Error("Panel layer closed.")); }
     panelRequests.clear();
     stage.destroy();

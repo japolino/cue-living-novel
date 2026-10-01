@@ -1,7 +1,10 @@
 import type { VisualNovelConfig } from "./config.js";
 import type { PanelArtifact } from "./shared/panels.js";
+import type { CueImageRequest, CueImageResult } from "./shared/cue-images.js";
 
 export type FrontendRequest =
+  | { type: "vn_external_image"; request: CueImageRequest }
+  | { type: "vn_external_image_cancel"; request: Pick<CueImageRequest, "version" | "provider" | "chatId" | "requestId"> }
   | { type: "vn_resolve_panel_template"; chatId: string; characterId?: string; requestId: string; template: string }
   /**
    * Announce whether the Cue view is open for a chat. The backend only plans
@@ -117,6 +120,7 @@ export type ConnectionCatalogErrors = {
 };
 
 export type BackendResponse =
+  | { type: "vn_external_image"; result: CueImageResult }
   | { type: "vn_panel_template"; requestId: string; chatId: string; template?: string; error?: string }
   | { type: "vn_state"; chatId: string; config: VisualNovelConfig; turn: TurnView | null }
   | { type: "vn_config"; config: VisualNovelConfig }

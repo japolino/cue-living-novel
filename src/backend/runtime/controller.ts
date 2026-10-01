@@ -5,6 +5,7 @@ import type {
   SwipeEditedPayloadDTO,
   SpindleAPI
 } from "lumiverse-spindle-types";
+import { createExternalImages } from "./external-images.js";
 import {
   AssetJobSchema,
   ChoiceSchema
@@ -64,6 +65,12 @@ type NormalizedChatMessage = ChatMessageDTO & {
 };
 
 const planningQueue = new PlanningQueue();
+const externalImageServices = new WeakMap<SpindleAPI, ReturnType<typeof createExternalImages>>();
+function externalImages(spindle: SpindleAPI) {
+  let service = externalImageServices.get(spindle);
+  if (!service) { service = createExternalImages(spindle); externalImageServices.set(spindle, service); }
+  return service;
+}
 const assetControllers = new Map<string, AbortController>();
 /**
  * Per-chat intake epoch. Macro resolution awaits the host before the planning
@@ -1146,6 +1153,8 @@ async function retryTurn(
 }
 
 async function handleFrontendMessage(spindle: SpindleAPI, request: FrontendRequest, userId: string): Promise<void> {
+  if (request.type === "vn_external_image") { await externalImages(spindle).request(request.request, userId); return; }
+  if (request.type === "vn_external_image_cancel") { externalImages(spindle).cancel(request.request, userId); return; }
   dbg(spindle, userId, `frontend request ${request.type}`);
   switch (request.type) {
     case "vn_resolve_panel_template": {
