@@ -14,4 +14,3 @@ test("results support all Cue image fits and reject executable URLs", () => {
   expect(parseImageResult({ ...request, status: "ready", imageUrl: "javascript:alert(1)", fit: "cover" })).toBeNull();
   expect(parseImageResult({ ...request, status: "ready", imageUrl: "/api/v1/images/a", fit: "stretch" })).toBeNull();
 });
-
