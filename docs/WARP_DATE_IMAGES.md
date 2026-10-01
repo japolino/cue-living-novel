@@ -2,6 +2,8 @@
 
 Cue accepts `vn-scene-image-request-v1` window events from Warp and replies on `vn-scene-image-result-v1`. Cancellation uses `vn-scene-image-cancel-v1`; fit updates use `vn-scene-image-fit-v1`.
 
+Ready results accept Lumiverse's generated-image endpoint `/api/v1/image-gen/results/<id>` as well as `/api/v1/images/<id>` for native assets and HTTP(S) URLs. Both bridge validators must support generated-result URLs; otherwise a successful render is silently discarded. Contract and real pipeline bridge tests cover the host's generated-image path.
+
 The version-1 request contains only `version`, `provider: "warp"`, `chatId`, `requestId`, `characterName`, `venue`, `timeOfDay` and `mood`. Additional fields, including traits, prompts, clothing, poses and connection overrides, are rejected. The frontend only routes requests for its active chat. The backend loads the initiating user's Cue settings and chat identity memory.
 
 External scenes use the existing planner, deterministic pose catalogue, prompt compiler, image connection/workflow, reference anchoring and native-card-image path. The selected name is resolved through Cue's own registry and aliases. If the resolved visual cue depicts a different character, generation is rejected rather than substituting that character. Warp never defines appearance.
@@ -14,7 +16,7 @@ Native-card mode is limited to a confirmed match with the chat card's character.
 
 ## Verification
 
-Verified on October 1: 1,088 tests passed, type checking passed and the production build passed. The matching Warp change passed 386 tests, type checking and its production build.
+Verified on October 1: 1,089 tests passed, type checking passed and the production build passed. The matching Warp change passed 390 tests, type checking and its production build.
 
 ```powershell
 bun run verify

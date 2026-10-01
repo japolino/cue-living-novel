@@ -14,3 +14,9 @@ test("results support all Cue image fits and reject executable URLs", () => {
   expect(parseImageResult({ ...request, status: "ready", imageUrl: "javascript:alert(1)", fit: "cover" })).toBeNull();
   expect(parseImageResult({ ...request, status: "ready", imageUrl: "/api/v1/images/a", fit: "stretch" })).toBeNull();
 });
+
+test("generated Lumiverse result URLs cross the image bridge", () => {
+  expect(parseImageResult({ ...request, status: "ready", imageUrl: "/api/v1/image-gen/results/generated-image", fit: "contain" })?.status).toBe("ready");
+  for (const imageUrl of ["/api/v1/image-gen/connections/a", "/api/v1/image-gen/results-evil/a", "data:text/html,evil", "//evil.test/a"])
+    expect(parseImageResult({ ...request, status: "ready", imageUrl, fit: "cover" })).toBeNull();
+});

@@ -100,6 +100,7 @@ test("duplicate requests join one operation and cancellation drops a late provid
 
 test("window bridge routes the real pipeline without Cue's view being open", async () => {
   const f = fixture(), bus = new EventTarget(), results: any[] = [], work: Promise<void>[] = [];
+  f.image = async () => ({ imageId: "generated", imageUrl: "/api/v1/image-gen/results/generated" });
   const bridge = connectImageBridge(bus, () => "c", (r) => {
     if (r.type === "vn_external_image") work.push(f.service.request(r.request, "user").then(() => {
       for (const m of f.sent) bridge.result(m.result);
@@ -110,6 +111,7 @@ test("window bridge routes the real pipeline without Cue's view being open", asy
   await Promise.all(work);
   expect(results[0].status).toBe("accepted");
   expect(results.at(-1).status).toBe("ready");
+  expect(results.at(-1).imageUrl).toBe("/api/v1/image-gen/results/generated");
   expect(f.images).toHaveLength(1);
   bridge.destroy();
 });

@@ -28,7 +28,7 @@ export function parseImageResult(v: unknown): CueImageResult | null {
   if (!imageIdentity(v) || !record(v)) return null;
   if (v.status === "accepted") return v as unknown as CueImageResult;
   if (v.status === "error" && text(v.error, 1000)) return v as unknown as CueImageResult;
-  if (v.status === "ready" && text(v.imageUrl, 4000) && /^(https?:\/\/|\/api\/v1\/images\/)/i.test(v.imageUrl)
+  if (v.status === "ready" && text(v.imageUrl, 4000) && /^(https?:\/\/|\/api\/v1\/(?:images\/|image-gen\/results\/))/i.test(v.imageUrl)
       && IMAGE_FITS.includes(v.fit as ImageFit)) return v as unknown as CueImageResult;
   return null;
 }
