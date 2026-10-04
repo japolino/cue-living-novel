@@ -23,7 +23,7 @@ import {
 } from "../store";
 import { generateAmbientMarkup, generateCueEffectMarkup } from "./procedural-particles.js";
 import { SpriteLayer, type SpriteLayerSnapshot } from "./sprite-layer.js";
-import type { PlateView, SpriteImageView, SpriteTurnView } from "../../shared/sprites.js";
+import type { PlateView, SpriteIllustrationView, SpriteImageView, SpriteTurnView } from "../../shared/sprites.js";
 
 export type { StageEffect };
 export type { AmbientEffect };
@@ -869,6 +869,24 @@ export class VnStage {
     if (this.destroyed) return;
     this.spriteLayer.updateImage(setKey, image);
     this.syncSprites();
+  }
+
+  /**
+   * One key-moment illustration changed state (sprite mode; the host
+   * forwards `vn_asset` for illustration jobs). Merged into the current
+   * sprite view, then the paragraph is re-applied as by `setSpriteTurn`.
+   * A paragraph without `illustrate`, or an unchanged view, is a no-op.
+   */
+  updateIllustration(paragraphIndex: number, view: SpriteIllustrationView): void {
+    if (this.destroyed) return;
+    const current = this.spriteLayer.getView();
+    if (!current?.staging.paragraphs[paragraphIndex]?.illustrate) return;
+    const list = current.illustrations ?? [];
+    const before = list.find((item) => item.paragraphIndex === paragraphIndex);
+    if (before && before.jobId === view.jobId && before.status === view.status && before.url === view.url) return;
+    const illustrations = [...list.filter((item) => item.paragraphIndex !== paragraphIndex), { ...view, paragraphIndex }]
+      .sort((left, right) => left.paragraphIndex - right.paragraphIndex);
+    this.setSpriteTurn({ ...current, illustrations });
   }
 
   /** One plate changed state (`vn_plate_update`). */

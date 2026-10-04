@@ -225,6 +225,86 @@ export const SPRITE_LIGHTS = ["neutral", "day", "sunset", "night", "indoor_warm"
 export type SpriteLight = (typeof SPRITE_LIGHTS)[number];
 
 /* ------------------------------------------------------------------------ */
+/* Key-moment interactions (closed catalogue)                                */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * What the characters of a key-moment illustration do. "none" (the safe
+ * default, first for the classifier) shows them in the scene without a
+ * special pose. Prompt tags are in SPRITE_INTERACTION_TAGS.
+ */
+export const SPRITE_INTERACTIONS = [
+  "none",
+  "kiss",
+  "hug",
+  "crying_on_shoulder",
+  "carrying",
+  "holding_hands",
+  "dancing",
+  "fighting",
+  "lying",
+  "kneeling",
+  "sitting_together",
+  "sitting",
+  "running",
+  "walking_together",
+  "looking_at_each_other",
+] as const;
+export type SpriteInteraction = (typeof SPRITE_INTERACTIONS)[number];
+
+/** Camera distance for a key moment: wide enough for the pose, close enough for faces. */
+export type SpriteMomentFraming = "upper body" | "cowboy shot" | "full body";
+
+export type SpriteInteractionSpec = {
+  /** Tags when two known characters take part (Danbooru style). */
+  pair: string;
+  /** Tags for one character alone (null: the interaction needs a partner). */
+  solo: string | null;
+  /**
+   * Tags for one known character with an unknown partner (the reader or an
+   * unnamed person): a first-person view, so nobody has to be invented.
+   */
+  pov: string | null;
+  framing: SpriteMomentFraming;
+  /**
+   * NovelAI V4+ action tag for the character captions (`mutual#`,
+   * `source#` / `target#`), or null.
+   */
+  action: { kind: "mutual" | "directed"; tag: string } | null;
+  /** Short description for the classifier. */
+  guide: string;
+};
+
+export const SPRITE_INTERACTION_TAGS: Readonly<Record<SpriteInteraction, SpriteInteractionSpec>> = {
+  none: { pair: "", solo: "", pov: null, framing: "cowboy shot", action: null, guide: "No special pose or contact; people just talk, stand or look" },
+  kiss: { pair: "kiss, couple, face-to-face, closed eyes", solo: null, pov: "pov, incoming kiss, closed eyes, blush", framing: "upper body", action: { kind: "mutual", tag: "kiss" }, guide: "Two people kiss" },
+  hug: { pair: "hug, couple, arms around another", solo: null, pov: "pov, incoming hug, outstretched arms, reaching towards viewer", framing: "upper body", action: { kind: "mutual", tag: "hug" }, guide: "Two people hug or embrace" },
+  crying_on_shoulder: { pair: "hug, crying, tears, head on another's shoulder", solo: null, pov: "pov, crying, tears, hug, head on chest", framing: "upper body", action: { kind: "directed", tag: "hug" }, guide: "Someone cries against another person's shoulder or chest" },
+  carrying: { pair: "princess carry, carrying", solo: null, pov: "pov, princess carry, being carried", framing: "full body", action: { kind: "directed", tag: "princess carry" }, guide: "Someone carries or lifts another person" },
+  holding_hands: { pair: "holding hands, couple", solo: null, pov: "pov, holding hands, pov hands", framing: "cowboy shot", action: { kind: "mutual", tag: "holding hands" }, guide: "Two people hold hands" },
+  dancing: { pair: "dancing, couple, holding hands, dynamic pose", solo: "dancing, dynamic pose", pov: "pov, dancing, holding hands", framing: "full body", action: { kind: "mutual", tag: "dancing" }, guide: "Someone dances" },
+  fighting: { pair: "fighting, battle, facing another, dynamic pose, action", solo: "fighting stance, battle, dynamic pose, action", pov: "fighting stance, battle, dynamic pose, action", framing: "full body", action: { kind: "mutual", tag: "fighting" }, guide: "A fight: punches, kicks, weapons, a duel" },
+  lying: { pair: "lying, on back, side-by-side", solo: "lying, on back", pov: "lying, on back, looking at viewer", framing: "full body", action: null, guide: "Someone lies down (on a bed, the floor, the grass)" },
+  kneeling: { pair: "kneeling", solo: "kneeling", pov: "kneeling, looking at viewer", framing: "full body", action: null, guide: "Someone kneels or falls to their knees" },
+  sitting_together: { pair: "sitting, side-by-side, couple", solo: "sitting", pov: "pov, sitting, side-by-side, looking at viewer", framing: "full body", action: { kind: "mutual", tag: "sitting" }, guide: "Two people sit together or next to each other" },
+  sitting: { pair: "sitting", solo: "sitting", pov: "sitting, looking at viewer", framing: "full body", action: null, guide: "Someone sits (on a chair, a bench, the ground)" },
+  running: { pair: "running, side-by-side, motion blur", solo: "running, motion blur", pov: "running, motion blur, looking back", framing: "full body", action: null, guide: "Someone runs or rushes" },
+  walking_together: { pair: "walking, side-by-side, couple", solo: "walking", pov: "pov, walking, looking at viewer", framing: "full body", action: { kind: "mutual", tag: "walking" }, guide: "Two people walk together" },
+  looking_at_each_other: { pair: "looking at another, eye contact, face-to-face", solo: null, pov: "pov, looking at viewer, eye contact, close-up", framing: "upper body", action: { kind: "mutual", tag: "eye contact" }, guide: "Two people look into each other's eyes" },
+};
+
+const INTERACTION_IDS: ReadonlySet<string> = new Set(SPRITE_INTERACTIONS);
+
+export function isSpriteInteraction(value: unknown): value is SpriteInteraction {
+  return typeof value === "string" && INTERACTION_IDS.has(value);
+}
+
+/** Interactions that are about two people (one known character gets the first-person variant). */
+export function interactionNeedsPartner(interaction: SpriteInteraction): boolean {
+  return SPRITE_INTERACTION_TAGS[interaction].solo === null;
+}
+
+/* ------------------------------------------------------------------------ */
 /* Staging stored on the turn plan                                           */
 /* ------------------------------------------------------------------------ */
 
@@ -266,6 +346,19 @@ export const SpriteActorStageSchema = z.object({
 }).strict();
 export type SpriteActorStage = z.infer<typeof SpriteActorStageSchema>;
 
+/** What a key-moment illustration shows: the interaction and who takes part (at most 2, cast keys). */
+export const SpriteKeyMomentSchema = z.object({
+  interaction: z.enum(SPRITE_INTERACTIONS).default("none"),
+  /** Cast keys of the characters in the picture, most important first. */
+  characters: z.array(z.string().trim().min(1).max(200)).max(2).default([]),
+  /**
+   * The interaction is with someone who is not a cast member (the reader or
+   * an unnamed person): one known character, first-person view.
+   */
+  partner: z.boolean().default(false),
+}).strict();
+export type SpriteKeyMoment = z.infer<typeof SpriteKeyMomentSchema>;
+
 export const SpriteParagraphStageSchema = z.object({
   /** Characters on stage for this paragraph, at most MAX_SPRITE_ACTORS, unique keys and slots. */
   actors: z.array(SpriteActorStageSchema).max(MAX_SPRITE_ACTORS),
@@ -279,6 +372,12 @@ export const SpriteParagraphStageSchema = z.object({
    * `keyIllustrations` setting is "off".
    */
   illustrate: z.boolean().optional(),
+  /**
+   * Additive (optional): what the key-moment illustration shows, set
+   * together with `illustrate`. Absent on older records (the backend then
+   * derives it from the text).
+   */
+  moment: SpriteKeyMomentSchema.optional(),
 }).strict();
 export type SpriteParagraphStage = z.infer<typeof SpriteParagraphStageSchema>;
 
@@ -384,6 +483,25 @@ export type SpriteIllustrationView = {
   /** Present when status is "ready". */
   url?: string;
 };
+
+/**
+ * The illustration view of one scene-image job (backend view building and
+ * the host's `vn_asset` forwarding share this mapping).
+ */
+export function spriteIllustrationViewFor(job: {
+  jobId: string;
+  paragraphIndex: number;
+  status: string;
+  imageUrl?: string | null;
+}): SpriteIllustrationView {
+  const ready = (job.status === "generated" || job.status === "browser_ready") && Boolean(job.imageUrl);
+  return {
+    paragraphIndex: job.paragraphIndex,
+    jobId: job.jobId,
+    status: ready ? "ready" : job.status === "failed" ? "failed" : "pending",
+    ...(ready ? { url: job.imageUrl! } : {}),
+  };
+}
 
 export type SpriteTurnView = {
   staging: SpriteStaging;

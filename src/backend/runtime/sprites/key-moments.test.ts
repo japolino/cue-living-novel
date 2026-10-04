@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_CONFIG } from "../../../config.js";
 import { AssetJobSchema, type AssetJob } from "../../../shared/contracts.js";
-import { SpriteStagingSchema, type SpriteParagraphStage } from "../../../shared/sprites.js";
+import { SPRITE_INTERACTIONS, SpriteStagingSchema, type SpriteParagraphStage } from "../../../shared/sprites.js";
 import { makePlan } from "../__fixtures__/sprite-staging-plans.js";
 import {
   applyKeyMoments,
@@ -11,7 +11,9 @@ import {
   keyIllustrationCues,
   keyIllustrationPlan,
   keyIllustrationViews,
+  keyMomentCast,
   keyMomentCues,
+  keyMomentInteraction,
   keyMomentStrength,
   selectClassifiedKeyMoments,
   selectDeterministicKeyMoments,
@@ -172,5 +174,91 @@ describe("key moments: jobs and views", () => {
     expect(isSpritePlannedRecord({ plan: staged, settingsSnapshot: { presentationMode: "sprites" } })).toBe(true);
     expect(isSpritePlannedRecord({ plan: staged, settingsSnapshot: {} })).toBe(false);
     expect(isSpritePlannedRecord({ plan, settingsSnapshot: { presentationMode: "sprites" } })).toBe(false);
+  });
+});
+
+
+describe("key moments: interaction (what the picture shows)", () => {
+  test("narration verbs map to the closed catalogue, most specific first", () => {
+    const cases: Array<[string, string]> = [
+      ["She rises on her toes and kisses him.", "kiss"],
+      ["Their lips meet under the stars.", "kiss"],
+      ["Mira sobs into his shoulder.", "crying_on_shoulder"],
+      ["She buries her face in his chest.", "crying_on_shoulder"],
+      ["Kai scoops her up and carries her inside.", "carrying"],
+      ["He lifts her into his arms.", "carrying"],
+      ["Mira throws her arms around Rin.", "hug"],
+      ["They embrace each other.", "hug"],
+      ["He holds her close.", "hug"],
+      ["She takes his hand.", "holding_hands"],
+      ["They walk on, hand in hand.", "holding_hands"],
+      ["They dance under the lanterns.", "dancing"],
+      ["Rin punches him across the jaw.", "fighting"],
+      ["Their blades clash.", "fighting"],
+      ["She lies down on the grass.", "lying"],
+      ["Mira falls to her knees.", "kneeling"],
+      ["They sit side by side on the bench.", "sitting_together"],
+      ["Mira sits next to him.", "sitting_together"],
+      ["Mira sits on the bench.", "sitting"],
+      ["He runs toward the gate.", "running"],
+      ["They walk together along the river.", "walking_together"],
+      ["Their eyes meet across the table.", "looking_at_each_other"],
+      ["She looks into his eyes.", "looking_at_each_other"],
+      ["Mira smiles at him.", "none"],
+    ];
+    for (const [text, expected] of cases) expect([text, keyMomentInteraction(text)]).toEqual([text, expected]);
+    // Every catalogue id except none is reachable by the text rule.
+    const reached = new Set(cases.map(([, interaction]) => interaction));
+    for (const interaction of SPRITE_INTERACTIONS) expect(reached.has(interaction)).toBe(true);
+  });
+
+  test("quoted speech, negation and idioms do not count; a stronger interaction wins over a weaker one", () => {
+    expect(keyMomentInteraction("\"Kiss me,\" she whispers.")).toBe("none");
+    expect(keyMomentInteraction("She did not kiss him.")).toBe("none");
+    expect(keyMomentInteraction("He wanted to hug her.")).toBe("none");
+    expect(keyMomentInteraction("She fights back tears.")).toBe("none");
+    expect(keyMomentInteraction("She holds her hand up to stop him.")).toBe("none");
+    expect(keyMomentInteraction("She sits beside him and kisses his cheek.")).toBe("kiss");
+    expect(keyMomentInteraction("She did not sit. She hugs him instead.")).toBe("hug");
+  });
+
+  const stageOf = (...keys: Array<[string, boolean]>): SpriteParagraphStage => ({
+    actors: keys.map(([characterKey, focus], index) => ({ ...actor, characterKey, focus, slot: (["left", "right", "center"] as const)[index]! })),
+    plateKey: null,
+    light: "neutral",
+  });
+  const names = new Map([["mira", "Mira Vale"], ["kai", "Kai"], ["rin", "Rin"]]);
+
+  test("cast: named actors first, at most 2; a lone character in a two-person interaction gets a partner", () => {
+    expect(keyMomentCast(stageOf(["mira", true], ["kai", false]), "Kai kisses Mira.", names, "kiss")).toEqual({ characters: ["kai", "mira"], partner: false });
+    expect(keyMomentCast(stageOf(["mira", true], ["kai", false], ["rin", false]), "Mira hugs Rin.", names, "hug")).toEqual({ characters: ["mira", "rin"], partner: false });
+    expect(keyMomentCast(stageOf(["mira", true]), "She kisses him.", names, "kiss")).toEqual({ characters: ["mira"], partner: true });
+    // Two people on stage, one named: the other actor is the partner.
+    expect(keyMomentCast(stageOf(["mira", true], ["kai", false]), "Mira kisses him.", names, "kiss")).toEqual({ characters: ["mira", "kai"], partner: false });
+    // Solo poses: only who the narration names (else the focus).
+    expect(keyMomentCast(stageOf(["mira", false], ["kai", true]), "Mira sits on the bench.", names, "sitting")).toEqual({ characters: ["mira"], partner: false });
+    expect(keyMomentCast(stageOf(["mira", false], ["kai", true]), "She sits down.", names, "sitting")).toEqual({ characters: ["kai"], partner: false });
+    // Names in quoted speech do not count; a first name is enough.
+    expect(keyMomentCast(stageOf(["mira", false], ["kai", true]), "\"Mira!\" He sits.", names, "sitting")).toEqual({ characters: ["kai"], partner: false });
+    expect(keyMomentCast(stageOf(["mira", false], ["kai", true]), "Mira kneels.", names, "kneeling").characters).toEqual(["mira"]);
+    expect(keyMomentCast(stageOf(), "She kisses him.", names, "kiss")).toEqual({ characters: [], partner: false });
+  });
+
+  test("applyKeyMoments stores the moment on the chosen paragraph; a confident classifier interaction wins", () => {
+    const plan = makePlan({
+      paragraphs: ["Mira smiles.", "Mira kisses Kai."],
+      cues: [{ p: 0, character: "Mira", pose: "smile", identity: "1girl" }, { p: 1, character: "Mira", pose: "smile", identity: "1girl" }],
+    });
+    const paragraphs = [stageOf(["mira", true]), stageOf(["mira", true], ["kai", false])];
+    const staged = applyKeyMoments(paragraphs, plan, 1, null, names);
+    expect(staged[0]!.moment).toBeUndefined();
+    expect(staged[1]).toMatchObject({ illustrate: true, moment: { interaction: "kiss", characters: ["mira", "kai"], partner: false } });
+    const classified = applyKeyMoments(paragraphs, plan, 1, new Map([[1, { moment: 4, standing: 0.1, interaction: "hug" as const }]]), names);
+    expect(classified[1]!.moment!.interaction).toBe("hug");
+    // Re-applying drops a stale moment from a paragraph that is no longer chosen.
+    const cleared = applyKeyMoments(classified, plan, 0, null, names);
+    expect(cleared[1]!.moment).toBeUndefined();
+    expect(cleared[1]!.illustrate).toBeUndefined();
+    expect(SpriteStagingSchema.safeParse({ version: 1, source: "planner", cast: [], plates: [], paragraphs: staged }).success).toBe(true);
   });
 });

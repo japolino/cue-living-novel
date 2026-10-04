@@ -4,10 +4,13 @@ import type { TurnView } from "../../protocol.js";
 import type { SpriteTurnView } from "../../shared/sprites.js";
 import {
   applyVisualConfigToStage,
+  describeIllustrationFailure,
+  failedIllustrationAt,
   fetchLumiverseImage,
   relayReferenceFetch,
   stageOwnsBackground,
   stageTurnInput,
+  turnWithIllustrationAsset,
   turnWithPlate,
   turnWithSpriteImage,
   type VisualStageThemeTarget,
@@ -80,5 +83,54 @@ describe("sprite mode host wiring", () => {
     const replies: unknown[] = [];
     await relayReferenceFetch({ requestId: "r", imageId: "x" }, async () => new Response("", { status: 403 }), (reply) => replies.push(reply));
     expect(replies).toEqual([{ type: "vn_reference_image", requestId: "r", error: "Image fetch failed (403)." }]);
+  });
+});
+
+
+describe("sprite mode: key-moment vn_asset forwarding", () => {
+  const keyed: SpriteTurnView = {
+    ...sprites,
+    staging: { ...sprites.staging, paragraphs: [{ actors: [], plateKey: "plate_a", light: "neutral" }, { actors: [], plateKey: null, light: "neutral", illustrate: true }] },
+    illustrations: [{ paragraphIndex: 1, jobId: "job-1", status: "pending" }],
+  };
+  const asset = (patch: Record<string, unknown>) => ({ jobId: "job-1", paragraphIndex: 1, status: "generated", imageUrl: "/api/v1/images/k", ...patch }) as never;
+
+  test("a finished or failed key-moment job updates sprites.illustrations in place", () => {
+    const turn = view({ sprites: keyed });
+    const ready = turnWithIllustrationAsset(turn, asset({}));
+    expect(ready.view).toEqual({ paragraphIndex: 1, jobId: "job-1", status: "ready", url: "/api/v1/images/k" });
+    expect(ready.turn.sprites!.illustrations).toEqual([ready.view!]);
+    expect(turn.sprites!.illustrations![0]!.status).toBe("pending");
+    const failed = turnWithIllustrationAsset(turn, asset({ status: "failed", imageUrl: null, error: "provider down" }));
+    expect(failed.view!.status).toBe("failed");
+    const generating = turnWithIllustrationAsset(turn, asset({ status: "generating", imageUrl: null }));
+    expect(generating.view!.status).toBe("pending");
+    expect(generating.turn).toBe(turn);
+  });
+
+  test("other paragraphs, other jobs and turns without sprites are left alone", () => {
+    const turn = view({ sprites: keyed });
+    expect(turnWithIllustrationAsset(turn, asset({ paragraphIndex: 0 }))).toEqual({ turn, view: null });
+    expect(turnWithIllustrationAsset(turn, asset({ jobId: "job-old" }))).toEqual({ turn, view: null });
+    const plain = view();
+    expect(turnWithIllustrationAsset(plain, asset({}))).toEqual({ turn: plain, view: null });
+    // A flagged paragraph without a known job takes the first job that reports.
+    const fresh = view({ sprites: { ...keyed, illustrations: [] } });
+    expect(turnWithIllustrationAsset(fresh, asset({})).turn.sprites!.illustrations!.map((item) => item.jobId)).toEqual(["job-1"]);
+  });
+
+  test("a failed key picture at the reader's paragraph gives a retryable, non-blocking image card", () => {
+    const failedTurn = view({
+      sprites: { ...keyed, illustrations: [{ paragraphIndex: 1, jobId: "job-1", status: "failed" }] },
+      assets: [{ jobId: "job-1", paragraphIndex: 1, status: "failed", error: "provider down" } as never],
+    });
+    expect(failedIllustrationAt(failedTurn, 1)).toEqual({ jobId: "job-1", error: "provider down" });
+    expect(failedIllustrationAt(failedTurn, 0)).toBeNull();
+    expect(failedIllustrationAt(view({ sprites: keyed }), 1)).toBeNull();
+    const card = describeIllustrationFailure("provider down");
+    expect(card).toMatchObject({ source: "image", retryable: true, detail: "provider down" });
+    expect(card.message).toContain("key moment");
+    expect(card.retryScope).toContain("Try again");
+    expect(Object.hasOwn(describeIllustrationFailure(null), "detail")).toBe(false);
   });
 });

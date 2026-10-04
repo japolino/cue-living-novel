@@ -35,12 +35,12 @@ export type SpriteImageRequest = {
 
 export type SpritePromptMember = Pick<SpriteCastMember, "name" | "identity" | "attire"> & Partial<Pick<SpriteCastMember, "subjectCategory">>;
 
-function tagKey(tag: string): string {
+export function tagKey(tag: string): string {
   return tag.trim().toLowerCase().replace(/_/g, " ").replace(/\s+/g, " ");
 }
 
 /** Drop tags already present earlier (case-insensitive, top-level only). */
-function dedupeSections(sections: string[]): string[] {
+export function dedupeSections(sections: string[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const section of sections) {
@@ -64,12 +64,12 @@ function dedupeSections(sections: string[]): string[] {
  * neutral style line. A custom prefix (artist and style tags) is kept as is:
  * it is what keeps sprites and plates in the user's style.
  */
-function stylePrefix(config: VisualNovelConfig, novelAi: boolean): string {
+export function stylePrefix(config: VisualNovelConfig, novelAi: boolean): string {
   if (config.promptPrefix !== DEFAULT_CONFIG.promptPrefix) return config.promptPrefix;
   return novelAi ? "anime coloring" : "masterpiece, best quality, anime coloring";
 }
 
-function sizeParameters(provider: string | null, size: { width: number; height: number }): Record<string, unknown> {
+export function sizeParameters(provider: string | null, size: { width: number; height: number }): Record<string, unknown> {
   if (provider === "novelai") return { resolution: `${size.width}x${size.height}` };
   if (provider && SIZE_PROVIDERS.has(provider)) return { width: size.width, height: size.height };
   return {};
@@ -79,17 +79,17 @@ function seedParameters(provider: string | null, seed: number | null): Record<st
   return seed !== null && provider && SEED_PROVIDERS.has(provider) ? { seed } : {};
 }
 
-function renderComfy(sections: string[]): string {
+export function renderComfy(sections: string[]): string {
   const joined = sections.map((section) => normalizePromptSection(section)).filter(Boolean).join(",\n\n");
   return validateAndRepairDelimiters(serializePromptWeights(joined, "comfyui"));
 }
 
-function comfyNegative(config: VisualNovelConfig, extra: string): string {
+export function comfyNegative(config: VisualNovelConfig, extra: string): string {
   const joined = dedupeSections([config.negativePrompt, extra]).join(", ");
   return validateAndRepairDelimiters(serializePromptWeights(joined, "comfyui"));
 }
 
-function novelAiNegative(config: VisualNovelConfig, extra: string, model: string): string {
+export function novelAiNegative(config: VisualNovelConfig, extra: string, model: string): string {
   const base = config.novelAiUseDefaultNegative !== false && config.negativePrompt === DEFAULT_CONFIG.negativePrompt
     ? NOVELAI_NEGATIVE_DEFAULT
     : config.negativePrompt;
@@ -100,7 +100,7 @@ function novelAiNegative(config: VisualNovelConfig, extra: string, model: string
  * NovelAI quality tags. V4.5 ones start with "location" (a background-focus
  * tag), which suits plates but would pull a sprite off its white background.
  */
-function novelAiQuality(config: VisualNovelConfig, model: string, present: string[], forSprite: boolean): string[] {
+export function novelAiQuality(config: VisualNovelConfig, model: string, present: string[], forSprite: boolean): string[] {
   if (config.novelAiQualityTags === false) return [];
   const have = new Set(present.flatMap((section) => splitTopLevelCsv(section)).map(tagKey));
   return splitTopLevelCsv(novelAiQualityTags(model))

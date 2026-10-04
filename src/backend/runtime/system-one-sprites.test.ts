@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { SpindleAPI } from "lumiverse-spindle-types";
 import { POSE_EXPRESSION_CATALOGUE } from "../../shared/character.js";
-import { SPRITE_HOT_SET, plateKeyFor, type SpritePlateRef } from "../../shared/sprites.js";
+import { SPRITE_HOT_SET, SPRITE_INTERACTIONS, plateKeyFor, type SpritePlateRef } from "../../shared/sprites.js";
 import { assertStagingInvariants, makePlan, stagingInput } from "./__fixtures__/sprite-staging-plans.js";
 import { buildSpriteStaging, deterministicSpriteStaging, type SpriteStagingInput } from "./sprite-staging.js";
 import {
@@ -414,7 +414,38 @@ test("key moments: a paragraph with only a key-moment question is still classifi
   const mock = mockSpindle((body) => ({ ...lowAnswers(body), p1_moment: score(4, 0.9), p1_standing: noul(0.1) }));
   const staging = await buildSpriteStaging(mock.spindle, stagingInput(plan, { config: { ...on, ...few } }));
   const body = mock.bodies.find((candidate) => candidate.questions.p1_moment)!;
-  assert.deepEqual(Object.keys(body.questions).filter((key) => key.startsWith("p1_")).sort(), ["p1_moment", "p1_standing"]);
+  assert.deepEqual(Object.keys(body.questions).filter((key) => key.startsWith("p1_")).sort(), ["p1_interaction", "p1_moment", "p1_standing"]);
   assert.equal(staging.paragraphs[1]!.actors.length, 0);
   assert.equal(flags(staging)[1], true);
+});
+
+test("key moments: a choice question for the interaction (none first); a confident answer sets the moment, else the text rule", async () => {
+  const plan = datePlan();
+  const confident = mockSpindle((body) => ({ ...lowAnswers(body), p2_moment: score(4, 0.9), p2_standing: noul(0.1), p2_interaction: choice("sitting_together", 0.8) }));
+  const staging = await buildSpriteStaging(confident.spindle, stagingInput(plan, { config: { ...on, ...few } }));
+  const question = confident.bodies[0]!.questions.p2_interaction!;
+  assert.equal(question.type, "choice");
+  const options = Object.keys(question.criteria as Record<string, unknown>);
+  assert.equal(options[0], "none", "the safe default first");
+  assert.deepEqual([...options].sort(), [...SPRITE_INTERACTIONS].sort());
+  assert.deepEqual(flags(staging), [false, false, true, false]);
+  assert.equal(staging.paragraphs[2]!.moment?.interaction, "sitting_together");
+  assert.deepEqual(staging.paragraphs[2]!.moment?.characters, staging.paragraphs[2]!.actors.map((actor) => actor.characterKey).slice(0, 1));
+  // Low confidence (or a confident "none"): the narration rule decides ("sits on the bench").
+  for (const answer of [choice("dancing", 0.4), choice("none", 0.95)]) {
+    const mock = mockSpindle((body) => ({ ...lowAnswers(body), p2_moment: score(4, 0.9), p2_standing: noul(0.1), p2_interaction: answer }));
+    const result = await buildSpriteStaging(mock.spindle, stagingInput(plan, { config: { ...on, ...few } }));
+    assert.equal(result.paragraphs[2]!.moment?.interaction, "sitting");
+  }
+});
+
+test("key moments few, deterministic: the chosen paragraph stores its interaction and characters", () => {
+  const staging = deterministicSpriteStaging(stagingInput(datePlan(), { config: few }));
+  const moment = staging.paragraphs[1]!.moment!;
+  assert.equal(moment.interaction, "kiss");
+  // Kai is not a cast member: Mira alone, first-person kiss.
+  assert.equal(moment.partner, true);
+  assert.equal(moment.characters.length, 1);
+  assert.ok(staging.cast.some((member) => member.characterKey === moment.characters[0]));
+  assert.ok(staging.paragraphs.every((stage, index) => index === 1 || stage.moment === undefined));
 });

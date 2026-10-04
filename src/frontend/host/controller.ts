@@ -27,7 +27,7 @@ import { SpeechDock } from "../speech/ui.js";
 import { SpeechSettingsSection } from "../speech/settings-ui.js";
 import { createSpriteCutService } from "../sprites/cut-service.js";
 import { withPlate, withSpriteImage } from "../stage/sprite-layer.js";
-import type { PlateView, SpriteImageView } from "../../shared/sprites.js";
+import { spriteIllustrationViewFor, type PlateView, type SpriteIllustrationView, type SpriteImageView } from "../../shared/sprites.js";
 
 const CLEANUP_KEY = Symbol.for("visual-novel-preview.frontend-cleanup");
 
@@ -356,6 +356,54 @@ export function applyVisualConfigToStage(
  */
 export function stageOwnsBackground(config: Pick<VisualNovelConfig, "presentationMode"> | null, turn: Pick<TurnView, "sprites"> | null): boolean {
   return config?.presentationMode === "sprites" && Boolean(turn?.sprites);
+}
+
+/**
+ * Sprite mode: map a `vn_asset` of a key-moment job onto the turn's
+ * `sprites.illustrations` (the backend no longer re-sends the turn). Returns
+ * the turn unchanged and a null view when the asset is not a key
+ * illustration of this turn (another paragraph, a stale job, scene mode).
+ */
+export function turnWithIllustrationAsset<T extends Pick<TurnView, "sprites">>(
+  turn: T,
+  asset: Pick<AssetView, "jobId" | "paragraphIndex" | "status" | "imageUrl">,
+): { turn: T; view: SpriteIllustrationView | null } {
+  const sprites = turn.sprites;
+  if (!sprites?.staging.paragraphs[asset.paragraphIndex]?.illustrate) return { turn, view: null };
+  const list = sprites.illustrations ?? [];
+  const before = list.find((item) => item.paragraphIndex === asset.paragraphIndex);
+  // The paragraph's job is the one the view already names (a new job only when none is known).
+  if (before && before.jobId !== asset.jobId) return { turn, view: null };
+  const view = spriteIllustrationViewFor(asset);
+  if (before && before.status === view.status && before.url === view.url) return { turn, view };
+  const illustrations = [...list.filter((item) => item.paragraphIndex !== asset.paragraphIndex), view]
+    .sort((left, right) => left.paragraphIndex - right.paragraphIndex);
+  return { turn: { ...turn, sprites: { ...sprites, illustrations } }, view };
+}
+
+/**
+ * The failed key illustration at a paragraph (sprite mode), with the job's
+ * error text when the turn knows it; null when the paragraph's picture is
+ * not failed.
+ */
+export function failedIllustrationAt(turn: Pick<TurnView, "sprites" | "assets">, paragraphIndex: number): { jobId: string; error: string | null } | null {
+  const sprites = turn.sprites;
+  if (!sprites?.staging.paragraphs[paragraphIndex]?.illustrate) return null;
+  const view = sprites.illustrations?.find((item) => item.paragraphIndex === paragraphIndex);
+  if (view?.status !== "failed") return null;
+  const asset = turn.assets.find((entry) => entry.jobId === view.jobId);
+  return { jobId: view.jobId, error: asset?.error ?? null };
+}
+
+/** The non-blocking image card for a failed key illustration (its "Try again" is the turn retry). */
+export function describeIllustrationFailure(error: string | null): HostStageError {
+  return {
+    message: "The picture for this key moment could not be made. The sprites stay on stage.",
+    ...(error ? { detail: error } : {}),
+    source: "image",
+    retryable: true,
+    retryScope: "Try again makes the key-moment picture again and keeps the reply.",
+  };
 }
 
 /** Apply a `vn_sprite_update` to a turn's sprite view (unchanged turns are returned as is). */
@@ -808,8 +856,28 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
    * stage renders the title, a collapsed technical detail, and a user-initiated
    * "Try again" only when `retryable` is true. Never retries by itself.
    */
+  /** Key of the failed key-illustration card on screen (sprite mode), or null. */
+  let illustrationNotice: string | null = null;
   function reportStageError(error: HostStageError | null): void {
+    illustrationNotice = null;
     stage.setError(error);
+  }
+
+  /**
+   * Sprite mode: while the reader is on a key paragraph whose picture
+   * failed, show the non-blocking image card (with "Try again"). Only this
+   * card is cleared when the reader moves on or the picture arrives.
+   */
+  function syncIllustrationNotice(paragraphIndex: number): void {
+    const failed = turn && stageOwnsBackground(configRef.current, turn) ? failedIllustrationAt(turn, paragraphIndex) : null;
+    if (failed && turn) {
+      const key = `${turn.messageId}:${turn.sourceFingerprint}:${failed.jobId}`;
+      if (illustrationNotice === key) return;
+      reportStageError(describeIllustrationFailure(failed.error));
+      illustrationNotice = key;
+      return;
+    }
+    if (illustrationNotice !== null) reportStageError(null);
   }
 
   function registerOverrides(): void {
@@ -900,7 +968,10 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
 
   async function syncImageForParagraph(paragraphIndex: number): Promise<void> {
     if (!turn) return;
-    if (stageOwnsBackground(configRef.current, turn)) return;
+    if (stageOwnsBackground(configRef.current, turn)) {
+      syncIllustrationNotice(paragraphIndex);
+      return;
+    }
     const assetFailure = currentAssetFailure(turn, paragraphIndex);
     if (assetFailure) reportStageError(assetFailure);
     const asset = selectCurrentImage(turn, paragraphIndex);
@@ -1072,10 +1143,22 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     }
     if (type === "vn_asset" && message.type === "vn_asset") {
       vnDebug("received vn_asset", `p${message.asset.paragraphIndex}`, message.asset.status, message.asset.imageUrl ?? "(no url)", (!turn || turn.chatId !== message.chatId || turn.messageId !== message.messageId) ? "(ignored: not the active turn)" : "");
+      // A turn held back while the reader's own line shows gets the update too.
+      if (pendingNextTurn && pendingNextTurn.chatId === message.chatId && pendingNextTurn.messageId === message.messageId) {
+        pendingNextTurn = turnWithIllustrationAsset(replaceAsset(pendingNextTurn, message.asset), message.asset).turn;
+      }
       if (!turn || turn.chatId !== message.chatId || turn.messageId !== message.messageId) return;
       turn = replaceAsset(turn, message.asset);
       stage.setAssetProgress(computeAssetProgress(turn));
       const cursor = stage.getState().currentParagraphIndex;
+      if (stageOwnsBackground(configRef.current, turn)) {
+        // Sprite mode: key-moment jobs update `sprites.illustrations` in place.
+        const applied = turnWithIllustrationAsset(turn, message.asset);
+        turn = applied.turn;
+        if (applied.view) stage.updateIllustration(message.asset.paragraphIndex, applied.view);
+        if (message.asset.paragraphIndex === cursor) syncIllustrationNotice(cursor);
+        return;
+      }
       if (message.asset.paragraphIndex <= cursor) void syncImageForParagraph(cursor);
       return;
     }

@@ -41,6 +41,7 @@ import {
   type StoredSpriteImage,
   type StoredSpriteSet,
 } from "./library.js";
+import { compileKeyMomentRequest, type KeyMomentScene } from "./moment-prompts.js";
 import { compilePlateRequest, compileSpriteRequest } from "./prompts.js";
 import { spriteSeedFor, spriteStyleKey } from "./style.js";
 import { plateView, spriteImageView, spriteLibraryView, spriteTurnView, stagingPlateKeys } from "./views.js";
@@ -91,6 +92,24 @@ type InflightWork = WorkItem & {
   producedImageUrl?: string;
 };
 
+/** A key-moment job on the sprite scheduler: the turn's AssetJob under a unique scheduler id. */
+type MomentWork = {
+  /** The turn record's job id (what the controller and the frontend know). */
+  jobId: string;
+  onEvent: (job: Readonly<AssetJob>) => void;
+};
+
+export type KeyMomentRunInput = {
+  /** The turn's key-illustration jobs (finished ones are kept as they are). */
+  jobs: readonly AssetJob[];
+  /** The picture of each job, by turn job id. Jobs without a scene are left alone. */
+  scenes: ReadonlyMap<string, KeyMomentScene>;
+  chatId: string;
+  signal: AbortSignal;
+  /** Called on every job change, with the whole job list. */
+  onUpdate: (jobs: AssetJob[], changed: AssetJob) => Promise<void> | void;
+};
+
 type UserState = {
   scheduler: AssetScheduler | null;
   providerKey: string;
@@ -103,6 +122,10 @@ type UserState = {
   explicit: Set<string>;
   pumping: Promise<void> | null;
   repump: boolean;
+  /** Key-moment jobs on this scheduler, by scheduler job id. */
+  moments: Map<string, MomentWork>;
+  /** Whether the image connection can anchor to a reference (cached briefly). */
+  anchorProvider: { connection: string; provider: string | null; until: number } | null;
 };
 
 export function spriteWorkKey(setKey: string, expression: string): string {
@@ -462,6 +485,119 @@ export class SpriteService {
     const state = this.users.get(userKey(userId));
     if (!state?.scheduler) return;
     for (const work of state.inflight.values()) state.scheduler.cancel(work.jobId, reason);
+    for (const schedulerId of state.moments.keys()) state.scheduler.cancel(schedulerId, reason);
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Key moments: a turn's key-illustration jobs on the sprite scheduler */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * Run a turn's key-moment jobs on the user's sprite scheduler, so they
+   * share the provider's concurrency with sprites and plates (instead of a
+   * second scheduler that would exceed `imageConcurrency`). The jobs stay
+   * the turn's AssetJobs: every change is reported through `onUpdate` with
+   * the turn's own job id, and the final list is returned. Queued (or
+   * interrupted "generating") jobs run; finished, failed and cancelled ones
+   * are kept as they are (the controller re-queues them for Retry/resume).
+   * Aborting `signal` (view closed, newer batch) or `pause` cancels them.
+   */
+  async runKeyMoments(userId: string | undefined, input: KeyMomentRunInput): Promise<AssetJob[]> {
+    let jobs = [...input.jobs];
+    if (input.signal.aborted) return jobs;
+    const config = await this.deps.loadConfig(userId);
+    if (!config.generateImages || input.signal.aborted) return jobs;
+    const state = this.state(userId);
+    const scheduler = this.schedulerFor(userId, state, config);
+    const ids: string[] = [];
+    const promises: Promise<unknown>[] = [];
+    const replace = (changed: AssetJob): void => {
+      jobs = jobs.map((job) => (job.jobId === changed.jobId ? changed : job));
+    };
+    for (const original of input.jobs) {
+      const scene = input.scenes.get(original.jobId);
+      if (!scene || (original.status !== "queued" && original.status !== "generating")) continue;
+      jobSequence += 1;
+      // A unique scheduler id: a retried job must never meet its own earlier (failed) run.
+      const schedulerId = `moment-${jobSequence}`;
+      const onEvent = (event: Readonly<AssetJob>): void => {
+        const current = jobs.find((job) => job.jobId === original.jobId) ?? original;
+        const changed = AssetJobSchema.parse({
+          ...current,
+          provider: state.providerKey,
+          status: event.status,
+          imageId: event.imageId,
+          imageUrl: event.imageUrl,
+          error: event.error,
+          queuedAt: current.queuedAt,
+          startedAt: event.startedAt,
+          generatedAt: event.generatedAt,
+          readyAt: event.readyAt,
+          finishedAt: event.finishedAt,
+        });
+        replace(changed);
+        void Promise.resolve(input.onUpdate(jobs, changed)).catch((error) => {
+          this.spindle.log.warn(`Key moment update failed: ${errorText(error)}`);
+        });
+      };
+      state.moments.set(schedulerId, { jobId: original.jobId, onEvent });
+      ids.push(schedulerId);
+      const scheduled = AssetJobSchema.parse({
+        ...original,
+        jobId: schedulerId,
+        provider: state.providerKey,
+        status: "queued",
+        promptFingerprint: `${spriteHash(schedulerId)}${spriteHash(original.jobId)}`,
+      });
+      this.deps.log?.(`key moment ${original.jobId} p${original.paragraphIndex} ${scene.interaction} x${scene.characters.length}${scene.partner ? "+pov" : ""} -> queued`, userId);
+      const handle = scheduler.schedule(scheduled, (_job, signal) => this.generateKeyMoment(userId, scene, input.chatId, signal));
+      promises.push(handle.promise);
+    }
+    if (ids.length === 0) return jobs;
+    const abort = (): void => {
+      const reason = typeof input.signal.reason === "string" ? input.signal.reason : "Key moment cancelled.";
+      for (const id of ids) scheduler.cancel(id, reason);
+    };
+    input.signal.addEventListener("abort", abort, { once: true });
+    try {
+      await Promise.allSettled(promises);
+    } finally {
+      input.signal.removeEventListener("abort", abort);
+      for (const id of ids) state.moments.delete(id);
+    }
+    // Nothing is left unexplained in "queued".
+    jobs = jobs.map((job) => (job.status === "queued" && input.scenes.has(job.jobId)
+      ? AssetJobSchema.parse({ ...job, status: "cancelled", imageId: null, imageUrl: null, generatedAt: null, readyAt: null, error: null, finishedAt: new Date().toISOString() })
+      : job));
+    // The scheduler may be drained now: let queued sprite work continue on a fresh one.
+    void this.pump(userId);
+    return jobs;
+  }
+
+  private async generateKeyMoment(userId: string | undefined, scene: KeyMomentScene, chatId: string, signal: AbortSignal): Promise<{ imageId: string; imageUrl: string }> {
+    const loaded = await this.deps.loadConfig(userId);
+    const { provider, config } = await this.providerFor(loaded, userId);
+    const request = compileKeyMomentRequest({ config, provider, scene });
+    const { connectionId, workflowId } = splitConnectionSelection(config.imageConnectionId);
+    const parameters = {
+      ...config.imageParameters,
+      ...(provider === "comfyui" && config.imageParameters.denoise === undefined ? { denoise: 0.0 } : {}),
+      ...request.parameters,
+      ...(workflowId ? { workflow_id: workflowId } : {}),
+    };
+    if (signal.aborted) throw abortError(signal);
+    const result = await this.spindle.imageGen.generate({
+      ...(connectionId ? { connection_id: connectionId } : {}),
+      prompt: request.prompt,
+      ...(request.negativePrompt ? { negativePrompt: request.negativePrompt } : {}),
+      ...(config.imageModel ? { model: config.imageModel } : {}),
+      parameters,
+      ...(chatId ? { owner_chat_id: chatId } : {}),
+      ...(userId ? { userId } : {}),
+    });
+    if (signal.aborted) throw abortError(signal);
+    if (!result?.imageId) throw new Error("The image provider completed without a persisted image ID.");
+    return { imageId: result.imageId, imageUrl: result.imageUrl ?? imageUrlFor(result.imageId) };
   }
 
   /* ------------------------------------------------------------------ */
@@ -496,7 +632,8 @@ export class SpriteService {
     if (!this.deps.isViewOpen(userId)) return;
     const library = await this.library.get(userId);
     const spriteMode = config.presentationMode === "sprites";
-    const anchoring = referenceAnchoringEnabled(config);
+    // Expressions wait for "idle" only when the provider can really anchor to it.
+    const anchoring = referenceAnchoringEnabled(config) && await this.providerAnchors(userId, state, config);
     if (config.generateImages) {
       const scheduler = this.schedulerFor(userId, state, config);
       const candidates: Array<{ item: WorkItem; priority: AssetJobPriority; order: number }> = [];
@@ -576,6 +713,8 @@ export class SpriteService {
         explicit: new Set(),
         pumping: null,
         repump: false,
+        moments: new Map(),
+        anchorProvider: null,
       };
       this.users.set(key, state);
     }
@@ -586,7 +725,7 @@ export class SpriteService {
     const providerKey = `image:${config.imageConnectionId ?? "default"}`;
     const concurrency = Math.max(1, Math.floor(config.imageConcurrency) || 1);
     // A drained scheduler is replaced so finished jobs never accumulate.
-    if (state.scheduler && state.inflight.size === 0) {
+    if (state.scheduler && state.inflight.size === 0 && state.moments.size === 0) {
       state.unsubscribe?.();
       state.scheduler = null;
       state.byJobId.clear();
@@ -641,6 +780,11 @@ export class SpriteService {
   }
 
   private onJobEvent(userId: string | undefined, state: UserState, job: Readonly<AssetJob>): void {
+    const moment = state.moments.get(job.jobId);
+    if (moment) {
+      moment.onEvent(job);
+      return;
+    }
     if (job.status !== "generating") return;
     const key = state.byJobId.get(job.jobId);
     const work = key ? state.inflight.get(key) : undefined;
@@ -664,6 +808,25 @@ export class SpriteService {
   /* ------------------------------------------------------------------ */
   /* Executors                                                            */
   /* ------------------------------------------------------------------ */
+
+  /**
+   * Whether the image connection's provider takes a reference image
+   * (NovelAI, ComfyUI, SwarmUI). Cached for 30 s per connection; an
+   * unknown provider counts as "cannot anchor", so nothing waits.
+   */
+  private async providerAnchors(userId: string | undefined, state: UserState, config: VisualNovelConfig): Promise<boolean> {
+    const connection = config.imageConnectionId ?? "";
+    const cached = state.anchorProvider;
+    if (cached && cached.connection === connection && cached.until > Date.now()) return cached.provider !== null && REFERENCE_PROVIDERS.has(cached.provider);
+    let provider: string | null = null;
+    try {
+      provider = (await resolveImageProfile(this.spindle, config, userId)).provider;
+    } catch {
+      provider = null;
+    }
+    state.anchorProvider = { connection, provider, until: Date.now() + 30_000 };
+    return provider !== null && REFERENCE_PROVIDERS.has(provider);
+  }
 
   private async providerFor(config: VisualNovelConfig, userId: string | undefined): Promise<{ provider: string | null; config: VisualNovelConfig }> {
     const profile = await resolveImageProfile(this.spindle, config, userId);

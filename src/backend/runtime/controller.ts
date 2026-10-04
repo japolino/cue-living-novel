@@ -8,7 +8,8 @@ import type {
 import { createExternalImages } from "./external-images.js";
 import {
   AssetJobSchema,
-  ChoiceSchema
+  ChoiceSchema,
+  type AssetJob
 } from "../../shared/contracts.js";
 import type { FrontendRequest, AssetView, TurnView } from "../../protocol.js";
 import type { VisualNovelConfig } from "../../config.js";
@@ -16,7 +17,8 @@ import { SpriteCastMemberSchema, SpriteStagingSchema, type SpriteCastMember, typ
 import { characterAppearanceKey } from "../../shared/identity.js";
 import { buildSpriteStaging, deterministicSpriteStaging } from "./sprite-staging.js";
 import { SpriteService, spriteStyleKey } from "./sprites/index.js";
-import { isSpritePlannedRecord, keyIllustrationCap, keyIllustrationCues, keyIllustrationPlan, keyIllustrationViews } from "./sprites/key-moments.js";
+import { isSpritePlannedRecord, keyIllustrationCap, keyIllustrationCues, keyIllustrationViews } from "./sprites/key-moments.js";
+import { keyMomentScenes } from "./sprites/moment-prompts.js";
 import { resolvePanelTemplate } from "./panel-templates.js";
 import { ViewRegistry } from "./view-registry.js";
 import { isFrontendRequest } from "../../protocol.js";
@@ -880,34 +882,42 @@ async function startAssets(
   // Sprite mode: the jobs are key illustrations; the pipeline sees only their cues.
   const spritePlanned = isSpritePlannedRecord(record);
 
+  const onUpdate = async (jobs: AssetJob[], changed: AssetJob): Promise<void> => {
+    dbg(spindle, userId, `asset ${changed.jobId} p${changed.paragraphIndex} [${changed.priority}] -> ${changed.status}${changed.imageId ? ` image=${changed.imageId}` : ""}${changed.error ? ` error="${changed.error}"` : ""}`);
+    const active = activeTurnKeys.get(key) ?? null;
+    if (!compareTurnKeys(active, changed.ownerTurnKey).accepted) return;
+    current = { ...current, jobs, updatedAt: new Date().toISOString() };
+    await saveTurnRecord(spindle, path, current, userId);
+    // Sprite mode: the host maps this onto `sprites.illustrations` (no turn re-send).
+    spindle.sendToFrontend({
+      type: "vn_asset",
+      chatId: record.plan.key.chatId,
+      messageId: record.plan.key.assistantMessageId,
+      asset: assetView(current, changed)
+    }, userId);
+  };
+
   try {
-    const finalJobs = await generateAssets(
-      spindle,
-      spritePlanned ? keyIllustrationPlan(record.plan, record.jobs) : record.plan,
-      record.jobs,
-      config,
-      controller.signal,
-      async (jobs, changed) => {
-        dbg(spindle, userId, `asset ${changed.jobId} p${changed.paragraphIndex} [${changed.priority}] -> ${changed.status}${changed.imageId ? ` image=${changed.imageId}` : ""}${changed.error ? ` error="${changed.error}"` : ""}`);
-        const active = activeTurnKeys.get(key) ?? null;
-        if (!compareTurnKeys(active, changed.ownerTurnKey).accepted) return;
-        current = { ...current, jobs, updatedAt: new Date().toISOString() };
-        await saveTurnRecord(spindle, path, current, userId);
-        spindle.sendToFrontend({
-          type: "vn_asset",
+    // Sprite mode: key moments get their own two-character prompt and run
+    // on the sprite scheduler (shared provider concurrency, same gating).
+    const finalJobs = spritePlanned
+      ? await spriteService(spindle).runKeyMoments(userId, {
+          jobs: record.jobs,
+          scenes: keyMomentScenes(record.plan, record.jobs),
           chatId: record.plan.key.chatId,
-          messageId: record.plan.key.assistantMessageId,
-          asset: assetView(current, changed)
-        }, userId);
-        // The sprite stage reads key illustrations from `sprites.illustrations`:
-        // re-send the (same) turn once one is finished or failed.
-        if (spritePlanned && (changed.status === "generated" || changed.status === "failed")) {
-          spindle.sendToFrontend({ type: "vn_turn", turn: await buildTurnView(spindle, current, userId) }, userId);
-        }
-      },
-      userId,
-      { sceneCache, admission, ...(options.bypassJobIds ? { bypassJobIds: options.bypassJobIds } : {}), ...sourceTextOption(record) }
-    );
+          signal: controller.signal,
+          onUpdate
+        })
+      : await generateAssets(
+          spindle,
+          record.plan,
+          record.jobs,
+          config,
+          controller.signal,
+          onUpdate,
+          userId,
+          { sceneCache, admission, ...(options.bypassJobIds ? { bypassJobIds: options.bypassJobIds } : {}), ...sourceTextOption(record) }
+        );
     const active = activeTurnKeys.get(key) ?? null;
     if (compareTurnKeys(active, record.plan.key).accepted) {
       current = { ...current, jobs: finalJobs, updatedAt: new Date().toISOString() };
