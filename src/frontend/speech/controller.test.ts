@@ -175,6 +175,23 @@ describe("default-off / zero-call gates", () => {
   });
 });
 
+describe("text effect tags", () => {
+  test("are stripped from the synthesized text; the words stay", async () => {
+    const { transport, controller } = rig();
+    controller.setCursor(cursor({ text: '"<shake>Get down!</shake>" she <WHISPER>says</whisper>.' }));
+    await dispatchPlay(controller);
+    expect(transport.requests[0]!.input.text).toBe('"Get down!" she says.');
+  });
+
+  test("a paragraph of only empty effect tags never dispatches", async () => {
+    const { transport, controller } = rig();
+    controller.setCursor(cursor({ text: "<wave> </wave>" }));
+    await controller.playCurrent();
+    await tick();
+    expect(transport.requests.length).toBe(0);
+  });
+});
+
 describe("voice selection & truthful unconfigured status", () => {
   test("narrator paragraphs use the narrator ref; named characters use overrides", async () => {
     const settings = enabledSettings({

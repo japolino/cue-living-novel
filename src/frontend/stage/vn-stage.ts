@@ -4,6 +4,7 @@ import {
   parseCustomRegexRules,
   type CustomRegexRule,
 } from "./rich-text.js";
+import { applyTextEffects, TEXT_EFFECT_LETTER_ATTRIBUTE } from "./text-effects.js";
 import {
   createInitialVnStageState,
   reduceVnStage,
@@ -642,6 +643,12 @@ export class VnStage {
   setTextEffects(mode: VisualNovelTextEffectMode): void {
     this.textEffectMode = mode === "static" || mode === "off" ? mode : "animated";
     this.root.dataset.vnTextEffects = this.textEffectMode;
+    this.syncBacklogTextEffects();
+  }
+
+  /** History never animates text effects: "off" stays off, anything else is "static". */
+  private syncBacklogTextEffects(): void {
+    this.backlogContent.dataset.vnTextEffects = this.textEffectMode === "off" ? "off" : "static";
   }
 
   getTextEffects(): VisualNovelTextEffectMode {
@@ -699,6 +706,9 @@ export class VnStage {
       `,
       )
       .join("");
+    // History shows effects frozen (colours and sizes kept, no motion).
+    this.syncBacklogTextEffects();
+    applyTextEffects(this.backlogContent);
     this.backlogContent.scrollTop = this.backlogContent.scrollHeight;
     this.backlogClose.focus({ preventScroll: true });
   }
@@ -1846,6 +1856,8 @@ export class VnStage {
     this.clearTypewriter();
     this.resetAutoRing();
     this.dialogueText.innerHTML = formatted;
+    // Split effect letters first so the typewriter reveals them one by one.
+    applyTextEffects(this.dialogueText);
 
     if (typeof document.createTreeWalker !== "function") {
       this.isTyping = false;
@@ -1856,10 +1868,16 @@ export class VnStage {
 
     const filter = typeof NodeFilter !== "undefined" ? NodeFilter.SHOW_TEXT : 4;
     const walker = document.createTreeWalker(this.dialogueText, filter);
-    const textNodes: Array<{ node: Text; fullText: string }> = [];
+    const textNodes: Array<{ node: Text; fullText: string; whole: boolean }> = [];
     let node: Node | null;
     while ((node = walker.nextNode())) {
-      textNodes.push({ node: node as Text, fullText: node.textContent ?? "" });
+      const parent = node.parentNode as Element | null;
+      textNodes.push({
+        node: node as Text,
+        fullText: node.textContent ?? "",
+        // A text-effect letter is one grapheme: reveal it in one step.
+        whole: Boolean(parent && typeof parent.hasAttribute === "function" && parent.hasAttribute(TEXT_EFFECT_LETTER_ATTRIBUTE)),
+      });
     }
 
     if (textNodes.length === 0 || textNodes.every((t) => !t.fullText)) {
@@ -1883,17 +1901,26 @@ export class VnStage {
         this.clearTypewriter();
         return;
       }
-      if (nodeIdx >= textNodes.length) {
-        this.completeTypewriter();
-        return;
-      }
-      const current = textNodes[nodeIdx]!;
-      if (charIdx < current.fullText.length) {
-        current.node.textContent += current.fullText[charIdx++];
-      } else {
+      // Reveal one character per tick. Node boundaries (many with split
+      // effect letters) cost no extra tick, and surrogate pairs stay whole.
+      while (nodeIdx < textNodes.length) {
+        const current = textNodes[nodeIdx]!;
+        if (charIdx < current.fullText.length) {
+          let next: number;
+          if (current.whole) {
+            next = current.fullText.length;
+          } else {
+            const code = current.fullText.codePointAt(charIdx) ?? 0;
+            next = charIdx + (code > 0xffff ? 2 : 1);
+          }
+          current.node.textContent += current.fullText.slice(charIdx, next);
+          charIdx = next;
+          return;
+        }
         nodeIdx++;
         charIdx = 0;
       }
+      this.completeTypewriter();
     }, this.textSpeed);
   }
 
@@ -1928,6 +1955,7 @@ export class VnStage {
     if (this.textSpeed <= 0 || this.isSkipping || this.isRewinding) {
       this.clearTypewriter();
       this.dialogueText.innerHTML = formatted;
+      applyTextEffects(this.dialogueText);
       this.isTyping = false;
       this.updateContinueButton();
       this.onTextRenderFinished();
