@@ -108,17 +108,45 @@ async function geometry(page: Page): Promise<Geo> {
   });
 }
 
-function assertLayout(geo: Geo, label: string, count: number): void {
+function assertLayout(geo: Geo, label: string, count: number, options: { sidesMayCrop?: boolean } = {}): void {
   const shown = geo.figures.filter((f) => f.state !== "exiting");
   assert.equal(shown.length, count, `${label}: ${count} sprites`);
   for (const f of shown) {
-    assert.ok(f.left >= -1 && f.right <= geo.stage.w + 1, `${label}: ${f.key} inside the stage horizontally (${f.left.toFixed(0)}..${f.right.toFixed(0)} of ${geo.stage.w})`);
+    // Narrow portrait trio: non-speakers may stand partly off-screen (assertFacesVisible checks them).
+    const cropOk = options.sidesMayCrop && f.focus !== "true";
+    if (!cropOk) assert.ok(f.left >= -1 && f.right <= geo.stage.w + 1, `${label}: ${f.key} inside the stage horizontally (${f.left.toFixed(0)}..${f.right.toFixed(0)} of ${geo.stage.w})`);
     assert.ok(Math.abs(f.bottom - geo.stage.h) <= 2, `${label}: ${f.key} stands on the stage bottom (${f.bottom.toFixed(1)} vs ${geo.stage.h})`);
     assert.ok(f.top >= geo.exit.bottom, `${label}: ${f.key} head stays below Back to chat (${f.top.toFixed(0)} >= ${geo.exit.bottom.toFixed(0)})`);
     assert.ok(f.top < geo.controls.top, `${label}: ${f.key} head is above the reading toolbar (${f.top.toFixed(0)} < ${geo.controls.top.toFixed(0)})`);
   }
   const lefts = [...shown].sort((a, b) => a.left - b.left).map((f) => (f.left + f.right) / 2);
   for (let i = 1; i < lefts.length; i += 1) assert.ok(lefts[i]! > lefts[i - 1]! + 20, `${label}: figures are spread left to right`);
+}
+
+/**
+ * Every face is readable: the head band (top 22% of the figure, central half
+ * of its width, a coarse stand-in for the face) keeps at least `min` of its
+ * width on stage and uncovered by figures standing in front (higher z-index).
+ */
+function assertFacesVisible(geo: Geo, label: string, min = 0.4): Record<string, number> {
+  const shown = geo.figures.filter((f) => f.state !== "exiting");
+  const out: Record<string, number> = {};
+  for (const f of shown) {
+    const w = f.right - f.left;
+    const head = { left: f.left + w * 0.25, right: f.right - w * 0.25, top: f.top, bottom: f.top + (f.bottom - f.top) * 0.22 };
+    let segments: Array<[number, number]> = [[Math.max(0, head.left), Math.min(geo.stage.w, head.right)]];
+    for (const g of shown) {
+      if (g === f || Number(g.z) <= Number(f.z) || g.top > head.bottom) continue;
+      segments = segments.flatMap(([a, b]): Array<[number, number]> => {
+        if (g.right <= a || g.left >= b) return [[a, b]];
+        return [[a, Math.min(b, g.left)], [Math.max(a, g.right), b]].filter(([x, y]) => y - x > 0.5) as Array<[number, number]>;
+      });
+    }
+    const visible = segments.reduce((s, [a, b]) => s + Math.max(0, b - a), 0) / Math.max(1, head.right - head.left);
+    out[f.key] = Math.round(visible * 100) / 100;
+    assert.ok(visible >= min, `${label}: ${f.key}'s face is readable (${(visible * 100).toFixed(0)}% visible)`);
+  }
+  return out;
 }
 
 /** CSS animations (not transitions) running inside the sprite layer. */
@@ -537,8 +565,29 @@ try {
     await open(page);
     for (const [name, paragraphs, count] of [["mobile-1-actor", SOLO, 1], ["mobile-2-actors", DUO, 2], ["mobile-3-actors", TRIO, 3]] as const) {
       await load(page, [...paragraphs]);
-      assertLayout(await geometry(page), name, count);
+      assertLayout(await geometry(page), name, count, { sidesMayCrop: count === 3 });
       await shot(page, name);
+    }
+    // Narrow trio: whoever speaks stands near the centre, in front and full
+    // size; the others step outward and back but keep their faces readable.
+    for (const focus of ["left", "center", "right", "none"] as const) {
+      const actors = [{ characterKey: "mira", slot: "left" }, { characterKey: "aoi", slot: "center" }, { characterKey: "kaede", slot: "right", facing: "left" }].map((a) => ({ ...a, focus: a.slot === focus }));
+      await load(page, [{ speaker: "Aoi", text: "Three on a phone screen.", actors }]);
+      const geo = await geometry(page);
+      assertLayout(geo, `mobile trio focus ${focus}`, 3, { sidesMayCrop: true });
+      const faces = assertFacesVisible(geo, `mobile trio focus ${focus}`, 0.3);
+      if (focus !== "none") {
+        const speaker = geo.figures.find((f) => f.focus === "true")!;
+        const centre = (speaker.left + speaker.right) / 2;
+        assert.ok(Math.abs(centre - geo.stage.w / 2) < geo.stage.w * 0.3, `mobile trio focus ${focus}: speaker near the centre (${centre.toFixed(0)} of ${geo.stage.w})`);
+        assert.equal(faces[speaker.key], 1, `mobile trio focus ${focus}: speaker's face fully visible`);
+        const scales = await page.evaluate(() => Object.fromEntries([...document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!.querySelectorAll<HTMLElement>("[data-vn-sprite]")].map((el) => [el.dataset.vnSpriteKey, getComputedStyle(el).scale])));
+        for (const f of geo.figures) {
+          if (f.focus === "true") assert.equal(scales[f.key], "none", `mobile trio focus ${focus}: speaker at full size`);
+          else assert.equal(scales[f.key], "0.8", `mobile trio focus ${focus}: ${f.key} stands back (smaller)`);
+        }
+      }
+      await shot(page, `mobile-3-actors-focus-${focus}`);
     }
     await load(page, [{ speaker: "Yuki", actors: [{ characterKey: "yuki", focus: true }] }]);
     await shot(page, "mobile-missing-set");

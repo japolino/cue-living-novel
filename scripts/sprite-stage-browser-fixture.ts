@@ -16,7 +16,7 @@ import {
  * downscaled copies of the sprite bake-off assets in scripts/fixtures/sprites/.
  *
  * Query: ?preset, ?intensity (full|gentle|off), ?speed (typewriter ms), ?mode (sprites|scene).
- * window.fx: { stage, load(paragraphs, options), go(index), illustrate(index, status), ready(...), view() }.
+ * window.fx: { stage, load(paragraphs, options), go(index), illustrate(index, status), ready(...), view(), effect(name), ambient(name) }.
  * Key moments: a paragraph with `illustrate: true` gets the fixture
  * illustration (`/sprites/illustration_moment.webp`, a composited close-up
  * standing in for a generated scene picture) unless `illustration` says otherwise.
@@ -81,6 +81,10 @@ export type FixtureParagraph = {
   actors: Array<Partial<SpriteActorStage> & { characterKey: string }>;
   plateKey?: string | null;
   light?: SpriteParagraphStage["light"];
+  /** Persistent ambient from this paragraph on (weather or mood grade). */
+  ambient?: string | null;
+  /** One-shot stage effect played when the paragraph shows. */
+  effect?: string;
   /** Key moment: show the full illustration instead of the sprites. */
   illustrate?: boolean;
   /** Status of that illustration (default "ready"). */
@@ -136,6 +140,8 @@ function load(paragraphs: FixtureParagraph[], options: { sets?: Partial<SpriteTu
       id: `fixture-${turnCounter}:${index}`,
       text: p.text ?? `Paragraph ${index + 1}.`,
       ...(p.speaker !== undefined ? { speaker: p.speaker } : {}),
+      ...(p.ambient !== undefined ? { ambient: p.ambient as never } : {}),
+      ...(p.effect !== undefined ? { effect: p.effect as never } : {}),
     })),
     sprites: view,
   });
@@ -164,5 +170,7 @@ Object.assign(window, {
     illustrate,
     spriteImage,
     view: () => current,
+    effect: (name: string) => stage.triggerEffect(name as never),
+    ambient: (name: string | null) => stage.applyAmbient(name as never),
   },
 });
