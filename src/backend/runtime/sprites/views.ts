@@ -23,6 +23,7 @@ export function spriteImageView(image: StoredSpriteImage): SpriteImageView {
     ...(ready && image.height ? { height: image.height } : {}),
     ...(image.status === "failed" && image.error ? { error: image.error } : {}),
     ...(image.status === "ready" && !ready ? { error: "The cut-out is missing." } : {}),
+    ...(ready && image.twoFigures === true ? { twoFigures: true as const } : {}),
   };
 }
 

@@ -161,6 +161,21 @@ describe("referenceParametersFor", () => {
     });
   });
 
+  test("a caller default strength (sprite expressions: 0.5) applies to ComfyUI only when the user set neither strength nor denoise", () => {
+    const sprite = { comfyDefaultStrength: 0.5 };
+    expect(referenceParametersFor("comfyui", portrait, DEFAULT_CONFIG, sprite)).toEqual({
+      resolvedSourceImages: [{ data: "QUJD", mimeType: "image/png" }],
+      denoise: 0.5
+    });
+    expect(referenceParametersFor("comfyui", portrait, { ...DEFAULT_CONFIG, imageParameters: { referenceStrength: 0.85 } }, sprite)).toMatchObject({ denoise: 0.85 });
+    expect(referenceParametersFor("comfyui", portrait, { ...DEFAULT_CONFIG, imageParameters: { denoise: 0.45 } }, sprite)).toEqual({
+      resolvedSourceImages: [{ data: "QUJD", mimeType: "image/png" }]
+    });
+    // NovelAI and SwarmUI are unchanged.
+    expect(referenceParametersFor("novelai", portrait, DEFAULT_CONFIG, sprite)).toEqual(referenceParametersFor("novelai", portrait, DEFAULT_CONFIG));
+    expect(referenceParametersFor("swarmui", portrait, DEFAULT_CONFIG, sprite)).toEqual(referenceParametersFor("swarmui", portrait, DEFAULT_CONFIG));
+  });
+
   test("returns nothing for unknown providers", () => {
     expect(referenceParametersFor("openai", portrait, DEFAULT_CONFIG)).toEqual({});
     expect(referenceParametersFor(null, portrait, DEFAULT_CONFIG)).toEqual({});

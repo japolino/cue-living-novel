@@ -449,6 +449,8 @@ export type SpriteImageView = {
   width?: number;
   height?: number;
   error?: string;
+  /** Ready, but the duplicate check found what looks like two figures (kept after one automatic retry). */
+  twoFigures?: true;
 };
 
 export type SpriteSetView = {
@@ -528,6 +530,11 @@ export type SpriteCutMeta = {
   bbox: [number, number, number, number];
   /** "best" used the segmentation model; "basic" is the model-free fallback. */
   quality: "best" | "basic";
+  /**
+   * Duplicate check of the browser cut-out: two figures side by side. Absent
+   * from older frontends (unknown).
+   */
+  twoFigures?: boolean;
   durationMs: number;
 };
 

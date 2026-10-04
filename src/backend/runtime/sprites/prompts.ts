@@ -11,9 +11,18 @@ import {
 import { applyAttireOverride, classifySubject } from "../images.js";
 import { NOVELAI_NEGATIVE_DEFAULT, novelAiCapabilities, novelAiQualityTags, renderNovelAiEmphasis } from "../novelai-prompt.js";
 
-/** Sprite framing: one standing figure on plain white, so the browser can cut it out. */
-export const SPRITE_FRAMING_TAGS = "solo, standing, cowboy shot, looking at viewer, simple background, white background, no shadow";
-export const SPRITE_NEGATIVE_TAGS = "scenery, background, shadow, drop shadow, gradient background, multiple people, text";
+/**
+ * Sprite framing: one standing figure, straight on and centred, on plain
+ * white with empty space on both sides, so the browser can cut it out and
+ * the stage can place it. Variant "F6" of the October 2026 ComfyUI tests
+ * (without the "(white background:1.2)" weight and the "grey background"
+ * negative, which had no effect): side clipping 100% -> 58%, figure width
+ * share 1.00 -> 0.80, low-angle / tilted shots about 12/18 -> 3/18. The
+ * plain-language sentence is the only part that gives side margin; it holds
+ * commas, so the top-level tag split makes it three "tags": keep it last.
+ */
+export const SPRITE_FRAMING_TAGS = "solo, standing, (centered:1.2), front view, (straight-on:1.2), facing viewer, looking at viewer, feet out of frame, white background, simple background, no shadow, The whole character is centered in the frame, seen straight on at eye level, with empty white space on both sides";
+export const SPRITE_NEGATIVE_TAGS = "scenery, background, shadow, drop shadow, gradient background, multiple people, text, multiple girls, 2girls, multiple views, split screen, border, (from below:1.3), from above, (dutch angle:1.2), (cropped, out of frame:1.2)";
 /** Plate framing: an empty place. */
 export const PLATE_TAGS = "scenery, no humans, detailed background, wide shot";
 export const PLATE_NEGATIVE_TAGS = "1girl, 1boy, people, person, character, text";
@@ -153,6 +162,33 @@ export function spriteIdentityTags(member: Pick<SpritePromptMember, "identity" |
   return attire || identity;
 }
 
+/** Weight of a non-natural skin colour tag in sprite identities (see weightSkinColourTags). */
+export const SPRITE_SKIN_COLOUR_WEIGHT = 1.15;
+const NON_NATURAL_SKIN = "blue|green|red|purple|pink|grey|gray|orange|yellow|black|teal|cyan|aqua|turquoise|violet|lavender|magenta|crimson|lime|gold|golden|silver";
+const SKIN_COLOUR_TAG = new RegExp(`^(?:(?:light|dark|pale|bright|deep|pastel)[ -])?(?:${NON_NATURAL_SKIN})[ -]skin(?:ned)?$`, "i");
+
+/**
+ * Sprite identities: weight non-natural skin colour tags ("blue skin",
+ * "light green skin", "purple_skin") at SPRITE_SKIN_COLOUR_WEIGHT, so the
+ * colour holds on a plain white background. In the October 2026 ComfyUI
+ * test (N = 4 seeds) "(blue skin:1.2)" moved a slime girl's median hue from
+ * teal (163°) to blue (191°); 1.4 added little. Natural tones (pale, fair,
+ * dark, tan, brown, light, white skin), "colored skin" and tags that already
+ * carry a weight or emphasis are left as they are.
+ */
+export function weightSkinColourTags(identity: string, weight = SPRITE_SKIN_COLOUR_WEIGHT): string {
+  const tags = splitTopLevelCsv(identity);
+  let changed = false;
+  const out = tags.map((tag) => {
+    const trimmed = tag.trim();
+    const plain = trimmed.replace(/_/g, " ").replace(/\s+/g, " ");
+    if (!SKIN_COLOUR_TAG.test(plain)) return trimmed;
+    changed = true;
+    return `(${trimmed}:${weight})`;
+  });
+  return changed ? out.filter(Boolean).join(", ") : identity;
+}
+
 /**
  * Sprite request: style prefix + subject + identity + outfit + expression
  * suffix + white-background sprite framing + style suffix, in the provider's
@@ -168,8 +204,9 @@ export function compileSpriteRequest(input: {
   seed: number | null;
 }): SpriteImageRequest {
   const { config, provider, member } = input;
-  const identity = spriteIdentityTags(member);
-  const [, subject] = classifySubject(identity, member.subjectCategory ?? "unknown");
+  const plainIdentity = spriteIdentityTags(member);
+  const [, subject] = classifySubject(plainIdentity, member.subjectCategory ?? "unknown");
+  const identity = weightSkinColourTags(plainIdentity);
   const pose = poseById(POSE_EXPRESSION_CATALOGUE, input.expression);
   const extra = { ...sizeParameters(provider, "sprite", config), ...seedParameters(provider, input.seed) };
   if (provider === "novelai") {

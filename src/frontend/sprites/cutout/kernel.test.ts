@@ -214,3 +214,67 @@ describe("sprite cut-out kernel", () => {
     expect(b.bbox).toEqual(a.bbox);
   });
 });
+
+describe("two-figure check", () => {
+  /** Opaque RGBA mask from rectangles [x0, y0, x1, y1]. */
+  function alphaImage(w: number, h: number, rects: Array<[number, number, number, number]>): Uint8ClampedArray {
+    const rgba = new Uint8ClampedArray(w * h * 4);
+    for (const [x0, y0, x1, y1] of rects) for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) rgba[(y * w + x) * 4 + 3] = 255;
+    return rgba;
+  }
+
+  test("one centred figure is not flagged", () => {
+    const r = k.figureCheck(alphaImage(100, 200, [[30, 10, 70, 200]]), 100, 200);
+    expect(r).toEqual({ twoFigures: false, splitShare: 0 });
+  });
+
+  test("two figures side by side are flagged", () => {
+    const r = k.figureCheck(alphaImage(100, 200, [[5, 10, 40, 200], [55, 10, 95, 200]]), 100, 200);
+    expect(r.twoFigures).toBe(true);
+    expect(r.splitShare).toBe(1);
+  });
+
+  test("narrow runs (arms, legs, a gap between hair strands) do not count", () => {
+    // Two runs of 24 px in a 100-px image: under 25% of the width.
+    const r = k.figureCheck(alphaImage(100, 200, [[10, 10, 34, 200], [60, 10, 84, 200]]), 100, 200);
+    expect(r.twoFigures).toBe(false);
+    // 25 px is wide enough.
+    expect(k.figureCheck(alphaImage(100, 200, [[10, 10, 35, 200], [60, 10, 85, 200]]), 100, 200).twoFigures).toBe(true);
+  });
+
+  test("only rows from 10% to 60% of the height count; the flag needs 40% of them split", () => {
+    // Split only below 60% (legs apart): not flagged.
+    const legs = k.figureCheck(alphaImage(100, 200, [[30, 10, 70, 120], [5, 120, 45, 200], [55, 120, 95, 200]]), 100, 200);
+    expect(legs).toEqual({ twoFigures: false, splitShare: 0 });
+    // Rows 20..60 of 20..120 split = 40%: flagged; one row fewer is not.
+    const at = (end: number) => k.figureCheck(alphaImage(100, 200, [[5, 20, 40, end], [55, 20, 95, end], [30, end, 70, 200]]), 100, 200);
+    expect(at(60).splitShare).toBeCloseTo(0.4, 6);
+    expect(at(60).twoFigures).toBe(true);
+    expect(at(59).twoFigures).toBe(false);
+  });
+
+  test("alpha 127 is transparent, 128 opaque", () => {
+    const rgba = alphaImage(100, 200, [[5, 10, 40, 200], [55, 10, 95, 200]]);
+    for (let o = 3; o < rgba.length; o += 4) if (rgba[o] === 255) rgba[o] = 127;
+    expect(k.figureCheck(rgba, 100, 200).twoFigures).toBe(false);
+    for (let o = 3; o < rgba.length; o += 4) if (rgba[o] === 127) rgba[o] = 128;
+    expect(k.figureCheck(rgba, 100, 200).twoFigures).toBe(true);
+  });
+
+  test("cutoutPixels reports the check for its own alpha", () => {
+    const one = image(120, 180);
+    figure(one, 40, 10, 80, 180, [230, 200, 190]);
+    expect(k.cutoutPixels(one.rgba, one.w, one.h, null).figures.twoFigures).toBe(false);
+    const two = image(120, 180);
+    figure(two, 4, 10, 50, 180, [230, 200, 190]);
+    figure(two, 70, 10, 116, 180, [230, 200, 190]);
+    const r = k.cutoutPixels(two.rgba, two.w, two.h, mask(two, [[4, 10, 50, 180, 1], [70, 10, 116, 180, 1]]));
+    expect(r.figures.twoFigures).toBe(true);
+    expect(r.figures.splitShare).toBe(1);
+  });
+
+  test("an empty image is not flagged", () => {
+    expect(k.figureCheck(new Uint8ClampedArray(4 * 10 * 10), 10, 10)).toEqual({ twoFigures: false, splitShare: 0 });
+    expect(k.figureCheck(new Uint8ClampedArray(0), 0, 0)).toEqual({ twoFigures: false, splitShare: 0 });
+  });
+});

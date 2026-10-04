@@ -8,7 +8,7 @@
  * Without Worker support the same function runs on the main thread behind a
  * MessageChannel, so both paths share one implementation.
  */
-import type { CutoutBBox, CutoutKernel } from "./kernel.js";
+import type { CutoutBBox, CutoutFigureCheck, CutoutKernel } from "./kernel.js";
 
 export type CutoutBackend = "webgpu" | "wasm";
 export type CutoutBackendPreference = "auto" | CutoutBackend;
@@ -38,6 +38,8 @@ export type CutoutWorkerCutResult = {
   height: number;
   bbox: CutoutBBox;
   quality: "best" | "basic";
+  /** Duplicate check on the cut-out alpha. */
+  figures: CutoutFigureCheck;
   /** Set when the model was requested but could not run (the result is "basic"). */
   modelError: string | null;
   timings: CutoutCutTimings;
@@ -213,7 +215,7 @@ export function cutoutWorkerMain(port: CutoutPort, createKernel: () => CutoutKer
     t = performance.now();
     const png = await encode(result.rgba, width, height);
     const encodeMs = performance.now() - t;
-    return { png, width, height, bbox: result.bbox, quality: mask ? "best" : "basic", modelError, timings: { decodeMs, modelMs, cutMs, encodeMs } };
+    return { png, width, height, bbox: result.bbox, quality: mask ? "best" : "basic", figures: result.figures, modelError, timings: { decodeMs, modelMs, cutMs, encodeMs } };
   }
 
   // One request at a time, in arrival order.

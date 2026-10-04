@@ -5,7 +5,7 @@ import { spriteHash } from "../../../shared/sprites.js";
  * Bump when sprite or plate prompts change in a way that should start new
  * sets (old sets stay in the library until they age out).
  */
-export const SPRITE_PROMPT_VERSION = "sprite-prompt-v1";
+export const SPRITE_PROMPT_VERSION = "sprite-prompt-v2";
 
 /**
  * Image-style identity for the sprite library. Two configs with the same key
@@ -38,4 +38,14 @@ export function spriteSeedFor(key: string, variant = 0): number {
   const base = Number.parseInt(spriteHash(key), 16) >>> 0;
   if (!variant) return base;
   return (base + Math.imul(variant, 0x9e3779b1)) >>> 0;
+}
+
+/**
+ * Shared seed of a sprite set for seed round `round` (0: the original,
+ * `spriteSeedFor(setKey)`). A new round is drawn when the idle comes out with
+ * two figures or the user regenerates the idle: duplicates follow the seed,
+ * not the reference image, so every expression of the set gets the new one.
+ */
+export function spriteSetSeedFor(setKey: string, round: number): number {
+  return round > 0 ? spriteSeedFor(`${setKey}\u0000seed-round`, round) : spriteSeedFor(setKey);
 }

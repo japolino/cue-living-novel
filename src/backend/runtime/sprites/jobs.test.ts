@@ -6,7 +6,7 @@ import { SpriteService } from "./jobs.js";
 import { spriteStyleKey } from "./style.js";
 import type { VisualNovelConfig } from "../../../config.js";
 
-function setup(options: MockSpindleOptions & { config?: Partial<VisualNovelConfig>; open?: boolean; cutTimeoutMs?: number } = {}) {
+function setup(options: MockSpindleOptions & { config?: Partial<VisualNovelConfig>; open?: boolean; cutTimeoutMs?: number; idleCheckWaitMs?: number } = {}) {
   const mock = mockSpindle(options);
   let open = options.open ?? true;
   let config = spriteConfig(options.config);
@@ -17,6 +17,7 @@ function setup(options: MockSpindleOptions & { config?: Partial<VisualNovelConfi
     loadConfig: async () => config,
     log: (line) => log.push(line),
     ...(options.cutTimeoutMs !== undefined ? { cutTimeoutMs: options.cutTimeoutMs } : {}),
+    ...(options.idleCheckWaitMs !== undefined ? { idleCheckWaitMs: options.idleCheckWaitMs } : {}),
     referenceTimeoutMs: 300,
   });
   const styleKey = spriteStyleKey(config);
@@ -27,8 +28,23 @@ function setup(options: MockSpindleOptions & { config?: Partial<VisualNovelConfi
   const answerCut = (request: { requestId: string }, meta: Record<string, unknown> = CUT_META) => service.handleCutResult("u1", {
     type: "vn_sprite_cut_result", requestId: request.requestId, chunkIndex: 0, chunkCount: 1, dataBase64: toBase64(fakePng()), meta: meta as typeof CUT_META,
   });
+  const answered = new Set<string>();
+  /** Answer every cut not answered yet (until none is left); `flag` decides the duplicate check per request. */
+  const answerAll = async (flag: (request: { expression: string; imageId: string }) => boolean = () => false) => {
+    for (let guard = 0; guard < 60; guard += 1) {
+      const pending = cutRequests().filter((request) => !answered.has(request.requestId));
+      if (pending.length === 0) return;
+      for (const request of pending) {
+        answered.add(request.requestId);
+        answerCut(request, { ...CUT_META, twoFigures: flag(request) });
+      }
+      await service.settle("u1");
+    }
+  };
+  /** Generate calls with the "set/expression" each one rendered (the log order is the call order). */
+  const callsBy = () => started().map((name, index) => ({ name, call: mock.calls[index]! }));
   return {
-    ...mock, service, log, styleKey, started, library, stored, cutRequests, answerCut,
+    ...mock, service, log, styleKey, started, library, stored, cutRequests, answerCut, answerAll, answered, callsBy,
     setOpen: (value: boolean) => { open = value; },
     setConfig: (patch: Partial<VisualNovelConfig>) => { config = { ...config, ...patch }; },
   };
@@ -229,8 +245,8 @@ describe("sprite jobs: reference anchoring", () => {
     // A library where idle is already rendered (e.g. by an earlier worker).
     await f.service.library.update("u1", (library, now) => {
       library.sets[setKey] = {
-        setKey, styleKey: f.styleKey, name: "Mira", identity: MIRA.identity, attire: MIRA.attire, seed: 5, createdAt: now, updatedAt: now, usedAt: now,
-        images: { idle: { expression: "idle", status: "ready", rawImageId: "raw-idle", rawImageUrl: null, cutImageId: "cut-idle", cutUrl: "/api/v1/images/cut-idle", bbox: [0, 0, 1, 1], width: 832, height: 1216, quality: "best", upgrade: null, error: null, attempts: 1, cutAttempts: 0, createdAt: now, updatedAt: now } },
+        setKey, styleKey: f.styleKey, name: "Mira", identity: MIRA.identity, attire: MIRA.attire, seed: 5, seedRound: 0, createdAt: now, updatedAt: now, usedAt: now,
+        images: { idle: { expression: "idle", status: "ready", rawImageId: "raw-idle", rawImageUrl: null, cutImageId: "cut-idle", cutUrl: "/api/v1/images/cut-idle", bbox: [0, 0, 1, 1], width: 832, height: 1216, quality: "best", upgrade: null, error: null, attempts: 1, cutAttempts: 0, seed: 5, ownSeed: false, twoFigures: false, autoRetried: false, createdAt: now, updatedAt: now } },
       };
     });
     await f.service.prepareCast("u1", [MIRA], spriteConfig({ referenceAnchoring: true }));
@@ -467,5 +483,189 @@ describe("sprite jobs: library actions", () => {
     const library = await service.library.get("u1");
     expect(Object.values(library.sets).map((set) => set.name)).toEqual(["Kai"]);
     expect(mock.deleted.filter((id) => id.startsWith("raw-")).length).toBe(miraRaws);
+  });
+});
+
+describe("sprite jobs: reference strength", () => {
+  async function expressionCalls(imageParameters: Record<string, unknown>) {
+    const f = setup({ provider: "comfyui", config: { referenceAnchoring: true, imageParameters } });
+    await f.service.prepareCast("u1", [MIRA], spriteConfig({ referenceAnchoring: true, imageParameters }));
+    await f.service.settle("u1");
+    await f.answerAll();
+    await f.service.settle("u1");
+    const setKey = spriteSetKeyFor(MIRA, f.styleKey);
+    const calls = f.callsBy();
+    expect(calls).toHaveLength(SPRITE_HOT_SET.length);
+    expect(calls[0]!.name).toBe(label(setKey, "idle"));
+    expect(calls[0]!.call.parameters.resolvedSourceImages).toBeUndefined();
+    return calls.slice(1).map((entry) => entry.call.parameters);
+  }
+
+  test("ComfyUI sprite expressions default to strength 0.5 (sent as denoise)", async () => {
+    for (const parameters of await expressionCalls({})) {
+      expect(parameters.resolvedSourceImages).toHaveLength(1);
+      expect(parameters.denoise).toBe(0.5);
+    }
+  });
+
+  test("the user's referenceStrength or denoise wins", async () => {
+    for (const parameters of await expressionCalls({ referenceStrength: 0.8 })) expect(parameters.denoise).toBe(0.8);
+    for (const parameters of await expressionCalls({ denoise: 0.3 })) expect(parameters.denoise).toBe(0.3);
+  });
+});
+
+describe("sprite jobs: duplicate check", () => {
+  test("a flagged expression gets one automatic regeneration with its own seed; a flagged retry is kept", async () => {
+    const f = setup();
+    await f.service.prepareCast("u1", [MIRA], spriteConfig());
+    await f.service.settle("u1");
+    const setKey = spriteSetKeyFor(MIRA, f.styleKey);
+    const set = (await f.library()).sets[setKey]!;
+    const firstSmileRaw = set.images.smile!.rawImageId!;
+    await f.answerAll((request) => request.expression === "smile");
+    await f.service.settle("u1");
+    const smiles = f.callsBy().filter((entry) => entry.name === label(setKey, "smile"));
+    expect(smiles).toHaveLength(2);
+    expect(smiles[0]!.call.parameters.seed).toBe(set.seed);
+    expect(smiles[1]!.call.parameters.seed).not.toBe(set.seed);
+    // Nothing else was regenerated.
+    expect(f.calls).toHaveLength(SPRITE_HOT_SET.length + 1);
+    const smile = (await f.library()).sets[setKey]!.images.smile!;
+    expect(smile).toMatchObject({ status: "ready", twoFigures: true, autoRetried: true, ownSeed: true });
+    expect(smile.rawImageId).not.toBe(firstSmileRaw);
+    expect(f.deleted).toContain(firstSmileRaw);
+    // The flagged first cut was never uploaded; the kept retry was.
+    expect(f.uploads).toHaveLength(SPRITE_HOT_SET.length);
+    const view = await f.service.libraryView("u1");
+    expect(view.sets[0]!.expressions.smile).toMatchObject({ status: "ready", twoFigures: true });
+    expect(view.sets[0]!.expressions.idle!.twoFigures).toBeUndefined();
+    expect((await f.library()).sets[setKey]!.images.idle!.twoFigures).toBe(false);
+    // The set seed did not change for an expression.
+    expect((await f.library()).sets[setKey]!.seed).toBe(set.seed);
+  });
+
+  test("a flagged idle draws a new set seed: idle again, then every expression with the new seed and the new idle as reference", async () => {
+    const f = setup({ provider: "comfyui", config: { referenceAnchoring: true } });
+    const config = spriteConfig({ referenceAnchoring: true });
+    await f.service.prepareCast("u1", [MIRA], config);
+    await f.service.settle("u1");
+    const setKey = spriteSetKeyFor(MIRA, f.styleKey);
+    const oldSeed = (await f.library()).sets[setKey]!.seed;
+    // Only the idle ran: the expressions wait for its duplicate check.
+    expect(f.started()).toEqual([label(setKey, "idle")]);
+    const firstIdle = (await f.library()).sets[setKey]!.images.idle!.rawImageId!;
+    await f.answerAll((request) => request.imageId === firstIdle);
+    await f.service.settle("u1");
+    const set = (await f.library()).sets[setKey]!;
+    expect(set.seedRound).toBe(1);
+    expect(set.seed).not.toBe(oldSeed);
+    const calls = f.callsBy();
+    expect(calls.map((entry) => entry.name).slice(0, 2)).toEqual([label(setKey, "idle"), label(setKey, "idle")]);
+    expect(calls).toHaveLength(SPRITE_HOT_SET.length + 1);
+    expect(calls[1]!.call.parameters.seed).toBe(set.seed);
+    for (const entry of calls.slice(2)) {
+      expect(entry.call.parameters.seed).toBe(set.seed);
+      expect(entry.call.parameters.resolvedSourceImages).toHaveLength(1);
+    }
+    expect(set.images.idle).toMatchObject({ status: "ready", twoFigures: false, autoRetried: true, seed: set.seed });
+    expect(set.images.idle!.rawImageId).not.toBe(firstIdle);
+    expect(f.deleted).toContain(firstIdle);
+    // The reference came from the new idle render in memory (no relay for the dropped one).
+    expect(f.of("vn_reference_fetch")).toHaveLength(0);
+    expect(Object.values(set.images).every((image) => image.status === "ready")).toBe(true);
+  });
+
+  test("the wait for the idle's check is bounded; expressions that ran with the old seed are queued again when the idle is flagged", async () => {
+    const f = setup({ provider: "comfyui", config: { referenceAnchoring: true }, idleCheckWaitMs: 40 });
+    const config = spriteConfig({ referenceAnchoring: true });
+    await f.service.prepareCast("u1", [MIRA], config);
+    const setKey = spriteSetKeyFor(MIRA, f.styleKey);
+    // Nobody answers the idle's cut: after 40 ms the expressions go ahead with the shared seed.
+    await waitFor(() => f.calls.length === SPRITE_HOT_SET.length);
+    await f.service.settle("u1");
+    const oldSeed = (await f.library()).sets[setKey]!.seed;
+    expect(f.calls.every((call) => call.parameters.seed === oldSeed)).toBe(true);
+    const before = (await f.library()).sets[setKey]!;
+    const oldRaws = Object.values(before.images).map((image) => image.rawImageId!);
+    const firstIdle = before.images.idle!.rawImageId!;
+    // The idle's cut is asked for first.
+    expect(f.cutRequests()[0]).toMatchObject({ expression: "idle", imageId: firstIdle });
+    await f.answerAll((request) => request.imageId === firstIdle);
+    await f.service.settle("u1");
+    const set = (await f.library()).sets[setKey]!;
+    expect(set.seed).not.toBe(oldSeed);
+    // 12 with the old seed, then the idle and the 11 expressions again with the new one.
+    expect(f.calls).toHaveLength(SPRITE_HOT_SET.length * 2);
+    expect(f.calls.slice(SPRITE_HOT_SET.length).every((call) => call.parameters.seed === set.seed)).toBe(true);
+    expect(f.deleted).toEqual(expect.arrayContaining(oldRaws));
+    expect(Object.values(set.images).every((image) => image.status === "ready" && image.seed === set.seed)).toBe(true);
+  });
+
+  test("an older frontend without the check: nothing is regenerated", async () => {
+    const f = setup();
+    await f.service.prepareCast("u1", [MIRA], spriteConfig());
+    await f.service.settle("u1");
+    for (let guard = 0; guard < 20; guard += 1) {
+      const pending = f.cutRequests().filter((request) => !f.answered.has(request.requestId));
+      if (!pending.length) break;
+      for (const request of pending) { f.answered.add(request.requestId); f.answerCut(request); }
+      await f.service.settle("u1");
+    }
+    expect(f.calls).toHaveLength(SPRITE_HOT_SET.length);
+    expect(Object.values((await f.library()).sets[spriteSetKeyFor(MIRA, f.styleKey)]!.images).every((image) => image.status === "ready" && image.twoFigures === null)).toBe(true);
+  });
+});
+
+describe("sprite jobs: set seed and user regeneration", () => {
+  test("regenerating the idle draws a new set seed for expressions not made yet; made ones stay", async () => {
+    const f = setup({ gated: true });
+    await f.service.prepareCast("u1", [MIRA], spriteConfig());
+    const setKey = spriteSetKeyFor(MIRA, f.styleKey);
+    // idle and the next expression render; the third is running when the user regenerates the idle.
+    for (let index = 0; index < 2; index += 1) {
+      await waitFor(() => f.gates.length > index);
+      f.gates[index]!.release();
+    }
+    await waitFor(() => f.gates.length === 3);
+    const oldSeed = (await f.library()).sets[setKey]!.seed;
+    const made = f.started().slice(0, 2);
+    const kept = { ...(await f.library()).sets[setKey]!.images[made[1]!.split("/")[1]!]! };
+    await f.service.action("u1", { type: "vn_sprite_action", action: "regenerate", setKey, expression: "idle" }, { config: spriteConfig() });
+    let released = 2;
+    while (released < SPRITE_HOT_SET.length + 1) {
+      await waitFor(() => f.gates.length > released);
+      f.gates[released]!.release();
+      released += 1;
+    }
+    await f.service.settle("u1");
+    const set = (await f.library()).sets[setKey]!;
+    expect(set.seedRound).toBe(1);
+    expect(set.seed).not.toBe(oldSeed);
+    const calls = f.callsBy();
+    expect(calls).toHaveLength(SPRITE_HOT_SET.length + 1);
+    // The running one kept its old seed; the new idle is next, then the rest, all with the new seed.
+    expect(calls[2]!.call.parameters.seed).toBe(oldSeed);
+    expect(calls[3]!.name).toBe(label(setKey, "idle"));
+    for (const entry of calls.slice(3)) expect(entry.call.parameters.seed).toBe(set.seed);
+    // The expression made before stays as it was.
+    expect(set.images[kept.expression]!.rawImageId).toBe(kept.rawImageId);
+    expect(calls.filter((entry) => entry.name === label(setKey, kept.expression))).toHaveLength(1);
+  });
+
+  test("regenerating the whole set: every expression shares one new seed", async () => {
+    const f = setup();
+    await f.service.prepareCast("u1", [MIRA], spriteConfig());
+    await f.service.settle("u1");
+    await f.answerAll();
+    const setKey = spriteSetKeyFor(MIRA, f.styleKey);
+    const oldSeed = (await f.library()).sets[setKey]!.seed;
+    const calls = f.calls.length;
+    await f.service.action("u1", { type: "vn_sprite_action", action: "regenerate", setKey }, { config: spriteConfig() });
+    await f.service.settle("u1");
+    const set = (await f.library()).sets[setKey]!;
+    const fresh = f.calls.slice(calls);
+    expect(fresh).toHaveLength(SPRITE_HOT_SET.length);
+    expect(new Set(fresh.map((call) => call.parameters.seed))).toEqual(new Set([set.seed]));
+    expect(set.seed).not.toBe(oldSeed);
   });
 });

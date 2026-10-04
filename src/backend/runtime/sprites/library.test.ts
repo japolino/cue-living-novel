@@ -12,6 +12,7 @@ import {
   normalizeSpriteLibrary,
   pruneSpriteLibrary,
 } from "./library.js";
+import { spriteSeedFor, spriteSetSeedFor } from "./style.js";
 import { missingSetView, spriteLibraryView, spriteSetView, spriteTurnView, stagingPlateKeys } from "./views.js";
 
 const STYLE = "style_test";
@@ -89,6 +90,44 @@ describe("sprite library: shape and bounds", () => {
   });
 });
 
+describe("sprite library: seeds and the duplicate check (schema compatibility)", () => {
+  test("a new set starts at seed round 0; images record no seed, no check, no retry", () => {
+    const set = newSpriteSet(member, "set_a", STYLE, "2026-01-01T00:00:00.000Z");
+    expect(set.seedRound).toBe(0);
+    expect(set.seed).toBe(spriteSetSeedFor("set_a", 0));
+    expect(set.images.idle).toMatchObject({ seed: null, ownSeed: false, twoFigures: null, autoRetried: false });
+  });
+
+  test("set seeds differ per round and stay 32-bit", () => {
+    const seeds = [0, 1, 2, 3].map((round) => spriteSetSeedFor("set_a", round));
+    expect(new Set(seeds).size).toBe(4);
+    expect(seeds[0]).toBe(spriteSeedFor("set_a"));
+    for (const seed of seeds) expect(seed >= 0 && seed < 2 ** 32 && Number.isInteger(seed)).toBe(true);
+  });
+
+  test("v1 data without the new fields still parses (generated images keep their own regeneration seed)", () => {
+    const now = "2026-01-01T00:00:00.000Z";
+    const legacyImage = (expression: string, attempts: number) => ({
+      expression, status: attempts ? "ready" : "queued", rawImageId: attempts ? `raw-${expression}` : null, rawImageUrl: null, cutImageId: null, cutUrl: null,
+      bbox: null, width: null, height: null, quality: null, upgrade: null, error: null, attempts, cutAttempts: 0, createdAt: now, updatedAt: now,
+    });
+    const legacySet = {
+      setKey: "set_a", styleKey: STYLE, name: "Mira", identity: "1girl", attire: null, seed: 7,
+      images: { idle: legacyImage("idle", 1), smile: legacyImage("smile", 0) }, createdAt: now, updatedAt: now, usedAt: now,
+    };
+    const library = normalizeSpriteLibrary({ version: 1, sets: { set_a: legacySet }, plates: {}, updatedAt: now });
+    const set = library.sets.set_a!;
+    expect(set.seed).toBe(7);
+    expect(set.seedRound).toBe(0);
+    expect(set.images.idle).toMatchObject({ seed: null, ownSeed: true, twoFigures: null, autoRetried: false });
+    expect(set.images.smile).toMatchObject({ ownSeed: false });
+    // Stored values round-trip.
+    const again = normalizeSpriteLibrary(JSON.parse(JSON.stringify({ ...library, sets: { set_a: { ...set, seedRound: 2, images: { ...set.images, idle: { ...set.images.idle!, ownSeed: false, twoFigures: true, autoRetried: true, seed: 9 } } } } })));
+    expect(again.sets.set_a!.seedRound).toBe(2);
+    expect(again.sets.set_a!.images.idle).toMatchObject({ seed: 9, ownSeed: false, twoFigures: true, autoRetried: true });
+  });
+});
+
 describe("sprite library store: persistence", () => {
   test("loads once per user, persists per user, and survives a new store", async () => {
     const { spindle, data } = storage();
@@ -142,6 +181,17 @@ describe("sprite views", () => {
     expect(view.expressions.smile).toEqual({ expression: "smile", status: "failed", error: "provider down" });
     expect(view.expressions.sad).toEqual({ expression: "sad", status: "cutting" });
     expect(view.expressions.happy_tears?.url).toBeUndefined();
+  });
+
+  test("a ready image the duplicate check flagged says so; other statuses do not", () => {
+    const set = newSpriteSet(member, "set_a", STYLE, "2026-01-01T00:00:00.000Z");
+    set.images.idle = { ...set.images.idle!, status: "ready", cutImageId: "cut1", cutUrl: "/api/v1/images/cut1", rawImageId: "raw1", twoFigures: true };
+    set.images.smile = { ...set.images.smile!, status: "cutting", rawImageId: "raw2", twoFigures: true };
+    set.images.sad = { ...set.images.sad!, status: "ready", cutImageId: "cut3", cutUrl: "/api/v1/images/cut3", rawImageId: "raw3", twoFigures: false };
+    const view = spriteSetView(set);
+    expect(view.expressions.idle!.twoFigures).toBe(true);
+    expect(view.expressions.smile!.twoFigures).toBeUndefined();
+    expect(view.expressions.sad!.twoFigures).toBeUndefined();
   });
 
   test("turn view keys sets by characterKey and plates by plateKey, missing ones included", () => {

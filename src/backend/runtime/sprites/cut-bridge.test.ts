@@ -36,6 +36,15 @@ describe("PNG checks", () => {
   });
 });
 
+describe("cut meta: duplicate check", () => {
+  test("twoFigures passes through when it is a boolean, else it is absent (older frontends)", () => {
+    expect(normalizeCutMeta({ ...META, twoFigures: true }, { width: 832, height: 1216 })?.twoFigures).toBe(true);
+    expect(normalizeCutMeta({ ...META, twoFigures: false }, { width: 832, height: 1216 })?.twoFigures).toBe(false);
+    expect("twoFigures" in normalizeCutMeta({ ...META, twoFigures: "yes" }, { width: 832, height: 1216 })!).toBe(false);
+    expect("twoFigures" in normalizeCutMeta(META, { width: 832, height: 1216 })!).toBe(false);
+  });
+});
+
 describe("cut bridge", () => {
   test("sends vn_sprite_cut and settles a single-chunk PNG", () => {
     const { bridge, sent, settled } = harness();

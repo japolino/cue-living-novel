@@ -69,6 +69,7 @@ export function normalizeCutMeta(meta: unknown, size: { width: number; height: n
     height: size.height,
     bbox,
     quality: record.quality === "best" ? "best" : "basic",
+    ...(typeof record.twoFigures === "boolean" ? { twoFigures: record.twoFigures } : {}),
     durationMs: Math.round(duration),
   };
 }

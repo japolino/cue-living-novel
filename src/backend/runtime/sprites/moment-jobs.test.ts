@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { VisualNovelConfig } from "../../../config.js";
 import { AssetJobSchema, type AssetJob } from "../../../shared/contracts.js";
 import { SPRITE_HOT_SET, spriteSetKeyFor } from "../../../shared/sprites.js";
-import { MIRA, mockSpindle, spriteConfig, waitFor, type MockSpindleOptions } from "./__fixtures__/sprite-fixtures.js";
+import { CUT_META, MIRA, fakePng, mockSpindle, spriteConfig, toBase64, waitFor, type MockSpindleOptions } from "./__fixtures__/sprite-fixtures.js";
 import { SpriteService } from "./jobs.js";
 import type { KeyMomentScene } from "./moment-prompts.js";
 import { spriteStyleKey } from "./style.js";
@@ -160,6 +160,13 @@ describe("sprite jobs: the anchoring wait needs a provider that can anchor", () 
     expect(f.gates).toHaveLength(1);
     expect(f.calls[0]!.includeDataUrl).toBe(true);
     f.gates[0]!.release();
+    // Then the expressions wait for the idle's duplicate check (the browser cut-out).
+    await waitFor(() => f.of("vn_sprite_cut").length === 1);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(f.gates).toHaveLength(1);
+    const cut = f.of("vn_sprite_cut")[0] as { requestId: string; expression: string };
+    expect(cut.expression).toBe("idle");
+    f.service.handleCutResult("u1", { type: "vn_sprite_cut_result", requestId: cut.requestId, chunkIndex: 0, chunkCount: 1, dataBase64: toBase64(fakePng()), meta: { ...CUT_META, twoFigures: false } });
     await waitFor(() => f.gates.length === 5);
     for (let index = 1; index < SPRITE_HOT_SET.length; index += 1) {
       await waitFor(() => f.gates.length > index);

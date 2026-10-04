@@ -698,11 +698,19 @@ export function cueCharacterName(scene: SceneState, cue: VisualCue): string {
   return normalizeCharacterName(cue.character || scene.character || scene.cast[0] || "");
 }
 
-/** Provider-specific reference parameters for one generation. */
+/** ComfyUI reference strength (sent as `denoise`) when the user set neither `referenceStrength` nor `denoise`. */
+export const COMFY_REFERENCE_STRENGTH_DEFAULT = 0.7;
+
+/**
+ * Provider-specific reference parameters for one generation.
+ * `comfyDefaultStrength` replaces the ComfyUI default strength (0.7) when the
+ * user set neither `referenceStrength` nor `denoise` (sprite expressions use 0.5).
+ */
 export function referenceParametersFor(
   provider: string | null,
   portrait: Pick<StoredPortrait, "data" | "mimeType">,
-  config: VisualNovelConfig
+  config: VisualNovelConfig,
+  options: { comfyDefaultStrength?: number } = {}
 ): Record<string, unknown> {
   if (!provider || !REFERENCE_PROVIDERS.has(provider)) return {};
   if (provider === "novelai") {
@@ -719,7 +727,8 @@ export function referenceParametersFor(
   }
   if (provider === "comfyui") {
     const raw = Number(config.imageParameters.referenceStrength);
-    const strength = Number.isFinite(raw) ? Math.min(1, Math.max(0, raw)) : 0.7;
+    const fallback = options.comfyDefaultStrength ?? COMFY_REFERENCE_STRENGTH_DEFAULT;
+    const strength = Number.isFinite(raw) ? Math.min(1, Math.max(0, raw)) : fallback;
     return {
       resolvedSourceImages: [{ data: portrait.data, mimeType: portrait.mimeType }],
       ...(config.imageParameters.denoise !== undefined ? {} : { denoise: strength })

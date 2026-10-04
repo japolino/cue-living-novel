@@ -43,7 +43,7 @@ import {
 } from "./library.js";
 import { compileKeyMomentRequest, type KeyMomentScene } from "./moment-prompts.js";
 import { compilePlateRequest, compileSpriteRequest } from "./prompts.js";
-import { spriteSeedFor, spriteStyleKey } from "./style.js";
+import { spriteSeedFor, spriteSetSeedFor, spriteStyleKey } from "./style.js";
 import { plateView, spriteImageView, spriteLibraryView, spriteTurnView, stagingPlateKeys } from "./views.js";
 
 /**
@@ -70,7 +70,24 @@ export type SpriteServiceDeps = {
   /** Cuts that time out this many times fail. */
   maxCutTimeouts?: number;
   libraryLimits?: { sets?: number; plates?: number };
+  /** Longest wait of anchored expressions for the idle's duplicate check (default IDLE_CHECK_WAIT_MS). */
+  idleCheckWaitMs?: number;
 };
+
+/**
+ * ComfyUI reference strength for sprite expressions (sent as `denoise`, which
+ * the workflow maps to the IP-Adapter weight) when the user set neither
+ * `referenceStrength` nor `denoise`. October 2026 tests: 0.5 keeps identity
+ * and outfit and copies less of the idle's pose and defects than 0.7. Scene
+ * images keep 0.7.
+ */
+export const SPRITE_REFERENCE_STRENGTH = 0.5;
+/**
+ * With anchoring, expressions wait this long at most for the idle's
+ * duplicate check (the browser cut-out) before they start with the current
+ * seed, so a slow or closed browser cannot stall the queue.
+ */
+export const IDLE_CHECK_WAIT_MS = 25_000;
 
 export type SpriteAction = Extract<FrontendRequest, { type: "vn_sprite_action" }>;
 
@@ -87,6 +104,8 @@ type WorkItem =
 type InflightWork = WorkItem & {
   jobId: string;
   priority: AssetJobPriority;
+  /** Seed the executor used (sprites on providers that take one). */
+  seed?: number;
   /** Provider image produced by this job (kept even when the job is cancelled afterwards). */
   producedImageId?: string;
   producedImageUrl?: string;
@@ -133,6 +152,8 @@ type UserState = {
   moments: Map<string, MomentWork>;
   /** Whether the image connection can anchor to a reference (cached briefly). */
   anchorProvider: { connection: string; provider: string | null; until: number } | null;
+  /** Re-pump when the first idle-check wait runs out. */
+  wake: { at: number; timer: ReturnType<typeof setTimeout> } | null;
 };
 
 export function spriteWorkKey(setKey: string, expression: string): string {
@@ -175,6 +196,8 @@ export class SpriteService {
   /** Relay misses per set (raw image id + until): later expressions do not wait for the same timeout again. */
   private readonly referenceMisses = new Map<string, { imageId: string; until: number }>();
   private readonly cutTasks = new Set<Promise<void>>();
+  /** When each fresh idle render (by raw image id) started waiting for its duplicate check. */
+  private readonly idleCheckSince = new Map<string, number>();
 
   constructor(private readonly spindle: SpindleAPI, private readonly deps: SpriteServiceDeps) {
     this.library = new SpriteLibraryStore(spindle, {
@@ -451,6 +474,8 @@ export class SpriteService {
     if (status === "queued") {
       image.rawImageId = null;
       image.rawImageUrl = null;
+      image.seed = null;
+      image.twoFigures = null;
     }
     image.cutImageId = null;
     image.cutUrl = null;
@@ -668,9 +693,12 @@ export class SpriteService {
       const scheduler = this.schedulerFor(userId, state, config);
       const candidates: Array<{ item: WorkItem; priority: AssetJobPriority; order: number }> = [];
       let order = 0;
+      let wakeAt = Number.POSITIVE_INFINITY;
       for (const set of Object.values(library.sets)) {
         const idle = set.images.idle;
-        const idleBlocks = anchoring && idle !== undefined && !idle.rawImageId && (idle.status === "queued" || idle.status === "generating");
+        const checkUntil = idle ? this.idleCheckDeadline(idle) : null;
+        if (anchoring && checkUntil !== null) wakeAt = Math.min(wakeAt, checkUntil);
+        const idleBlocks = anchoring && idle !== undefined && ((!idle.rawImageId && (idle.status === "queued" || idle.status === "generating")) || checkUntil !== null);
         for (const [expression, image] of Object.entries(set.images)) {
           order += 1;
           if (image.status !== "queued" && image.status !== "generating") continue;
@@ -702,6 +730,7 @@ export class SpriteService {
         || (left.item.kind === "plate" ? 0 : 1) - (right.item.kind === "plate" ? 0 : 1)
         || left.order - right.order);
       for (const candidate of candidates) this.start(userId, state, scheduler, candidate.item, candidate.priority);
+      if (Number.isFinite(wakeAt)) this.wakeAt(userId, state, wakeAt);
       // Raise queued work a newer turn now needs sooner.
       for (const work of state.inflight.values()) {
         const wanted = state.wanted.get(work.key);
@@ -724,7 +753,9 @@ export class SpriteService {
         if ((image.status !== "cutting" && !upgrade) || !image.rawImageId) continue;
         if (this.bridge.isOutstanding(userId, set.setKey, image.expression)) continue;
         const wanted = state.wanted.get(spriteWorkKey(set.setKey, image.expression));
-        pending.push({ target: { setKey: set.setKey, expression: image.expression, imageId: image.rawImageId }, rank: upgrade ? 4 : wanted ? PRIORITY_RANK[wanted] : 3 });
+        // A fresh idle first: anchored expressions wait for its duplicate check.
+        const rank = upgrade ? 4 : image.expression === "idle" && image.status === "cutting" ? -1 : wanted ? PRIORITY_RANK[wanted] : 3;
+        pending.push({ target: { setKey: set.setKey, expression: image.expression, imageId: image.rawImageId }, rank });
       }
     }
     pending.sort((left, right) => left.rank - right.rank);
@@ -733,6 +764,39 @@ export class SpriteService {
       this.bridge.request(userId, target);
       outstanding += 1;
     }
+  }
+
+  /**
+   * Until when anchored expressions wait for this idle's duplicate check:
+   * a fresh render (not an automatic retry, whose result is kept anyway)
+   * that waits for its first cut-out. Null when nothing is pending.
+   */
+  private idleCheckDeadline(idle: StoredSpriteImage): number | null {
+    if (idle.status !== "cutting" || idle.twoFigures !== null || idle.autoRetried || !idle.rawImageId) return null;
+    // The wait starts when the render arrived (a cut timeout later touches updatedAt again).
+    let since = this.idleCheckSince.get(idle.rawImageId);
+    if (since === undefined) {
+      since = Math.min(Date.now(), Date.parse(idle.updatedAt) || 0);
+      this.idleCheckSince.set(idle.rawImageId, since);
+      while (this.idleCheckSince.size > 256) {
+        const oldest = this.idleCheckSince.keys().next().value;
+        if (oldest === undefined) break;
+        this.idleCheckSince.delete(oldest);
+      }
+    }
+    const until = since + (this.deps.idleCheckWaitMs ?? IDLE_CHECK_WAIT_MS);
+    return until > Date.now() ? until : null;
+  }
+
+  private wakeAt(userId: string | undefined, state: UserState, at: number): void {
+    if (state.wake && state.wake.at <= at && state.wake.at > Date.now()) return;
+    if (state.wake) clearTimeout(state.wake.timer);
+    const timer = setTimeout(() => {
+      if (state.wake?.timer === timer) state.wake = null;
+      void this.pump(userId);
+    }, Math.max(0, at - Date.now()) + 5);
+    (timer as { unref?: () => void }).unref?.();
+    state.wake = { at, timer };
   }
 
   private state(userId: string | undefined): UserState {
@@ -753,6 +817,7 @@ export class SpriteService {
         repump: false,
         moments: new Map(),
         anchorProvider: null,
+        wake: null,
       };
       this.users.set(key, state);
     }
@@ -882,12 +947,14 @@ export class SpriteService {
     const set = library.sets[work.setKey];
     const image = set?.images[work.expression];
     if (!set || !image) throw new Error("This sprite set is no longer in the library.");
-    const seed = image.attempts > 0 ? spriteSeedFor(work.setKey, image.attempts) : set.seed;
+    // First renders share the set's seed (the same pose across expressions).
+    const seed = image.ownSeed ? spriteSeedFor(work.setKey, image.attempts) : set.seed;
+    work.seed = seed;
     const request = compileSpriteRequest({ config, provider, member: set, expression: work.expression, seed });
     const anchorable = referenceAnchoringEnabled(config) && provider !== null && REFERENCE_PROVIDERS.has(provider);
     const reference = anchorable && work.expression !== "idle" ? await this.idleReference(userId, set, signal) : null;
     const base = reference && provider
-      ? { ...config.imageParameters, ...referenceParametersFor(provider, reference, config) }
+      ? { ...config.imageParameters, ...referenceParametersFor(provider, reference, config, { comfyDefaultStrength: SPRITE_REFERENCE_STRENGTH }) }
       : { ...config.imageParameters, ...(provider === "comfyui" && config.imageParameters.denoise === undefined ? { denoise: 0.0 } : {}) };
     const captureIdle = anchorable && work.expression === "idle";
     return this.generate(userId, work, signal, config, request, base, captureIdle ? work.setKey : null);
@@ -1034,6 +1101,8 @@ export class SpriteService {
           image.status = "failed";
           image.error = message;
           image.attempts += 1;
+          // A retry after a failure draws its own seed (as before).
+          image.ownSeed = true;
           image.updatedAt = now;
           return () => this.broadcastImage(userId, work.setKey, image);
         }
@@ -1070,6 +1139,8 @@ export class SpriteService {
         image.error = null;
         image.cutAttempts = 0;
         image.attempts += 1;
+        image.seed = work.seed ?? null;
+        image.twoFigures = null;
         image.updatedAt = now;
         set.updatedAt = now;
         return () => this.broadcastImage(userId, work.setKey, image);
@@ -1141,6 +1212,12 @@ export class SpriteService {
       void this.pump(userId);
       return;
     }
+    // Duplicate check: a fresh render that looks like two figures gets one
+    // automatic regeneration (a flagged retry is kept and shown).
+    if (first.status === "cutting" && outcome.meta.twoFigures === true && first.twoFigures === null && !first.autoRetried) {
+      await this.regenerateFlagged(userId, target);
+      return;
+    }
     let uploaded: { id: string; url: string } | null = null;
     let uploadError: string | null = null;
     try {
@@ -1181,6 +1258,7 @@ export class SpriteService {
       image.width = outcome.meta.width;
       image.height = outcome.meta.height;
       image.quality = outcome.meta.quality;
+      if (outcome.meta.twoFigures !== undefined) image.twoFigures = outcome.meta.twoFigures;
       // A basic cut while "best" is selected gets one silent upgrade later.
       image.upgrade = image.upgrade === "pending" ? "done" : null;
       image.error = null;
@@ -1193,6 +1271,67 @@ export class SpriteService {
     if (stale && uploaded) await this.deleteImage(userId, uploaded.id);
     if (replaced) await this.deleteImage(userId, replaced);
     broadcast?.();
+    void this.pump(userId);
+  }
+
+  /**
+   * The browser found two figures in a fresh render: drop it and queue one
+   * new render. Duplicates follow the seed, so an expression gets its own new
+   * seed; a flagged idle draws a new shared seed for the whole set, and every
+   * expression that already ran (or is running) with the old seed is queued
+   * again, so the set keeps one pose and the new idle as its reference.
+   */
+  private async regenerateFlagged(userId: string | undefined, target: SpriteCutTarget): Promise<void> {
+    const state = this.state(userId);
+    const doomed: string[] = [];
+    const requeued: string[] = [];
+    const broadcasts = await this.library.update(userId, (library, now) => {
+      const set = library.sets[target.setKey];
+      const image = set?.images[target.expression];
+      if (!set || !image || image.status !== "cutting" || image.rawImageId !== target.imageId) return [];
+      const out: Array<() => void> = [];
+      const requeue = (entry: StoredSpriteImage, priority: AssetJobPriority): void => {
+        if (entry.rawImageId) doomed.push(entry.rawImageId);
+        if (entry.cutImageId) doomed.push(entry.cutImageId);
+        this.resetImage(entry, "queued", now);
+        const key = spriteWorkKey(set.setKey, entry.expression);
+        state.wanted.set(key, higher(state.wanted.get(key), priority));
+        // A continuation of earlier work: it runs even if the mode changed meanwhile.
+        state.explicit.add(key);
+        out.push(() => this.broadcastImage(userId, set.setKey, entry));
+      };
+      requeue(image, "visible");
+      image.autoRetried = true;
+      if (target.expression !== "idle") {
+        image.ownSeed = true;
+      } else {
+        const oldSeed = set.seed;
+        set.seedRound += 1;
+        set.seed = spriteSetSeedFor(set.setKey, set.seedRound);
+        image.ownSeed = false;
+        this.references.delete(set.setKey);
+        this.referenceMisses.delete(set.setKey);
+        for (const other of Object.values(set.images)) {
+          if (other === image) continue;
+          const key = spriteWorkKey(set.setKey, other.expression);
+          const work = state.inflight.get(key);
+          const running = work?.kind === "sprite" && work.seed === oldSeed;
+          const rendered = other.seed === oldSeed && (other.status === "cutting" || other.status === "ready");
+          if (!running && !rendered) continue;
+          this.forget(userId, state, key, set.setKey, other.expression);
+          requeue(other, "next");
+          other.ownSeed = false;
+          requeued.push(other.expression);
+        }
+      }
+      set.updatedAt = now;
+      return out;
+    });
+    if (broadcasts.length) {
+      this.deps.log?.(`sprite ${target.setKey}/${target.expression}: two figures -> regenerate${target.expression === "idle" ? ` with a new set seed${requeued.length ? `, requeued ${requeued.join(", ")}` : ""}` : ""}`, userId);
+    }
+    for (const broadcast of broadcasts) broadcast();
+    for (const id of doomed) await this.deleteImage(userId, id);
     void this.pump(userId);
   }
 
@@ -1265,10 +1404,17 @@ export class SpriteService {
           return;
         }
         const doomed: string[] = [];
+        // A new idle (alone or with the whole set) brings a new shared seed:
+        // expressions not made yet follow it; existing ones stay.
+        const renewSeed = expressions.includes("idle");
         for (const expression of expressions) this.forget(userId, state, spriteWorkKey(setKey, expression), setKey, expression);
         const broadcasts = await this.library.update(userId, (lib, now) => {
           const fresh = lib.sets[setKey];
           if (!fresh) return [];
+          if (renewSeed) {
+            fresh.seedRound += 1;
+            fresh.seed = spriteSetSeedFor(setKey, fresh.seedRound);
+          }
           const out: Array<() => void> = [];
           for (const expression of expressions) {
             let image = fresh.images[expression];
@@ -1280,6 +1426,10 @@ export class SpriteService {
             if (image.rawImageId) doomed.push(image.rawImageId);
             if (image.cutImageId) doomed.push(image.cutImageId);
             this.resetImage(image, "queued", now);
+            image.autoRetried = false;
+            // With a new set seed everything regenerated here shares it; one
+            // expression alone gets its own new seed (once it was made before).
+            image.ownSeed = renewSeed ? false : image.attempts > 0;
             const key = spriteWorkKey(setKey, expression);
             state.wanted.set(key, expressions.length === 1 || expression === "idle" ? "visible" : "next");
             state.explicit.add(key);
@@ -1289,8 +1439,11 @@ export class SpriteService {
           fresh.usedAt = now;
           return out;
         });
-        // A whole-set regeneration also renews the idle reference.
-        if (expressions.includes("idle")) this.references.delete(setKey);
+        // A new idle also renews the idle reference.
+        if (renewSeed) {
+          this.references.delete(setKey);
+          this.referenceMisses.delete(setKey);
+        }
         for (const broadcast of broadcasts) broadcast();
         for (const id of doomed) await this.deleteImage(userId, id);
         await this.pump(userId);

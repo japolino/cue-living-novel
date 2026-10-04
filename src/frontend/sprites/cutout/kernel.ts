@@ -24,6 +24,23 @@ export type CutoutPixelsResult = {
   bbox: CutoutBBox;
   /** Background colour (median of the background part of the 4-px image border). */
   background: [number, number, number];
+  /** Duplicate check on the cut-out alpha (see `figureCheck`). */
+  figures: CutoutFigureCheck;
+};
+
+/**
+ * "Two figures side by side" check on the cut-out mask (alpha > 127). In
+ * the rows from 10% to 60% of the height, a row is "split" when it holds at
+ * least two opaque runs as wide as 25% of the image; the image is flagged
+ * when at least 40% of those rows are split. October 2026 ComfyUI set (394
+ * sprites, 102 with extra figures): precision 0.95, false-positive rate 1%,
+ * recall 0.55 (it finds figures standing apart, not overlapping groups or
+ * grids).
+ */
+export type CutoutFigureCheck = {
+  twoFigures: boolean;
+  /** Share of the checked rows that are split (0..1). */
+  splitShare: number;
 };
 
 export type CutoutModelInput = {
@@ -39,12 +56,15 @@ export type CutoutKernel = {
     seed: number; grow: number; guard: number; holeMask: number; holeArea: number;
     speckMask: number; band: number; dFull: number; bboxAlpha: number;
     bgMask: number; lightMin: number; lightSpread: number; bgMinPixels: number; bgMinShare: number;
+    splitAlpha: number; splitTop: number; splitBottom: number; splitRun: number; splitShare: number;
   };
   backgroundColor(rgba: Uint8ClampedArray, width: number, height: number, mask?: Float32Array | null): [number, number, number];
   colorDistance(rgba: Uint8ClampedArray, width: number, height: number, bg: [number, number, number]): Float32Array;
   floodBackground(distance: Float32Array, width: number, height: number): Uint8Array;
   cutoutPixels(rgba: Uint8ClampedArray, width: number, height: number, mask: Float32Array | null): CutoutPixelsResult;
   opaqueBBox(rgba: Uint8ClampedArray, width: number, height: number): CutoutBBox;
+  /** Duplicate check on straight-alpha RGBA (alpha > 127 is opaque). */
+  figureCheck(rgba: Uint8ClampedArray, width: number, height: number): CutoutFigureCheck;
   /** PIL-style separable bilinear resize (antialiased when shrinking) of interleaved float channels. */
   resizeBilinear(src: Float32Array, sw: number, sh: number, channels: number, dw: number, dh: number): Float32Array;
   modelInput(rgba: Uint8ClampedArray, width: number, height: number, size: number): CutoutModelInput;
@@ -80,6 +100,15 @@ export function createCutoutKernel(): CutoutKernel {
     /** A border subset is used only with at least this many pixels and this share of the border. */
     bgMinPixels: 64,
     bgMinShare: 0.02,
+    /** Duplicate check: alpha (0..255) above this is opaque ... */
+    splitAlpha: 127,
+    /** ... rows from this share of the height (inclusive) ... */
+    splitTop: 0.1,
+    /** ... to this share (exclusive) are checked; a "wide" run is at least this share of the width ... */
+    splitBottom: 0.6,
+    splitRun: 0.25,
+    /** ... and the image has two figures when at least this share of the rows has two wide runs. */
+    splitShare: 0.4,
   };
 
   function medianFromHistogram(hist: Uint32Array, count: number): number {
@@ -252,6 +281,24 @@ export function createCutoutKernel(): CutoutKernel {
     return opaqueBBoxFromAlpha((i) => rgba[i * 4 + 3]!, width, height);
   }
 
+  function figureCheck(rgba: Uint8ClampedArray, width: number, height: number): CutoutFigureCheck {
+    const minRun = params.splitRun * width;
+    let rows = 0, split = 0;
+    for (let y = 0; y < height; y++) {
+      if (y < params.splitTop * height || y >= params.splitBottom * height) continue;
+      rows++;
+      let wide = 0, run = 0;
+      for (let x = 0, o = y * width * 4 + 3; x <= width; x++, o += 4) {
+        if (x < width && rgba[o]! > params.splitAlpha) { run++; continue; }
+        if (run >= minRun) wide++;
+        run = 0;
+      }
+      if (wide >= 2) split++;
+    }
+    const splitShare = rows ? split / rows : 0;
+    return { twoFigures: rows > 0 && splitShare >= params.splitShare, splitShare };
+  }
+
   function cutoutPixels(rgba: Uint8ClampedArray, width: number, height: number, mask: Float32Array | null): CutoutPixelsResult {
     const n = width * height;
     if (rgba.length < n * 4) throw new Error("cutoutPixels: pixel buffer is too small");
@@ -333,7 +380,7 @@ export function createCutoutKernel(): CutoutKernel {
       out[o] = a <= 0 ? 0 : a >= 255 ? 255 : Math.floor(a);
     }
     const bbox = opaqueBBoxFromAlpha((i) => out[i * 4 + 3]!, width, height);
-    return { rgba: out, alpha, bbox, background: bg };
+    return { rgba: out, alpha, bbox, background: bg, figures: figureCheck(out, width, height) };
   }
 
   /** PIL ImagingResample bilinear coefficients for one axis. */
@@ -433,5 +480,5 @@ export function createCutoutKernel(): CutoutKernel {
     return mask;
   }
 
-  return { params, backgroundColor, colorDistance, floodBackground, cutoutPixels, opaqueBBox, resizeBilinear, modelInput, modelMask };
+  return { params, backgroundColor, colorDistance, floodBackground, cutoutPixels, opaqueBBox, figureCheck, resizeBilinear, modelInput, modelMask };
 }

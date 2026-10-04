@@ -7,9 +7,15 @@ import {
   NOVELAI_SPRITE_SIZE,
   PLATE_SIZE,
   SPRITE_IMAGE_SIZE_PRESETS,
+  SPRITE_FRAMING_TAGS,
+  SPRITE_NEGATIVE_TAGS,
   SPRITE_SIZE,
+  SPRITE_SKIN_COLOUR_WEIGHT,
   spriteImageSizeFor,
+  weightSkinColourTags,
 } from "./prompts.js";
+import { splitTopLevelCsv } from "../../inlay-prompt/index.js";
+import { SPRITE_PROMPT_VERSION } from "./style.js";
 import { spriteSeedFor, spriteStyleKey } from "./style.js";
 
 const mira = { name: "Mira", identity: "1girl, silver hair, green eyes, school uniform", attire: "red kimono", subjectCategory: "female" as const };
@@ -61,7 +67,7 @@ describe("sprite prompts: ComfyUI syntax", () => {
     // Outfit override drops the identity's clothing.
     expect(request.prompt).not.toContain("school uniform");
     expect(request.prompt).toContain("white background");
-    expect(request.prompt).toContain("cowboy shot");
+    expect(request.prompt).toContain("feet out of frame");
     expect(request.prompt).toContain("no shadow");
     // Catalogue braces become ComfyUI (tag:weight) groups.
     expect(request.prompt).not.toMatch(/\{/);
@@ -224,5 +230,76 @@ describe("sprite prompts: NovelAI syntax", () => {
     expect(request.prompt).toMatch(/\blocation\b/);
     expect(request.parameters.characterTags).toEqual([]);
     expect(request.negativePrompt).toContain("people");
+  });
+});
+
+describe("sprite framing: weights and the plain-language sentence survive every provider syntax", () => {
+  const framing = splitTopLevelCsv(SPRITE_FRAMING_TAGS).map((tag) => tag.trim());
+  const negative = splitTopLevelCsv(SPRITE_NEGATIVE_TAGS).map((tag) => tag.trim());
+  const weighted = (tags: string[]) => tags.map((tag) => /^\((.+):([0-9.]+)\)$/.exec(tag)).filter((match): match is RegExpExecArray => match !== null);
+  const sentence = framing.slice(framing.findIndex((tag) => /^[A-Z]/.test(tag))).join(", ");
+  const plain = { name: "Ren", identity: "1boy, black hair", attire: null, subjectCategory: "male" as const };
+
+  test("the prompt version is bumped for the new framing", () => {
+    expect(SPRITE_PROMPT_VERSION).toBe("sprite-prompt-v2");
+  });
+
+  test("ComfyUI: weights kept as (tag:w), the sentence whole and last", () => {
+    const request = compileSpriteRequest({ config: config(), provider: "comfyui", member: plain, expression: "idle", seed: 1 });
+    for (const match of weighted(framing)) expect(request.prompt).toContain(match[0]);
+    for (const match of weighted(negative)) expect(request.negativePrompt).toContain(match[0]);
+    expect(sentence.length).toBeGreaterThan(20);
+    expect(request.prompt.trimEnd().endsWith(sentence)).toBe(true);
+    expect(request.prompt.match(/\bsolo\b/g)?.length).toBe(1);
+  });
+
+  test("NovelAI V4+: numeric emphasis w::tag::, the sentence whole in the base prompt", () => {
+    for (const model of ["nai-diffusion-4-5-full", "nai-diffusion-4-full"]) {
+      const request = compileSpriteRequest({ config: config({ imageModel: model }), provider: "novelai", member: plain, expression: "idle", seed: 1 });
+      for (const match of weighted(framing)) expect(request.prompt).toContain(`${Number(match[2])}::${match[1]}::`);
+      for (const match of weighted(negative)) expect(request.negativePrompt).toContain(`${Number(match[2])}::${match[1]}::`);
+      expect(request.prompt).toContain(sentence);
+      expect(request.prompt).not.toMatch(/\(/);
+      // The sentence is the end of the framing: only quality tags follow it.
+      const after = request.prompt.slice(request.prompt.indexOf(sentence) + sentence.length);
+      expect(after.split(",").map((tag) => tag.trim()).filter(Boolean).every((tag) => !framing.includes(tag))).toBe(true);
+    }
+  });
+
+  test("NovelAI legacy (V3): brace emphasis, the sentence whole", () => {
+    const request = compileSpriteRequest({ config: config({ imageModel: "nai-diffusion-3" }), provider: "novelai", member: plain, expression: "idle", seed: 1 });
+    for (const match of weighted(framing)) expect(request.prompt).toMatch(new RegExp(`\\{+${match[1]!.replace(/[-]/g, "\\-")}\\}+`));
+    expect(request.prompt).toContain(sentence);
+    expect(request.prompt).not.toMatch(/\(|::/);
+    expect(request.negativePrompt).not.toMatch(/\(|::/);
+  });
+});
+
+describe("sprite identity: non-natural skin colours are weighted", () => {
+  test("blue, green, purple, grey... skin get the weight; natural tones and coloured skin stay plain", () => {
+    expect(SPRITE_SKIN_COLOUR_WEIGHT).toBe(1.15);
+    expect(weightSkinColourTags("1girl, slime girl, blue skin, liquid hair")).toBe("1girl, slime girl, (blue skin:1.15), liquid hair");
+    for (const tag of ["green skin", "red skin", "purple skin", "pink skin", "grey skin", "gray skin", "orange skin", "yellow skin", "black skin", "light blue skin", "dark green skin", "blue_skin", "Blue Skin"]) {
+      expect(weightSkinColourTags(tag)).toBe(`(${tag}:1.15)`);
+    }
+    for (const tag of ["pale skin", "fair skin", "dark skin", "tan skin", "brown skin", "light skin", "white skin", "colored skin", "dark-skinned female", "blue eyes", "skin tight"]) {
+      expect(weightSkinColourTags(tag)).toBe(tag);
+    }
+  });
+
+  test("already weighted or emphasised tags are left alone", () => {
+    for (const text of ["(blue skin:1.3)", "{blue skin}", "[blue skin]", "1.2::blue skin::", "(blue skin)"]) expect(weightSkinColourTags(text)).toBe(text);
+  });
+
+  test("sprite prompts carry the weight in each provider's syntax", () => {
+    const slime = { name: "Mio", identity: "1girl, slime girl, blue skin, pale skin", attire: null, subjectCategory: "female" as const };
+    const comfy = compileSpriteRequest({ config: config(), provider: "comfyui", member: slime, expression: "idle", seed: 1 });
+    expect(comfy.prompt).toContain("(blue skin:1.15)");
+    expect(comfy.prompt).toContain("pale skin");
+    expect(comfy.prompt).not.toContain("(pale skin");
+    const nai = compileSpriteRequest({ config: config({ imageModel: "nai-diffusion-4-5-full" }), provider: "novelai", member: slime, expression: "idle", seed: 1 });
+    expect((nai.parameters.characterTags as Array<{ tags: string }>)[0]!.tags).toContain("1.15::blue skin::");
+    const legacy = compileSpriteRequest({ config: config({ imageModel: "nai-diffusion-3" }), provider: "novelai", member: slime, expression: "idle", seed: 1 });
+    expect(legacy.prompt).toContain("{{{blue skin}}}");
   });
 });

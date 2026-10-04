@@ -6,7 +6,7 @@ import {
   type SpriteImageStatus,
   type SpritePlateRef,
 } from "../../../shared/sprites.js";
-import { spriteSeedFor } from "./style.js";
+import { spriteSeedFor, spriteSetSeedFor } from "./style.js";
 
 /**
  * The per-user sprite library: sprite sets (one cut-out per expression for a
@@ -51,6 +51,22 @@ export const StoredSpriteImageSchema = z.object({
   attempts: z.number().int().nonnegative().default(0),
   /** Cut requests that timed out for the current raw image. */
   cutAttempts: z.number().int().nonnegative().default(0),
+  /** Seed of the current raw render (null: none yet, or made before seeds were recorded). */
+  seed: z.number().int().nonnegative().nullable().default(null),
+  /**
+   * The next render uses its own seed (`spriteSeedFor(setKey, attempts)`)
+   * instead of the set's shared seed: after a failure, a single-expression
+   * regenerate, or an automatic retry. Stored data without the field: own
+   * seed once it has been generated (the v1 rule, see normalizeSpriteLibrary).
+   */
+  ownSeed: z.boolean().default(false),
+  /**
+   * Browser duplicate check of the current cut-out ("two figures side by
+   * side"); null until checked (or from a frontend without the check).
+   */
+  twoFigures: z.boolean().nullable().default(null),
+  /** This image already had its one automatic regeneration after a flagged check. */
+  autoRetried: z.boolean().default(false),
   createdAt: Stamp,
   updatedAt: Stamp,
 });
@@ -64,12 +80,18 @@ export const StoredSpriteSetSchema = z.object({
   identity: z.string().max(4000),
   attire: z.string().max(2000).nullable(),
   subjectCategory: z.enum(["female", "male", "nonbinary", "nonhuman", "unknown"]).optional(),
+  /** Shared seed of the set's first renders (same pose across expressions). */
   seed: z.number().int().nonnegative(),
+  /** How often the shared seed was drawn again (flagged idle, idle regenerated); 0 = the original. */
+  seedRound: z.number().int().nonnegative().default(0),
   images: z.record(z.string(), z.unknown()).transform((raw) => {
     const images: Record<string, StoredSpriteImage> = {};
     for (const [key, value] of Object.entries(raw)) {
       const parsed = StoredSpriteImageSchema.safeParse(value);
-      if (parsed.success && parsed.data.expression === key) images[key] = parsed.data;
+      if (!parsed.success || parsed.data.expression !== key) continue;
+      // v1 data: an image that was generated before regenerates with its own seed.
+      if (typeof (value as { ownSeed?: unknown } | null)?.ownSeed !== "boolean") parsed.data.ownSeed = parsed.data.attempts > 0;
+      images[key] = parsed.data;
     }
     return images;
   }),
@@ -147,6 +169,10 @@ export function newSpriteImage(expression: string, now: string, status: SpriteIm
     error: null,
     attempts: 0,
     cutAttempts: 0,
+    seed: null,
+    ownSeed: false,
+    twoFigures: null,
+    autoRetried: false,
     createdAt: now,
     updatedAt: now,
   };
@@ -168,7 +194,8 @@ export function newSpriteSet(
     identity: member.identity,
     attire: member.attire,
     ...(member.subjectCategory ? { subjectCategory: member.subjectCategory } : {}),
-    seed: spriteSeedFor(setKey),
+    seed: spriteSetSeedFor(setKey, 0),
+    seedRound: 0,
     images,
     createdAt: now,
     updatedAt: now,

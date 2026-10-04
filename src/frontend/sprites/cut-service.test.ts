@@ -10,7 +10,7 @@ type Sent = Extract<FrontendRequest, { type: "vn_sprite_cut_result" }>;
 const request = (requestId: string, imageId = `img-${requestId}`): SpriteCutRequest => ({ type: "vn_sprite_cut", requestId, imageId, setKey: "set", expression: "idle" });
 
 function result(png: Blob, extra: Partial<CutoutResult> = {}): CutoutResult {
-  return { png, width: 832, height: 1216, bbox: [0.1, 0.05, 0.8, 0.95], quality: "best", durationMs: 1234.4, ...extra };
+  return { png, width: 832, height: 1216, bbox: [0.1, 0.05, 0.8, 0.95], quality: "best", twoFigures: false, splitShare: 0, durationMs: 1234.4, ...extra };
 }
 
 function setup(options: {
@@ -43,8 +43,14 @@ describe("sprite cut service", () => {
     expect(cuts[0]!.options.signal).toBeInstanceOf(AbortSignal);
     expect(sent).toEqual([{
       type: "vn_sprite_cut_result", requestId: "a", chunkIndex: 0, chunkCount: 1, dataBase64: "iVBORw==",
-      meta: { width: 832, height: 1216, bbox: [0.1, 0.05, 0.8, 0.95], quality: "best", durationMs: 1234 },
+      meta: { width: 832, height: 1216, bbox: [0.1, 0.05, 0.8, 0.95], quality: "best", twoFigures: false, durationMs: 1234 },
     }]);
+  });
+
+  test("the duplicate check travels in the meta", async () => {
+    const { service, sent } = setup({ cut: async () => result(new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" }), { twoFigures: true, splitShare: 0.7 }) });
+    await service.handle(request("two"));
+    expect(sent[0]!.meta?.twoFigures).toBe(true);
   });
 
   test("without config: best quality and the default model", async () => {

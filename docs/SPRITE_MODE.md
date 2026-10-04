@@ -113,17 +113,93 @@ scene mode), through the existing per-provider scheduler and concurrency.
 ### Prompts
 
 - Sprite: style prefix + identity tags + attire + expression suffix
-  (`POSE_EXPRESSION_CATALOGUE`) + `solo, standing, cowboy shot, looking at
-  viewer, simple background, white background, no shadow` + style suffix.
-  Negative: style negative + `scenery, background, shadow, drop shadow,
-  gradient background, multiple people, text`. Portrait size where the
-  provider takes a size (`spriteImageSize`; NovelAI always 832×1216). One fixed seed per set where the
-  provider takes a seed, and the set's ready `idle` sprite as reference image
-  where reference anchoring is on and supported, for consistency.
+  (`POSE_EXPRESSION_CATALOGUE`) + sprite framing (`SPRITE_FRAMING_TAGS`) +
+  style suffix. Negative: style negative + `SPRITE_NEGATIVE_TAGS`. Portrait
+  size where the provider takes a size (`spriteImageSize`; NovelAI always
+  832×1216). One shared seed per set where the provider takes a seed, and
+  the set's `idle` render as reference image where reference anchoring is on
+  and supported, for consistency (see "Seeds, reference strength and the
+  duplicate check").
+  - Framing (prompt version `sprite-prompt-v2`): `solo, standing,
+    (centered:1.2), front view, (straight-on:1.2), facing viewer, looking at
+    viewer, feet out of frame, white background, simple background, no
+    shadow, The whole character is centered in the frame, seen straight on at
+    eye level, with empty white space on both sides`. Negative add-on:
+    `scenery, background, shadow, drop shadow, gradient background, multiple
+    people, text, multiple girls, 2girls, multiple views, split screen,
+    border, (from below:1.3), from above, (dutch angle:1.2), (cropped, out of
+    frame:1.2)`. This is variant F6 of the October 2026 ComfyUI tests
+    (Anima, 624×912, 3 characters × 4 seeds) without its `(white
+    background:1.2)` weight and `grey background` negative, which had no
+    measured effect: side clipping 100% → 58%, figure width share 1.00 →
+    0.80, low-angle or tilted figures ≈ 12/18 → 3/18. The plain-language
+    sentence is the only part that gives side margin. It holds commas, so the
+    top-level tag split (dedupe) sees three "tags"; it stays last in the
+    framing. Weights survive every syntax: ComfyUI `(tag:w)`, NovelAI V4+
+    `w::tag::`, legacy NovelAI braces. Side effect: more flat grey or beige
+    backgrounds, which the cut-out removes.
+  - Skin colour: in sprite identities a non-natural skin colour tag (`blue
+    skin`, `light green skin`, `purple_skin`…) not already weighted gets
+    weight 1.15 (`weightSkinColourTags`); natural tones (pale, fair, dark, tan,
+    brown, light, white skin) and `colored skin` stay plain. Small evidence
+    (N = 4 seeds): `(blue skin:1.2)` moved a slime girl's median hue from teal
+    163° to blue 191°.
 - Plate: style prefix + location, time of day, weather, description +
   `scenery, no humans, detailed background, wide shot` + style suffix.
   Negative: style negative + `1girl, 1boy, people, person, character,
   text`. Landscape size (`spriteImageSize`; NovelAI always 1216×832).
+
+### Seeds, reference strength and the duplicate check
+
+Findings of the October 2026 ComfyUI tests (394 images): an extra figure
+(two copies of the character side by side) follows the **seed**, not the
+reference image. With the seed of a doubled idle, 13 of 16 expressions were
+doubled too, even with a clean reference; with another seed 0 of 20, even
+with the doubled idle as reference. Defects copy the same way (a black
+frame: 4/4 at the same seed, 0/16 at another). The shared seed is still
+wanted: it keeps one pose across the expressions.
+
+- **Seeds.** First renders of a set use the set's shared seed
+  (`StoredSpriteSet.seed`, round `seedRound`, `spriteSetSeedFor`). An image
+  with `ownSeed` (after a failure, a single-expression regenerate or an
+  automatic retry) uses `spriteSeedFor(setKey, attempts)`. Each image
+  records the seed of its current render (`seed`).
+- **Reference strength.** ComfyUI sprite expressions default to strength
+  0.5 (`SPRITE_REFERENCE_STRENGTH`, sent as `denoise`, which the workflow
+  maps to the IP-Adapter weight) when the user set neither
+  `imageParameters.referenceStrength` nor `denoise`. 0.5 holds identity and
+  outfit and copies less pose and fewer defects than 0.7; at 0 (no
+  reference) the outfit drifts and duplicates are frequent. Scene images
+  keep 0.7; NovelAI is unchanged.
+- **Duplicate check (browser).** The cut-out kernel (`figureCheck`) checks
+  the cut-out alpha: mask = alpha > 127; in the rows from 10% to 60% of the
+  height, a row is split when it holds at least two opaque runs at least 25%
+  of the width wide; the image has two figures when at least 40% of the rows
+  are split. It travels as `twoFigures` in the cut meta (absent from older
+  frontends). On the test set: precision 0.95, false-positive rate 1%,
+  recall 0.55 (it finds figures standing apart, not overlapping groups or
+  grids). It is a cheap retry trigger, not a guarantee.
+- **Acting on it (backend).** A fresh render flagged by its first check is
+  dropped (its cut is not uploaded) and rendered again once
+  (`autoRetried`):
+  - an expression with its own new seed;
+  - the idle with a new set seed (`seedRound` + 1); every expression that
+    already rendered, or is rendering, with the old set seed is queued again,
+    so the set keeps one pose and the new idle as its reference.
+  A flagged retry is kept and shown; the Sprite library says "may show two
+  figures" and Regenerate draws a new one.
+- **Waiting for the idle's check.** With anchoring, expressions already
+  wait for the idle render; they now also wait for its first check (the
+  cut-out), at most `IDLE_CHECK_WAIT_MS` (25 s) from the render, so a slow or
+  closed browser cannot stall the queue (the service re-pumps when the wait
+  runs out). The idle's cut goes first among pending cuts. An automatic
+  retry of the idle is not waited for (its result is kept anyway). Without
+  anchoring nothing waits; a flagged idle then re-queues the expressions
+  made with the old seed.
+- **User regenerate.** Regenerating the idle (alone or with the whole set)
+  draws a new set seed: expressions not made yet use it, existing ones stay;
+  a whole-set regenerate gives every expression the new seed. One other
+  expression alone gets its own new seed, as before.
 
 ## Staging (backend)
 
@@ -223,7 +299,9 @@ ISNet-anime mask → border flood fill over background-coloured pixels (mask >
 0.7 guards against leaks) → enclosed near-background components whose mean
 mask < 0.5 become background → separate components whose mean mask < 0.3
 are dropped (brush specks) → defringe (un-mix the background colour from the
-edge band). The background colour is the median of the image border.
+edge band) → duplicate check on the alpha (`figureCheck`, see "Seeds,
+reference strength and the duplicate check"). The background colour is the
+median of the image border.
 "basic" quality skips the model. The model is downloaded once from
 `spriteModelUrl` and cached in the browser; onnxruntime-web is loaded lazily
 (WebGPU, else WASM) so the frontend bundle stays small.
@@ -337,13 +415,15 @@ Library and generation:
 
 - `sprites/library.json` per user; newest 64 sets / 128 plates by last use;
   evicted entries delete their images (best effort).
-- One fixed seed per set (`spriteSeedFor`); regeneration changes it.
+- One shared seed per set (`spriteSetSeedFor`); a single-expression
+  regeneration gives that image its own seed, a new idle a new set seed.
   NovelAI: character caption on V4+, `resolution` 832×1216 (plates and key
   moments 1216×832) whatever `spriteImageSize` says;
   ComfyUI / SwarmUI: `width`, `height` from `spriteImageSize` (standard
   624×912 / 912×624, upscaled 832×1216 / 1216×832), `seed`.
 - With reference anchoring, `idle` is generated first and the other
-  expressions use it as the reference; providers without anchoring skip it.
+  expressions use it as the reference (after its duplicate check, at most
+  25 s); providers without anchoring skip it.
 - Cut bridge: ≤ 2 cuts in flight per user, chunks in any order, PNG signature
   and IHDR checked, 5-minute inactivity timeout, failed after 3 timeouts.
   A "basic" cut made while "best" is selected is re-cut once on the next view

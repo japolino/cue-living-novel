@@ -17,6 +17,7 @@ import {
   type CutoutModelState,
 } from "../src/frontend/sprites/cutout/index.js";
 import { createSpriteCutService } from "../src/frontend/sprites/cut-service.js";
+import { createCutoutKernel } from "../src/frontend/sprites/cutout/kernel.js";
 import type { FrontendRequest } from "../src/protocol.js";
 import { DEFAULT_CONFIG } from "../src/config.js";
 
@@ -101,6 +102,20 @@ async function scaleCompare(url: string, options: { quality: "best" | "basic"; m
   };
 }
 
+const kernel = createCutoutKernel();
+
+/** The kernel's two-figure check on an existing cut-out (its alpha channel). */
+async function figureCheckUrl(url: string) {
+  const px = await pixels(await fetchBlob(url));
+  return { ...kernel.figureCheck(px.data, px.width, px.height), size: [px.width, px.height] };
+}
+
+/** Cut a raw sprite with the real pipeline and return its duplicate check. */
+async function cutFigures(url: string, options: { quality: "best" | "basic"; modelUrl: string }) {
+  const r = await cutSprite(await fetchBlob(url), options);
+  return { twoFigures: r.twoFigures, splitShare: r.splitShare, quality: r.quality, ms: r.durationMs };
+}
+
 const states: CutoutModelState[] = [];
 onCutoutModelState((state) => states.push(state));
 
@@ -117,5 +132,6 @@ function startService() {
 (window as unknown as { cutout: unknown }).cutout = {
   cutSprite, configureCutoutRuntime, prepareCutoutModel, clearCutoutModel, getCutoutModelState, getCachedCutoutModelBytes,
   getCutoutRunnerMode, getCutoutRuntimeInfo, resetCutoutRuntime, states, fetchBlob, pixels, compareAlpha, composite, startService, scaleCompare,
+  figureCheckUrl, cutFigures,
 };
 document.title = "sprite-cutout-ready";

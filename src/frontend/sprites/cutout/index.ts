@@ -37,6 +37,14 @@ export type CutoutResult = {
   /** Opaque bounding box, normalized 0..1: [x, y, width, height]. */
   bbox: [number, number, number, number];
   quality: CutoutQuality;
+  /**
+   * Duplicate check: the mask looks like two figures side by side (see
+   * `CutoutFigureCheck`). Precise (1% false positives) but finds only about
+   * half of the duplicates.
+   */
+  twoFigures: boolean;
+  /** Share of the checked rows that hold two wide opaque runs (0..1). */
+  splitShare: number;
   durationMs: number;
   /** Where the time went (diagnostics). */
   timings?: CutoutCutTimings;
@@ -219,6 +227,8 @@ export async function cutSprite(image: Blob, options: CutoutOptions): Promise<Cu
     height: result.height,
     bbox: result.bbox,
     quality: result.quality,
+    twoFigures: result.figures?.twoFigures === true,
+    splitShare: result.figures?.splitShare ?? 0,
     durationMs: performance.now() - started,
     timings: result.timings,
   };

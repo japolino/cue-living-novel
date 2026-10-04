@@ -75,7 +75,7 @@ export function createSpriteCutService(deps: SpriteCutServiceDeps): SpriteCutSer
           chunkCount: chunks.length,
           dataBase64,
           ...(chunkIndex === 0
-            ? { meta: { width: result.width, height: result.height, bbox: result.bbox, quality: result.quality, durationMs: Math.round(result.durationMs) } }
+            ? { meta: { width: result.width, height: result.height, bbox: result.bbox, quality: result.quality, twoFigures: result.twoFigures === true, durationMs: Math.round(result.durationMs) } }
             : {}),
         });
       });

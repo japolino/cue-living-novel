@@ -1,6 +1,6 @@
 import { chromium, type Browser, type Page } from "playwright";
 import assert from "node:assert/strict";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 
 /**
@@ -29,6 +29,14 @@ import { mkdir, writeFile } from "node:fs/promises";
  *     parameters were tuned on); the alphas must agree (IoU mean >= 0.99,
  *     min >= 0.98) and the bbox must not move, for "basic" on every sprite and
  *     with the model on 3 (all on WebGPU or with SPRITE_CUTOUT_FULL=1);
+ *   - duplicate check ("two figures", CUE_SPRITE_HYP, default the owner's
+ *     reply-test/hyp folder; skipped when missing): the kernel's figureCheck on
+ *     the experiment's Python cut-outs must give the Python rule's flags
+ *     (hyp/q4_labels_rule.csv, >= 99% agreement); real cuts of
+ *     reply-test/raw_lr2/Mio_idle.png and Mio_laughing.png (two figures) are
+ *     flagged and at most 1 of reply-test/raw_lr/*.png is; with
+ *     SPRITE_CUTOUT_FULL=1 or SPRITE_CUTOUT_DUP_FULL=1 every experiment raw
+ *     image is also cut ("basic") and compared with the labels;
  *   - model cache: a second load reads the cache (no download), clear removes it;
  *   - cut service: ordered base64 chunks with meta, duplicate requestIds ignored.
  *
@@ -49,6 +57,17 @@ const standardNames = existsSync(STANDARD)
   ? readdirSync(STANDARD).filter((file) => file.endsWith(".png") && file !== "plate.png").map((file) => file.slice(0, -4)).sort()
   : [];
 const OUT = ".cache/sprite-cutout";
+const HYP = (process.env.CUE_SPRITE_HYP ?? "C:/Users/eme4/cue-living-novel/.cache/reply-test/hyp").replace(/\\/g, "/");
+const LR2 = (process.env.CUE_SPRITE_LR2 ?? `${HYP.replace(/\/[^/]+\/?$/, "")}/raw_lr2`).replace(/\\/g, "/");
+const DUP_FULL = FULL || process.env.SPRITE_CUTOUT_DUP_FULL === "1";
+type HypLabel = { src: string; label: string; dup: boolean; rf: number; flag: boolean };
+const hypLabels: HypLabel[] = existsSync(`${HYP}/q4_labels_rule.csv`)
+  ? readFileSync(`${HYP}/q4_labels_rule.csv`, "utf8").trim().split(/\r?\n/).slice(1).map((line) => {
+    // src,label,n,dup,rf,flag,set,type,rf_full,flag_full (set is quoted and holds commas)
+    const cells = line.match(/("[^"]*"|[^,]+)/g) ?? [];
+    return { src: cells[0]!, label: cells[1]!, dup: cells[3] === "1", rf: Number(cells[8]), flag: cells[9] === "1" };
+  })
+  : [];
 
 if (!existsSync(RAW)) {
   console.log(`SKIP sprite cut-out browser test: no bake-off sprites at ${RAW} (set CUE_SPRITE_BAKEOFF).`);
@@ -81,6 +100,8 @@ const server = Bun.serve({
     if (path.startsWith("/raw/")) return send(`${RAW}/${path.slice(5)}`);
     if (path.startsWith("/ref/")) return send(`${REF}/${path.slice(5)}`);
     if (path.startsWith("/std/")) return send(`${STANDARD}/${path.slice(5)}`);
+    if (path.startsWith("/hyp/")) return send(`${HYP}/${path.slice(5)}`);
+    if (path.startsWith("/lr2/")) return send(`${LR2}/${path.slice(5)}`);
     return new Response('<html><head><meta charset="utf-8"></head><body><script type="module" src="/fixture.js"></script></body></html>', { headers: { "Content-Type": "text/html" } });
   },
 });
@@ -229,6 +250,78 @@ try {
       }
       assert.ok(stats.meanIou >= 0.99 && stats.minIou >= 0.98, `standard size (${quality}): IoU vs the 832x1216 cut mean >= 0.99, min >= 0.98 (${fmt(stats.meanIou)}, ${fmt(stats.minIou)})`);
       summary[`standard-624x912/${quality}`] = stats;
+    }
+  }
+
+  // ---- Duplicate check (two figures) ------------------------------------------------
+  if (!hypLabels.length) {
+    console.log(`\nSKIP duplicate check: no labels at ${HYP}/q4_labels_rule.csv (set CUE_SPRITE_HYP).`);
+  } else {
+    // 1. The TS port of the rule on the experiment's own (Python) cut-outs.
+    const rows: Array<HypLabel & { tsFlag: boolean; tsShare: number }> = [];
+    for (const entry of hypLabels) {
+      const check = await page.evaluate((url) => (window as any).cutout.figureCheckUrl(url), `/hyp/cut_${entry.src}/${entry.label}.webp`);
+      rows.push({ ...entry, tsFlag: check.twoFigures, tsShare: check.splitShare });
+    }
+    const agree = rows.filter((row) => row.tsFlag === row.flag).length;
+    const maxDiff = Math.max(...rows.map((row) => Math.abs(row.tsShare - row.rf)));
+    const score = (flags: boolean[]) => {
+      const tp = rows.filter((row, i) => flags[i] && row.dup).length, fp = rows.filter((row, i) => flags[i] && !row.dup).length;
+      const fn = rows.filter((row, i) => !flags[i] && row.dup).length, tn = rows.length - tp - fp - fn;
+      return { tp, fp, fn, tn, precision: tp / Math.max(1, tp + fp), recall: tp / Math.max(1, tp + fn), fpr: fp / Math.max(1, fp + tn) };
+    };
+    const ts = score(rows.map((row) => row.tsFlag));
+    const py = score(rows.map((row) => row.flag));
+    console.log(`\nduplicate check, TS figureCheck on the Python cut-outs: ${agree}/${rows.length} flags agree with the Python rule (max split-share difference ${fmt(maxDiff)})`);
+    console.log(`  vs labels: TS P ${fmt(ts.precision, 3)} R ${fmt(ts.recall, 3)} FPR ${fmt(ts.fpr, 3)} (TP ${ts.tp} FP ${ts.fp} FN ${ts.fn}); Python P ${fmt(py.precision, 3)} R ${fmt(py.recall, 3)} FPR ${fmt(py.fpr, 3)}`);
+    for (const row of rows.filter((r) => r.tsFlag !== r.flag)) console.log(`  differs: ${row.src}/${row.label} TS ${fmt(row.tsShare, 3)} vs Python ${fmt(row.rf, 3)}`);
+    assert.ok(agree / rows.length >= 0.99, `TS figureCheck agrees with the Python rule on >= 99% (${agree}/${rows.length})`);
+    summary.duplicateCheckPort = { agree, total: rows.length, maxShareDiff: maxDiff, ts, python: py };
+
+    // 2. Real cuts: raw_lr2 Mio (two figures) and raw_lr (mostly one figure).
+    const model = models.at(-1);
+    const modelUrl = model ? `${origin}/models/${model}` : `${origin}/models/none.onnx`;
+    if (model) {
+      await page.evaluate(async ({ url, backend, base }) => {
+        const c = (window as any).cutout;
+        c.resetCutoutRuntime();
+        c.configureCutoutRuntime({ ortBaseUrl: base, backend });
+        await c.prepareCutoutModel(url);
+      }, { url: modelUrl, backend: gpu ? "webgpu" : "wasm", base: `${origin}/ort/` });
+    }
+    const real: Record<string, unknown> = {};
+    for (const quality of model ? ["basic", "best"] as const : ["basic"] as const) {
+      for (const name of ["Mio_idle", "Mio_laughing"]) {
+        if (!existsSync(`${LR2}/${name}.png`)) continue;
+        const r = await page.evaluate(({ url, quality, modelUrl }) => (window as any).cutout.cutFigures(url, { quality, modelUrl }), { url: `/lr2/${name}.png`, quality, modelUrl });
+        console.log(`  raw_lr2/${name} (${r.quality}): split share ${fmt(r.splitShare, 3)} -> ${r.twoFigures ? "two figures" : "one figure"}`);
+        assert.equal(r.quality, quality);
+        assert.ok(r.twoFigures, `raw_lr2/${name} (${quality}) has two figures`);
+        real[`raw_lr2/${name}/${quality}`] = r.splitShare;
+      }
+      const list = quality === "basic" || gpu || FULL ? standardNames : standardNames.slice(0, 3);
+      const flagged: string[] = [];
+      for (const name of list) {
+        const r = await page.evaluate(({ url, quality, modelUrl }) => (window as any).cutout.cutFigures(url, { quality, modelUrl }), { url: `/std/${name}.png`, quality, modelUrl });
+        if (r.twoFigures) flagged.push(`${name} ${fmt(r.splitShare, 3)}`);
+        real[`raw_lr/${name}/${quality}`] = r.splitShare;
+      }
+      console.log(`  raw_lr (${quality}): ${flagged.length}/${list.length} flagged${flagged.length ? `: ${flagged.join(", ")}` : ""}`);
+      assert.ok(flagged.length <= 1, `raw_lr (${quality}): at most one sprite flagged (${flagged.join(", ")})`);
+    }
+    summary.duplicateCheckReal = real;
+
+    // 3. Optional: the whole pipeline ("basic") on every experiment raw image.
+    if (DUP_FULL) {
+      const flags: boolean[] = [];
+      for (const entry of hypLabels) {
+        const r = await page.evaluate((url) => (window as any).cutout.cutFigures(url, { quality: "basic", modelUrl: "" }), `/hyp/${entry.src}/${entry.label}.png`);
+        flags.push(r.twoFigures);
+      }
+      const full = score(flags);
+      const agreeFull = flags.filter((flag, i) => flag === rows[i]!.flag).length;
+      console.log(`  basic cut of every raw image: ${agreeFull}/${rows.length} agree with the Python flags; vs labels P ${fmt(full.precision, 3)} R ${fmt(full.recall, 3)} FPR ${fmt(full.fpr, 3)} (TP ${full.tp} FP ${full.fp} FN ${full.fn})`);
+      summary.duplicateCheckBasicPipeline = { agree: agreeFull, total: rows.length, ...full };
     }
   }
 
