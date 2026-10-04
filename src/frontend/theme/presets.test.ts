@@ -137,6 +137,81 @@ describe("authored preset signatures", () => {
   });
 });
 
+describe("crafted chrome per preset", () => {
+  const ruleBody = (css: string, selectorTail: string): string => {
+    const index = css.indexOf(`${selectorTail} {`);
+    if (index < 0) return "";
+    return css.slice(index, css.indexOf("}", index));
+  };
+
+  test("every authored preset styles the toolbar's hover and running (Auto/Skip) states", () => {
+    for (const id of EXPECTED_PRESETS) {
+      if (id === "lumiverse") continue;
+      const css = THEME_PRESET_CSS[id];
+      expect(css).toContain("[data-vn-control]:hover:not(:disabled)");
+      expect(css).toContain('[data-vn-control][data-vn-active="true"]');
+    }
+  });
+
+  test("lumiverse drives the shared chrome from host tokens instead of fixed colours", () => {
+    const css = THEME_PRESET_CSS.lumiverse;
+    expect(css).toContain("--vn-accent-contrast: var(--lumiverse-primary-contrast");
+    expect(css).toContain("--vn-chrome-hover: var(--lumiverse-fill-medium");
+    expect(css).toContain("--vn-panel-solid: var(--lumiverse-bg-elevated");
+  });
+
+  test("every preset gives choices a hover and keyboard-focus treatment", () => {
+    for (const id of EXPECTED_PRESETS) {
+      const css = THEME_PRESET_CSS[id];
+      expect(css).toContain("[data-vn-choice]:hover:not(:disabled)");
+      expect(css).toContain("[data-vn-choice]:focus-visible");
+    }
+  });
+
+  test("each preset opens with its root token block, so the settings preview reads its colours", () => {
+    for (const id of EXPECTED_PRESETS) {
+      const css = THEME_PRESET_CSS[id].trimStart();
+      expect(css.startsWith(`[data-vn-root][data-vn-preset="${id}"] {`)).toBe(true);
+      const firstRule = css.slice(0, css.indexOf("}"));
+      expect(firstRule).toContain("--vn-accent:");
+      expect(firstRule).toContain("--vn-text:");
+    }
+  });
+
+  test("golden-hour's choice and composer panel no longer stretch to the stage width", () => {
+    const css = THEME_PRESET_CSS["golden-hour"];
+    const panel = css.slice(css.indexOf('[data-vn-root][data-vn-preset="golden-hour"] [data-vn-choice-list],'));
+    const body = panel.slice(0, panel.indexOf("}"));
+    expect(body).not.toContain("width:");
+    expect(css).not.toContain("min(94rem");
+  });
+
+  test("boxed-console never clips its nameplate or toolbar", () => {
+    const css = THEME_PRESET_CSS["boxed-console"];
+    const dialogueRule = css.match(/\[data-vn-dialogue\] \{[\s\S]*?\}/)?.[0] ?? "";
+    expect(dialogueRule).not.toContain("overflow: hidden");
+    expect(ruleBody(css, "[data-vn-speaker]")).toContain("color: #7dffa1");
+  });
+
+  test("paper-novel prints the heading, hint and move groups in ivory over the scene", () => {
+    const css = THEME_PRESET_CSS["paper-novel"];
+    expect(css).toContain("--vn-overlay-text: #fbf5e8");
+    expect(css).toContain("--vn-overlay-muted: rgba(251, 245, 232, 0.88)");
+  });
+
+  test("literature-club history text is dark on its pale page", () => {
+    const css = THEME_PRESET_CSS["literature-club"];
+    expect(ruleBody(css, '[data-vn-root][data-vn-preset="literature-club"] [data-vn-backlog-text]')).toContain("color: #44162e");
+  });
+
+  test("presets draw their own glyphs only with local text or CSS shapes", () => {
+    for (const id of EXPECTED_PRESETS) {
+      // A backslash escape inside a template literal is easy to break; use literal glyphs.
+      expect(THEME_PRESET_CSS[id]).not.toMatch(/content:\s*"\\/);
+    }
+  });
+});
+
 describe("isThemePresetId", () => {
   test("accepts exactly the canonical ids", () => {
     for (const id of EXPECTED_PRESETS) {

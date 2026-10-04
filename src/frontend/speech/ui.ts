@@ -27,20 +27,32 @@ const DOCK_CSS = `
   max-width: calc(100% - 9rem);
   font: 13px/1.4 var(--lumiverse-font-family, system-ui, sans-serif);
 }
-[data-dock] { display: flex; align-items: center; gap: .45rem; padding: .35rem .6rem; border-radius: 999px; border: 1px solid var(--lumiverse-border, rgba(255,255,255,.25)); background: rgba(10, 10, 18, .78); color: var(--lumiverse-text, #f5f5f7); backdrop-filter: blur(6px); max-width: 100%; }
-button { min-width: 2rem; min-height: 2rem; flex: none; border-radius: 999px; border: 1px solid var(--lumiverse-border, rgba(255,255,255,.25)); background: var(--lumiverse-fill-medium, rgba(255,255,255,.12)); color: inherit; font: inherit; cursor: pointer; }
-button:disabled { opacity: .5; cursor: default; }
-[data-status] { max-width: 16rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--lumiverse-text-muted, rgba(255,255,255,.72)); }
+[data-dock] { display: flex; align-items: center; gap: .4rem; padding: .3rem .7rem .3rem .3rem; border-radius: var(--vn-shell-radius, 999px); border: 1px solid var(--vn-shell-border, var(--lumiverse-border, rgba(255,255,255,.25))); background: var(--vn-shell-bg, rgba(10, 10, 18, .78)); color: var(--vn-shell-text, var(--lumiverse-text, #f5f5f7)); font-family: var(--vn-shell-family, inherit); box-shadow: var(--vn-shell-shadow, 0 .3rem 1rem rgba(0,0,0,.35)); backdrop-filter: blur(10px); max-width: 100%; }
+button { display: inline-grid; place-items: center; min-width: 2.1rem; min-height: 2.1rem; padding: 0; flex: none; border-radius: var(--vn-shell-radius, 999px); border: 1px solid color-mix(in srgb, var(--vn-shell-accent, #c1b0eb) 55%, transparent); background: color-mix(in srgb, var(--vn-shell-accent, #c1b0eb) 16%, transparent); color: var(--vn-shell-accent, inherit); font: inherit; font-size: .8rem; line-height: 1; cursor: pointer; transition: background-color .14s ease, border-color .14s ease, transform .12s ease; }
+button:hover:not(:disabled) { border-color: var(--vn-shell-accent, #c1b0eb); background: color-mix(in srgb, var(--vn-shell-accent, #c1b0eb) 28%, transparent); }
+button:active:not(:disabled) { transform: scale(.94); }
+button:focus-visible { outline: 2px solid var(--vn-shell-accent, #c1b0eb); outline-offset: 2px; }
+button:disabled { opacity: .45; cursor: default; }
+[data-status] { max-width: 16rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vn-shell-muted, var(--lumiverse-text-muted, rgba(255,255,255,.72))); }
+[data-status]:empty { display: none; }
 [data-status][data-tone="error"] { color: var(--lumiverse-danger, #ff8ca0); white-space: normal; }
+@media (pointer: coarse) { button { min-width: 2.75rem; min-height: 2.75rem; } }
+@media (prefers-reduced-motion: reduce) { button { transition: none; } button:active:not(:disabled) { transform: none; } }
 @media (max-width: 640px) {
   :host {
     left: auto;
-    right: calc(max(0.75rem, env(safe-area-inset-right)) + 7.5rem);
+    right: calc(max(0.75rem, env(safe-area-inset-right)) + 7.75rem);
     transform: none;
-    max-width: calc(100% - 13.5rem);
+    max-width: calc(100% - 15.5rem);
   }
+  [data-dock] { gap: .25rem; padding: .25rem; }
   [data-status] { max-width: 4rem; }
-}`;
+}
+@media (max-width: 480px) {
+  /* Phones: the buttons carry the state; an info line would collide with Panels. Errors still show. */
+  [data-status][data-tone="info"] { display: none; }
+}
+@media (max-width: 640px) and (pointer: coarse) { button { min-width: 2.75rem; min-height: 2.75rem; } }`;
 
 export class SpeechDock {
   private readonly host: HTMLElement;
