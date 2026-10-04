@@ -1,3 +1,5 @@
+import { TEXT_EFFECT_IDS, isTextEffectId } from "../../shared/text-effects.js";
+
 export type CustomRegexRule = {
   pattern: RegExp;
   replacement: string;
@@ -112,7 +114,7 @@ const ALLOWED_TAGS = new Set([
 
 const ALLOWED_ATTRS: Record<string, Set<string>> = {
   font: new Set(["color", "style", "face", "size"]),
-  span: new Set(["class", "style"]),
+  span: new Set(["class", "style", "data-vn-text-fx"]),
   em: new Set(["class", "style"]),
   strong: new Set(["class", "style"]),
   b: new Set(["class", "style"]),
@@ -165,6 +167,10 @@ function sanitizeAndRestoreAllowedHtml(escapedText: string): string {
           continue;
         }
         val = val.replace(/"/g, "&quot;");
+      } else if (attrName === "data-vn-text-fx") {
+        // Only catalogue ids; anything else drops the attribute.
+        val = val.trim().toLowerCase();
+        if (!isTextEffectId(val)) continue;
       } else if (attrName === "class" || attrName === "face" || attrName === "color" || attrName === "size") {
         val = val.replace(/[^a-zA-Z0-9_#.,\s-]/g, "");
       }
@@ -177,6 +183,60 @@ function sanitizeAndRestoreAllowedHtml(escapedText: string): string {
   });
 }
 
+// Escaped effect tags (`&lt;shake&gt;`, `&lt;/Shake&gt;`) or an inline code
+// span, which is skipped so `<shake>` inside backticks stays literal.
+const ESCAPED_TEXT_EFFECT_TOKEN = new RegExp(
+  `<code\\b[^>]*>[\\s\\S]*?<\\/code>|&lt;\\s*(\\/?)\\s*(${TEXT_EFFECT_IDS.join("|")})\\s*&gt;`,
+  "gi",
+);
+
+/**
+ * Turn escaped catalogue tags into effect spans. Tags are paired with a
+ * stack, so output is always balanced: a closing tag closes the nearest open
+ * tag with the same id (inner unclosed tags are dropped), stray closing tags
+ * and tags left open at the end are dropped. An unclosed tag therefore never
+ * swallows the rest of the paragraph or breaks later markup.
+ */
+function restoreTextEffectTags(escapedText: string): string {
+  if (escapedText.indexOf("&lt;") === -1) return escapedText;
+  type Token = { start: number; end: number; closing: boolean; id: string };
+  const tokens: Token[] = [];
+  for (const match of escapedText.matchAll(ESCAPED_TEXT_EFFECT_TOKEN)) {
+    if (match[2] === undefined) continue; // code span
+    tokens.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      closing: match[1] === "/",
+      id: match[2].toLowerCase(),
+    });
+  }
+  if (tokens.length === 0) return escapedText;
+  const replacement = new Map<Token, string>();
+  const open: Token[] = [];
+  for (const token of tokens) {
+    replacement.set(token, "");
+    if (!token.closing) {
+      open.push(token);
+      continue;
+    }
+    let depth = open.length - 1;
+    while (depth >= 0 && open[depth]!.id !== token.id) depth -= 1;
+    if (depth < 0) continue; // stray closing tag
+    // Tags opened after the matching one were never closed: drop them.
+    open.length = depth + 1;
+    const opener = open.pop()!;
+    replacement.set(opener, `<span data-vn-text-fx="${opener.id}">`);
+    replacement.set(token, "</span>");
+  }
+  let output = "";
+  let cursor = 0;
+  for (const token of tokens) {
+    output += escapedText.slice(cursor, token.start) + replacement.get(token);
+    cursor = token.end;
+  }
+  return output + escapedText.slice(cursor);
+}
+
 /**
  * Format raw paragraph text for rich display:
  * 1. Strip inline image tags (<img="name">, {{img::name}})
@@ -184,6 +244,9 @@ function sanitizeAndRestoreAllowedHtml(escapedText: string): string {
  * 3. Escape HTML special characters
  * 4. Parse markdown syntax (**bold**, *italic*, _italic_, ~~strike~~, `code`)
  * 5. Sanitize and allow safe HTML tags (<font>, <span>, <em>, etc.)
+ * 6. Turn paired text effect tags (<shake>, <rainbow>, ... see
+ *    src/shared/text-effects.ts) into `<span data-vn-text-fx="id">`.
+ *    Display regex rules run first, so a rule may emit these tags too.
  */
 export type DialogueFormatOptions = {
   stripMarkdown?: boolean;
@@ -270,6 +333,9 @@ export function formatDialogueText(
 
   // 6. Restore sanitized safe tags
   formatted = sanitizeAndRestoreAllowedHtml(formatted);
+
+  // 7. Paired text effect tags become effect spans (unpaired ones are dropped)
+  formatted = restoreTextEffectTags(formatted);
 
   return formatted;
 }

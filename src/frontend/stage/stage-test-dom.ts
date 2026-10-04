@@ -69,6 +69,17 @@ export class FakeNode {
   }
 
   get isText(): boolean { return this.tagName === "#TEXT"; }
+  /** DOM node type: 3 text, 11 fragment/shadow root, 1 element. */
+  get nodeType(): number { return this.isText ? 3 : this.tagName.startsWith("#") ? 11 : 1; }
+  get previousSibling(): FakeNode | null {
+    const siblings = this.parentNode?.children ?? [];
+    return siblings[siblings.indexOf(this) - 1] ?? null;
+  }
+  get nextSibling(): FakeNode | null {
+    const siblings = this.parentNode?.children ?? [];
+    const idx = siblings.indexOf(this);
+    return idx === -1 ? null : siblings[idx + 1] ?? null;
+  }
   get className(): string { return this.attributes.get("class") ?? ""; }
   set className(value: string) { if (value) this.attributes.set("class", value); else this.attributes.delete("class"); }
   get id(): string { return this.attributes.get("id") ?? ""; }
@@ -125,6 +136,15 @@ export class FakeNode {
     if (idx !== -1) this.parentNode.children.splice(idx, 1);
     this.parentNode = null;
   }
+  insertBefore(node: FakeNode, reference: FakeNode | null): FakeNode {
+    if (!reference) return this.appendChild(node);
+    node.remove();
+    const idx = this.children.indexOf(reference);
+    node.parentNode = this;
+    this.children.splice(idx === -1 ? this.children.length : idx, 0, node);
+    return node;
+  }
+  removeChild(node: FakeNode): FakeNode { if (node.parentNode === this) node.remove(); return node; }
   replaceChildren(...nodes: FakeNode[]): void { this.children = []; for (const n of nodes) this.appendChild(n); }
 
   addEventListener(type: string, listener: Listener): void {
@@ -279,6 +299,7 @@ function matchesCompound(node: FakeNode, compound: string): boolean {
 export const FakeDocument = {
   activeElement: null as FakeNode | null,
   createElement: (tag: string) => new FakeNode(tag),
+  createTextNode: (text: string) => new FakeNode("#text", text),
   createElementNS: (_ns: string, tag: string) => new FakeNode(tag),
 };
 

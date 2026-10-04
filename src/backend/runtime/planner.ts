@@ -56,6 +56,7 @@ import { normalizeStageEffect, normalizeAmbientEffect, deriveWeatherAmbient } fr
 import { getAudioCatalog, getAudioCatalogPromptSummary } from "./audio-catalog.js";
 import { debugErrorSummary, debugJson, debugQuote, plannerDebugLogger, type PlannerDebugScope } from "./debug-trace.js";
 import { decidePresentation, type SystemOneDecisions } from "./system-one.js";
+import { stripTextEffectTags } from "../../shared/text-effects.js";
 
 export const PlannerEnvironmentChangesSchema = z.object({
   description: z.string().trim().min(1).optional(),
@@ -317,7 +318,7 @@ function recentContext(messages: PlanTurnInput["recentMessages"], maximum: numbe
   if (maximum <= 0) return "";
   return messages.slice(-maximum).map((message) => {
     const role = message.is_user ? "User" : message.name || "Assistant";
-    return `${role}: ${message.content}`;
+    return `${role}: ${stripTextEffectTags(message.content)}`;
   }).join("\n\n");
 }
 
@@ -1185,7 +1186,7 @@ function fallbackPlanner(input: PlanTurnInput, paragraphCount: number): z.infer<
           paragraphIndex: pIdx,
           action: null,
           expression: null,
-          promptDelta: input.content.slice(0, 900)
+          promptDelta: stripTextEffectTags(input.content).slice(0, 900)
         });
       }
     }
@@ -2066,7 +2067,7 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
 
   const visualContext = await loadVisualContext(spindle, {
     chatId: input.chatId,
-    target: [recentContext(input.recentMessages, input.config.includeRecentMessages), input.content].filter(Boolean).join("\n\n"),
+    target: [recentContext(input.recentMessages, input.config.includeRecentMessages), stripTextEffectTags(input.content)].filter(Boolean).join("\n\n"),
     config: input.config,
     ...(input.userId ? { userId: input.userId } : {})
   });
@@ -2086,12 +2087,15 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
   let planner: z.infer<typeof PlannerOutputSchema>;
   let usedFallback = false;
   const plannerConnection = await resolvePlannerConnection(spindle, input.config, input.userId);
-  const paragraphText = narrative.paragraphs.map((paragraph) => `[${paragraph.index}] ${paragraph.text}`).join("\n\n");
+  // Text effect tags (<shake>, <rainbow>, ...) are display markup: the plan
+  // keeps them for the stage, but prompts and pose matching read plain words.
+  const promptParagraphs = narrative.paragraphs.map((paragraph) => ({ ...paragraph, text: stripTextEffectTags(paragraph.text) }));
+  const paragraphText = promptParagraphs.map((paragraph) => `[${paragraph.index}] ${paragraph.text}`).join("\n\n");
   const debug = plannerDebugLogger(spindle, input.config, plannerDebugScope(input));
   const systemOnePromise: Promise<SystemOneDecisions | null> = input.config.systemOneMode === "off"
     ? Promise.resolve(null)
     : decidePresentation(spindle, {
-        paragraphs: narrative.paragraphs,
+        paragraphs: promptParagraphs,
         previousScene: input.previousScene,
         names: [...Object.values(seedRegistry).map((entry) => entry.name), ...Object.values(seedRegistry).flatMap((entry) => entry.aliases), ...(input.previousScene?.cast ?? []), input.message.name, input.singleCharacter.protagonist.name].filter((name): name is string => Boolean(name)),
         ...(personaName ? { personaName } : {}),
@@ -2332,7 +2336,7 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
   const cacheCandidates = !classifierVisuals && cueLimit > 0 ? distinctCues.slice(cueLimit, cueLimit + MAX_CACHE_CUES_PER_TURN) : [];
   const materializeCue = (cue: typeof distinctCues[number], index: number) => {
       const scene = sceneForParagraph(scenes, cue.paragraphIndex);
-      const paragraph = narrative.paragraphs.find((candidate) => candidate.index === cue.paragraphIndex);
+      const paragraph = promptParagraphs.find((candidate) => candidate.index === cue.paragraphIndex);
       const cueIsUser = isPersona(cue.character);
       // When a cue was erroneously aimed at the user/persona (e.g. user dialogue
       // or action), do not copy the user's expression or scan the user's speech
