@@ -23,6 +23,7 @@ Under Advanced, NovelAI has toggles for model-specific quality tags and default 
 - view-gated generation: Cue only plans turns and generates images for chats whose Cue view is open; closing the view (or leaving the chat) aborts the in-flight image batch and marks it cancelled, opening the view plans the latest reply only when nothing current is stored, and cancelled images wait for a manual Retry instead of resuming on their own
 - per-user and per-chat persisted continuity
 - a settings tab, a user-selectable scene-image fit (Cover / Contain / Stretch / Original size / Scale down), seven built-in theme presets (Lumiverse, Golden hour, Boxed console, Paper novel, Midnight noir, Yamaku classic, Literature club), and a shadow-DOM custom CSS contract that is always the final styling layer
+- optional **sprite mode**: reusable character cut-outs (12 expressions each) over reusable backgrounds, staged per paragraph, with a sprite library in settings (see [Sprite mode](#sprite-mode))
 - an always-accessible **Back to chat** control that restores native Lumiverse
 
 It targets Lumiverse staging `1.1.6`, audited at commit `33dfa9ee62999fa3e2567066ed5cdadf61635323`, and `lumiverse-spindle-types` `0.6.23`.
@@ -46,6 +47,26 @@ The pipeline never mutates canonical chat messages. It writes only extension-own
 As with any generative system, image-provider speed and visual identity quality depend on the selected model, provider, and prompt settings. Cue does not promise a specific provider result.
 
 RisuAI card greetings that pack several alternative scenes into one message are macro-resolved before planning, so only the selected scene is shown. Limitation: no host event fires when a scene picker in the chat is clicked, so a changed selection is picked up only when Cue is reopened, when state is requested again, through the Try again control on the waiting card (`vn_refresh`), or through Try again on a visible turn (`vn_retry_turn` re-resolves first and replans when the selection changed). Volatile macros such as `{{random}}`, `{{roll}}` or `{{time}}` in a message re-resolve on every check without counting as a new scene; a message whose host resolution fails keeps its stored turn.
+
+## Sprite mode
+
+Scene mode (the default) paints a full picture for each scene. That takes 20–50 s per picture, so Cue limits pictures per reply. **Sprite mode** pays for pictures once and then reuses them:
+
+- **Character sprites.** For each character, outfit and image style, Cue makes 12 expressions (idle, smile, laughing, sad, crying, angry, surprised, embarrassed, worried, thinking, smug, scared). Each is drawn on a white background with your image connection, then cut out in your browser.
+- **Backgrounds.** One empty background ("plate") per place, time of day and weather.
+- **Staging.** For every paragraph, Cue chooses who stands where, with which expression, motion, emote and light. Every paragraph can change expression, and there is no picture limit per reply.
+
+**Turn it on.** Open the Cue settings tab, then **Pictures**. Keep **Generated illustrations**, and under **How the story is shown** choose **Character sprites**. It saves at once. **Pictures per reply** does not apply in sprite mode; Cue keeps your choice for scene mode.
+
+**First-run cost.** The first time a character appears, Cue makes their set: the expressions the reply needs first, then the rest of the 12. Each new place needs one background. These are normal requests to your image connection, so the first replies cost about as much as scene mode. After that, the same character, outfit and style reuse their set in every chat. Generation runs only while a Cue view is open.
+
+**Cut-out quality.** **Best** downloads a 176 MB segmentation model (ISNet-anime) once from Hugging Face. The browser keeps it, so later visits do not download it again. The download starts with the first cut-out, or at once with **Download model**. **Remove downloaded model** frees the space. **Basic** never downloads anything and removes the plain background without a model; edges can be rougher, mostly on white clothes and hair. A different model address goes under **Advanced → Models and parameters → Sprite cut-out model URL** (https only, saved with **Apply**).
+
+**Classifier staging.** Without System One, Cue stages from the story reader's plan: the speakers stand on stage, and expressions come from the cues. With **System One** on (**Connections**, key saved), Jev answers small choice and yes/no questions for each paragraph: who is present, which expression, motion and emote, how strong, which light. It also notices a place you have already visited, even when it is described differently, so the background is reused. These questions run in parallel and take well under a second. Uncertain answers keep the previous choice, so sprites do not flicker.
+
+**The library.** **Pictures → Sprite library** lists your characters (ready count out of 12, every expression on a checkerboard with its status) and backgrounds. From there you can **Prepare sprites for this chat** ahead of time, **Regenerate** an expression or background, **Re-cut** a sprite from its original picture, and **Delete** a set or background (Cue asks you to confirm). The library is kept per user and bounded to the newest 64 sets and 128 backgrounds.
+
+**Limits.** A change of image style (connection, model, prompt prefix or suffix, negative prompt) starts new sets. Until an expression is ready, the nearest ready one stands in. A character with nothing ready yet shows a "Preparing" badge instead of a sprite. v1 has no lip flap or blinking, no full illustrations mixed in, no parallax, and no sprite for your persona. See [docs/SPRITE_MODE.md](docs/SPRITE_MODE.md) for the design.
 
 ## Scene image reuse (temporary cache)
 
