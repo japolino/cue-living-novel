@@ -71,6 +71,10 @@ describe("image size option", () => {
     expect(SPRITE_IMAGE_SIZE_OPTIONS[1]!.help).toContain("832×1216");
     expect(SPRITE_IMAGE_SIZE_OPTIONS[1]!.help).toContain("VRAM");
     expect(SPRITE_IMAGE_SIZE_HELP).toContain("NovelAI always uses its largest free size");
+    // One setting covers scene pictures too.
+    expect(SPRITE_IMAGE_SIZE_OPTIONS[0]!.help).toContain("Scenes and backgrounds 912×624");
+    expect(SPRITE_IMAGE_SIZE_OPTIONS[1]!.help).toContain("Scenes and backgrounds 1216×832");
+    expect(SPRITE_IMAGE_SIZE_HELP).toContain("in both modes");
     expect(normalizeSpriteImageSize("upscaled")).toBe("upscaled");
     expect(normalizeSpriteImageSize("huge")).toBe("standard");
     expect(normalizeSpriteImageSize("")).toBe("standard");

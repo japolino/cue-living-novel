@@ -42,6 +42,8 @@ Generated scene images come from the one built-in path: `src/backend/runtime/pla
 
 Every image shows exactly one centered protagonist composed from a stable identity/tag block and a pose suffix from a finite catalogue. The tag block is frozen per chat and is never auto-updated by a later turn. By default, pose is selected by a pure function of paragraph index and text; optional System One decisions can choose another pose from the same catalogue. The camera is fixed to a centered, eye-level, medium-wide 16:9 composition with the lower quarter clear for the dialogue surface.
 
+**Image size.** Scene pictures are wide, so Cue asks for a landscape size. **Pictures → Image size** sets it for ComfyUI and SwarmUI in both modes: **Standard** 912×624 (the default) or **Upscaled** 1216×832. NovelAI always gets 1216×832, its largest size that costs no Anlas (unless you pick another size under NovelAI **Image dimensions**). A `width` and `height` in your **Image parameters (JSON)** win, so a workflow you sized yourself keeps its size. Other providers get no size from Cue.
+
 The pipeline never mutates canonical chat messages. It writes only extension-owned projections: per-turn records, per-chat state, and the single-character visual-state identity record.
 
 As with any generative system, image-provider speed and visual identity quality depend on the selected model, provider, and prompt settings. Cue does not promise a specific provider result.
@@ -83,8 +85,8 @@ the display name), the resolved appearance tags and wardrobe, the effective
 environment (location, time and weather, lighting, description, persistent
 elements), the closed-catalogue pose/expression, the bounded action/prop, the
 camera framing, and the exact provider request (positive and negative prompt,
-connection and workflow, provider, model, your image parameters, prompt
-syntax, and the reference-anchoring toggle). Scene ids, cue ids, paragraph
+connection and workflow, provider, model, your image parameters, the image
+size Cue sends, prompt syntax, and the reference-anchoring toggle). Scene ids, cue ids, paragraph
 numbers, the turn key and free-form
 `promptDelta` are not part of the match, so alternating speakers (Mira, Alex,
 Mira) in the same room still reuse. Composition and camera locks are not

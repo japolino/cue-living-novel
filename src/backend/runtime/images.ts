@@ -4,6 +4,7 @@ import { DEFAULT_CONFIG } from "../../config.js";
 import { novelAiCapabilities, novelAiQualityTags, NOVELAI_NEGATIVE_DEFAULT, renderNovelAiEmphasis } from "./novelai-prompt.js";
 import { AssetJobSchema, type AssetJob, type SceneState, type TurnPlan, type VisualCue } from "../../shared/contracts.js";
 import { AssetScheduler } from "../core/asset-scheduler.js";
+import { sceneSizeParameters } from "./image-size.js";
 import {
   SceneImageCache,
   sceneEpisodeOf,
@@ -377,7 +378,10 @@ export function sceneImageIdentityFor(
       provider,
       connectionId: connectionId ? (workflowId ? `${connectionId}::${workflowId}` : connectionId) : null,
       model: config.imageModel,
-      parameters: { ...userImageParameters(config), ...(nai?.parameters ?? {}) },
+      // The default scene size is part of the request (the user's own size
+      // wins, see sceneSizeParameters). Other providers add nothing, so their
+      // keys keep their exact bytes.
+      parameters: { ...sceneSizeParameters(provider, config), ...userImageParameters(config), ...(nai?.parameters ?? {}) },
       promptSyntax: nai ? "nai" : description.promptSyntax,
       referenceAnchoring: referenceAnchoringEnabled(config),
       // Only present in card mode, so default ("captured") cache keys keep
@@ -1088,7 +1092,10 @@ export async function generateAssets(
                 ...(provider === "comfyui" && config.imageParameters.denoise === undefined ? { denoise: 0.0 } : {})
               };
           const { connectionId, workflowId } = splitConnectionSelection(config.imageConnectionId);
+          // Scene pictures are wide on the stage: send a landscape size
+          // unless the user's image parameters already set one.
           const effectiveParameters = {
+            ...sceneSizeParameters(provider, config),
             ...parameters,
             ...(nai?.parameters ?? {}),
             ...(workflowId ? { workflow_id: workflowId } : {})

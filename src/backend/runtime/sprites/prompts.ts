@@ -1,4 +1,4 @@
-import type { VisualNovelConfig, VisualNovelSpriteImageSize } from "../../../config.js";
+import type { VisualNovelConfig } from "../../../config.js";
 import { DEFAULT_CONFIG } from "../../../config.js";
 import { POSE_EXPRESSION_CATALOGUE, poseById } from "../../../shared/character.js";
 import type { SpriteCastMember, SpritePlateRef } from "../../../shared/sprites.js";
@@ -9,6 +9,7 @@ import {
   validateAndRepairDelimiters,
 } from "../../inlay-prompt/index.js";
 import { applyAttireOverride, classifySubject } from "../images.js";
+import { sizeParameters } from "../image-size.js";
 import { NOVELAI_NEGATIVE_DEFAULT, novelAiCapabilities, novelAiQualityTags, renderNovelAiEmphasis } from "../novelai-prompt.js";
 
 /**
@@ -27,40 +28,20 @@ export const SPRITE_NEGATIVE_TAGS = "scenery, background, shadow, drop shadow, g
 export const PLATE_TAGS = "scenery, no humans, detailed background, wide shot";
 export const PLATE_NEGATIVE_TAGS = "1girl, 1boy, people, person, character, text";
 
-export type SpriteImageKind = "sprite" | "plate" | "moment";
-export type SpritePixelSize = { readonly width: number; readonly height: number };
-
-/** Sprite and plate sizes per `spriteImageSize` (ComfyUI / SwarmUI). Key moments use the plate size. */
-export const SPRITE_IMAGE_SIZE_PRESETS: Readonly<Record<VisualNovelSpriteImageSize, { sprite: SpritePixelSize; plate: SpritePixelSize }>> = {
-  standard: { sprite: { width: 624, height: 912 }, plate: { width: 912, height: 624 } },
-  upscaled: { sprite: { width: 832, height: 1216 }, plate: { width: 1216, height: 832 } },
-};
-/** "Upscaled" sizes (also NovelAI's, see NOVELAI_SPRITE_SIZE). */
-export const SPRITE_SIZE = SPRITE_IMAGE_SIZE_PRESETS.upscaled.sprite;
-export const PLATE_SIZE = SPRITE_IMAGE_SIZE_PRESETS.upscaled.plate;
-/**
- * NovelAI always gets its largest size that costs no Anlas on Opus (at most
- * 1024×1024 = 1,048,576 pixels), whatever `spriteImageSize` says.
- */
-export const NOVELAI_SPRITE_SIZE = SPRITE_SIZE;
-export const NOVELAI_PLATE_SIZE = PLATE_SIZE;
-
-/** Pixel size of one generated image of `kind` for a provider and the config's `spriteImageSize`. */
-export function spriteImageSizeFor(
-  provider: string | null,
-  kind: SpriteImageKind,
-  setting: VisualNovelSpriteImageSize | undefined,
-): SpritePixelSize {
-  const landscape = kind !== "sprite";
-  if (provider === "novelai") return landscape ? NOVELAI_PLATE_SIZE : NOVELAI_SPRITE_SIZE;
-  const preset = SPRITE_IMAGE_SIZE_PRESETS[setting ?? "standard"] ?? SPRITE_IMAGE_SIZE_PRESETS.standard;
-  return landscape ? preset.plate : preset.sprite;
-}
+export {
+  NOVELAI_PLATE_SIZE,
+  NOVELAI_SPRITE_SIZE,
+  PLATE_SIZE,
+  SPRITE_IMAGE_SIZE_PRESETS,
+  SPRITE_SIZE,
+  sizeParameters,
+  spriteImageSizeFor,
+  type SpriteImageKind,
+  type SpritePixelSize,
+} from "../image-size.js";
 
 /** Providers whose image parameters take a fixed seed. */
 const SEED_PROVIDERS = new Set(["novelai", "comfyui", "swarmui"]);
-/** Providers whose image parameters take an explicit width and height. */
-const SIZE_PROVIDERS = new Set(["comfyui", "swarmui"]);
 
 export type SpriteImageRequest = {
   prompt: string;
@@ -103,22 +84,6 @@ export function dedupeSections(sections: string[]): string[] {
 export function stylePrefix(config: VisualNovelConfig, novelAi: boolean): string {
   if (config.promptPrefix !== DEFAULT_CONFIG.promptPrefix) return config.promptPrefix;
   return novelAi ? "anime coloring" : "masterpiece, best quality, anime coloring";
-}
-
-/**
- * Size parameters for one image of `kind`: NovelAI a `resolution` (always its
- * largest free size), ComfyUI / SwarmUI `width` / `height` from
- * `spriteImageSize`, other providers nothing.
- */
-export function sizeParameters(
-  provider: string | null,
-  kind: SpriteImageKind,
-  config: Pick<VisualNovelConfig, "spriteImageSize"> | null | undefined,
-): Record<string, unknown> {
-  const size = spriteImageSizeFor(provider, kind, config?.spriteImageSize);
-  if (provider === "novelai") return { resolution: `${size.width}x${size.height}` };
-  if (provider && SIZE_PROVIDERS.has(provider)) return { width: size.width, height: size.height };
-  return {};
 }
 
 function seedParameters(provider: string | null, seed: number | null): Record<string, unknown> {

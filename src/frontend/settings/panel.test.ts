@@ -73,14 +73,19 @@ describe("settings panel markup", () => {
     expect(source).toContain('spriteModelUrl: parseSpriteModelUrl(');
   });
 
-  test("sprite image size: one everyday control in the sprite-only block, before the cut-out", () => {
+  test("image size: one everyday control for both modes, before the sprite-only block", () => {
     expect(source.match(/optionList\("spriteImageSize"/g)).toHaveLength(1);
     expect(source).toContain('case "spriteImageSize": return { spriteImageSize: normalizeSpriteImageSize(target.value) };');
     expect(source).toContain('this.setRadio("spriteImageSize", config.spriteImageSize);');
     expect(advancedKeys).not.toContain("spriteImageSize");
     const spritesOnly = source.slice(source.indexOf("<div data-sprites-only hidden>"), source.indexOf('${group("Sprite library"'));
-    expect(spritesOnly).toContain('optionList("spriteImageSize", SPRITE_IMAGE_SIZE_OPTIONS)');
-    expect(spritesOnly.indexOf("spriteImageSize")).toBeLessThan(spritesOnly.indexOf('optionList("spriteCutout"'));
+    expect(spritesOnly).not.toContain("spriteImageSize");
+    const generated = source.slice(source.indexOf("<div data-generated-only>"), source.indexOf("<div data-sprites-only hidden>"));
+    expect(generated).toContain('optionList("spriteImageSize", SPRITE_IMAGE_SIZE_OPTIONS)');
+    // Scene pictures use it too, so it is not a scene-only or sprite-only group.
+    const group = generated.slice(generated.indexOf('${group("Image size"'));
+    expect(group).not.toContain("sceneOnly");
+    expect(group).toContain("scenes scene pictures");
   });
 
   test("expressions per character: one everyday control right after Image size, in the sprite-only block", () => {
@@ -91,7 +96,7 @@ describe("settings panel markup", () => {
     expect(advancedKeys).not.toContain("spriteExpressionCount");
     const spritesOnly = source.slice(source.indexOf("<div data-sprites-only hidden>"), source.indexOf('${group("Sprite library"'));
     expect(spritesOnly).toContain('${group("Expressions per character"');
-    expect(spritesOnly.indexOf('optionList("spriteImageSize"')).toBeLessThan(spritesOnly.indexOf('optionList("spriteExpressionCount"'));
+    expect(source.indexOf('optionList("spriteImageSize"')).toBeLessThan(source.indexOf('optionList("spriteExpressionCount"'));
     expect(spritesOnly.indexOf('optionList("spriteExpressionCount"')).toBeLessThan(spritesOnly.indexOf('optionList("spriteCutout"'));
   });
 

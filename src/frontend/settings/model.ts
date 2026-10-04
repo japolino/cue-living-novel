@@ -684,14 +684,14 @@ export function normalizeSpriteCutout(value: string): VisualNovelSpriteCutout {
     : DEFAULT_CONFIG.spriteCutout;
 }
 
-/** Sprite image size (ComfyUI / SwarmUI only; NovelAI always uses its largest free size). */
+/** Image size for scene pictures and sprites (ComfyUI / SwarmUI only; NovelAI always uses its largest free size). */
 export const SPRITE_IMAGE_SIZE_OPTIONS: ReadonlyArray<{ value: VisualNovelSpriteImageSize; label: string; help: string }> = [
-  { value: "standard", label: "Standard", help: "Faster, and fits GPUs with little memory. Sprites 624×912, backgrounds 912×624." },
-  { value: "upscaled", label: "Upscaled", help: "Sharper, but slower and needs more GPU memory (VRAM). Sprites 832×1216, backgrounds 1216×832." },
+  { value: "standard", label: "Standard", help: "Faster, and fits GPUs with little memory. Scenes and backgrounds 912×624, sprites 624×912." },
+  { value: "upscaled", label: "Upscaled", help: "Sharper, but slower and needs more GPU memory (VRAM). Scenes and backgrounds 1216×832, sprites 832×1216." },
 ];
 
 /** Group hint under "Image size". */
-export const SPRITE_IMAGE_SIZE_HELP = "For ComfyUI and SwarmUI. NovelAI always uses its largest free size. Sprites you already have are kept.";
+export const SPRITE_IMAGE_SIZE_HELP = "For ComfyUI and SwarmUI, in both modes. NovelAI always uses its largest free size; its scene pictures follow Image dimensions. A width and height in your Image parameters win for scene pictures. Sprites you already have are kept.";
 
 export function normalizeSpriteImageSize(value: string): VisualNovelSpriteImageSize {
   return (SPRITE_IMAGE_SIZES as readonly string[]).includes(value)

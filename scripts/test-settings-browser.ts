@@ -153,12 +153,21 @@ try {
   assert.equal(await presentation.isVisible(), true, "presentation mode shows while pictures are generated");
   assert.equal(await settings.locator('input[name="presentationMode"][value="scene"]').isChecked(), true, "scene pictures is the default");
   assert.equal(await settings.locator("[data-sprites-only]").isVisible(), false, "sprite controls hide in scene mode");
+  // Image size also sets the scene picture size, so it shows in scene mode too.
+  const sizeGroup = settings.locator('[data-group-id="sprite-size"]');
+  assert.equal(await sizeGroup.isVisible(), true, "image size shows in scene mode");
+  assert.match(await sizeGroup.innerText(), /Scenes and backgrounds 912×624/);
+  await settings.locator('input[name="spriteImageSize"][value="upscaled"]').check();
+  assert.deepEqual(await lastPatch(page), { spriteImageSize: "upscaled" }, "image size saves at once in scene mode");
+  await settings.locator('input[name="spriteImageSize"][value="standard"]').check();
+  assert.deepEqual(await lastPatch(page), { spriteImageSize: "standard" });
   const budgetGroup = settings.locator('[data-group][data-scene-only]').first();
   assert.equal(await budgetGroup.getAttribute("data-inactive"), null);
   const requestsBefore = (await spriteFixture(page)).libraryRequests;
   await settings.locator('input[name="presentationMode"][value="sprites"]').check();
   assert.deepEqual(await lastPatch(page), { presentationMode: "sprites" }, "presentation mode is an everyday patch");
   assert.equal(await settings.locator("[data-sprites-only]").isVisible(), true, "sprite controls appear with sprites");
+  assert.equal(await sizeGroup.isVisible(), true, "image size stays in sprite mode");
   assert.equal(await budgetGroup.getAttribute("data-inactive"), "", "pictures per reply reads as not applying");
   assert.equal(await budgetGroup.locator("[data-scene-note]").isVisible(), true);
   assert.equal(await settings.locator('input[name="budgetPreset"][value="custom"]').isChecked(), true, "the budget keeps its value in sprite mode");

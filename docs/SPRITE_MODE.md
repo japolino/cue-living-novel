@@ -31,17 +31,18 @@ own expression and there is no picture cap.
 | `spriteCutout` | `"best"` (model) \| `"basic"` (no download) | `"best"` | at once (everyday) |
 | `spriteModelUrl` | https URL | ISNet-anime on Hugging Face | Advanced (Apply) |
 | `keyIllustrations` | `"off"` \| `"few"` (≤ 1 per reply) | `"off"` | at once (everyday, sprite mode only) |
-| `spriteImageSize` | `"standard"` \| `"upscaled"` | `"standard"` | at once (everyday, sprite mode only) |
+| `spriteImageSize` | `"standard"` \| `"upscaled"` | `"standard"` | at once (everyday, both modes) |
 | `spriteExpressionCount` | `4` \| `8` \| `12` | `4` | at once (everyday, sprite mode only) |
 
 ### Image size (`spriteImageSize`)
 
-Applies to providers that take a width and height (ComfyUI, SwarmUI):
+Applies to providers that take a width and height (ComfyUI, SwarmUI), in
+sprite mode and in scene mode:
 
-| Setting | Sprites | Plates | Key moments |
-|---|---|---|---|
-| Standard (default) | 624×912 | 912×624 | 912×624 |
-| Upscaled | 832×1216 | 1216×832 | 1216×832 |
+| Setting | Sprites | Plates | Key moments | Scene pictures |
+|---|---|---|---|---|
+| Standard (default) | 624×912 | 912×624 | 912×624 | 912×624 |
+| Upscaled | 832×1216 | 1216×832 | 1216×832 | 1216×832 |
 
 Standard is fast and fits small GPUs: on an RTX 5060 8 GB (≈ 2.7 GB free
 VRAM) a 624×912 sprite takes ≈ 11 s; at 832×1216 the model spills out of
@@ -50,8 +51,19 @@ stage, so 624×912 looks fine. Upscaled is sharper but slower.
 
 NovelAI ignores the setting: it always gets its largest size that costs no
 Anlas on Opus (≤ 1024×1024 = 1,048,576 pixels), 832×1216 for sprites and
-1216×832 for plates and key moments. Providers that take no size get none.
-`spriteImageSizeFor` / `sizeParameters` in `sprites/prompts.ts` hold the rule.
+1216×832 for plates, key moments and scene pictures. Providers that take no
+size get none. `spriteImageSizeFor` / `sizeParameters` in
+`runtime/image-size.ts` hold the rule (`sprites/prompts.ts` re-exports them).
+
+Scene pictures (`runtime/images.ts`, `sceneSizeParameters`): before this,
+scene requests carried no size, so a ComfyUI workflow rendered at its own
+saved size (often portrait) while the stage shows a 16:9 picture. Now the
+landscape size goes under the user's "Image parameters (JSON)": a `width` or
+`height` there (or a `resolution` on NovelAI, which the NovelAI "Image
+dimensions" control writes) wins, and Cue then adds no size. Sprite, plate and
+key-moment requests keep their rule (their size goes over the user's
+parameters). The scene size is part of the scene-cache request identity;
+other providers add nothing, so their keys keep their bytes.
 
 The size is not part of the style key, so changing it does not start new
 sets: images already made stay, and only new or regenerated images use the
@@ -386,8 +398,8 @@ layers, crossfaded) → ambient overlay (behind sprites) → `[data-vn-sprites]`
 
 ## Settings (frontend)
 
-Presentation mode control; image size (Standard / Upscaled, sprite mode
-only); expressions per character (4 / 8 / 12, sprite mode only); cut-out quality; model status (absent /
+Presentation mode control; image size (Standard / Upscaled, both modes:
+scene pictures use the landscape size); expressions per character (4 / 8 / 12, sprite mode only); cut-out quality; model status (absent /
 downloading / ready / unsupported) with Download and Remove; a sprite library
 gallery (sets with their expressions on a checkerboard, plates) with Prepare
 for this chat, Regenerate, Re-cut, and Delete; the model URL under Advanced.

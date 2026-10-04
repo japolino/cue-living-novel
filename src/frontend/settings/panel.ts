@@ -631,12 +631,12 @@ export class VisualNovelSettingsPanel {
                   </fieldset>
                 </div>
               `, { id: "presentation", find: find("Scene pictures or character sprites", "presentation mode sprites sprite mode character expressions cut-out plates backgrounds scene pictures vn") })}
+              ${group("Image size", `
+                <fieldset aria-label="Image size">
+                  ${optionList("spriteImageSize", SPRITE_IMAGE_SIZE_OPTIONS)}
+                </fieldset>
+              `, { id: "sprite-size", help: esc(SPRITE_IMAGE_SIZE_HELP), find: find("Image size", "scenes scene pictures sprites sprite backgrounds size resolution width height landscape standard upscaled vram gpu memory faster sharper comfyui swarmui novelai") })}
               <div data-sprites-only hidden>
-                ${group("Image size", `
-                  <fieldset aria-label="Image size">
-                    ${optionList("spriteImageSize", SPRITE_IMAGE_SIZE_OPTIONS)}
-                  </fieldset>
-                `, { id: "sprite-size", help: esc(SPRITE_IMAGE_SIZE_HELP), find: find("Image size", "sprites sprite size resolution standard upscaled vram gpu memory faster sharper comfyui swarmui novelai") })}
                 ${group("Expressions per character", `
                   <fieldset aria-label="Expressions per character">
                     ${optionList("spriteExpressionCount", SPRITE_EXPRESSION_COUNT_OPTIONS)}
