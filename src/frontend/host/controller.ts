@@ -665,12 +665,12 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       ctx.sendToBackend({ type: "vn_set_config", patch, chatId: chatId() });
     }
   }) : null;
-  // Speech settings live in their own card appended after the main panel, so
-  // the panel file itself stays untouched. Profile/voice listing happens only
-  // on explicit button presses inside the card (metadata calls, no synthesis).
+  // Speech settings render inside the panel's Voice section (own shadow root,
+  // own save path). Profile/voice listing happens only on explicit button
+  // presses inside it (metadata calls, no synthesis).
   const speechTransport = createSpeechTransport();
   const speechSettings = settingsHandle ? new SpeechSettingsSection({
-    mount: settingsHandle.root,
+    mount: settingsPanel?.voiceMount() ?? settingsHandle.root,
     onSave: (speechPatch) => {
       ctx.sendToBackend({ type: "vn_set_config", patch: { speech: speechPatch }, chatId: chatId() });
     },

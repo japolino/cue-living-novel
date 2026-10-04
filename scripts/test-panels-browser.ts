@@ -84,7 +84,7 @@ try {
   for (const name of ["parserParameters", "imageParameters", "customCss", "ignoredTags", "debugLogging", "imageModel"]) {
     assert.equal(await settings.locator(`[name="${name}"]`).isVisible(), false, name + " should be advanced");
   }
-  await settings.getByRole("heading", { name: "Appearance", exact: true }).click();
+  await settings.getByRole("tab", { name: "Look" }).click();
   await settings.locator('input[name="themePreset"][value="paper-novel"]').check();
   assert.deepEqual(await page.evaluate(() => (window as any).settingsFixture.saved), { themePreset: "paper-novel" });
   await page.screenshot({ path: ".cache/settings-basic-mobile.png", fullPage: true });

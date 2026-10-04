@@ -6,11 +6,13 @@ import {
 import { GEMINI_AUDIO_TAG_SUGGESTIONS } from "./delivery.js";
 import { characterOverrideKey, speakerNameKey } from "./voice-resolution.js";
 import type { SafeTtsProfile, VoiceOption } from "./transport.js";
+import { SETTINGS_TOKENS_CSS } from "../settings/controls-css.js";
 
 /**
- * Self-contained "Speech" settings card. Mounted by the host controller as a
- * SIBLING of the main settings panel (own shadow root), so the existing panel
- * file stays untouched and merge-friendly.
+ * Self-contained speech settings. The host controller mounts it inside the
+ * settings panel's Voice section (`VisualNovelSettingsPanel.voiceMount()`);
+ * it keeps its own shadow root and save path, and shares the panel's look
+ * through SETTINGS_TOKENS_CSS.
  *
  * Truthfulness rules:
  * - profiles/voices load ONLY on explicit button presses (the voices endpoint
@@ -29,35 +31,53 @@ export type SpeechSettingsSectionOptions = {
   getChatId: () => string;
 };
 
-const SECTION_CSS = `
-:host { display: block; color: var(--lumiverse-text, #f5f5f7); font: 15px/1.5 var(--lumiverse-font-family, system-ui, sans-serif); padding: 0 1rem 1rem; max-width: 54rem; }
-* { box-sizing: border-box; }
-details { border: 1px solid var(--lumiverse-border, rgba(255,255,255,.16)); border-radius: .9rem; background: var(--lumiverse-card-bg, rgba(255,255,255,.035)); }
-summary { list-style: none; display: flex; align-items: center; gap: .6rem; min-height: 3.25rem; padding: .7rem 1rem; cursor: pointer; }
-summary::-webkit-details-marker { display: none; }
-summary h2 { flex: 1; margin: 0; font-size: 1.05rem; font-weight: 650; }
-summary span { font-size: .85rem; color: var(--lumiverse-text-muted, rgba(255,255,255,.68)); }
-[data-body] { display: grid; gap: .9rem; padding: .25rem 1rem 1.1rem; }
-label, .field { display: grid; gap: .3rem; font-weight: 600; }
-small { font-weight: 400; font-size: .85rem; color: var(--lumiverse-text-muted, rgba(255,255,255,.68)); }
-input[type="text"], select { width: 100%; min-height: 2.5rem; padding: .5rem .7rem; border: 1px solid var(--lumiverse-border, rgba(255,255,255,.2)); border-radius: .6rem; background: var(--lumiverse-bg-elevated, #171822); color: inherit; font: inherit; }
-input[type="range"] { width: 100%; accent-color: var(--lumiverse-primary, #a986ff); }
-input[type="checkbox"] { width: 1.2rem; height: 1.2rem; accent-color: var(--lumiverse-primary, #a986ff); }
-.check { display: flex; align-items: flex-start; gap: .55rem; font-weight: 600; }
-button { min-height: 2.4rem; padding: .4rem .9rem; border: 1px solid var(--lumiverse-border, rgba(255,255,255,.24)); border-radius: 999px; background: var(--lumiverse-fill-medium, rgba(255,255,255,.1)); color: inherit; font: inherit; cursor: pointer; }
-button:disabled { opacity: .55; cursor: default; }
-.row { display: grid; gap: .5rem; grid-template-columns: 1fr 1fr auto; align-items: end; }
-.voice-row { display: grid; gap: .5rem; grid-template-columns: 1fr auto; align-items: end; }
-@media (max-width: 640px) {
-  .row { grid-template-columns: 1fr; }
-  .voice-row { grid-template-columns: 1fr; }
+const SECTION_CSS = `${SETTINGS_TOKENS_CSS}
+[data-speech-root] { display: grid; gap: .9rem; }
+[data-speech-card], fieldset { display: grid; gap: .75rem; min-width: 0; margin: 0; padding: 1rem 1.05rem 1.1rem; border: 1px solid var(--set-border); border-radius: var(--set-radius); background: var(--set-surface); }
+[data-speech-card] > header { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .65rem; }
+h3, legend { font-size: .98rem; font-weight: 650; line-height: 1.3; }
+h3 { flex: 1 1 auto; }
+legend { float: left; width: 100%; padding: 0; margin: 0 0 .1rem; }
+[data-speech-state] { padding: .05rem .6rem; border-radius: 999px; border: 1px solid var(--set-border); font-size: .76rem; font-weight: 650; color: var(--set-muted); }
+[data-speech-state][data-on] { border-color: color-mix(in srgb, var(--set-success) 60%, transparent); color: var(--set-success); }
+label, .field { display: grid; gap: .35rem; font-weight: 600; font-size: .93rem; min-width: 0; }
+.check { display: grid; grid-template-columns: auto 1fr; align-items: start; gap: .7rem; min-height: var(--set-control); padding: .45rem .2rem; font-weight: 550; cursor: pointer; }
+.check input { margin-top: .17rem; }
+.check small { margin-top: .1rem; }
+.row { display: grid; gap: .5rem; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: end; }
+.voice-row { display: grid; gap: .5rem; grid-template-columns: minmax(0, 1fr) auto; align-items: end; }
+.actions { display: flex; flex-wrap: wrap; gap: .55rem .75rem; align-items: center; }
+.actions small { flex: 1 1 14rem; }
+:host { container-type: inline-size; }
+@container (max-width: 520px) {
+  .row, .voice-row { grid-template-columns: 1fr; }
+  [data-speech-card], fieldset { padding: .85rem .8rem .95rem; }
 }
-[data-status] { font-size: .85rem; color: var(--lumiverse-text-muted, rgba(255,255,255,.68)); }
-[data-status][data-tone="error"] { color: var(--lumiverse-danger, #ff8ca0); }
-.warn { font-size: .85rem; color: var(--lumiverse-warning, #ffd08a); }
-fieldset { border: 1px solid var(--lumiverse-border, rgba(255,255,255,.12)); border-radius: .7rem; padding: .75rem; display: grid; gap: .7rem; margin: 0; }
-legend { font-weight: 650; padding: 0 .3rem; }
+[data-speech-status][data-tone="error"] { color: var(--set-danger); }
+.warn { padding: .5rem .7rem; border-radius: .6rem; background: color-mix(in srgb, var(--set-warning) 10%, transparent); font-size: .84rem; color: var(--set-warning); }
 `;
+
+function moreDisclosure(text: string): HTMLDetailsElement {
+  const details = document.createElement("details");
+  details.setAttribute("data-more", "");
+  const summary = document.createElement("summary");
+  summary.textContent = "More";
+  const body = document.createElement("p");
+  body.textContent = text;
+  details.append(summary, body);
+  return details;
+}
+
+function card(title: string, ...children: Node[]): HTMLElement {
+  const section = document.createElement("section");
+  section.setAttribute("data-speech-card", "");
+  const header = document.createElement("header");
+  const heading = document.createElement("h3");
+  heading.textContent = title;
+  header.append(heading);
+  section.append(header, ...children);
+  return section;
+}
 
 type ProfilesState =
   | { status: "idle" | "loading"; profiles: SafeTtsProfile[] }
@@ -69,8 +89,6 @@ export class SpeechSettingsSection {
   private readonly shadow: ShadowRoot;
   private settings: SpeechSettings = DEFAULT_SPEECH_SETTINGS;
   private profiles: ProfilesState = { status: "idle", profiles: [] };
-  /** Disclosure state survives re-renders; starts open only when enabled. */
-  private openState: boolean | null = null;
   private voiceOptions = new Map<string, VoiceOption[]>();
   /**
    * Character names typed via "Add" that have no saved voice yet. They are
@@ -281,17 +299,13 @@ export class SpeechSettingsSection {
     const settings = this.settings;
     const style = document.createElement("style");
     style.textContent = SECTION_CSS;
-    const details = document.createElement("details");
-    details.open = this.openState ?? settings.enabled;
-    details.addEventListener("toggle", () => { this.openState = details.open; });
-    const summary = document.createElement("summary");
-    const title = document.createElement("h2");
-    title.textContent = "Speech (read paragraphs aloud)";
-    const summaryState = document.createElement("span");
-    summaryState.textContent = settings.enabled ? "On" : "Off";
-    summary.append(title, summaryState);
     const body = document.createElement("div");
-    body.setAttribute("data-body", "");
+    body.setAttribute("data-speech-root", "");
+    // Kept for hosts/tests that read the visible on/off state.
+    const summaryState = document.createElement("span");
+    summaryState.setAttribute("data-speech-state", "");
+    summaryState.toggleAttribute("data-on", settings.enabled);
+    summaryState.textContent = settings.enabled ? "On" : "Off";
 
     // Enable
     const enable = document.createElement("label");
@@ -302,23 +316,25 @@ export class SpeechSettingsSection {
     enableInput.checked = settings.enabled;
     enableInput.addEventListener("change", () => this.save((next) => { next.enabled = enableInput.checked; }));
     const enableText = document.createElement("span");
-    enableText.innerHTML = "Read the current paragraph aloud with your saved Lumiverse TTS profiles<br><small>Off by default. Cue sends text to your Lumiverse server only when you press Play (or enable auto-play). Each request can cost provider credits. Cue never reads or stores API keys.</small>";
+    enableText.innerHTML = "Read the current paragraph aloud with your saved Lumiverse TTS profiles<small>Off by default. Text is sent only when you press Play (or turn on auto-play). Each request can cost provider credits.</small>";
+    enableText.append(moreDisclosure("Cue sends text to your Lumiverse server, which forwards it to the TTS provider of the chosen profile. Cue never reads or stores API keys."));
     enable.append(enableInput, enableText);
 
     // Host autoplay overlap warning (truthful: coordination not verified).
     const overlap = document.createElement("p");
     overlap.className = "warn";
-    overlap.textContent = "If Lumiverse’s own TTS auto-play is also on, both players may speak the same message. Cue does not change the Lumiverse setting; turn one of them off yourself.";
+    overlap.textContent = "If Lumiverse’s own TTS auto-play is also on, both may speak the same message. Cue does not change that setting; turn one of them off.";
 
     // Profiles loader
     const loadRow = document.createElement("div");
+    loadRow.className = "actions";
     const loadButton = document.createElement("button");
     loadButton.type = "button";
     loadButton.setAttribute("data-speech-field", "load-profiles");
     loadButton.textContent = this.profiles.status === "loading" ? "Loading profiles…" : "Load profiles";
     loadButton.disabled = this.profiles.status === "loading";
     const loadStatus = document.createElement("small");
-    loadStatus.setAttribute("data-status", "");
+    loadStatus.setAttribute("data-speech-status", "");
     if (this.profiles.status === "ready") loadStatus.textContent = `${this.profiles.profiles.length} saved TTS profile(s). Listing is metadata only — nothing was synthesized or tested.`;
     if (this.profiles.status === "error") { loadStatus.textContent = this.profiles.error; loadStatus.setAttribute("data-tone", "error"); }
     if (this.profiles.status === "idle") loadStatus.textContent = "Profiles are listed only when you ask. Saved choices keep working without loading this list.";
@@ -455,7 +471,8 @@ export class SpeechSettingsSection {
     const deliveryLegend = document.createElement("legend");
     deliveryLegend.textContent = "Delivery style (experimental)";
     const deliveryHelp = document.createElement("small");
-    deliveryHelp.textContent = "“Gemini audio tags” prepends one inline tag like [whispers] to the SPOKEN text only (the visible prose never changes). This follows Google’s Gemini speech-generation guide; it is probabilistic guidance for Gemini-family TTS models routed through your profile, has no exhaustive supported list, and other providers may read the bracket text aloud. Cue never makes extra LLM calls to pick emotions — you choose the tag.";
+    deliveryHelp.textContent = "“Gemini audio tags” adds one tag like [whispers] to the spoken text only. The visible prose never changes.";
+    const deliveryMore = moreDisclosure("This follows Google’s Gemini speech-generation guide. It is probabilistic guidance for Gemini-family TTS models routed through your profile and has no exhaustive supported list. Other providers may read the bracket text aloud. Cue never makes extra LLM calls to pick emotions — you choose the tag.");
     const modeSelect = document.createElement("select");
     modeSelect.setAttribute("data-speech-field", "delivery-mode");
     for (const [value, label] of [["none", "None — send the prose unchanged (default)"], ["gemini-audio-tags", "Gemini audio tags — prepend a chosen [tag]"]] as const) {
@@ -502,10 +519,10 @@ export class SpeechSettingsSection {
     compatInput.checked = settings.deliveryAllProviders;
     compatInput.addEventListener("change", () => this.save((next) => { next.deliveryAllProviders = compatInput.checked; }));
     const compatText = document.createElement("span");
-    compatText.innerHTML = "Compatibility: also send the tag to non-Gemini profiles<br><small>Off by default. Cue checks the selected profile’s model before each Play and only injects the tag when the model id is Gemini-family. Turning this on sends the bracket tag to ANY provider, which may read it aloud instead of acting it.</small>";
+    compatText.innerHTML = "Compatibility: also send the tag to non-Gemini profiles<small>Off by default. Cue checks the selected profile’s model before each Play and only adds the tag for Gemini-family models. On sends the tag to any provider, which may read it aloud.</small>";
     compat.append(compatInput, compatText);
     compat.hidden = settings.deliveryMode !== "gemini-audio-tags";
-    delivery.append(deliveryLegend, deliveryHelp, modeSelect, tagLabel, compat);
+    delivery.append(deliveryLegend, deliveryHelp, deliveryMore, modeSelect, tagLabel, compat);
 
     // Autoplay + volume
     const autoplay = document.createElement("label");
@@ -516,7 +533,7 @@ export class SpeechSettingsSection {
     autoplayInput.checked = settings.autoplay;
     autoplayInput.addEventListener("change", () => this.save((next) => { next.autoplay = autoplayInput.checked; }));
     const autoplayText = document.createElement("span");
-    autoplayText.innerHTML = "Auto-play each new paragraph<br><small>Starts only after you press Play once (browsers require a user gesture). Each paragraph is one synthesis request on your TTS profile.</small>";
+    autoplayText.innerHTML = "Auto-play each new paragraph<small>Starts only after you press Play once (browsers require a user gesture). Each paragraph is one synthesis request on your TTS profile.</small>";
     autoplay.append(autoplayInput, autoplayText);
 
     const volume = document.createElement("label");
@@ -532,9 +549,18 @@ export class SpeechSettingsSection {
     volumeInput.addEventListener("change", () => this.save((next) => { next.volume = Number(volumeInput.value); }));
     volume.append(volumeTitle, volumeInput);
 
-    body.append(enable, overlap, loadRow, narrator, fallback, overrides, delivery, autoplay, volume);
-    details.append(summary, body);
-    this.shadow.replaceChildren(style, details);
+    const speechCard = card("Speech", enable, overlap);
+    speechCard.querySelector("header")!.append(summaryState);
+    body.append(
+      speechCard,
+      card("TTS profiles", loadRow),
+      narrator,
+      fallback,
+      overrides,
+      delivery,
+      card("Playback", autoplay, volume),
+    );
+    this.shadow.replaceChildren(style, body);
 
     // Restore focus and text selection if an input had active focus
     if (activeField) {

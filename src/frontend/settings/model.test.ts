@@ -32,7 +32,16 @@ import {
   NOVELAI_SAMPLER_OPTIONS,
   NOVELAI_NOTICE,
   normalizeReferenceSource,
+  TEXT_EFFECT_MODE_OPTIONS,
+  normalizeTextEffects,
+  SETTINGS_SECTIONS,
+  SETTINGS_SECTION_KEY,
+  SETUP_DONE_KEY,
+  normalizeSettingsSection,
+  searchSettings,
+  type SettingsSearchEntry,
 } from "./model";
+import { TEXT_EFFECT_MODES } from "../../config.js";
 
 describe("reference source options", () => {
   test("exposes exactly captured (default first) and card sprites", () => {
@@ -325,5 +334,89 @@ describe("NovelAI effective connection & parameters", () => {
     expect(snapDimension(10)).toBe(64);     // minimum bound
     expect(snapDimension(5000)).toBe(2048); // maximum bound
     expect(snapDimension(NaN, 1216)).toBe(1216); // fallback
+  });
+});
+
+describe("text effects mode options", () => {
+  test("lists every config mode once, default first", () => {
+    expect(TEXT_EFFECT_MODE_OPTIONS.map((option) => option.value)).toEqual([...TEXT_EFFECT_MODES]);
+    expect(TEXT_EFFECT_MODE_OPTIONS[0]!.value).toBe(DEFAULT_CONFIG.textEffects);
+    for (const option of TEXT_EFFECT_MODE_OPTIONS) {
+      expect(option.label.trim().length).toBeGreaterThan(0);
+      expect(option.help.trim().length).toBeGreaterThan(0);
+    }
+  });
+
+  test("normalizes unknown values to the default", () => {
+    expect(normalizeTextEffects("static")).toBe("static");
+    expect(normalizeTextEffects("off")).toBe("off");
+    expect(normalizeTextEffects("animated")).toBe("animated");
+    expect(normalizeTextEffects("sparkly")).toBe("animated");
+    expect(normalizeTextEffects("")).toBe("animated");
+  });
+});
+
+describe("settings sections", () => {
+  test("seven sections with unique ids, labels and blurbs", () => {
+    expect(SETTINGS_SECTIONS.map((section) => section.id)).toEqual(["reading", "look", "pictures", "sound", "voice", "connections", "advanced"]);
+    expect(new Set(SETTINGS_SECTIONS.map((section) => section.label)).size).toBe(SETTINGS_SECTIONS.length);
+    for (const section of SETTINGS_SECTIONS) expect(section.blurb.trim().length).toBeGreaterThan(0);
+  });
+
+  test("the remembered-section key lives next to the setup flag and never collides with it", () => {
+    expect(SETTINGS_SECTION_KEY.startsWith("cue.visual-novel.")).toBe(true);
+    expect(SETTINGS_SECTION_KEY).not.toBe(SETUP_DONE_KEY);
+  });
+
+  test("normalizes unknown or missing sections to Reading", () => {
+    expect(normalizeSettingsSection("advanced")).toBe("advanced");
+    expect(normalizeSettingsSection("appearance")).toBe("reading");
+    expect(normalizeSettingsSection(null)).toBe("reading");
+    expect(normalizeSettingsSection(undefined)).toBe("reading");
+    expect(normalizeSettingsSection(3)).toBe("reading");
+  });
+});
+
+describe("settings search", () => {
+  const entries: SettingsSearchEntry[] = [
+    { id: "a", label: "Text speed", section: "reading", keywords: "typing typewriter" },
+    { id: "b", label: "Music volume", section: "sound", keywords: "bgm loudness" },
+    { id: "c", label: "Sound effects volume", section: "sound", keywords: "sfx" },
+    { id: "d", label: "Theme CSS", section: "advanced", keywords: "custom style" },
+    { id: "e", label: "Text size", section: "look", keywords: "font scale" },
+  ];
+
+  test("an empty query finds nothing", () => {
+    expect(searchSettings(entries, "")).toEqual([]);
+    expect(searchSettings(entries, "   ")).toEqual([]);
+  });
+
+  test("matches word prefixes in labels, case- and accent-insensitive", () => {
+    expect(searchSettings(entries, "VOL").map((entry) => entry.id)).toEqual(["b", "c"]);
+    expect(searchSettings(entries, "vólume").map((entry) => entry.id)).toEqual(["b", "c"]);
+  });
+
+  test("every word must match; keywords and section names count", () => {
+    expect(searchSettings(entries, "music vol").map((entry) => entry.id)).toEqual(["b"]);
+    expect(searchSettings(entries, "typewriter").map((entry) => entry.id)).toEqual(["a"]);
+    expect(searchSettings(entries, "advanced").map((entry) => entry.id)).toEqual(["d"]);
+    expect(searchSettings(entries, "music css")).toEqual([]);
+  });
+
+  test("label matches rank above keyword matches, and a label prefix ranks first", () => {
+    const ranked = searchSettings([
+      { id: "kw", label: "Ignored tags", section: "advanced", keywords: "text filter" },
+      { id: "label", label: "Text size", section: "look" },
+      { id: "prefix", label: "Text effects", section: "look" },
+    ], "text eff");
+    expect(ranked.map((entry) => entry.id)).toEqual(["prefix"]);
+    expect(searchSettings([
+      { id: "kw", label: "Ignored tags", section: "advanced", keywords: "text filter" },
+      { id: "label", label: "Text size", section: "look" },
+    ], "text").map((entry) => entry.id)).toEqual(["label", "kw"]);
+  });
+
+  test("respects the result limit", () => {
+    expect(searchSettings(entries, "s", 2)).toHaveLength(2);
   });
 });

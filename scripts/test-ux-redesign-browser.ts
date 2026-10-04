@@ -70,16 +70,16 @@ try {
     "Planner readiness must truthfully reflect 'No saved story reader connections'"
   );
 
-  const imageReadiness = page.locator('[data-section="images"] [data-readiness="image"]');
-  // Open images section to inspect
-  await page.locator('[data-section="images"] > summary').click();
+  const imageReadiness = page.locator('[data-pane="pictures"] [data-readiness="image"]');
+  // Open the Pictures section to inspect
+  await page.getByRole("tab", { name: "Pictures" }).click();
   assert.ok(
     (await imageReadiness.textContent())?.includes("No saved"),
     "Image readiness must truthfully reflect 'No saved image connections'"
   );
 
   // Verify sound empty state
-  await page.locator('[data-section="sound"] > summary').click();
+  await page.getByRole("tab", { name: "Sound" }).click();
   const soundEmpty = page.locator("[data-sound-empty]");
   assert.equal(await soundEmpty.isVisible(), true, "Sound empty state must be visible when 0 audio assets");
   assert.ok(
@@ -115,8 +115,8 @@ try {
   // =========================================================================
   console.log("\n--- Running Scenario 2: Missing Saved Connection ---");
   await page.goto(`http://127.0.0.1:${server.port}/?missing-connection`);
-  await page.locator('[data-section="images"] > summary').click();
-  const missingImgReadiness = page.locator('[data-section="images"] [data-readiness="image"]');
+  await page.getByRole("tab", { name: "Pictures" }).click();
+  const missingImgReadiness = page.locator('[data-pane="pictures"] [data-readiness="image"]');
   const readinessText = await missingImgReadiness.textContent();
   assert.ok(
     readinessText?.includes("missing") || readinessText?.includes("no longer"),
@@ -130,13 +130,13 @@ try {
   await page.goto(`http://127.0.0.1:${server.port}/?settings`);
   const initialReqCount = networkRequests.length;
 
-  // Open Images section
-  await page.locator('[data-section="images"] > summary').click();
+  // Open the Pictures section
+  await page.getByRole("tab", { name: "Pictures" }).click();
 
   // Test Image Source switching
-  const cardRadio = page.locator('[data-section="images"] input[name="imageSource"][value="card"]');
-  const generatedRadio = page.locator('[data-section="images"] input[name="imageSource"][value="generated"]');
-  const textRadio = page.locator('[data-section="images"] input[name="imageSource"][value="text"]');
+  const cardRadio = page.locator('[data-pane="pictures"] input[name="imageSource"][value="card"]');
+  const generatedRadio = page.locator('[data-pane="pictures"] input[name="imageSource"][value="generated"]');
+  const textRadio = page.locator('[data-pane="pictures"] input[name="imageSource"][value="text"]');
 
   assert.equal(await generatedRadio.isChecked(), true, "Default image source is generated");
 
@@ -164,15 +164,16 @@ try {
   const budgetHelp = page.locator("[data-budget-help]");
   assert.ok((await budgetHelp.textContent())?.includes("4"), "Balanced budget defaults to 4");
 
-  // Test Local Live Story Sample
+  // The live sample only shows where it helps (Reading and Look), never over Pictures
   const sample = page.locator("[data-sample]");
-  assert.equal(await sample.isVisible(), true, "Story sample is rendered");
+  assert.equal(await sample.isVisible(), false, "Story sample stays out of the Pictures section");
+
+  // Open the Look section and switch theme preset
+  await page.getByRole("tab", { name: "Look" }).click();
+  assert.equal(await sample.isVisible(), true, "Story sample is rendered in Look");
   const sampleSpeaker = sample.locator("[data-sample-speaker]");
   assert.equal(await sampleSpeaker.textContent(), "Mira");
-
-  // Open Appearance section and switch theme preset
-  await page.locator('[data-section="appearance"] > summary').click();
-  const goldenHourTile = page.locator('[data-section="appearance"] [data-tiles] input[value="golden-hour"]');
+  const goldenHourTile = page.locator('[data-pane="look"] [data-tiles] input[value="golden-hour"]');
   await goldenHourTile.click();
 
   // Verify sample styles updated locally
@@ -190,10 +191,7 @@ try {
   // Test Advanced Config Draft Preservation on Error
   console.log("Testing Advanced Config Draft Preservation on Error...");
   const advDetails = page.locator("[data-advanced-settings]");
-  await advDetails.locator("> summary").click();
-
-  // Open Connections and models subsection
-  await advDetails.getByText("Connections and models").click();
+  await page.getByRole("tab", { name: "Advanced" }).click();
 
   const customJsonInput = advDetails.locator('textarea[name="imageParameters"]');
   await customJsonInput.fill('{"steps": 35, "cfg": 7.5}');
@@ -203,8 +201,8 @@ try {
     (window as any).settingsFixture.fixture.simulateError = true;
   });
 
-  // Click Apply advanced settings
-  await advDetails.locator("[data-apply]").click();
+  // Click Apply in the unapplied-changes bar
+  await page.locator("[data-draft-bar] [data-apply]").click();
 
   // Verify error state is shown
   const statusEl = page.locator("[data-status]");
