@@ -46,9 +46,9 @@ export const VN_SPRITE_CSS = `
 
 /* Tall phone screens: slots are narrow, so let figures overlap a little more. */
 @media (orientation: portrait) {
-  [data-vn-sprites] { --vn-sprite-figure-h: 78cqh; --vn-sprite-slot-w: 92cqw; }
-  [data-vn-sprites][data-vn-sprite-count="2"] { --vn-sprite-figure-h: 74cqh; --vn-sprite-slot-w: 58cqw; }
-  [data-vn-sprites][data-vn-sprite-count="3"] { --vn-sprite-figure-h: 70cqh; --vn-sprite-slot-w: 42cqw; }
+  [data-vn-sprites] { --vn-sprite-figure-h: 80cqh; --vn-sprite-slot-w: 100cqw; }
+  [data-vn-sprites][data-vn-sprite-count="2"] { --vn-sprite-figure-h: 76cqh; --vn-sprite-slot-w: 72cqw; }
+  [data-vn-sprites][data-vn-sprite-count="3"] { --vn-sprite-figure-h: 72cqh; --vn-sprite-slot-w: 58cqw; }
 }
 
 [data-vn-root][data-vn-effect-intensity="gentle"] [data-vn-sprites] {
@@ -68,7 +68,9 @@ export const VN_SPRITE_CSS = `
 
 [data-vn-sprite] {
   position: absolute;
-  left: var(--vn-sprite-x, 50%);
+  /* The slot anchor, pulled in so the whole figure stays on stage. */
+  --vn-sprite-half-w: calc(var(--vn-sprite-img-w) * var(--vn-sprite-bw, 1) / 2);
+  left: clamp(var(--vn-sprite-half-w), var(--vn-sprite-x, 50%), calc(100% - var(--vn-sprite-half-w)));
   bottom: 0;
   width: 0;
   height: 0;
@@ -175,10 +177,10 @@ export const VN_SPRITE_CSS = `
   --vn-sprite-tint-opacity: 0.6;
 }
 [data-vn-sprites][data-vn-sprite-light="night"] {
-  --vn-sprite-light-filter: brightness(0.74) saturate(0.7) contrast(1.04);
-  --vn-sprite-tint: #3a56b0;
+  --vn-sprite-light-filter: brightness(0.8) saturate(0.78) contrast(1.04);
+  --vn-sprite-tint: #2f4fb8;
   --vn-sprite-tint-blend: multiply;
-  --vn-sprite-tint-opacity: 0.42;
+  --vn-sprite-tint-opacity: 0.5;
 }
 [data-vn-sprites][data-vn-sprite-light="indoor_warm"] {
   --vn-sprite-light-filter: brightness(0.98) saturate(1.04);
@@ -237,10 +239,11 @@ export const VN_SPRITE_CSS = `
   transform-origin: 50% 0;
 }
 [data-vn-sprite-emote][data-vn-sprite-emote-place="face"] {
-  width: calc(var(--vn-sprite-emote-size) * 1.25);
-  height: calc(var(--vn-sprite-emote-size) * 1.25);
-  left: calc(var(--vn-sprite-emote-size) * -0.625);
-  bottom: calc(var(--vn-sprite-fig-h) * 0.8);
+  width: calc(var(--vn-sprite-emote-size) * 1.15);
+  height: calc(var(--vn-sprite-emote-size) * 1.15);
+  left: calc(var(--vn-sprite-emote-size) * -0.575);
+  /* Estimated cheek line: the head is not detected, so this is approximate. */
+  bottom: calc(var(--vn-sprite-fig-h) * 0.715);
   filter: none;
   opacity: 0.85;
   transform-origin: 50% 50%;
