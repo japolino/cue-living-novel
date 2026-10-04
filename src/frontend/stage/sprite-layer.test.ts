@@ -4,6 +4,8 @@ import {
   effectivePlateKey,
   illustrationFor,
   layoutSpriteActors,
+  narrowSpriteX,
+  SPRITE_NARROW_X,
   resolveSpriteImage,
   spriteEmoteMarkup,
   spriteGeometry,
@@ -404,6 +406,44 @@ describe("key illustrations", () => {
       layer.clear();
       expect(layer.snapshot().illustration).toBeNull();
       expect(container.dataset.vnSpriteIllustrated).toBeUndefined();
+    } finally {
+      restore();
+    }
+  });
+});
+
+describe("narrow portrait layout (3 actors)", () => {
+  const trio = (focus: "left" | "center" | "right" | null) => layoutSpriteActors([
+    actor("mira", { slot: "left", focus: focus === "left" }),
+    actor("ren", { slot: "center", focus: focus === "center" }),
+    actor("aoi", { slot: "right", focus: focus === "right" }),
+  ]);
+  test("the row shifts toward the speaker and keeps its order", () => {
+    expect(narrowSpriteX(trio(null))).toEqual([...SPRITE_NARROW_X[-1]]);
+    expect(narrowSpriteX(trio("left"))).toEqual([...SPRITE_NARROW_X[0]]);
+    expect(narrowSpriteX(trio("center"))).toEqual([...SPRITE_NARROW_X[1]]);
+    expect(narrowSpriteX(trio("right"))).toEqual([...SPRITE_NARROW_X[2]]);
+    for (const xs of Object.values(SPRITE_NARROW_X)) expect([...xs].sort((a, b) => a - b)).toEqual([...xs]);
+    // The speaker stands nearer the centre than in a fixed spread.
+    expect(Math.abs(narrowSpriteX(trio("left"))[0]! - 50)).toBeLessThan(Math.abs(SPRITE_NARROW_X[-1][0] - 50));
+    expect(Math.abs(narrowSpriteX(trio("right"))[2]! - 50)).toBeLessThan(Math.abs(SPRITE_NARROW_X[-1][2] - 50));
+  });
+  test("one or two actors keep their anchors", () => {
+    const duo = layoutSpriteActors([actor("mira", { slot: "left", focus: true }), actor("ren", { slot: "right" })]);
+    expect(narrowSpriteX(duo)).toEqual(duo.map((p) => p.x));
+    const solo = layoutSpriteActors([actor("mira")]);
+    expect(narrowSpriteX(solo)).toEqual([50]);
+  });
+  test("the layer writes the narrow anchor next to the normal one", () => {
+    const restore = installFakeDocument();
+    try {
+      const container = new FakeNode("div");
+      const layer = new SpriteLayer({ container: () => container as unknown as HTMLElement });
+      layer.setEnabled(true);
+      layer.setTurn(turnView([{ actors: [actor("mira", { slot: "left", focus: true }), actor("ren", { slot: "center" }), actor("aoi", { slot: "right" })], plateKey: "plate_a", light: "day" }]));
+      layer.show(0, { animate: false });
+      const vars = container.querySelectorAll("[data-vn-sprite]").map((el) => [el.dataset.vnSpriteKey, el.style["--vn-sprite-x"], el.style["--vn-sprite-xn"]]);
+      expect(vars).toEqual([["mira", "19%", `${SPRITE_NARROW_X[0][0]}%`], ["ren", "50%", `${SPRITE_NARROW_X[0][1]}%`], ["aoi", "81%", `${SPRITE_NARROW_X[0][2]}%`]]);
     } finally {
       restore();
     }

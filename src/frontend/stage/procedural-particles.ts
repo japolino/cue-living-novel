@@ -156,11 +156,9 @@ function rainTile(spec: RainLayerSpec): string {
   return svgDataUri(`<defs>${gradients.join("")}${filter}</defs>${body}`, spec.w, spec.h);
 }
 
-function rainLayer(spec: RainLayerSpec, tilt: number, gentle?: RainLayerSpec): string {
+function rainLayer(spec: RainLayerSpec, tilt: number): string {
   const style = vars({
     "--tile": rainTile(spec),
-    // Optional sparser tile that "gentle" swaps in (same size and speed).
-    ...(gentle ? { "--tile-gentle": rainTile(gentle) } : {}),
     "--tw": `${spec.w}px`,
     "--th": `${spec.h}px`,
     "--dur": `${n(spec.h / spec.speed, 3)}s`,
@@ -390,6 +388,12 @@ export type FrontAmbientEffect = (typeof FRONT_AMBIENT_EFFECTS)[number];
 /** Front density bound: front particles per back particle (asserted by tests). */
 export const FRONT_AMBIENT_MAX_DENSITY = 0.4;
 
+/** Front rain streaks (the back sheets draw hundreds per screen). */
+export const FRONT_RAIN_STREAKS = { rain: 7, heavy_rain: 10 } as const;
+
+/** Lens drops on the front layer for heavy rain (the back layer has 12). */
+export const FRONT_LENS_DROPS = 5;
+
 export function isFrontAmbientEffect(effect: AmbientEffect | null | undefined): effect is FrontAmbientEffect {
   return (FRONT_AMBIENT_EFFECTS as readonly string[]).includes(effect ?? "");
 }
@@ -399,8 +403,8 @@ export function isFrontAmbientEffect(effect: AmbientEffect | null | undefined): 
  * below the dialogue) so weather surrounds the characters. Lighter, larger
  * and faster than the back overlay, and sparse: at most
  * FRONT_AMBIENT_MAX_DENSITY of the back layer's particles. "gentle" halves
- * it (CSS hides every other `.vn-pt`; rain swaps in a sparser tile), reduced
- * motion hides the whole layer. Empty for mood grades.
+ * it (CSS hides every other `.vn-pt`), reduced motion hides the whole layer.
+ * Empty for mood grades.
  */
 export function generateFrontAmbientMarkup(effect: AmbientEffect): string {
   switch (effect) {
@@ -424,19 +428,31 @@ export function generateFrontAmbientMarkup(effect: AmbientEffect): string {
 }
 
 function generateFrontRainMarkup(heavy: boolean): string {
-  const prefix = heavy ? "vn-heavy-rain" : "vn-rain";
   const tilt = heavy ? 13 : 8;
-  // Big, soft, fast streaks close to the lens; a handful per large tile.
-  const sheet = (count: number): RainLayerSpec => ({
-    cls: `${prefix}-front vn-front-sheet`, seed: heavy ? 241 : 141, w: 640, h: 780, speed: heavy ? 3400 : 2900, blur: 1.5,
-    groups: [{ count, len: [150, 250], width: 3.6, alpha: heavy ? [0.26, 0.42] : [0.2, 0.34], color: "#eef4ff" }],
-  });
-  const full = heavy ? 6 : 4;
+  const slope = Math.tan((tilt * Math.PI) / 180);
+  // A few big, soft, fast streaks close to the lens. Single nodes rather than
+  // another full-stage scrolling sheet: far cheaper to composite, and
+  // "gentle" halves them like any other particle.
+  const count = heavy ? FRONT_RAIN_STREAKS.heavy_rain : FRONT_RAIN_STREAKS.rain;
+  const streaks: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const fall = pseudo(heavy ? 247 : 147, i, heavy ? 0.26 : 0.32, heavy ? 0.36 : 0.44);
+    streaks.push(`<i class="vn-pt vn-streak" style="${vars({
+      left: `${n(strat(heavy ? 241 : 141, i, count, 2, 108))}%`,
+      "--y": `${n(pseudo(heavy ? 242 : 142, i, 4, 90))}cqh`,
+      "--sz": `${n(pseudo(heavy ? 243 : 143, i, 150, 260))}px`,
+      "--o": n(pseudo(heavy ? 244 : 144, i, heavy ? 0.34 : 0.26, heavy ? 0.52 : 0.42), 2),
+      "--fd": `${n(fall, 2)}s`,
+      "--dl": `${n(-pseudo(heavy ? 246 : 146, i, 0, fall), 2)}s`,
+      "--dx": `calc(-112cqh * ${n(slope, 3)})`,
+      "--tilt": `${tilt}deg`,
+    })}"></i>`);
+  }
   let lens = "";
   if (heavy) {
     // The wet lens sits on the camera glass, so in sprite mode it moves in
     // front of the characters (the back copy is hidden by CSS).
-    const dropCount = 7;
+    const dropCount = FRONT_LENS_DROPS;
     const drops: string[] = [];
     for (let i = 0; i < dropCount; i++) {
       const run = i % 3 === 1;
@@ -452,7 +468,7 @@ function generateFrontRainMarkup(heavy: boolean): string {
     }
     lens = `<div class="vn-rain-lens" data-vn-lens-droplets>${drops.join("")}</div>`;
   }
-  return `${rainLayer(sheet(full), tilt, sheet(Math.ceil(full / 2)))}${lens}`;
+  return `<div class="vn-fx-layer vn-rain-front">${streaks.join("")}</div>${lens}`;
 }
 
 /** Front falling layer: same seeded falling particle as the back layers. */

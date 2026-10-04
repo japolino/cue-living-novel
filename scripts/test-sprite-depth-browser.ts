@@ -160,7 +160,8 @@ try {
       assert.equal(l.front!.cls, `vn-ambient-front-${ambient}`);
       assert.ok(l.front!.layers > 0, `${ambient}: front has content`);
       if (ambient === "fog") assert.ok(l.front!.layers <= Math.floor(l.backFogLayers * 0.4) + 1, "fog: one front bank for three back banks");
-      else if (!ambient.includes("rain")) assert.ok(l.front!.pts > 0 && l.front!.pts <= l.backPts * 0.4, `${ambient}: front density ${l.front!.pts} <= 40% of ${l.backPts}`);
+      else if (ambient.includes("rain")) assert.ok(l.front!.pts >= 5 && l.front!.pts <= 15, `${ambient}: a few front streaks (${l.front!.pts})`);
+      else assert.ok(l.front!.pts > 0 && l.front!.pts <= l.backPts * 0.4, `${ambient}: front density ${l.front!.pts} <= 40% of ${l.backPts}`);
       assert.deepEqual(l.pointer, ["none"], `${ambient}: depth layers never take pointer events`);
       assert.equal(l.sceneIsolation, "isolate");
       assert.ok(l.sceneInNarrativeOrder, "the dialogue comes after the scene");
@@ -271,25 +272,34 @@ try {
     const near = (actual: number, expected: number, tolerance: number, label: string) => assert.ok(Math.abs(actual - expected) <= tolerance, `${label}: ${actual.toFixed(3)} vs ${expected.toFixed(3)}`);
 
     // Zoom punch peak (16% of 450 ms).
-    /** Sample until the camera move is well under way (headless timing is loose). */
-    const sampleWhen = async (ok: (s: Awaited<ReturnType<typeof probe>>) => boolean) => {
-      let s = await probe();
-      for (let i = 0; i < 40 && !ok(s); i += 1) { await page.waitForTimeout(8); s = await probe(); }
-      return s;
-    };
+    /** Freeze every running camera animation at `ms` (deterministic mid-frame). */
+    const freezeAt = (ms: number) => page.evaluate((at) => {
+      const theme = document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!;
+      for (const a of theme.getAnimations()) {
+        const name = (a as CSSAnimation).animationName ?? "";
+        if (/zoom|shake|depth|tilt|rumble|heartbeat/.test(name)) { a.pause(); a.currentTime = at; }
+      }
+    }, ms);
+    const release = () => page.evaluate(() => {
+      const theme = document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!;
+      for (const a of theme.getAnimations()) if (a.playState === "paused") a.play();
+    });
     await page.evaluate(() => (window as any).fx.effect("zoom_punch"));
-    let p = await sampleWhen((s) => scaleOf(s.img.transform) > 1.1);
+    await freezeAt(72);
+    let p = await probe();
     let plate = scaleOf(p.img.transform) - 1;
     assert.ok(plate > 0.05, `punch mid-frame (${plate})`);
     near((scaleOf(p.sprites.scale) - 1) / plate, 1.15, 0.06, "punch: sprites 1.15x the plate");
     near((scaleOf(p.front.scale) - 1) / plate, 1.4, 0.06, "punch: front 1.4x the plate");
     report.push(`zoom_punch mid-frame: plate +${(plate * 100).toFixed(1)}%, sprites +${((scaleOf(p.sprites.scale) - 1) * 100).toFixed(1)}%, front +${((scaleOf(p.front.scale) - 1) * 100).toFixed(1)}%`);
     await shot(page, "parallax-zoom-punch-midframe");
+    await release();
     await page.waitForTimeout(600);
 
     // Shake hard (8-18% of 500 ms): scene carries 1x, sprites add 0.15x, front 0.4x.
     await page.evaluate(() => (window as any).fx.effect("shake_hard"));
-    p = await sampleWhen((s) => Math.abs(translateOf(s.scene.transform)[0]) > 8);
+    await freezeAt(90);
+    p = await probe();
     const [sx] = translateOf(p.scene.transform);
     const [spx] = translateOf(p.sprites.translate);
     const [fx] = translateOf(p.front.translate);
@@ -298,6 +308,7 @@ try {
     near(fx / sx, 0.4, 0.05, "shake: front adds 0.4x");
     report.push(`shake_hard mid-frame: scene ${sx.toFixed(1)}px, sprites +${spx.toFixed(1)}px, front +${fx.toFixed(1)}px`);
     await shot(page, "parallax-shake-hard-midframe");
+    await release();
     await page.waitForTimeout(600);
 
     // Tilt, rumble and heartbeat drive the containers too.
@@ -378,12 +389,8 @@ try {
     assert.equal(l.front!.ptsVisible, Math.ceil(l.front!.pts / 2), `gentle halves the front flakes (${l.front!.ptsVisible}/${l.front!.pts})`);
     await shot(page, "gentle-snow");
     await load(page, TRIO({ ambient: "rain", plateKey: "plate_street", light: "night" }), 900);
-    const sheet = await page.evaluate(() => {
-      const theme = document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!;
-      const layer = theme.querySelector<HTMLElement>("[data-vn-ambient-front] .vn-rain-layer")!;
-      return { shown: getComputedStyle(layer.querySelector("i")!).backgroundImage.slice(0, 200), gentle: layer.style.getPropertyValue("--tile-gentle").trim().slice(4, 200) };
-    });
-    assert.ok(sheet.gentle.length > 20 && sheet.shown.includes(sheet.gentle.slice(0, 120)), "gentle swaps in the sparser rain tile");
+    const rain = await layers(page);
+    assert.equal(rain.front!.ptsVisible, Math.ceil(rain.front!.pts / 2), `gentle halves the front streaks (${rain.front!.ptsVisible}/${rain.front!.pts})`);
     await shot(page, "gentle-rain");
     await page.close();
   }
@@ -461,22 +468,26 @@ try {
   }
 
   // ---- Frame cost: rain + 3 sprites (rough rAF probe) -------------------------------
+  // Measured twice: with GPU compositing when the machine has it (the normal
+  // case for readers; asserted), and in the default headless software
+  // renderer (pessimistic; reported, loosely bounded against scene rain).
   {
-    const probe = async (query: Record<string, string>, paragraphs: P[]) => {
-      const page = await browser!.newPage({ viewport: { width: 1280, height: 720 } });
+    type Frames = { mean: number; p95: number; long: number; frames: number };
+    const probe = async (b: Browser, query: Record<string, string>, paragraphs: P[], ambient: string): Promise<Frames> => {
+      const page = await b.newPage({ viewport: { width: 1280, height: 720 } });
       watch(page);
       await open(page, query);
       await load(page, paragraphs, 800);
-      if (query.mode === "scene") await page.evaluate(() => (window as any).fx.ambient("rain"));
+      await page.evaluate((a) => (window as any).fx.ambient(a), ambient);
       await page.waitForTimeout(400);
-      const result = await page.evaluate(() => new Promise<{ mean: number; p95: number; long: number; frames: number }>((resolve) => {
+      const result = await page.evaluate(() => new Promise<Frames>((resolve) => {
         const times: number[] = [];
         let last = performance.now();
         const start = last;
         const tick = (now: number) => {
           times.push(now - last);
           last = now;
-          if (now - start < 3000) requestAnimationFrame(tick);
+          if (now - start < 2500) requestAnimationFrame(tick);
           else {
             const sorted = [...times].sort((a, b) => a - b);
             resolve({ mean: times.reduce((s, t) => s + t, 0) / times.length, p95: sorted[Math.floor(sorted.length * 0.95)]!, long: times.filter((t) => t > 34).length, frames: times.length });
@@ -487,15 +498,39 @@ try {
       await page.close();
       return result;
     };
+    const fmt = (r: Frames) => `mean ${r.mean.toFixed(1)} ms, p95 ${r.p95.toFixed(1)} ms, ${r.long} long of ${r.frames}`;
     const rainTrio = TRIO({ ambient: "rain", plateKey: "plate_street", light: "night" });
-    const sprites = await probe({}, rainTrio);
-    const heavy = await probe({}, TRIO({ ambient: "heavy_rain", plateKey: "plate_street", light: "dark" }));
-    const scene = await probe({ mode: "scene" }, [{ text: "Scene rain.", actors: [] }]);
-    const fmt = (r: { mean: number; p95: number; long: number; frames: number }) => `mean ${r.mean.toFixed(1)} ms, p95 ${r.p95.toFixed(1)} ms, ${r.long} long frames of ${r.frames}`;
-    report.push(`frames sprite mode rain + 3 sprites + front: ${fmt(sprites)}`);
-    report.push(`frames sprite mode heavy_rain + 3 sprites + front: ${fmt(heavy)}`);
-    report.push(`frames scene mode rain (reference): ${fmt(scene)}`);
-    assert.ok(sprites.mean < 25, `rain + 3 sprites keeps a reasonable frame time (${fmt(sprites)})`);
+    const heavyTrio = TRIO({ ambient: "heavy_rain", plateKey: "plate_street", light: "dark" });
+    const sceneRain: P[] = [{ text: "Scene rain.", actors: [] }];
+
+    const gpu = await chromium.launch({ headless: true, args: ["--enable-gpu", "--ignore-gpu-blocklist", ...(process.platform === "win32" ? ["--use-angle=d3d11"] : [])] });
+    try {
+      const page = await gpu.newPage();
+      const renderer = await page.evaluate(() => {
+        const gl = document.createElement("canvas").getContext("webgl");
+        const info = gl?.getExtension("WEBGL_debug_renderer_info");
+        return gl && info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : "none";
+      });
+      await page.close();
+      const hardware = !/swiftshader|llvmpipe|software|none/i.test(renderer);
+      report.push(`GPU renderer: ${renderer}${hardware ? "" : " (software: GPU frame check skipped)"}`);
+      if (hardware) {
+        const s = await probe(gpu, {}, rainTrio, "rain");
+        const h = await probe(gpu, {}, heavyTrio, "heavy_rain");
+        report.push(`GPU frames, rain + 3 sprites + front: ${fmt(s)}`);
+        report.push(`GPU frames, heavy_rain + 3 sprites + front: ${fmt(h)}`);
+        assert.ok(s.mean < 20, `GPU: rain + 3 sprites holds ~60 fps (${fmt(s)})`);
+        assert.ok(h.mean < 20, `GPU: heavy rain + 3 sprites holds ~60 fps (${fmt(h)})`);
+      }
+    } finally {
+      await gpu.close();
+    }
+
+    const s = await probe(browser, {}, rainTrio, "rain");
+    const ref = await probe(browser, { mode: "scene" }, sceneRain, "rain");
+    report.push(`software frames, rain + 3 sprites + front: ${fmt(s)}`);
+    report.push(`software frames, scene-mode rain (reference): ${fmt(ref)}`);
+    assert.ok(s.mean < ref.mean * 3, `software: sprite rain stays within 3x scene rain (${fmt(s)} vs ${fmt(ref)})`);
   }
 
   assert.deepEqual(errors, [], "no console errors");

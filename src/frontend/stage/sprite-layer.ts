@@ -111,6 +111,33 @@ export function layoutSpriteActors(actors: readonly SpriteActorStage[]): SpriteA
   return sorted.map((actor, order) => ({ actor, x: xs[order] ?? 50, order }));
 }
 
+/**
+ * Anchors (percent, left to right) for 3 actors on a narrow portrait stage,
+ * by the speaker's position (-1: nobody in focus). The speaker stands about
+ * a figure's half width from the edge or nearer the centre; the others step
+ * outward, partly off-screen.
+ */
+export const SPRITE_NARROW_X: Readonly<Record<-1 | 0 | 1 | 2, readonly [number, number, number]>> = {
+  [-1]: [14, 50, 86],
+  0: [30, 66, 96],
+  1: [12, 50, 88],
+  2: [4, 34, 70],
+};
+
+/**
+ * Anchors for a narrow portrait stage, where three figures cannot stand side
+ * by side. Side actors spread outward (partly off-screen) and the row shifts
+ * toward the speaker, so the speaker stands whole and near the centre while
+ * everyone keeps their left-to-right order (no swapping places when the
+ * speaker changes). The CSS shrinks and dims non-speakers there. One or two
+ * actors keep their normal anchors.
+ */
+export function narrowSpriteX(placements: readonly SpriteActorPlacement[]): number[] {
+  if (placements.length !== 3) return placements.map(({ x }) => x);
+  const focus = placements.findIndex(({ actor }) => actor.focus) as -1 | 0 | 1 | 2;
+  return [...SPRITE_NARROW_X[focus]];
+}
+
 /** Expressions of a set that can be shown now (ready and with a URL). */
 export function readySpriteExpressions(set: SpriteSetView | undefined | null): Set<string> {
   const ready = new Set<string>();
@@ -665,6 +692,7 @@ export class SpriteLayer {
     else delete container.dataset.vnSpriteLight;
     container.dataset.vnSpriteCount = String(placements.length);
     const anyFocus = placements.some(({ actor }) => actor.focus);
+    const narrowX = narrowSpriteX(placements);
     const keep = new Set(placements.map(({ actor }) => actor.characterKey));
 
     for (const entry of [...this.actors.values()]) {
@@ -691,6 +719,8 @@ export class SpriteLayer {
       el.dataset.vnSpriteDim = anyFocus && !actor.focus ? "true" : "false";
       setVars(el, {
         "--vn-sprite-x": `${x}%`,
+        // Narrow portrait stages with three actors (sprite-css.ts).
+        "--vn-sprite-xn": `${narrowX[order] ?? x}%`,
         "--vn-sprite-amp": String(Math.round((actor.intensity / 3) * 100) / 100),
       });
       if (isNew) {

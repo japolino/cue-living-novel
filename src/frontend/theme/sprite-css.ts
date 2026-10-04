@@ -62,7 +62,26 @@ export const VN_SPRITE_CSS = `
 @media (orientation: portrait) {
   [data-vn-sprites] { --vn-sprite-figure-h: 80cqh; --vn-sprite-slot-w: 100cqw; }
   [data-vn-sprites][data-vn-sprite-count="2"] { --vn-sprite-figure-h: 76cqh; --vn-sprite-slot-w: 72cqw; }
-  [data-vn-sprites][data-vn-sprite-count="3"] { --vn-sprite-figure-h: 72cqh; --vn-sprite-slot-w: 58cqw; }
+  [data-vn-sprites][data-vn-sprite-count="3"] { --vn-sprite-figure-h: 74cqh; --vn-sprite-slot-w: 64cqw; }
+  /* Three actors cannot stand side by side: the speaker stands near the
+     centre at full size and in front; the others step outward (partly
+     off-screen) and back (smaller), in the same left-to-right order
+     (narrowSpriteX in sprite-layer.ts). */
+  [data-vn-sprites][data-vn-sprite-count="3"] [data-vn-sprite] {
+    left: var(--vn-sprite-xn, var(--vn-sprite-x, 50%));
+    transition:
+      left var(--vn-sprite-move-ms) cubic-bezier(0.33, 1, 0.68, 1),
+      scale var(--vn-sprite-move-ms) cubic-bezier(0.33, 1, 0.68, 1),
+      filter 320ms ease,
+      opacity 320ms ease;
+  }
+  [data-vn-sprites][data-vn-sprite-count="3"] [data-vn-sprite][data-vn-sprite-dim="true"] {
+    scale: 0.8;
+  }
+  /* The speaker always stands whole on screen. */
+  [data-vn-sprites][data-vn-sprite-count="3"] [data-vn-sprite][data-vn-sprite-focus="true"] {
+    left: clamp(var(--vn-sprite-half-w), var(--vn-sprite-xn, 50%), calc(100% - var(--vn-sprite-half-w)));
+  }
 }
 
 [data-vn-root][data-vn-effect-intensity="gentle"] [data-vn-sprites] {
@@ -448,7 +467,8 @@ export const VN_SPRITE_CSS = `
 
 /* Reduced motion: characters change places and expressions by fading only. */
 @media (prefers-reduced-motion: reduce) {
-  [data-vn-sprite] {
+  [data-vn-sprite],
+  [data-vn-sprites][data-vn-sprite-count="3"] [data-vn-sprite] {
     transition: filter 200ms ease, opacity 200ms ease;
   }
   [data-vn-sprite] *,
@@ -577,9 +597,9 @@ export const VN_SPRITE_CSS = `
 }
 @keyframes vn-sprite-lightning-shade {
   0%, 17%, 100% { filter: var(--vn-sprite-light-filter, brightness(1)) brightness(1) saturate(1); }
-  3% { filter: var(--vn-sprite-light-filter, brightness(1)) brightness(0.3) saturate(0.5); }
+  3% { filter: var(--vn-sprite-light-filter, brightness(1)) brightness(0.24) saturate(0.45); }
   9% { filter: var(--vn-sprite-light-filter, brightness(1)) brightness(0.82) saturate(0.85); }
-  21% { filter: var(--vn-sprite-light-filter, brightness(1)) brightness(0.36) saturate(0.55); }
+  21% { filter: var(--vn-sprite-light-filter, brightness(1)) brightness(0.3) saturate(0.5); }
   30% { filter: var(--vn-sprite-light-filter, brightness(1)) brightness(0.72) saturate(0.8); }
   52% { filter: var(--vn-sprite-light-filter, brightness(1)) brightness(0.94) saturate(0.95); }
 }

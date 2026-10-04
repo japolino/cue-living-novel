@@ -1322,7 +1322,19 @@ export const VN_EFFECTS_CSS = `
   transition: scale 2s ease;
 }
 
-[data-vn-ambient-front] .vn-front-sheet { opacity: 1; }
+/* Front rain: single soft streaks, slanted with the wind, falling fast. */
+[data-vn-ambient-front] .vn-streak {
+  top: var(--y);
+  width: 3px;
+  height: var(--sz);
+  margin-left: -1.5px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, rgba(236, 244, 255, 0) 0%, rgba(236, 244, 255, 0.5) 62%, rgba(246, 250, 255, 0.95) 100%);
+  box-shadow: 0 0 3px rgba(226, 238, 255, 0.35);
+  opacity: var(--o);
+  rotate: var(--tilt);
+  animation: vn-pt-fall var(--fd) linear var(--dl) infinite;
+}
 [data-vn-ambient-front] .vn-fireflies-front { opacity: 0.55; }
 [data-vn-ambient-front] .vn-embers-front { opacity: 0.7; }
 [data-vn-ambient-front] .vn-snow-front { opacity: 0.9; }
@@ -1337,10 +1349,6 @@ export const VN_EFFECTS_CSS = `
 }
 
 /* "gentle" halves the front layer too (.vn-pt thinning applies already). */
-[data-vn-effect-intensity="gentle"] [data-vn-ambient-front] .vn-rain-layer > i {
-  background-image: var(--tile-gentle, var(--tile));
-}
-
 [data-vn-effect-intensity="gentle"] [data-vn-ambient-front] .vn-fog-front {
   --o0: 0.13;
   --o1: 0.22;
@@ -1417,11 +1425,11 @@ export const VN_EFFECTS_CSS = `
 
 @keyframes vn-lightning-soft {
   0% { opacity: 0; }
-  3% { opacity: 0.3; }
-  9% { opacity: 0.03; }
+  3% { opacity: 0.14; }
+  9% { opacity: 0.02; }
   17% { opacity: 0; }
-  21% { opacity: 0.22; }
-  28% { opacity: 0.04; }
+  21% { opacity: 0.1; }
+  28% { opacity: 0.02; }
   100% { opacity: 0; }
 }
 
