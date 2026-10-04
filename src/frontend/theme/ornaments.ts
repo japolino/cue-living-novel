@@ -161,12 +161,10 @@ export const VN_ORNAMENT_GROUPS: Record<VisualNovelThemePreset, string> = {
     <g transform="translate(1500 170) scale(0.9)" fill="currentColor" stroke="none" opacity="0.5"><g data-vn-anim="sparkle"><path d="M 0 -12 L 2.6 -2.6 L 12 0 L 2.6 2.6 L 0 12 L -2.6 2.6 L -12 0 L -2.6 -2.6 Z"/></g></g>
   </g>`,
   "yamaku-classic": `<g data-vn-ornament-group="" data-vn-preset="yamaku-classic" aria-hidden="true" focusable="false" vector-effect="non-scaling-stroke" fill="none" stroke="currentColor">
-    <!-- Warm classic corner framing brackets -->
+    <!-- Warm classic corner framing brackets (top only: the translucent box would show lower ones through it) -->
     <g stroke="currentColor" stroke-width="1.8" opacity="0.45">
       <path d="M 64 104 L 64 64 L 104 64"/>
       <path d="M 1496 64 L 1536 64 L 1536 104"/>
-      <path d="M 1536 796 L 1536 836 L 1496 836"/>
-      <path d="M 104 836 L 64 836 L 64 796"/>
     </g>
   </g>`,
   "literature-club": `<g data-vn-ornament-group="" data-vn-preset="literature-club" aria-hidden="true" focusable="false" vector-effect="non-scaling-stroke" fill="currentColor" stroke="none">

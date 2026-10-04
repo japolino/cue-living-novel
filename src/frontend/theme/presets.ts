@@ -575,6 +575,8 @@ const PAPER_NOVEL_CSS = `
   --vn-odds-good: #2f6b3a;
   --vn-odds-fair: #87570f;
   --vn-odds-poor: #8a2f23;
+  --vn-error: #8a2f23;
+  --vn-error-title: #8a2f23;
 }
 [data-vn-root][data-vn-preset="paper-novel"] [data-vn-ornament-group][data-vn-preset="paper-novel"] { display: block; color: #e9d9b8; }
 [data-vn-root][data-vn-preset="paper-novel"] [data-vn-dialogue] {
@@ -784,7 +786,7 @@ const PAPER_NOVEL_CSS = `
 [data-vn-root][data-vn-preset="paper-novel"] [data-vn-badge-icon="alert"] { color: #87570f; }
 [data-vn-root][data-vn-preset="paper-novel"] [data-vn-badge][data-vn-badge-interactive="true"]:hover,
 [data-vn-root][data-vn-preset="paper-novel"] button[data-vn-badge]:hover { border-color: #8a2f23; background: #fbf6ea; box-shadow: 0 0.3rem 0.8rem rgba(40, 26, 12, 0.35); }
-[data-vn-root][data-vn-preset="paper-novel"] [data-vn-badge-kind="error"] { border-color: #8a2f23; background: #f8eee6; color: #4a1a12; box-shadow: inset 3px 0 0 #8a2f23, 0 0.3rem 0.9rem rgba(40, 26, 12, 0.35); }
+[data-vn-root][data-vn-preset="paper-novel"] [data-vn-badge-kind="error"] { border-color: #8a2f23; background: #f8eee6; color: #4a1a12; box-shadow: 0 0.3rem 0.9rem rgba(40, 26, 12, 0.35); }
 [data-vn-root][data-vn-preset="paper-novel"] [data-vn-badge-title] { color: #8a2f23; }
 [data-vn-root][data-vn-preset="paper-novel"] [data-vn-badge-details] summary,
 [data-vn-root][data-vn-preset="paper-novel"] [data-vn-badge-note] { color: #6b4a3a; }
@@ -1312,6 +1314,8 @@ const LITERATURE_CLUB_CSS = `
   --vn-odds-good: #2c7a47;
   --vn-odds-fair: #9a6510;
   --vn-odds-poor: #b8285a;
+  --vn-error: #c43868;
+  --vn-error-title: #b8285a;
 }
 [data-vn-root][data-vn-preset="literature-club"] [data-vn-ornament-group][data-vn-preset="literature-club"] { display: block; }
 [data-vn-root][data-vn-preset="literature-club"] [data-vn-dialogue] {
@@ -1507,10 +1511,10 @@ const LITERATURE_CLUB_CSS = `
 [data-vn-root][data-vn-preset="literature-club"] [data-vn-submit] {
   border: 2.5px solid #ffffff;
   background-color: #e8507c;
-  background-image: linear-gradient(180deg, #f9709b, #d63f6d);
+  background-image: linear-gradient(180deg, #cf3865, #b02656);
   color: #ffffff;
   font-family: var(--vn-font-family);
-  text-shadow: 0 1px 1px #a8244f;
+  text-shadow: 0 1px 1px #7a1538;
   box-shadow: 0 4px 12px rgba(232, 80, 124, 0.4);
 }
 [data-vn-root][data-vn-preset="literature-club"] [data-vn-game-choice] {

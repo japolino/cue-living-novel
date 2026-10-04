@@ -33,4 +33,17 @@ describe("framework ornament markup", () => {
     expect(VN_ORNAMENT_LAYER_MARKUP.match(/<svg\b/g)).toHaveLength(1);
     expect(VN_ORNAMENT_LAYER_MARKUP).toContain('viewBox="0 0 1600 900"');
   });
+
+  test("ornaments anchor to the frame, never to the moving dialogue plate", () => {
+    // The plate sits roughly in x 100..1500, y 540..840 of the 1600x900 box and
+    // moves with text length, so no placed shape may land inside that band.
+    for (const [id, markup] of Object.entries(VN_ORNAMENT_GROUPS)) {
+      for (const match of markup.matchAll(/translate\((\d+(?:\.\d+)?) (\d+(?:\.\d+)?)\)/g)) {
+        const x = Number(match[1]);
+        const y = Number(match[2]);
+        const inPlate = x > 100 && x < 1500 && y > 540 && y < 840;
+        expect(inPlate, `${id} places a shape at ${x},${y}`).toBe(false);
+      }
+    }
+  });
 });

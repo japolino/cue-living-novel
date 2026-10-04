@@ -357,6 +357,31 @@ button[data-vn-badge]:active {
   margin-top: 0.15rem;
 }
 
+/* Errors keep a red edge, title and icon in every preset (presets restyle the card itself). */
+[data-vn-badge-kind="error"] {
+  position: relative;
+  padding-left: 1.05rem;
+}
+
+[data-vn-badge-kind="error"]::before {
+  position: absolute;
+  top: 0.65rem;
+  bottom: 0.65rem;
+  left: 0.3rem;
+  width: 3px;
+  border-radius: 3px;
+  background: var(--vn-error, #ff8497);
+  content: "";
+}
+
+[data-vn-badge-kind="error"] [data-vn-badge-icon="alert"] {
+  color: var(--vn-error, #ff8497);
+}
+
+[data-vn-badge-kind="error"] [data-vn-badge-title] {
+  color: var(--vn-error-title, #ffc2cc);
+}
+
 [data-vn-badge-body] {
   display: grid;
   gap: 0.35rem;
