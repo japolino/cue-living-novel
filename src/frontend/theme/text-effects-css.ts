@@ -110,9 +110,10 @@ export const VN_TEXT_EFFECTS_CSS = `
   animation-fill-mode: none, none, none, backwards;
   animation-play-state: var(--vn-tfx-play, running);
 }
-/* While the typewriter has not reached a letter it is empty: hold its
-   entrance until it appears. */
-[data-vn-text-fx-ch]:empty {
+/* While the typewriter has not reached a letter (pending, or empty in older
+   markup) hold its entrance until it appears. */
+[data-vn-text-fx-ch]:empty,
+[data-vn-text-fx-ch][data-vn-typing-pending] {
   animation-name: var(--vn-tfx-move, none), var(--vn-tfx-tint, none), var(--vn-tfx-flicker, none), none;
 }
 

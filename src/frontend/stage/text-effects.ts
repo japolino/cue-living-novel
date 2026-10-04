@@ -20,7 +20,7 @@
  *
  * Guarantees: idempotent (already split text is never split again); every
  * visible character stays in a text node and no character is added or
- * removed (the stage typewriter empties all text nodes and refills them one
+ * removed (the stage typewriter hides untyped text and reveals it one
  * character at a time); letters are grapheme clusters (emoji, combining
  * marks, and flags stay whole); the work is capped per effect and per call,
  * and text past a cap stays plain inside its effect span.

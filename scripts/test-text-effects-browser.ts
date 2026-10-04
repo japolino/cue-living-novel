@@ -18,7 +18,7 @@ await mkdir(".cache/text-effects", { recursive: true });
 /** Runs in the page: find the dialogue element through the shadow roots. */
 const FIND = `(() => { const find = (root) => { for (const el of root.querySelectorAll("*")) { if (el.shadowRoot) { const hit = el.shadowRoot.querySelector("[data-vn-dialogue-text]"); if (hit) return hit; const deep = find(el.shadowRoot); if (deep) return deep; } } return null; }; return find(document); })()`;
 
-type LetterInfo = { text: string; fx: string; anims: string[]; running: number; color: string; display: string };
+type LetterInfo = { text: string; fx: string; anims: string[]; running: number; color: string; display: string; pending: boolean };
 
 async function letters(page: Page, scope = "[data-vn-dialogue-text]"): Promise<LetterInfo[]> {
   return page.evaluate(([find, sel]) => {
@@ -34,6 +34,7 @@ async function letters(page: Page, scope = "[data-vn-dialogue-text]"): Promise<L
         running: anims.filter((a) => a.playState === "running").length,
         color: style.color,
         display: style.display,
+        pending: el.hasAttribute("data-vn-typing-pending"),
       };
     });
   }, [FIND, scope] as const);
@@ -138,14 +139,57 @@ try {
   await page.locator("[data-vn-dialogue-text] [data-vn-text-fx-ch]").first().waitFor({ state: "attached" });
   await page.waitForTimeout(260);
   info = await letters(page);
-  const filled = info.filter((l) => l.text).length;
+  const filled = info.filter((l) => !l.pending).length;
   assert.ok(filled > 0 && filled < info.length, `letters appear progressively (${filled}/${info.length})`);
-  const shoutIn = info.filter((l) => l.fx === "shout" && l.text);
+  assert.ok(info.every((l) => l.text), "untyped letters keep their text so the layout is final");
+  const shoutIn = info.filter((l) => l.fx === "shout" && !l.pending);
   assert.ok(shoutIn.length > 0 && shoutIn.some((l) => l.anims.includes("vn-tfx-shout-in")), "a typed shout letter punches in");
-  assert.ok(info.filter((l) => !l.text).every((l) => !l.anims.includes("vn-tfx-fade-in")), "an untyped letter holds its entrance");
+  assert.ok(info.filter((l) => l.pending).every((l) => !l.anims.includes("vn-tfx-fade-in")), "an untyped letter holds its entrance");
   await page.waitForTimeout(1600);
   const typed = await page.evaluate((find) => (eval(find) as HTMLElement).textContent, FIND);
   assert.equal(typed, "Hey STOP! ghost 👋 done", "typing completes every character");
+
+  // ---- Typewriter never re-wraps: a word starts on the line it ends on ------
+  await page.goto(url({ speed: "8", text: "Actually, he was never sure about the glasses. Sometimes he looked and they weren't there. He'd stopped asking, and nobody had ever thought to tell him otherwise." }));
+  await page.locator("[data-vn-dialogue-text]").first().waitFor({ state: "attached" });
+  const rewraps = await page.evaluate(async (find) => {
+    const d = eval(find) as HTMLElement;
+    d.style.width = "430px";
+    const hidden = (node: Node) => Boolean((node.parentElement as Element | null)?.closest("[data-vn-typing-rest], [data-vn-typing-pending]"));
+    const textNodes = (visibleOnly: boolean) => {
+      const walker = document.createTreeWalker(d, NodeFilter.SHOW_TEXT);
+      const out: Text[] = [];
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) if (!visibleOnly || !hidden(n)) out.push(n as Text);
+      return out;
+    };
+    const topOfChar = (nodes: Text[], index: number) => {
+      let seen = 0;
+      for (const node of nodes) {
+        const len = node.data.length;
+        if (index < seen + len) {
+          const r = document.createRange(); r.setStart(node, index - seen); r.setEnd(node, index - seen + 1);
+          // Relative to the dialogue box, so the box entrance animation does not count.
+          return Math.round(r.getBoundingClientRect().top - d.getBoundingClientRect().top);
+        }
+        seen += len;
+      }
+      return NaN;
+    };
+    const samples: Array<{ count: number; top: number }> = [];
+    for (let i = 0; i < 400 && d.querySelector("[data-vn-typing-rest], [data-vn-typing-pending]"); i += 1) {
+      const visible = textNodes(true);
+      const count = visible.reduce((n, t) => n + t.data.length, 0);
+      if (count > 0) samples.push({ count, top: topOfChar(visible, count - 1) });
+      await new Promise((resolve) => setTimeout(resolve, 9));
+    }
+    const final = textNodes(false);
+    const moved = samples.filter((s) => topOfChar(final, s.count - 1) !== s.top).map((s) => s.count);
+    const lines = new Set(samples.map((s) => s.top)).size;
+    d.style.width = "";
+    return { samples: samples.length, lines, moved };
+  }, FIND);
+  assert.ok(rewraps.samples > 20 && rewraps.lines >= 3, `the paragraph typed over several lines (${rewraps.samples} samples, ${rewraps.lines} lines)`);
+  assert.deepEqual(rewraps.moved, [], "no typed character changes line while the paragraph types out");
 
   // ---- Wrapping: words stay whole, quotes stay with the effect -------------
   await page.goto(url({ text: 'One two three "<shout>STOP!</shout>" and <wave>la-la lovely words</wave>, <rainbow>ever</rainbow>more.' }));

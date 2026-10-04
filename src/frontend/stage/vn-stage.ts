@@ -71,6 +71,24 @@ export function isAmbientEffect(value: unknown): value is AmbientEffect {
   return typeof value === "string" && AMBIENT_EFFECT_IDS.has(value);
 }
 
+/**
+ * Typewriter bookkeeping. Untyped text sits in a `[data-vn-typing-rest]`
+ * sibling span (visibility hidden, still in the layout) and untyped effect
+ * letters carry `[data-vn-typing-pending]`, so line breaks never move while
+ * a paragraph types out.
+ */
+export const TYPEWRITER_REST_ATTRIBUTE = "data-vn-typing-rest";
+export const TYPEWRITER_PENDING_ATTRIBUTE = "data-vn-typing-pending";
+
+type TypewriterNode = {
+  node: Text;
+  fullText: string;
+  /** The effect-letter span that owns this text node, if any. */
+  letter: Element | null;
+  /** Hidden span holding this node's untyped remainder, while typing. */
+  rest: HTMLElement | null;
+};
+
 export const TEXT_SHAKE_HEURISTIC_REGEX = /\*\s*(?:thud|slam|crash|smack|shake)[!?.,]*\s*\*/i;
 import {
   TEXT_SCALE_MAX,
@@ -457,7 +475,7 @@ export class VnStage {
   private fadeTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly readParagraphIds = new Set<string>();
   private readonly backlogEntries: Array<{ speaker?: string | undefined; text: string; formatted: string }> = [];
-  private activeTextNodes: Array<{ node: Text; fullText: string }> = [];
+  private activeTextNodes: TypewriterNode[] = [];
   private currentRenderedParagraphId = "";
   private currentRenderedFormatted = "";
   private effectIntensity: VnEffectIntensity = "full";
@@ -1784,6 +1802,9 @@ export class VnStage {
     if (this.activeTextNodes.length > 0) {
       for (const item of this.activeTextNodes) {
         item.node.textContent = item.fullText;
+        item.rest?.remove();
+        item.rest = null;
+        item.letter?.removeAttribute(TYPEWRITER_PENDING_ATTRIBUTE);
       }
       this.activeTextNodes = [];
     }
@@ -1876,16 +1897,14 @@ export class VnStage {
 
     const filter = typeof NodeFilter !== "undefined" ? NodeFilter.SHOW_TEXT : 4;
     const walker = document.createTreeWalker(this.dialogueText, filter);
-    const textNodes: Array<{ node: Text; fullText: string; whole: boolean }> = [];
+    const textNodes: TypewriterNode[] = [];
     let node: Node | null;
     while ((node = walker.nextNode())) {
       const parent = node.parentNode as Element | null;
-      textNodes.push({
-        node: node as Text,
-        fullText: node.textContent ?? "",
-        // A text-effect letter is one grapheme: reveal it in one step.
-        whole: Boolean(parent && typeof parent.hasAttribute === "function" && parent.hasAttribute(TEXT_EFFECT_LETTER_ATTRIBUTE)),
-      });
+      const fullText = node.textContent ?? "";
+      // A text-effect letter is one grapheme: reveal it in one step.
+      const letter = parent && typeof parent.hasAttribute === "function" && parent.hasAttribute(TEXT_EFFECT_LETTER_ATTRIBUTE) ? parent : null;
+      textNodes.push({ node: node as Text, fullText, letter, rest: null });
     }
 
     if (textNodes.length === 0 || textNodes.every((t) => !t.fullText)) {
@@ -1895,9 +1914,25 @@ export class VnStage {
       return;
     }
 
+    // Lay the whole paragraph out first and hide what is not typed yet, so
+    // line breaks are final from the first letter: a word that will not fit
+    // starts on the next line instead of jumping there half-typed. Untyped
+    // text stays in the layout as a visibility-hidden sibling span; effect
+    // letters keep their text and carry a pending attribute.
     this.activeTextNodes = textNodes;
     for (const item of textNodes) {
+      if (!item.fullText) continue;
+      if (item.letter) {
+        item.letter.setAttribute(TYPEWRITER_PENDING_ATTRIBUTE, "");
+        continue;
+      }
+      const rest = document.createElement("span");
+      rest.setAttribute(TYPEWRITER_REST_ATTRIBUTE, "");
+      rest.setAttribute("aria-hidden", "true");
+      rest.textContent = item.fullText;
       item.node.textContent = "";
+      item.node.parentNode?.insertBefore(rest, item.node.nextSibling);
+      item.rest = rest;
     }
 
     this.isTyping = true;
@@ -1914,15 +1949,22 @@ export class VnStage {
       while (nodeIdx < textNodes.length) {
         const current = textNodes[nodeIdx]!;
         if (charIdx < current.fullText.length) {
-          let next: number;
-          if (current.whole) {
-            next = current.fullText.length;
-          } else {
-            const code = current.fullText.codePointAt(charIdx) ?? 0;
-            next = charIdx + (code > 0xffff ? 2 : 1);
+          if (current.letter) {
+            current.letter.removeAttribute(TYPEWRITER_PENDING_ATTRIBUTE);
+            charIdx = current.fullText.length;
+            return;
           }
-          current.node.textContent += current.fullText.slice(charIdx, next);
-          charIdx = next;
+          const code = current.fullText.codePointAt(charIdx) ?? 0;
+          charIdx += code > 0xffff ? 2 : 1;
+          current.node.textContent = current.fullText.slice(0, charIdx);
+          if (current.rest) {
+            if (charIdx < current.fullText.length) {
+              current.rest.textContent = current.fullText.slice(charIdx);
+            } else {
+              current.rest.remove();
+              current.rest = null;
+            }
+          }
           return;
         }
         nodeIdx++;

@@ -10,6 +10,13 @@ import { VnStage, type VnStageOptions } from "./vn-stage";
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Text the reader can see: skips untyped typewriter text (hidden but laid out). */
+function visibleText(node: FakeNode): string {
+  if (node.isText) return node.textContent;
+  if (node.hasAttribute("data-vn-typing-rest") || node.hasAttribute("data-vn-typing-pending")) return "";
+  return node.children.map(visibleText).join("");
+}
+
 /** Minimal TreeWalker over fake text nodes, so the typewriter path runs. */
 function installTreeWalker(): () => void {
   const doc = document as unknown as Record<string, unknown>;
@@ -69,20 +76,26 @@ describe("stage text effects", () => {
       s.loadTurn({ mode: "standard", paragraphs: [{ id: "p0", speaker: "Mira", text: "Hi <wave>la la</wave> 👋" }] });
       const text = dialogue(s);
       const letters = () => text.querySelectorAll("[data-vn-text-fx-ch]");
-      // Decorated before typing starts: letters exist but are empty.
+      // Decorated before typing starts: letters exist, keep their text for
+      // layout, and wait hidden until the typewriter reaches them.
       expect(letters().length).toBe(4);
-      expect(letters().every((l) => l.textContent === "")).toBe(true);
-      const seen: string[] = [];
-      for (let i = 0; i < 40 && text.textContent !== "Hi la la 👋"; i += 1) {
-        await wait(6);
-        seen.push(text.textContent);
-      }
+      expect(letters().every((l) => l.hasAttribute("data-vn-typing-pending"))).toBe(true);
+      // The full paragraph is laid out from the first tick.
       expect(text.textContent).toBe("Hi la la 👋");
+      expect(visibleText(text)).toBe("");
+      const seen: string[] = [];
+      for (let i = 0; i < 40 && visibleText(text) !== "Hi la la 👋"; i += 1) {
+        await wait(6);
+        seen.push(visibleText(text));
+        expect(text.textContent).toBe("Hi la la 👋");
+      }
+      expect(visibleText(text)).toBe("Hi la la 👋");
       // Progressive: some intermediate frame shows part of the wave.
       expect(seen.some((frame) => frame.startsWith("Hi l") && frame.length < "Hi la la 👋".length)).toBe(true);
       // The emoji never shows half a surrogate pair.
       expect(seen.every((frame) => !/[\uD800-\uDBFF]$/.test(frame))).toBe(true);
       expect(letters().map((l) => l.textContent)).toEqual(["l", "a", "l", "a"]);
+      expect(text.querySelectorAll("[data-vn-typing-rest], [data-vn-typing-pending]").length).toBe(0);
     } finally {
       undoWalker();
     }
@@ -97,10 +110,13 @@ describe("stage text effects", () => {
         { id: "p1", speaker: "Mira", text: "next" },
       ] });
       const text = dialogue(s);
-      expect(text.textContent).toBe("");
+      expect(visibleText(text)).toBe("");
+      expect(text.textContent).toBe("STOP! now");
       (s as unknown as { advance(): void }).advance();
+      expect(visibleText(text)).toBe("STOP! now");
       expect(text.textContent).toBe("STOP! now");
       expect(text.querySelectorAll("[data-vn-text-fx-ch]").map((l) => l.textContent).join("")).toBe("STOP!");
+      expect(text.querySelectorAll("[data-vn-typing-rest], [data-vn-typing-pending]").length).toBe(0);
     } finally {
       undoWalker();
     }

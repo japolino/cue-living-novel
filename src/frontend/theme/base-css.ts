@@ -38,6 +38,13 @@ textarea {
   display: none !important;
 }
 
+/* Typewriter: untyped text keeps its place in the layout (so lines never
+   re-wrap while typing) but is not painted until it is revealed. */
+[data-vn-typing-rest],
+[data-vn-typing-pending] {
+  visibility: hidden !important;
+}
+
 [data-vn-root] {
   /*
    * Chrome tokens. Declared on the root (not :host) so a preset that changes
