@@ -1,5 +1,5 @@
 import type { SpindleFrontendContext } from "lumiverse-spindle-types";
-import type { VisualNovelConfig, VisualNovelEffectIntensity } from "../../config.js";
+import type { VisualNovelConfig, VisualNovelEffectIntensity, VisualNovelTextEffectMode } from "../../config.js";
 import { REFERENCE_IMAGE_MAX_BYTES, REFERENCE_IMAGE_MIMES } from "../../protocol.js";
 import type { AssetView, BackendResponse, ConnectionCatalogOption, FrontendRequest, TurnView } from "../../protocol.js";
 import { AudioEngine, VnStage, isAmbientEffect, isStageEffect } from "../stage/index.js";
@@ -302,6 +302,8 @@ export type VisualStageThemeTarget = Pick<
   setTextScale?: (scale: number) => void;
   /** Lets the stage also gate its own heuristic effects (text-triggered shake). */
   setEffectIntensity?: (level: VisualNovelEffectIntensity) => void;
+  /** Inline dialogue text effects mode (stage sets `data-vn-text-effects`). */
+  setTextEffects?: (mode: VisualNovelTextEffectMode) => void;
 };
 
 /**
@@ -324,6 +326,7 @@ export function applyVisualConfigToStage(
   stage.setSkipMode?.(config.skipMode);
   stage.setTextScale?.(config.textScale);
   stage.setEffectIntensity?.(config.effectIntensity);
+  stage.setTextEffects?.(config.textEffects);
 }
 
 /**

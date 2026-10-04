@@ -15,6 +15,14 @@ export type VisualNovelSceneImageFit = (typeof SCENE_IMAGE_FITS)[number];
  */
 export const EFFECT_INTENSITIES = ["off", "gentle", "full"] as const;
 export type VisualNovelEffectIntensity = (typeof EFFECT_INTENSITIES)[number];
+/**
+ * How inline text effects (<shake>, <rainbow>, ... see src/shared/text-effects.ts)
+ * render in dialogue: "animated" plays them, "static" keeps their colour and
+ * styling without motion, "off" shows plain text. OS reduced-motion always
+ * downgrades "animated" to "static".
+ */
+export const TEXT_EFFECT_MODES = ["animated", "static", "off"] as const;
+export type VisualNovelTextEffectMode = (typeof TEXT_EFFECT_MODES)[number];
 
 /**
  * Where a character's reference anchor image comes from.
@@ -104,6 +112,8 @@ export type VisualNovelConfig = {
   skipMode: "read" | "all";
   /** Presentation strength of one-shot stage effects. Default "full" keeps existing playback. */
   effectIntensity: VisualNovelEffectIntensity;
+  /** Inline dialogue text effects (<shake>, <rainbow>, ...). Default "animated". */
+  textEffects: VisualNovelTextEffectMode;
   /** Dialogue text size multiplier, 1 = the theme's own size. */
   textScale: number;
   audioDirectory: string;
@@ -155,6 +165,7 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   autoPlayDelay: 2000,
   skipMode: "read",
   effectIntensity: "full",
+  textEffects: "animated",
   textScale: 1,
   audioDirectory: "",
   bgmVolume: 0.7,
@@ -230,6 +241,12 @@ function effectIntensity(value: unknown): VisualNovelEffectIntensity {
     : DEFAULT_CONFIG.effectIntensity;
 }
 
+function textEffectMode(value: unknown): VisualNovelTextEffectMode {
+  return typeof value === "string" && (TEXT_EFFECT_MODES as readonly string[]).includes(value)
+    ? value as VisualNovelTextEffectMode
+    : DEFAULT_CONFIG.textEffects;
+}
+
 function textScale(value: unknown): number {
   const scale = floatBetween(value, TEXT_SCALE_MIN, TEXT_SCALE_MAX, DEFAULT_CONFIG.textScale);
   return Math.round(scale * 100) / 100;
@@ -300,6 +317,7 @@ export function normalizeConfig(value: unknown): VisualNovelConfig {
     autoPlayDelay: integer(input.autoPlayDelay, 500, 10000, DEFAULT_CONFIG.autoPlayDelay),
     skipMode: input.skipMode === "all" ? "all" : "read",
     effectIntensity: effectIntensity(input.effectIntensity),
+    textEffects: textEffectMode(input.textEffects),
     textScale: textScale(input.textScale),
     audioDirectory: stringValue(input.audioDirectory, DEFAULT_CONFIG.audioDirectory).trim(),
     bgmVolume: floatBetween(input.bgmVolume, 0, 1, DEFAULT_CONFIG.bgmVolume),

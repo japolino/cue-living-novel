@@ -1,4 +1,5 @@
 import { VN_EFFECTS_CSS } from "./effects-css.js";
+import { VN_TEXT_EFFECTS_CSS } from "./text-effects-css.js";
 
 export const VN_BASE_CSS = `
 :host {
@@ -1400,4 +1401,6 @@ button[data-vn-badge]:active {
 }
 
 ${VN_EFFECTS_CSS}
+
+${VN_TEXT_EFFECTS_CSS}
 `;

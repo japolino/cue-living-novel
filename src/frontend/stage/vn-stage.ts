@@ -76,6 +76,7 @@ import {
   TEXT_SCALE_MIN,
   type VisualNovelEffectIntensity,
   type VisualNovelSceneImageFit,
+  type VisualNovelTextEffectMode,
   type VisualNovelThemePreset,
 } from "../../config.js";
 import {
@@ -456,6 +457,7 @@ export class VnStage {
   private currentRenderedParagraphId = "";
   private currentRenderedFormatted = "";
   private effectIntensity: VnEffectIntensity = "full";
+  private textEffectMode: VisualNovelTextEffectMode = "animated";
   private textScale = 1;
   /** Structured details for the error currently stored in state (message only). */
   private errorDetails: VnStageErrorDetails | null = null;
@@ -630,6 +632,20 @@ export class VnStage {
 
   getEffectIntensity(): VnEffectIntensity {
     return this.effectIntensity;
+  }
+
+  /**
+   * Inline text effects mode (config `textEffects`). Written to the root as
+   * `data-vn-text-effects` so CSS can play, freeze, or neutralize the
+   * `[data-vn-text-fx]` spans produced by the dialogue formatter.
+   */
+  setTextEffects(mode: VisualNovelTextEffectMode): void {
+    this.textEffectMode = mode === "static" || mode === "off" ? mode : "animated";
+    this.root.dataset.vnTextEffects = this.textEffectMode;
+  }
+
+  getTextEffects(): VisualNovelTextEffectMode {
+    return this.textEffectMode;
   }
 
   toggleAutoPlay(force?: boolean): void {

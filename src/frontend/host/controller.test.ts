@@ -86,6 +86,7 @@ const baseConfig: VisualNovelConfig = {
   autoPlayDelay: 2000,
   skipMode: "read",
   effectIntensity: "full",
+  textEffects: "animated",
   textScale: 1,
   audioDirectory: "",
   bgmVolume: 0.7,
