@@ -21,8 +21,9 @@ import {
   type VnStageState,
   type VnTurnInput,
 } from "../store";
-import { generateAmbientMarkup, generateCueEffectMarkup } from "./procedural-particles.js";
+import { generateAmbientMarkup, generateCueEffectMarkup, generateFrontAmbientMarkup } from "./procedural-particles.js";
 import { SpriteLayer, type SpriteLayerSnapshot } from "./sprite-layer.js";
+import { measurePlateLight } from "./sprite-depth.js";
 import type { PlateView, SpriteImageView, SpriteTurnView } from "../../shared/sprites.js";
 
 export type { StageEffect };
@@ -500,6 +501,14 @@ export class VnStage {
   /** Plate URL whose scene-image request is queued for the next microtask. */
   private queuedPlateUrl: string | null = null;
   private readonly failedPlateUrls = new Set<string>();
+  /** Sprite-mode depth layers, created on first use so scene mode never has them. */
+  private ambientFrontEl: HTMLElement | null = null;
+  private plateLightEl: HTMLElement | null = null;
+  /** Ambient whose front copy is mounted (sprite mode), or null. */
+  private frontAmbient: AmbientEffect | null = null;
+  private lightningTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Plate URL whose light side was last requested (stale answers are dropped). */
+  private plateLightUrl: string | null = null;
 
   constructor(options: VnStageOptions) {
     this.state = options.initialState ?? createInitialVnStageState();
@@ -830,6 +839,7 @@ export class VnStage {
     if (next === this.presentationMode) return;
     this.presentationMode = next;
     this.root.dataset.vnPresentation = next;
+    this.syncDepthLayers();
     if (next === "scene") {
       this.spriteLayer.setEnabled(false);
       this.queuedPlateUrl = null;
@@ -925,6 +935,7 @@ export class VnStage {
     const plate = this.spriteLayer.plateFor(index);
     if (!plate || plate.status !== "ready" || !plate.url) return;
     const url = plate.url;
+    this.syncPlateLight(url);
     if (this.state.displayedImage?.url === url || this.state.pendingImage?.url === url) return;
     if (this.failedPlateUrls.has(url) || this.queuedPlateUrl === url) return;
     this.queuedPlateUrl = url;
@@ -939,6 +950,109 @@ export class VnStage {
         if (!loaded && this.state.imageError && this.state.displayedImage?.url !== url) this.failedPlateUrls.add(url);
       });
     });
+  }
+
+  /**
+   * Sprite-mode depth layers (src/frontend/stage/sprite-depth.ts):
+   * the plate light (lightning behind the sprites) and the front ambient copy
+   * in front of them. Scene mode empties and hides both and drops the plate
+   * light side, so switching back leaves the classic stage as it was.
+   */
+  private syncDepthLayers(): void {
+    if (this.presentationMode !== "sprites") {
+      this.clearSpriteLightning();
+      if (this.plateLightEl) this.plateLightEl.hidden = true;
+      delete this.scene.dataset.vnLightSide;
+      this.plateLightUrl = null;
+    } else if (this.plateLightEl) {
+      this.plateLightEl.hidden = false;
+    }
+    this.syncFrontAmbient();
+  }
+
+  /** Mount (or clear) the front copy of the current particle ambient. */
+  private syncFrontAmbient(): void {
+    const effect = this.presentationMode === "sprites" ? this.currentAmbient : null;
+    const markup = effect ? generateFrontAmbientMarkup(effect) : "";
+    if (!markup) {
+      if (this.ambientFrontEl && this.frontAmbient !== null) {
+        this.ambientFrontEl.innerHTML = "";
+        this.ambientFrontEl.className = "";
+        this.ambientFrontEl.hidden = true;
+      }
+      this.frontAmbient = null;
+      return;
+    }
+    if (effect === this.frontAmbient) return;
+    const front = this.ensureAmbientFront();
+    front.className = `vn-ambient-front-${effect}`;
+    front.innerHTML = markup;
+    front.hidden = false;
+    this.frontAmbient = effect;
+  }
+
+  private ensureAmbientFront(): HTMLElement {
+    if (this.ambientFrontEl) return this.ambientFrontEl;
+    const element = document.createElement("div");
+    // Also an ambient overlay, so the shared particle styles, the "gentle"
+    // thinning and the reduced-motion rules apply to it as well.
+    element.setAttribute("data-vn-ambient", "");
+    element.setAttribute("data-vn-ambient-front", "");
+    element.setAttribute("aria-hidden", "true");
+    const sprites = this.spriteContainer();
+    this.scene.insertBefore(element, sprites.nextSibling);
+    this.ambientFrontEl = element;
+    return element;
+  }
+
+  private ensurePlateLight(): HTMLElement {
+    if (this.plateLightEl) return this.plateLightEl;
+    const element = document.createElement("div");
+    element.setAttribute("data-vn-plate-light", "");
+    element.setAttribute("aria-hidden", "true");
+    // Above the plate and the back ambient, under the scrim and the sprites.
+    this.scene.insertBefore(element, this.ambientOverlay.nextSibling);
+    this.plateLightEl = element;
+    return element;
+  }
+
+  /** Sample where the plate's light comes from; the sprites' rim light faces it. */
+  private syncPlateLight(url: string): void {
+    if (this.plateLightUrl === url) return;
+    this.plateLightUrl = url;
+    void measurePlateLight(url).then((side) => {
+      if (this.destroyed || this.presentationMode !== "sprites" || this.plateLightUrl !== url) return;
+      if (side) this.scene.dataset.vnLightSide = side;
+      else delete this.scene.dataset.vnLightSide;
+    });
+  }
+
+  /**
+   * Lightning in sprite mode: the bolt is drawn behind the characters, the
+   * plate is lit and the sprites turn into rim-lit silhouettes (CSS keyed on
+   * `data-vn-lightning` on the scene). Self-clears like the scene-mode bolt.
+   */
+  private triggerSpriteLightning(duration: number): void {
+    this.clearSpriteLightning();
+    const light = this.ensurePlateLight();
+    light.hidden = false;
+    if (typeof this.scene.offsetWidth === "number") void this.scene.offsetWidth;
+    light.innerHTML = generateCueEffectMarkup("lightning");
+    this.scene.dataset.vnLightning = "true";
+    this.lightningTimer = setTimeout(() => {
+      this.lightningTimer = null;
+      if (this.destroyed) return;
+      this.clearSpriteLightning();
+    }, duration);
+  }
+
+  private clearSpriteLightning(): void {
+    if (this.lightningTimer !== null) {
+      clearTimeout(this.lightningTimer);
+      this.lightningTimer = null;
+    }
+    delete this.scene.dataset.vnLightning;
+    if (this.plateLightEl) this.plateLightEl.innerHTML = "";
   }
 
   /**
@@ -1188,7 +1302,9 @@ export class VnStage {
       case "lightning":
         // Double flash on the flash overlay plus a drawn bolt under the dialogue box.
         this.triggerFlashPreset("lightning", 550);
-        this.triggerFxBurst("lightning", 550);
+        // Sprite mode draws the bolt behind the characters and rims them instead.
+        if (this.presentationMode === "sprites") this.triggerSpriteLightning(550);
+        else this.triggerFxBurst("lightning", 550);
         break;
       case "speed_lines":
         this.triggerFxBurst("speed_lines", 650);
@@ -1336,12 +1452,19 @@ export class VnStage {
       delete this.ambientOverlay.dataset.vnAmbient;
       this.ambientOverlay.className = "";
       this.ambientOverlay.innerHTML = "";
+      this.syncFrontAmbient();
       return;
     }
     this.scene.dataset.vnSceneAmbient = effect as string;
     this.ambientOverlay.dataset.vnAmbient = effect as string;
     this.ambientOverlay.className = `vn-ambient-${effect}`;
     this.ambientOverlay.innerHTML = generateAmbientMarkup(this.currentAmbient);
+    this.syncFrontAmbient();
+  }
+
+  /** The sprite-mode front ambient layer, or null before sprite mode first used it. */
+  getAmbientFrontOverlay(): HTMLElement | null {
+    return this.ambientFrontEl;
   }
 
   getAmbientOverlay(): HTMLElement {
@@ -1399,6 +1522,7 @@ export class VnStage {
 
     delete this.fxOverlay.dataset.vnEffect;
     this.fxOverlay.innerHTML = "";
+    this.clearSpriteLightning();
 
     this.ambientOverride = undefined;
     this.applyAmbient(null);

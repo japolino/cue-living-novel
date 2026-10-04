@@ -8,6 +8,10 @@
  * Layering contract:
  * - ambient weather / grades live in `[data-vn-ambient]` inside the scene
  *   (under the readability scrim and the dialogue box);
+ * - sprite mode adds a front ambient copy (`[data-vn-ambient-front]`) in
+ *   front of the sprites, raises grades over them, and lights the plate
+ *   behind them for lightning (`[data-vn-plate-light]`), see "SPRITE MODE
+ *   DEPTH" below;
  * - bursts live in `[data-vn-fx]` above the scene, below the dialogue box;
  * - nothing here ever takes pointer events.
  *
@@ -1288,6 +1292,317 @@ export const VN_EFFECTS_CSS = `
 }
 
 .vn-fog-layer-3 > i { background-image: ${TEX_FOG_NEAR}; }
+
+/* ==========================================================================
+   SPRITE MODE DEPTH (front ambient, grades over sprites, lightning, parallax)
+   Scoped to [data-vn-presentation="sprites"] and to the sprite-mode-only
+   layers ([data-vn-ambient-front], [data-vn-plate-light]), so scene mode
+   renders exactly as before. Layer depth for camera moves: plate 1x,
+   sprites 1 + --vn-depth-sprites, front 1 + --vn-depth-front
+   (SPRITE_DEPTH in stage/sprite-depth.ts).
+   ========================================================================== */
+
+[data-vn-root][data-vn-presentation="sprites"] {
+  --vn-depth-sprites: 0.15;
+  --vn-depth-front: 0.4;
+}
+
+[data-vn-root][data-vn-presentation="sprites"] [data-vn-sprites] {
+  --vn-depth: var(--vn-depth-sprites, 0.15);
+  transform-origin: 50% 50%;
+  transition: filter 600ms ease, scale 2s ease;
+}
+
+/* Front ambient: a sparse, larger, faster copy of the weather in front of
+   the sprites (z 4) and still inside the scene, so below the dialogue. */
+[data-vn-ambient][data-vn-ambient-front] {
+  z-index: 5;
+  --vn-depth: var(--vn-depth-front, 0.4);
+  transform-origin: 50% 50%;
+  transition: scale 2s ease;
+}
+
+[data-vn-ambient-front] .vn-front-sheet { opacity: 1; }
+[data-vn-ambient-front] .vn-fireflies-front { opacity: 0.55; }
+[data-vn-ambient-front] .vn-embers-front { opacity: 0.7; }
+[data-vn-ambient-front] .vn-snow-front { opacity: 0.9; }
+
+[data-vn-ambient-front] .vn-fog-front {
+  height: 30%;
+  --fw: 1280px;
+  --fd: 32s;
+  --bd: 9s;
+  --o0: 0.26;
+  --o1: 0.44;
+}
+
+/* "gentle" halves the front layer too (.vn-pt thinning applies already). */
+[data-vn-effect-intensity="gentle"] [data-vn-ambient-front] .vn-rain-layer > i {
+  background-image: var(--tile-gentle, var(--tile));
+}
+
+[data-vn-effect-intensity="gentle"] [data-vn-ambient-front] .vn-fog-front {
+  --o0: 0.13;
+  --o1: 0.22;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* The wet lens is on the camera glass: in sprite mode it is drawn by the front layer. */
+  [data-vn-root][data-vn-presentation="sprites"] [data-vn-ambient]:not([data-vn-ambient-front]) .vn-rain-lens {
+    display: none;
+  }
+}
+
+/* Mood grades cover the plate and the characters alike (never the dialogue). */
+[data-vn-root][data-vn-presentation="sprites"] [data-vn-scene][data-vn-scene-ambient="vignette_dark"] > [data-vn-ambient]:not([data-vn-ambient-front]),
+[data-vn-root][data-vn-presentation="sprites"] [data-vn-scene][data-vn-scene-ambient="sepia_flashback"] > [data-vn-ambient]:not([data-vn-ambient-front]),
+[data-vn-root][data-vn-presentation="sprites"] [data-vn-scene][data-vn-scene-ambient="desaturate"] > [data-vn-ambient]:not([data-vn-ambient-front]),
+[data-vn-root][data-vn-presentation="sprites"] [data-vn-scene][data-vn-scene-ambient="dream_haze"] > [data-vn-ambient]:not([data-vn-ambient-front]),
+[data-vn-root][data-vn-presentation="sprites"] [data-vn-scene][data-vn-scene-ambient="danger_pulse"] > [data-vn-ambient]:not([data-vn-ambient-front]) {
+  z-index: 5;
+}
+
+/* Lightning: the bolt and the sky light sit behind the characters; the full
+   screen flash is softer so the rim-lit silhouettes read (sprite-css.ts). */
+[data-vn-plate-light] {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  overflow: hidden;
+  pointer-events: none;
+  container-type: size;
+}
+
+[data-vn-plate-light]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse 120% 95% at 66% 0%, rgba(240, 245, 255, 0.95) 0%, rgba(196, 214, 255, 0.6) 42%, rgba(150, 176, 236, 0.22) 78%, rgba(150, 176, 236, 0) 100%);
+  mix-blend-mode: screen;
+  opacity: 0;
+  pointer-events: none;
+}
+
+[data-vn-scene][data-vn-lightning] [data-vn-plate-light]::before {
+  animation: vn-plate-lightning 550ms linear both;
+}
+
+[data-vn-plate-light] svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+[data-vn-plate-light] .vn-bolt > b {
+  position: absolute;
+  display: block;
+  pointer-events: none;
+}
+
+[data-vn-root][data-vn-presentation="sprites"] [data-vn-flash][data-vn-flash="lightning"] {
+  animation: vn-lightning-soft 550ms linear forwards;
+}
+
+@keyframes vn-plate-lightning {
+  0% { opacity: 0; }
+  3% { opacity: 1; }
+  9% { opacity: 0.18; }
+  17% { opacity: 0.06; }
+  21% { opacity: 0.88; }
+  30% { opacity: 0.3; }
+  52% { opacity: 0.1; }
+  100% { opacity: 0; }
+}
+
+@keyframes vn-lightning-soft {
+  0% { opacity: 0; }
+  3% { opacity: 0.3; }
+  9% { opacity: 0.03; }
+  17% { opacity: 0; }
+  21% { opacity: 0.22; }
+  28% { opacity: 0.04; }
+  100% { opacity: 0; }
+}
+
+/* ---- Parallax --------------------------------------------------------------
+   Plate-only camera moves (zoom in / out / punch, tilt) scale the sprites and
+   the front layer by (1 + depth) times the plate's amount; scene-level moves
+   (shakes, rumble, heartbeat) already carry them 1x, so they add depth x. */
+
+@media (prefers-reduced-motion: no-preference) {
+  [data-vn-root][data-vn-presentation="sprites"] [data-vn-scene-image] {
+    /* Base CSS drops the 2s zoom transition when motion is allowed; keep it
+       here so the plate and the sprites push in together. */
+    transition: opacity var(--vn-transition-duration, 280ms) ease, transform 2s ease;
+  }
+}
+
+[data-vn-root][data-vn-presentation="sprites"] [data-vn-scene][data-vn-zoom="in"] [data-vn-sprites],
+[data-vn-root][data-vn-presentation="sprites"] [data-vn-scene][data-vn-zoom="in"] [data-vn-ambient-front] {
+  scale: calc(1 + 0.12 * (1 + var(--vn-depth)));
+}
+
+[data-vn-root][data-vn-presentation="sprites"] [data-vn-scene][data-vn-zoom="out"] [data-vn-sprites],
+[data-vn-root][data-vn-presentation="sprites"] [data-vn-scene][data-vn-zoom="out"] [data-vn-ambient-front] {
+  animation: vn-depth-zoom-pull 1.6s cubic-bezier(0.22, 0.68, 0.18, 1) both;
+}
+
+[data-vn-root][data-vn-presentation="sprites"] [data-vn-scene][data-vn-zoom="punch"] [data-vn-sprites],
+[data-vn-root][data-vn-presentation="sprites"] [data-vn-scene][data-vn-zoom="punch"] [data-vn-ambient-front] {
+  animation: vn-depth-zoom-punch 450ms linear both;
+}
+
+[data-vn-root][data-vn-presentation="sprites"] [data-vn-scene][data-vn-tilt="true"] [data-vn-sprites],
+[data-vn-root][data-vn-presentation="sprites"] [data-vn-scene][data-vn-tilt="true"] [data-vn-ambient-front] {
+  animation: vn-depth-tilt 700ms linear both;
+}
+
+[data-vn-root][data-vn-presentation="sprites"] [data-vn-scene][data-vn-heartbeat] [data-vn-sprites],
+[data-vn-root][data-vn-presentation="sprites"] [data-vn-scene][data-vn-heartbeat] [data-vn-ambient-front] {
+  animation: vn-depth-heartbeat 850ms cubic-bezier(0.3, 0.2, 0.3, 1) both;
+}
+
+[data-vn-root][data-vn-presentation="sprites"] [data-vn-scene][data-vn-shake="true"] [data-vn-sprites],
+[data-vn-root][data-vn-presentation="sprites"] [data-vn-scene][data-vn-shake="true"] [data-vn-ambient-front] {
+  animation: vn-depth-shake 300ms cubic-bezier(0.33, 0, 0.3, 1) both;
+}
+
+[data-vn-root][data-vn-presentation="sprites"] [data-vn-scene][data-vn-shake="hard"] [data-vn-sprites],
+[data-vn-root][data-vn-presentation="sprites"] [data-vn-scene][data-vn-shake="hard"] [data-vn-ambient-front] {
+  animation: vn-depth-shake-hard 500ms cubic-bezier(0.25, 0.1, 0.25, 1) both;
+}
+
+[data-vn-root][data-vn-presentation="sprites"] [data-vn-scene][data-vn-shake="rumble"] [data-vn-sprites],
+[data-vn-root][data-vn-presentation="sprites"] [data-vn-scene][data-vn-shake="rumble"] [data-vn-ambient-front] {
+  animation: vn-depth-rumble 800ms linear both;
+}
+
+@keyframes vn-depth-zoom-pull {
+  0% { scale: calc(1 + 0.14 * (1 + var(--vn-depth))); }
+  100% { scale: 1; }
+}
+
+@keyframes vn-depth-zoom-punch {
+  0% { scale: 1; animation-timing-function: cubic-bezier(0.2, 0.9, 0.3, 1); }
+  16% { scale: calc(1 + 0.17 * (1 + var(--vn-depth))); animation-timing-function: cubic-bezier(0.45, 0, 0.55, 1); }
+  42% { scale: calc(1 - 0.015 * (1 + var(--vn-depth))); animation-timing-function: cubic-bezier(0.45, 0, 0.55, 1); }
+  66% { scale: calc(1 + 0.012 * (1 + var(--vn-depth))); animation-timing-function: cubic-bezier(0.45, 0, 0.55, 1); }
+  100% { scale: 1; }
+}
+
+@keyframes vn-depth-tilt {
+  0% { rotate: 0deg; scale: 1; animation-timing-function: cubic-bezier(0.3, 0, 0.2, 1); }
+  32% { rotate: calc(2.2deg * (1 + var(--vn-depth))); scale: calc(1 + 0.095 * (1 + var(--vn-depth))); animation-timing-function: linear; }
+  68% { rotate: calc(2.4deg * (1 + var(--vn-depth))); scale: calc(1 + 0.1 * (1 + var(--vn-depth))); animation-timing-function: cubic-bezier(0.5, 0, 0.3, 1); }
+  100% { rotate: 0deg; scale: 1; }
+}
+
+@keyframes vn-depth-heartbeat {
+  0% { scale: 1; }
+  12% { scale: calc(1 + 0.04 * var(--vn-depth)); }
+  24% { scale: calc(1 + 0.005 * var(--vn-depth)); }
+  36% { scale: calc(1 + 0.06 * var(--vn-depth)); }
+  62% { scale: 1; }
+  100% { scale: 1; }
+}
+
+@keyframes vn-depth-shake {
+  0%, 100% { translate: 0 0; }
+  12% { translate: calc(-5px * var(--vn-depth)) calc(3px * var(--vn-depth)); }
+  28% { translate: calc(5px * var(--vn-depth)) calc(-3px * var(--vn-depth)); }
+  46% { translate: calc(-3px * var(--vn-depth)) calc(-2px * var(--vn-depth)); }
+  66% { translate: calc(2px * var(--vn-depth)) calc(1px * var(--vn-depth)); }
+  84% { translate: calc(-1px * var(--vn-depth)) 0; }
+}
+
+@keyframes vn-depth-shake-hard {
+  0%, 100% { translate: 0 0; }
+  8% { translate: calc(-14px * var(--vn-depth)) calc(9px * var(--vn-depth)); }
+  18% { translate: calc(15px * var(--vn-depth)) calc(-10px * var(--vn-depth)); }
+  30% { translate: calc(-12px * var(--vn-depth)) calc(-7px * var(--vn-depth)); }
+  44% { translate: calc(9px * var(--vn-depth)) calc(7px * var(--vn-depth)); }
+  58% { translate: calc(-6px * var(--vn-depth)) calc(3px * var(--vn-depth)); }
+  72% { translate: calc(4px * var(--vn-depth)) calc(-2px * var(--vn-depth)); }
+  86% { translate: calc(-2px * var(--vn-depth)) calc(1px * var(--vn-depth)); }
+}
+
+@keyframes vn-depth-rumble {
+  0%, 100% { translate: 0 0; }
+  6% { translate: calc(-1.5px * var(--vn-depth)) calc(1px * var(--vn-depth)); }
+  12% { translate: calc(2px * var(--vn-depth)) calc(-1.5px * var(--vn-depth)); }
+  18% { translate: calc(-3px * var(--vn-depth)) calc(-1px * var(--vn-depth)); }
+  24% { translate: calc(3px * var(--vn-depth)) calc(2px * var(--vn-depth)); }
+  30% { translate: calc(-3.5px * var(--vn-depth)) calc(1px * var(--vn-depth)); }
+  36% { translate: calc(3px * var(--vn-depth)) calc(-2px * var(--vn-depth)); }
+  42% { translate: calc(-3.5px * var(--vn-depth)) calc(-1.5px * var(--vn-depth)); }
+  48% { translate: calc(3.5px * var(--vn-depth)) calc(1.5px * var(--vn-depth)); }
+  54% { translate: calc(-3px * var(--vn-depth)) calc(2px * var(--vn-depth)); }
+  60% { translate: calc(3px * var(--vn-depth)) calc(-1.5px * var(--vn-depth)); }
+  66% { translate: calc(-2.5px * var(--vn-depth)) calc(1px * var(--vn-depth)); }
+  72% { translate: calc(2.5px * var(--vn-depth)) calc(-1px * var(--vn-depth)); }
+  78% { translate: calc(-2px * var(--vn-depth)) calc(-1px * var(--vn-depth)); }
+  84% { translate: calc(1.5px * var(--vn-depth)) calc(1px * var(--vn-depth)); }
+  90% { translate: calc(-1px * var(--vn-depth)) calc(0.5px * var(--vn-depth)); }
+  95% { translate: calc(0.5px * var(--vn-depth)) calc(-0.5px * var(--vn-depth)); }
+}
+
+/* ---- Idle plate drift ------------------------------------------------------
+   A few pixels over many seconds, on the independent translate property; the
+   tiny overscale keeps the edges covered. Every plate camera animation lists
+   the drift first so it keeps running through zooms, tilts and blur pulses. */
+
+[data-vn-root][data-vn-presentation="sprites"] [data-vn-scene-image] {
+  --vn-plate-drift: vn-plate-drift 34s ease-in-out -8.5s infinite alternate;
+  scale: 1.012;
+  animation: var(--vn-plate-drift);
+}
+
+[data-vn-root][data-vn-presentation="sprites"][data-vn-effect-intensity="off"] [data-vn-scene-image] {
+  --vn-plate-drift: none;
+}
+
+[data-vn-root][data-vn-presentation="sprites"] [data-vn-scene][data-vn-zoom="out"] [data-vn-scene-image] {
+  animation: var(--vn-plate-drift), vn-zoom-pull 1.6s cubic-bezier(0.22, 0.68, 0.18, 1) both;
+}
+
+[data-vn-root][data-vn-presentation="sprites"] [data-vn-scene][data-vn-zoom="punch"] [data-vn-scene-image] {
+  animation: var(--vn-plate-drift), vn-zoom-punch 450ms linear both;
+}
+
+[data-vn-root][data-vn-presentation="sprites"] [data-vn-scene][data-vn-tilt="true"] [data-vn-scene-image] {
+  animation: var(--vn-plate-drift), vn-tilt 700ms linear both;
+}
+
+[data-vn-root][data-vn-presentation="sprites"] [data-vn-scene][data-vn-blur] [data-vn-scene-image] {
+  animation: var(--vn-plate-drift), vn-blur-pulse 650ms cubic-bezier(0.3, 0, 0.2, 1) both;
+}
+
+@keyframes vn-plate-drift {
+  0% { translate: -0.45% 0.2%; }
+  100% { translate: 0.45% -0.2%; }
+}
+
+/* Reduced motion: no drift, no parallax, no front particles, no lightning
+   light; only the static grades stay. */
+@media (prefers-reduced-motion: reduce) {
+  [data-vn-root][data-vn-presentation="sprites"] [data-vn-scene-image] {
+    --vn-plate-drift: none;
+  }
+
+  [data-vn-root][data-vn-presentation="sprites"] [data-vn-sprites],
+  [data-vn-ambient][data-vn-ambient-front] {
+    animation: none !important;
+    scale: none !important;
+    translate: none !important;
+    rotate: none !important;
+  }
+
+  [data-vn-ambient][data-vn-ambient-front],
+  [data-vn-plate-light] {
+    display: none !important;
+  }
+}
 
 /* ==========================================================================
    EFFECT INTENSITY: "gentle" halves particle density and drops near layers

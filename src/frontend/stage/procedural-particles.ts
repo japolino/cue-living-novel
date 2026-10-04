@@ -14,7 +14,8 @@ import { svgDataUri } from "../theme/effects-css";
  * tiles (seeded SVG textures) instead of hundreds of nodes.
  *
  * Node budget at "full" (asserted by tests): every ambient stays under ~120
- * nodes; "gentle" hides every other `.vn-pt` particle via CSS.
+ * nodes; "gentle" hides every other `.vn-pt` particle via CSS. In sprite mode
+ * particle ambients also get a sparse front copy (generateFrontAmbientMarkup).
  */
 
 /**
@@ -155,9 +156,11 @@ function rainTile(spec: RainLayerSpec): string {
   return svgDataUri(`<defs>${gradients.join("")}${filter}</defs>${body}`, spec.w, spec.h);
 }
 
-function rainLayer(spec: RainLayerSpec, tilt: number): string {
+function rainLayer(spec: RainLayerSpec, tilt: number, gentle?: RainLayerSpec): string {
   const style = vars({
     "--tile": rainTile(spec),
+    // Optional sparser tile that "gentle" swaps in (same size and speed).
+    ...(gentle ? { "--tile-gentle": rainTile(gentle) } : {}),
     "--tw": `${spec.w}px`,
     "--th": `${spec.h}px`,
     "--dur": `${n(spec.h / spec.speed, 3)}s`,
@@ -370,6 +373,155 @@ function generateFogMarkup(): string {
     `<div class="vn-fog-layer vn-fog-layer-2"><i></i></div>`,
     `<div class="vn-fog-layer vn-fog-layer-3"><i></i></div>`,
   ].join("");
+}
+
+/* -------------------------------------------------------------------------- */
+/* Front ambient layer (sprite mode)                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Particle ambients that get a front copy in sprite mode. Mood grades have no
+ * particles: in sprite mode the stage raises their overlay above the sprites.
+ */
+export const FRONT_AMBIENT_EFFECTS = ["rain", "heavy_rain", "snow", "sakura", "fireflies", "embers", "fog"] as const satisfies readonly AmbientEffect[];
+
+export type FrontAmbientEffect = (typeof FRONT_AMBIENT_EFFECTS)[number];
+
+/** Front density bound: front particles per back particle (asserted by tests). */
+export const FRONT_AMBIENT_MAX_DENSITY = 0.4;
+
+export function isFrontAmbientEffect(effect: AmbientEffect | null | undefined): effect is FrontAmbientEffect {
+  return (FRONT_AMBIENT_EFFECTS as readonly string[]).includes(effect ?? "");
+}
+
+/**
+ * Foreground copy of a particle ambient, drawn in front of the sprites (and
+ * below the dialogue) so weather surrounds the characters. Lighter, larger
+ * and faster than the back overlay, and sparse: at most
+ * FRONT_AMBIENT_MAX_DENSITY of the back layer's particles. "gentle" halves
+ * it (CSS hides every other `.vn-pt`; rain swaps in a sparser tile), reduced
+ * motion hides the whole layer. Empty for mood grades.
+ */
+export function generateFrontAmbientMarkup(effect: AmbientEffect): string {
+  switch (effect) {
+    case "rain":
+      return generateFrontRainMarkup(false);
+    case "heavy_rain":
+      return generateFrontRainMarkup(true);
+    case "snow":
+      return generateFrontSnowMarkup();
+    case "sakura":
+      return generateFrontSakuraMarkup();
+    case "fireflies":
+      return generateFrontFirefliesMarkup();
+    case "embers":
+      return generateFrontEmbersMarkup();
+    case "fog":
+      return `<div class="vn-fog-layer vn-fog-layer-3 vn-fog-front"><i></i></div>`;
+    default:
+      return "";
+  }
+}
+
+function generateFrontRainMarkup(heavy: boolean): string {
+  const prefix = heavy ? "vn-heavy-rain" : "vn-rain";
+  const tilt = heavy ? 13 : 8;
+  // Big, soft, fast streaks close to the lens; a handful per large tile.
+  const sheet = (count: number): RainLayerSpec => ({
+    cls: `${prefix}-front vn-front-sheet`, seed: heavy ? 241 : 141, w: 640, h: 780, speed: heavy ? 3400 : 2900, blur: 1.5,
+    groups: [{ count, len: [150, 250], width: 3.6, alpha: heavy ? [0.26, 0.42] : [0.2, 0.34], color: "#eef4ff" }],
+  });
+  const full = heavy ? 6 : 4;
+  let lens = "";
+  if (heavy) {
+    // The wet lens sits on the camera glass, so in sprite mode it moves in
+    // front of the characters (the back copy is hidden by CSS).
+    const dropCount = 7;
+    const drops: string[] = [];
+    for (let i = 0; i < dropCount; i++) {
+      const run = i % 3 === 1;
+      const dur = pseudo(335, i, 9, 15);
+      drops.push(`<i class="vn-pt vn-drop${run ? " vn-drop--run" : ""}" style="${vars({
+        left: `${n(strat(331, i, dropCount, 4, 94))}%`,
+        top: `${n(pseudo(332, i, run ? 4 : 6, run ? 40 : 80))}%`,
+        "--sz": `${n(pseudo(333, i, 11, 26))}px`,
+        "--sq": n(pseudo(334, i, 0.9, 1.2), 2),
+        "--dur": `${n(dur, 2)}s`,
+        "--dl": `${n(-pseudo(336, i, 0, dur), 2)}s`,
+      })}"></i>`);
+    }
+    lens = `<div class="vn-rain-lens" data-vn-lens-droplets>${drops.join("")}</div>`;
+  }
+  return `${rainLayer(sheet(full), tilt, sheet(Math.ceil(full / 2)))}${lens}`;
+}
+
+/** Front falling layer: same seeded falling particle as the back layers. */
+function frontFallGroup(layer: FallLayer, cls: (i: number) => string, extra?: (i: number) => Record<string, string>): string {
+  const out: string[] = [];
+  for (let i = 0; i < layer.count; i++) out.push(fallingParticle(cls(i), layer, i, extra?.(i)));
+  return `<div class="vn-fx-layer ${layer.cls}">${out.join("")}</div>`;
+}
+
+function generateFrontSnowMarkup(): string {
+  // Large out-of-focus flakes drifting past the lens.
+  const near: FallLayer = { cls: "vn-snow-front", seed: 130, count: 10, size: [46, 84], fall: [3.4, 4.6], opacity: [0.3, 0.55] };
+  return frontFallGroup(near, () => "vn-flake vn-flake--bokeh vn-flake--front", (i) => ({
+    "--sw": `${n(pseudo(139, i, 18, 40))}px`,
+  }));
+}
+
+function generateFrontSakuraMarkup(): string {
+  const near: FallLayer = { cls: "vn-sakura-front", seed: 160, count: 6, size: [46, 64], fall: [4.2, 5.6], opacity: [0.55, 0.75] };
+  return frontFallGroup(near, () => "vn-petal vn-petal--far vn-petal--front", (i) => ({
+    "--rd": `${n(pseudo(172, i, 2.6, 4.2), 2)}s`,
+    "--ax": `${n(pseudo(170, i, 0.4, 1), 2)} ${n(pseudo(171, i, -0.6, 0.9), 2)} 0.8`,
+    "--r0": `${Math.round(pseudo(173, i, -60, 60))}deg`,
+    "--dx": `${n(pseudo(168, i, -34, -14))}cqw`,
+  }));
+}
+
+function generateFrontFirefliesMarkup(): string {
+  const count = 5;
+  const flies: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const wander = pseudo(156, i, 8, 13);
+    const blink = pseudo(157, i, 2.8, 4.6);
+    const offset = (seed: number) => `${n(pseudo(seed, i, -80, 80))}px ${n(pseudo(seed + 1, i, -50, 50))}px`;
+    flies.push(`<i class="vn-pt vn-firefly vn-firefly--near vn-firefly--front" style="${vars({
+      left: `${n(strat(150, i, count, 4, 96))}%`,
+      top: `${n(pseudo(151, i, 34, 86))}%`,
+      "--sz": `${n(pseudo(152, i, 78, 116))}px`,
+      "--wd": `${n(wander, 2)}s`,
+      "--bd": `${n(blink, 2)}s`,
+      "--dl": `${n(-pseudo(153, i, 0, wander), 2)}s`,
+      "--bdl": `${n(-pseudo(154, i, 0, blink), 2)}s`,
+      "--p1": offset(158),
+      "--p2": offset(160),
+      "--p3": offset(162),
+    })}"></i>`);
+  }
+  return `<div class="vn-fx-layer vn-fireflies-front">${flies.join("")}</div>`;
+}
+
+function generateFrontEmbersMarkup(): string {
+  const count = 7;
+  const sparks: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const streak = i % 3 === 1;
+    const rise = pseudo(163, i, 2.4, 3.6);
+    sparks.push(`<i class="vn-pt vn-ember vn-ember--${streak ? "streak" : "bokeh"} vn-ember--front" style="${vars({
+      left: `${n(strat(160, i, count, 3, 97))}%`,
+      "--y": `${n(pseudo(164, i, 10, 90))}cqh`,
+      "--sz": `${n(streak ? pseudo(161, i, 14, 19) : pseudo(161, i, 40, 64))}px`,
+      "--fd": `${n(rise, 2)}s`,
+      "--dl": `${n(-pseudo(162, i, 0, rise), 2)}s`,
+      "--dx": `${n(pseudo(165, i, -6, 14))}cqw`,
+      "--sw": `${n(pseudo(166, i, 14, 34))}px`,
+      "--sd": `${n(pseudo(167, i, 1.1, 2), 2)}s`,
+      "--fl": `${n(pseudo(168, i, 0.14, 0.3), 2)}s`,
+    })}"></i>`);
+  }
+  return `<div class="vn-fx-layer vn-embers-front">${sparks.join("")}</div>`;
 }
 
 /* -------------------------------------------------------------------------- */

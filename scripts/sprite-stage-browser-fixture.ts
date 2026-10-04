@@ -15,7 +15,7 @@ import {
  * downscaled copies of the sprite bake-off assets in scripts/fixtures/sprites/.
  *
  * Query: ?preset, ?intensity (full|gentle|off), ?speed (typewriter ms), ?mode (sprites|scene).
- * window.fx: { stage, load(paragraphs, options), go(index), ready(...), view() }.
+ * window.fx: { stage, load(paragraphs, options), go(index), ready(...), view(), effect(name), ambient(name) }.
  */
 const q = new URL(location.href).searchParams;
 
@@ -77,6 +77,10 @@ export type FixtureParagraph = {
   actors: Array<Partial<SpriteActorStage> & { characterKey: string }>;
   plateKey?: string | null;
   light?: SpriteParagraphStage["light"];
+  /** Persistent ambient from this paragraph on (weather or mood grade). */
+  ambient?: string | null;
+  /** One-shot stage effect played when the paragraph shows. */
+  effect?: string;
 };
 
 const mount = document.createElement("div");
@@ -121,6 +125,8 @@ function load(paragraphs: FixtureParagraph[], options: { sets?: Partial<SpriteTu
       id: `fixture-${turnCounter}:${index}`,
       text: p.text ?? `Paragraph ${index + 1}.`,
       ...(p.speaker !== undefined ? { speaker: p.speaker } : {}),
+      ...(p.ambient !== undefined ? { ambient: p.ambient as never } : {}),
+      ...(p.effect !== undefined ? { effect: p.effect as never } : {}),
     })),
     sprites: view,
   });
@@ -140,5 +146,7 @@ Object.assign(window, {
     go,
     spriteImage,
     view: () => current,
+    effect: (name: string) => stage.triggerEffect(name as never),
+    ambient: (name: string | null) => stage.applyAmbient(name as never),
   },
 });

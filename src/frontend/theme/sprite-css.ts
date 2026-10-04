@@ -11,6 +11,12 @@
  * aspect), `--vn-sprite-cx`/`--vn-sprite-by` = bbox bottom-centre). The bbox
  * bottom-centre sits on the anchor, so transparent margins never float a
  * character above the floor.
+ *
+ * Depth (sprite-depth.ts): a contact shadow and leg occlusion ground each
+ * figure, a rim light coloured by the light preset sits on the edge that
+ * faces the plate's light, weather and mood grades tint the characters, and
+ * lightning turns them into rim-lit silhouettes. Parallax, the front ambient
+ * layer and the plate drift live in effects-css.ts ("SPRITE MODE DEPTH").
  */
 export const VN_SPRITE_CSS = `
 [data-vn-sprites] {
@@ -27,6 +33,14 @@ export const VN_SPRITE_CSS = `
   /* Effect intensity scale for motion and emotes ("gentle" halves it). */
   --vn-sprite-fx: 1;
   --vn-sprite-move-ms: 620ms;
+  /* Rim light: colour and strength per light preset; side from the plate
+     (data-vn-light-side on the scene: left / right / top, default top). */
+  --vn-sprite-rim: #fff6e6;
+  --vn-sprite-rim-o: 0.2;
+  --vn-sprite-rim-x: 0;
+  --vn-sprite-rim-y: 1;
+  /* Contact shadow strength. */
+  --vn-sprite-ground-o: 0.42;
   transition: filter 600ms ease;
 }
 
@@ -163,55 +177,155 @@ export const VN_SPRITE_CSS = `
   pointer-events: none;
 }
 
+/* ---- Grounding ----------------------------------------------------------
+   Sprites are usually cut at the thighs by the frame bottom, so no foot
+   ellipse: a soft floor band behind the legs and a lighter occlusion band
+   over them blend the figure into the plate's (scrim-darkened) floor. Both
+   ride on the anchor, so slot moves carry them and hops leave them on the
+   floor. */
+[data-vn-sprite]::before,
+[data-vn-sprite]::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  pointer-events: none;
+}
+[data-vn-sprite]::before {
+  --vn-sprite-ground-w: calc(var(--vn-sprite-half-w) * 3.4);
+  left: calc(var(--vn-sprite-ground-w) / -2);
+  width: var(--vn-sprite-ground-w);
+  height: calc(var(--vn-sprite-fig-h) * 0.3);
+  background: radial-gradient(ellipse 50% 100% at 50% 100%,
+    rgba(5, 7, 13, var(--vn-sprite-ground-o)) 0%,
+    rgba(5, 7, 13, calc(var(--vn-sprite-ground-o) * 0.5)) 42%,
+    rgba(5, 7, 13, 0) 100%);
+  z-index: -1;
+}
+[data-vn-sprite]::after {
+  --vn-sprite-occl-w: calc(var(--vn-sprite-half-w) * 2.3);
+  left: calc(var(--vn-sprite-occl-w) / -2);
+  width: var(--vn-sprite-occl-w);
+  height: calc(var(--vn-sprite-fig-h) * 0.2);
+  background: linear-gradient(0deg, rgba(5, 7, 13, calc(var(--vn-sprite-ground-o) * 0.95)) 0%, rgba(5, 7, 13, calc(var(--vn-sprite-ground-o) * 0.35)) 45%, rgba(5, 7, 13, 0) 100%);
+  -webkit-mask: radial-gradient(ellipse 50% 100% at 50% 100%, #000 55%, transparent 100%);
+  mask: radial-gradient(ellipse 50% 100% at 50% 100%, #000 55%, transparent 100%);
+  z-index: 1;
+}
+
+/* ---- Rim light ------------------------------------------------------------
+   A thin sliver along the edge that faces the plate's light, coloured by the
+   light preset: the cut-out minus the same cut-out shifted away from the
+   light (two mask layers, subtract). Static, so it is painted once; mirrored
+   figures flip the shift so the rim stays on the lit side. */
+[data-vn-sprite][data-vn-sprite-mirrored="true"] { --vn-sprite-rim-flip: -1; }
+[data-vn-scene][data-vn-light-side="left"] [data-vn-sprites] { --vn-sprite-rim-x: 1; --vn-sprite-rim-y: 0.45; }
+[data-vn-scene][data-vn-light-side="right"] [data-vn-sprites] { --vn-sprite-rim-x: -1; --vn-sprite-rim-y: 0.45; }
+[data-vn-scene][data-vn-light-side="top"] [data-vn-sprites] { --vn-sprite-rim-x: 0; --vn-sprite-rim-y: 1; }
+
+[data-vn-sprite-image]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  --vn-sprite-rim-w: calc(var(--vn-sprite-img-h) * 0.0055);
+  --vn-sprite-rim-dx: calc(var(--vn-sprite-rim-w) * var(--vn-sprite-rim-x) * var(--vn-sprite-rim-flip, 1));
+  --vn-sprite-rim-dy: calc(var(--vn-sprite-rim-w) * var(--vn-sprite-rim-y));
+  background: var(--vn-sprite-rim);
+  mix-blend-mode: screen;
+  opacity: var(--vn-sprite-rim-o);
+  -webkit-mask:
+    var(--vn-sprite-mask, none) 0 0 / 100% 100% no-repeat,
+    var(--vn-sprite-mask, none) var(--vn-sprite-rim-dx) var(--vn-sprite-rim-dy) / 100% 100% no-repeat;
+  -webkit-mask-composite: source-out;
+  mask:
+    var(--vn-sprite-mask, none) 0 0 / 100% 100% no-repeat,
+    var(--vn-sprite-mask, none) var(--vn-sprite-rim-dx) var(--vn-sprite-rim-dy) / 100% 100% no-repeat;
+  mask-composite: subtract;
+  transition: opacity 600ms ease;
+  pointer-events: none;
+}
+
 /* ---- Light presets (SPRITE_LIGHTS) ------------------------------------- */
 [data-vn-sprites][data-vn-sprite-light="day"] {
   --vn-sprite-light-filter: brightness(1.03) saturate(1.05);
   --vn-sprite-tint: #fff4d6;
   --vn-sprite-tint-blend: soft-light;
   --vn-sprite-tint-opacity: 0.25;
+  --vn-sprite-rim: #fff1cf;
+  --vn-sprite-rim-o: 0.34;
+  --vn-sprite-ground-o: 0.46;
 }
 [data-vn-sprites][data-vn-sprite-light="sunset"] {
   --vn-sprite-light-filter: brightness(0.97) saturate(1.12) contrast(1.02);
   --vn-sprite-tint: #ff8a3d;
   --vn-sprite-tint-blend: soft-light;
   --vn-sprite-tint-opacity: 0.6;
+  --vn-sprite-rim: #ff9a4d;
+  --vn-sprite-rim-o: 0.62;
+  --vn-sprite-ground-o: 0.4;
 }
 [data-vn-sprites][data-vn-sprite-light="night"] {
   --vn-sprite-light-filter: brightness(0.8) saturate(0.78) contrast(1.04);
   --vn-sprite-tint: #2f4fb8;
   --vn-sprite-tint-blend: multiply;
   --vn-sprite-tint-opacity: 0.5;
+  --vn-sprite-rim: #9cbcff;
+  --vn-sprite-rim-o: 0.5;
+  --vn-sprite-ground-o: 0.34;
 }
 [data-vn-sprites][data-vn-sprite-light="indoor_warm"] {
   --vn-sprite-light-filter: brightness(0.98) saturate(1.04);
   --vn-sprite-tint: #ffb766;
   --vn-sprite-tint-blend: soft-light;
   --vn-sprite-tint-opacity: 0.38;
+  --vn-sprite-rim: #ffc98a;
+  --vn-sprite-rim-o: 0.36;
+  --vn-sprite-ground-o: 0.42;
 }
 [data-vn-sprites][data-vn-sprite-light="indoor_cool"] {
   --vn-sprite-light-filter: brightness(0.98) saturate(0.9);
   --vn-sprite-tint: #a9c8ff;
   --vn-sprite-tint-blend: soft-light;
   --vn-sprite-tint-opacity: 0.42;
+  --vn-sprite-rim: #d6e6ff;
+  --vn-sprite-rim-o: 0.36;
+  --vn-sprite-ground-o: 0.42;
 }
 [data-vn-sprites][data-vn-sprite-light="candle"] {
   --vn-sprite-light-filter: brightness(0.8) saturate(1.08) contrast(1.06);
   --vn-sprite-tint: #ff7a1f;
   --vn-sprite-tint-blend: multiply;
   --vn-sprite-tint-opacity: 0.32;
+  --vn-sprite-rim: #ffa04a;
+  --vn-sprite-rim-o: 0.56;
+  --vn-sprite-ground-o: 0.4;
 }
 [data-vn-sprites][data-vn-sprite-light="dark"] {
   --vn-sprite-light-filter: brightness(0.5) saturate(0.55) contrast(1.1);
   --vn-sprite-tint: #1b2547;
   --vn-sprite-tint-blend: multiply;
   --vn-sprite-tint-opacity: 0.35;
+  --vn-sprite-rim: #7f95d6;
+  --vn-sprite-rim-o: 0.4;
+  --vn-sprite-ground-o: 0.3;
 }
 
-/* Mood grades from the ambient overlay also grade the characters. */
-[data-vn-scene][data-vn-scene-ambient="sepia_flashback"] [data-vn-sprites] { filter: sepia(0.72) contrast(1.1) saturate(0.88); }
-[data-vn-scene][data-vn-scene-ambient="desaturate"] [data-vn-sprites] { filter: grayscale(0.88) contrast(1.08) brightness(0.92); }
-[data-vn-scene][data-vn-scene-ambient="vignette_dark"] [data-vn-sprites] { filter: contrast(1.06) brightness(0.94); }
-[data-vn-scene][data-vn-scene-ambient="dream_haze"] [data-vn-sprites] { filter: brightness(1.06) contrast(0.92) saturate(1.1); }
+/* Mood grades from the ambient overlay also grade the characters. The filter
+   sits on each (static) image layer, not on the whole layer container, so
+   breathing and talking never force the browser to re-filter every frame. */
+[data-vn-sprite-image] { filter: var(--vn-sprite-air-filter, none); }
+[data-vn-scene][data-vn-scene-ambient="sepia_flashback"] [data-vn-sprites] { --vn-sprite-air-filter: sepia(0.72) contrast(1.1) saturate(0.88); }
+[data-vn-scene][data-vn-scene-ambient="desaturate"] [data-vn-sprites] { --vn-sprite-air-filter: grayscale(0.88) contrast(1.08) brightness(0.92); }
+[data-vn-scene][data-vn-scene-ambient="vignette_dark"] [data-vn-sprites] { --vn-sprite-air-filter: contrast(1.06) brightness(0.94); }
+[data-vn-scene][data-vn-scene-ambient="dream_haze"] [data-vn-sprites] { --vn-sprite-air-filter: brightness(1.06) contrast(0.92) saturate(1.1); }
+[data-vn-scene][data-vn-scene-ambient="danger_pulse"] [data-vn-sprites] { --vn-sprite-air-filter: contrast(1.06) saturate(1.06) brightness(0.97); }
+/* Weather grades the characters a little too, so they sit in the same air. */
+[data-vn-scene][data-vn-scene-ambient="rain"] [data-vn-sprites] { --vn-sprite-air-filter: brightness(0.94) saturate(0.9); }
+[data-vn-scene][data-vn-scene-ambient="heavy_rain"] [data-vn-sprites] { --vn-sprite-air-filter: brightness(0.86) saturate(0.82) contrast(1.03); }
+[data-vn-scene][data-vn-scene-ambient="snow"] [data-vn-sprites] { --vn-sprite-air-filter: saturate(0.9) brightness(1.02); }
+[data-vn-scene][data-vn-scene-ambient="fireflies"] [data-vn-sprites] { --vn-sprite-air-filter: brightness(0.9) saturate(0.95); }
+[data-vn-scene][data-vn-scene-ambient="embers"] [data-vn-sprites] { --vn-sprite-air-filter: saturate(1.06) sepia(0.08); }
+[data-vn-scene][data-vn-scene-ambient="fog"] [data-vn-sprites] { --vn-sprite-air-filter: contrast(0.9) saturate(0.86) brightness(1.02); }
 
 /* ---- Emotes (SPRITE_EMOTES) -------------------------------------------- */
 [data-vn-sprite-emote] {
@@ -308,6 +422,19 @@ export const VN_SPRITE_CSS = `
   [data-vn-sprite-emote][data-vn-sprite-emote-name="ellipsis"] circle { animation: vn-sprite-emote-dots 1.5s ease-in-out infinite; }
   [data-vn-sprite-emote][data-vn-sprite-emote-name="ellipsis"] circle:nth-child(2) { animation-delay: 0.2s; }
   [data-vn-sprite-emote][data-vn-sprite-emote-name="ellipsis"] circle:nth-child(3) { animation-delay: 0.4s; }
+
+  /* Lightning (data-vn-lightning on the scene, sprite mode): the plate
+     flashes behind the characters, so they drop to silhouettes with a cold
+     rim on the side of the bolt (upper right). */
+  [data-vn-scene][data-vn-lightning] [data-vn-sprite-image] img {
+    animation: vn-sprite-lightning-shade 550ms linear both;
+  }
+  [data-vn-scene][data-vn-lightning] [data-vn-sprite-image]::before {
+    --vn-sprite-rim: #eef4ff;
+    --vn-sprite-rim-x: -1.8;
+    --vn-sprite-rim-y: 1.1;
+    animation: vn-sprite-lightning-rim 550ms linear both;
+  }
 
   /* "Off": no motion or emote animation; positions still change. */
   [data-vn-root][data-vn-effect-intensity="off"] [data-vn-sprite] [data-vn-sprite-body],
@@ -447,6 +574,23 @@ export const VN_SPRITE_CSS = `
 @keyframes vn-sprite-emote-gloom {
   0%, 100% { opacity: 0.75; transform: translateY(0); }
   50% { opacity: 1; transform: translateY(calc(5% * var(--vn-sprite-fx, 1))); }
+}
+@keyframes vn-sprite-lightning-shade {
+  0%, 17%, 100% { filter: var(--vn-sprite-light-filter, brightness(1)) brightness(1) saturate(1); }
+  3% { filter: var(--vn-sprite-light-filter, brightness(1)) brightness(0.3) saturate(0.5); }
+  9% { filter: var(--vn-sprite-light-filter, brightness(1)) brightness(0.82) saturate(0.85); }
+  21% { filter: var(--vn-sprite-light-filter, brightness(1)) brightness(0.36) saturate(0.55); }
+  30% { filter: var(--vn-sprite-light-filter, brightness(1)) brightness(0.72) saturate(0.8); }
+  52% { filter: var(--vn-sprite-light-filter, brightness(1)) brightness(0.94) saturate(0.95); }
+}
+@keyframes vn-sprite-lightning-rim {
+  0%, 100% { opacity: var(--vn-sprite-rim-o); }
+  3% { opacity: 1; }
+  9% { opacity: 0.3; }
+  17% { opacity: 0.1; }
+  21% { opacity: 0.95; }
+  30% { opacity: 0.4; }
+  52% { opacity: 0.15; }
 }
 @keyframes vn-sprite-emote-dots {
   0%, 60%, 100% { opacity: 1; }
