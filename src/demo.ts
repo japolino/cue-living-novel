@@ -106,7 +106,8 @@ stage.loadTurn({
   paragraphs: [
     { id: "p0", speaker: "Mira", text: "The last sunlight spills across the valley. For a moment, neither of us says anything." },
     { id: "p1", speaker: "Mira", text: "By the time she turns toward you, the first stars have appeared over the ridge." },
-    { id: "p2", speaker: "Mira", text: "So, she asks quietly, where do we go from here?" }
+    { id: "p2", speaker: "Mira", text: "\"<rainbow><wave>Look, a shooting star!</wave></rainbow>\" She grabs your sleeve. <whisper>Make a wish.</whisper> <tremble>Quick!</tremble>" },
+    { id: "p3", speaker: "Mira", text: "So, she asks quietly, where do we go from here?" }
   ],
   choices: [
     { id: "stay", label: "Stay until sunrise", value: "Let's stay here until sunrise." },

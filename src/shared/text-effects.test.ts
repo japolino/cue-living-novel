@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import {
   isTextEffectId,
   stripTextEffectTags,
@@ -52,5 +53,16 @@ describe("stripTextEffectTags", () => {
 
   test("is stateless across calls (no shared lastIndex)", () => {
     for (let i = 0; i < 3; i += 1) expect(stripTextEffectTags("<wave>a</wave>")).toBe("a");
+  });
+});
+
+describe("README text effects table", () => {
+  test("lists every catalogue example and the author guide", () => {
+    const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
+    const section = readme.slice(readme.indexOf("## Text effects"), readme.indexOf("## Run the standalone preview"));
+    for (const effect of TEXT_EFFECT_CATALOGUE) {
+      expect(section).toContain(`| \`${effect.example}\` | ${effect.label} | ${effect.description} |`);
+    }
+    for (const line of TEXT_EFFECT_AUTHOR_GUIDE.split("\n")) expect(section).toContain(line);
   });
 });

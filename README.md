@@ -137,6 +137,41 @@ avoided), each miss with its reason (`absent`, `evicted`, `invalidated`,
 scope releases, and a per-batch summary (hits, shared, avoided, stores,
 misses, rejects, waits, evictions, entries, bytes).
 
+## Text effects
+
+Dialogue can style a few words with an inline tag. Wrap the words and close the tag:
+
+| Markup | Effect | Looks like / use for | Moves |
+| --- | --- | --- | --- |
+| `<shake>Get down!</shake>` | Shake | Letters jolt hard and fast. Shouts, impacts, fear. | letters |
+| `<tremble>I-I'm fine.</tremble>` | Tremble | A small nervous quiver. Cold, nerves, holding back tears. | letters |
+| `<wave>La la la~</wave>` | Wave | Letters ripple up and down in turn. Sing-song, teasing, dreamy. | letters |
+| `<bounce>We won!</bounce>` | Bounce | Letters hop one after another. Excited, cheerful. | letters |
+| `<rainbow>Magic!</rainbow>` | Rainbow | Colours flow through the letters. Magic, wonder, silliness. | letters |
+| `<glow>The seal breaks.</glow>` | Glow | A soft, breathing light around the words. Spells, revelations. | whole words |
+| `<pulse>Ba-dump.</pulse>` | Pulse | Words swell like a heartbeat. Emphasis, longing. | whole words |
+| `<glitch>SYSTEM ERROR</glitch>` | Glitch | Colour split with sudden digital tearing. Machines, corruption. | letters |
+| `<whisper>don't tell anyone</whisper>` | Whisper | Small, faint, slightly italic. Secrets, asides. | none |
+| `<shout>STOP!</shout>` | Shout | Large and bold; each letter punches in. Yelling. | letters |
+| `<fade>Remember me...</fade>` | Fade | Letters drift in slowly, then flicker like a ghost. Memories, the uncanny. | letters |
+
+- Tags are case-insensitive and nest: `<rainbow><wave>la la</wave></rainbow>` gives rainbow letters that also ripple. Markdown works inside (`<shout>**NO**</shout>`).
+- A tag that is never closed, or a stray closing tag, is dropped; it never swallows the rest of the paragraph. Unknown tags (`<sparkle>`) and tags with attributes stay visible as plain text, like other unsupported HTML. Tags inside backticks stay literal.
+- The output form `<span data-vn-text-fx="wave">…</span>` is also accepted. Only catalogue ids pass the sanitizer; any other value is removed.
+- The tags are display markup only. Cue removes them from planner and image prompts and from text sent to speech (TTS), so they are never read aloud.
+- The **Text effects** setting (config `textEffects`) has three modes: **Animated** (default), **Static** (colours, glow, and sizes stay; nothing moves), and **Off** (plain text). The OS "reduce motion" setting always behaves as Static. Effect intensity **Gentle** makes text motion smaller and slower. History always shows effects Static.
+- **Display regex rules** run before the tags are read, so a rule can add effects. For example, to make every "magic" shimmer: `/\b(magic)\b/gi => <rainbow>$1</rainbow>`.
+- **Teaching the model.** Paste this into a character card, lorebook entry, or preset (Settings also shows it with a Copy button):
+
+  ```text
+  Text effects: in dialogue you may wrap a few words in one of these tags to style them in the visual novel:
+  <shake> <tremble> <wave> <bounce> <rainbow> <glow> <pulse> <glitch> <whisper> <shout> <fade>
+  Examples: "<shake>Get down!</shake>", "<whisper>don't tell anyone</whisper>", "<rainbow><wave>la la la</wave></rainbow>".
+  Use them rarely (at most one or two per reply), only for strong moments, wrap only the words that need it, and always close every tag.
+  ```
+
+Custom CSS can restyle effects through `[data-vn-text-fx="<id>"]`, the per-letter `[data-vn-text-fx-ch]` spans (index in `--vn-ch`), and the tuning properties `--vn-text-fx-amp`, `--vn-text-fx-speed`, `--vn-text-fx-glow`, `--vn-text-fx-rainbow-mix`, `--vn-text-fx-rainbow-1` … `-7`, and `--vn-text-fx-split-a` / `-b`.
+
 ## Run the standalone preview
 
 ```powershell

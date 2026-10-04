@@ -98,12 +98,13 @@ export const VN_TEXT_EFFECTS_CSS = `
     linear,
     var(--vn-tfx-flicker-ease, ease-in-out),
     var(--vn-tfx-enter-ease, ease-out);
-  /* Big negative base: loops start mid-cycle (no wait) and stay in phase
-     order, so a wave or colour band travels left to right. */
+  /* Loops start a whole number of cycles in the past (no wait, and frame 0
+     lines up with the first letter), and each letter lags the previous one,
+     so a wave or colour band travels left to right. */
   animation-delay:
-    calc(-120s + var(--vn-ch, 0) * var(--vn-tfx-move-lag, 0ms) / var(--vn-tfx-speed, 1)),
-    calc(-120s + var(--vn-ch, 0) * var(--vn-tfx-tint-lag, 0ms) / var(--vn-tfx-speed, 1)),
-    calc(-120s + var(--vn-ch, 0) * var(--vn-tfx-flicker-lag, 0ms) / var(--vn-tfx-speed, 1)),
+    calc((var(--vn-ch, 0) * var(--vn-tfx-move-lag, 0ms) - 100 * var(--vn-tfx-move-dur, 1s)) / var(--vn-tfx-speed, 1)),
+    calc((var(--vn-ch, 0) * var(--vn-tfx-tint-lag, 0ms) - 100 * var(--vn-tfx-tint-dur, 1s)) / var(--vn-tfx-speed, 1)),
+    calc((var(--vn-ch, 0) * var(--vn-tfx-flicker-lag, 0ms) - 100 * var(--vn-tfx-flicker-dur, 1s)) / var(--vn-tfx-speed, 1)),
     0s;
   animation-iteration-count: infinite, infinite, infinite, 1;
   animation-fill-mode: none, none, none, backwards;
@@ -154,7 +155,7 @@ export const VN_TEXT_EFFECTS_CSS = `
 }
 @keyframes vn-tfx-wave {
   0%, 100% { translate: 0 calc(var(--vn-tfx-amp) * 0.07em); }
-  50% { translate: 0 calc(var(--vn-tfx-amp) * -0.2em); }
+  50% { translate: 0 calc(var(--vn-tfx-amp) * -0.22em); }
 }
 
 /* ---- bounce: letters hop in turn --------------------------------------- */
@@ -175,17 +176,19 @@ export const VN_TEXT_EFFECTS_CSS = `
 [data-vn-text-fx="rainbow"] {
   --vn-tfx-tint: var(--vn-tfx-gate-color, vn-tfx-rainbow);
   --vn-tfx-tint-dur: 2.8s;
-  --vn-tfx-tint-lag: 170ms;
+  --vn-tfx-tint-lag: 300ms;
   --vn-tfx-rb-mix: var(--vn-text-fx-rainbow-mix, 82%);
 }
 @keyframes vn-tfx-rainbow {
+  /* Listed backwards: with each letter lagging, a frozen frame reads
+     red, orange, yellow, green... from left to right. */
   0%, 100% { color: color-mix(in oklab, var(--vn-text-fx-rainbow-1, #ff5a6e) var(--vn-tfx-rb-mix), currentColor); }
-  14% { color: color-mix(in oklab, var(--vn-text-fx-rainbow-2, #ff9a3d) var(--vn-tfx-rb-mix), currentColor); }
-  28% { color: color-mix(in oklab, var(--vn-text-fx-rainbow-3, #ffd93a) var(--vn-tfx-rb-mix), currentColor); }
-  43% { color: color-mix(in oklab, var(--vn-text-fx-rainbow-4, #5fe08a) var(--vn-tfx-rb-mix), currentColor); }
-  57% { color: color-mix(in oklab, var(--vn-text-fx-rainbow-5, #3fd0f0) var(--vn-tfx-rb-mix), currentColor); }
-  71% { color: color-mix(in oklab, var(--vn-text-fx-rainbow-6, #6e8bff) var(--vn-tfx-rb-mix), currentColor); }
-  86% { color: color-mix(in oklab, var(--vn-text-fx-rainbow-7, #c473ff) var(--vn-tfx-rb-mix), currentColor); }
+  14% { color: color-mix(in oklab, var(--vn-text-fx-rainbow-7, #c473ff) var(--vn-tfx-rb-mix), currentColor); }
+  28% { color: color-mix(in oklab, var(--vn-text-fx-rainbow-6, #6e8bff) var(--vn-tfx-rb-mix), currentColor); }
+  43% { color: color-mix(in oklab, var(--vn-text-fx-rainbow-5, #3fd0f0) var(--vn-tfx-rb-mix), currentColor); }
+  57% { color: color-mix(in oklab, var(--vn-text-fx-rainbow-4, #5fe08a) var(--vn-tfx-rb-mix), currentColor); }
+  71% { color: color-mix(in oklab, var(--vn-text-fx-rainbow-3, #ffd93a) var(--vn-tfx-rb-mix), currentColor); }
+  86% { color: color-mix(in oklab, var(--vn-text-fx-rainbow-2, #ff9a3d) var(--vn-tfx-rb-mix), currentColor); }
 }
 
 /* ---- glow: a soft breathing light ---------------------------------------- */
@@ -207,11 +210,15 @@ export const VN_TEXT_EFFECTS_CSS = `
   --vn-tfx-word-dur: 1.25s;
   --vn-tfx-word-display: inline-block;
 }
+/* A little side room so the swell never covers the spaces around a word. */
+[data-vn-text-fx="pulse"] [data-vn-text-fx-word] {
+  margin-inline: 0.05em;
+}
 @keyframes vn-tfx-pulse {
   0%, 100% { scale: 1; }
-  14% { scale: calc(1 + var(--vn-tfx-amp) * 0.11); }
+  14% { scale: calc(1 + var(--vn-tfx-amp) * 0.09); }
   28% { scale: 1; }
-  40% { scale: calc(1 + var(--vn-tfx-amp) * 0.07); }
+  40% { scale: calc(1 + var(--vn-tfx-amp) * 0.05); }
   58% { scale: 1; }
 }
 
@@ -311,6 +318,7 @@ export const VN_TEXT_EFFECTS_CSS = `
 [data-vn-text-effects="off"] [data-vn-text-fx] [data-vn-text-fx-word]:not([data-vn-text-effects="off"] :is([data-vn-text-effects="animated"], [data-vn-text-effects="static"]) *),
 [data-vn-text-effects="off"] [data-vn-text-fx] [data-vn-text-fx-ch]:not([data-vn-text-effects="off"] :is([data-vn-text-effects="animated"], [data-vn-text-effects="static"]) *) {
   display: inline;
+  margin: 0;
   font: inherit;
   letter-spacing: inherit;
   color: inherit;
