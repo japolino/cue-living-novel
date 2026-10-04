@@ -201,6 +201,7 @@ bun run serve:demo
 ```
 
 Open `http://localhost:4173` for CYOA mode or `http://localhost:4173/?mode=standard` for typed input.
+Open `http://localhost:4173/?sprites` for a short sprite-mode scene with the fixture sprites (also takes `&preset=<theme preset id>` and `&mode=standard`).
 
 ## Install into a local Lumiverse staging checkout
 
