@@ -118,6 +118,13 @@ type UserState = {
   inflight: Map<string, InflightWork>;
   byJobId: Map<string, string>;
   wanted: Map<string, AssetJobPriority>;
+  /**
+   * First paragraph of the latest staged turn that needs each work item (its
+   * own expression, or one it stands in for). Within a priority, work starts
+   * in reading order, so the background and the first speaker come first and
+   * a third character does not wait behind every expression of the first.
+   */
+  need: Map<string, number>;
   /** Work an explicit library action asked for: runs even outside sprite mode. */
   explicit: Set<string>;
   pumping: Promise<void> | null;
@@ -257,8 +264,25 @@ export class SpriteService {
     const anchoring = referenceAnchoringEnabled(config);
     const changedImages: Array<[string, StoredSpriteImage]> = [];
     const changedPlates: StoredPlate[] = [];
+    // Reading order of this turn: the first paragraph that needs each item.
+    const need = new Map<string, number>();
+    const needAt = (key: string, paragraph: number) => {
+      if (!need.has(key) || need.get(key)! > paragraph) need.set(key, paragraph);
+    };
     await this.library.update(userId, (library, now) => {
       for (const member of staging.cast) {
+        const setKey = spriteSetKeyFor(member, styleKey);
+        let firstSeen = Number.POSITIVE_INFINITY;
+        staging.paragraphs.forEach((paragraph, index) => {
+          for (const actor of paragraph.actors) {
+            if (actor.characterKey !== member.characterKey) continue;
+            firstSeen = Math.min(firstSeen, index);
+            needAt(spriteWorkKey(setKey, actor.expression), index);
+            needAt(spriteWorkKey(setKey, spriteFallbackExpression(actor.expression)), index);
+          }
+        });
+        // With anchoring every expression waits for idle, so idle is needed when the character first appears.
+        if (anchoring && Number.isFinite(firstSeen)) needAt(spriteWorkKey(setKey, "idle"), firstSeen);
         const requested: string[] = [];
         for (const paragraph of staging.paragraphs) {
           for (const actor of paragraph.actors) {
@@ -279,6 +303,10 @@ export class SpriteService {
       }
       const plateKeys = stagingPlateKeys(staging);
       const firstPlate = staging.paragraphs.find((paragraph) => paragraph.plateKey)?.plateKey ?? plateKeys[0];
+      staging.paragraphs.forEach((paragraph, index) => {
+        if (paragraph.plateKey) needAt(plateWorkKey(paragraph.plateKey), index);
+      });
+      if (firstPlate) needAt(plateWorkKey(firstPlate), 0);
       for (const plateKey of plateKeys) {
         let plate = library.plates[plateKey];
         if (!plate) {
@@ -297,6 +325,8 @@ export class SpriteService {
         state.wanted.set(key, higher(state.wanted.get(key), plateKey === firstPlate ? "visible" : "next"));
       }
     });
+    // The latest turn decides the reading order (an older turn's leftovers come after it).
+    state.need = need;
     for (const [setKey, image] of changedImages) this.broadcastImage(userId, setKey, image);
     for (const plate of changedPlates) this.broadcastPlate(userId, plate);
     await this.pump(userId);
@@ -663,7 +693,14 @@ export class SpriteService {
         if (!spriteMode && !state.explicit.has(key)) continue;
         candidates.push({ item: { kind: "plate", key, plateKey: plate.plateKey }, priority: state.wanted.get(key) ?? "next", order: order * 100 });
       }
-      candidates.sort((left, right) => PRIORITY_RANK[left.priority] - PRIORITY_RANK[right.priority] || left.order - right.order);
+      // Within a priority: reading order of the latest turn (a plate before a
+      // sprite needed at the same paragraph), then library order.
+      const needOf = (candidate: { item: WorkItem }) => state.need.get(candidate.item.key) ?? Number.POSITIVE_INFINITY;
+      candidates.sort((left, right) =>
+        PRIORITY_RANK[left.priority] - PRIORITY_RANK[right.priority]
+        || needOf(left) - needOf(right)
+        || (left.item.kind === "plate" ? 0 : 1) - (right.item.kind === "plate" ? 0 : 1)
+        || left.order - right.order);
       for (const candidate of candidates) this.start(userId, state, scheduler, candidate.item, candidate.priority);
       // Raise queued work a newer turn now needs sooner.
       for (const work of state.inflight.values()) {
@@ -710,6 +747,7 @@ export class SpriteService {
         inflight: new Map(),
         byJobId: new Map(),
         wanted: new Map(),
+        need: new Map(),
         explicit: new Set(),
         pumping: null,
         repump: false,

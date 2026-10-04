@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { SPRITE_HOT_SET, spriteSetKeyFor } from "../../../shared/sprites.js";
+import { SPRITE_HOT_SET, plateKeyFor, spriteSetKeyFor, type SpriteStaging } from "../../../shared/sprites.js";
 import { CUT_META, KAI, MIRA, fakePng, mockSpindle, sampleStaging, spriteConfig, toBase64, waitFor, type MockSpindleOptions } from "./__fixtures__/sprite-fixtures.js";
 import { SPRITE_LIBRARY_PATH, type SpriteLibrary } from "./library.js";
 import { SpriteService } from "./jobs.js";
@@ -37,7 +37,7 @@ function setup(options: MockSpindleOptions & { config?: Partial<VisualNovelConfi
 const label = (setKey: string, expression: string) => `${setKey}/${expression}`;
 
 describe("sprite jobs: ensure, priorities, dedupe", () => {
-  test("requested expressions and the first plate go first, then rare/next, then the hot set", async () => {
+  test("requested expressions and the first plate go first in reading order, then rare/next, then the hot set", async () => {
     const f = setup({ gated: true });
     const staging = sampleStaging(f.styleKey);
     const setKey = spriteSetKeyFor(MIRA, f.styleKey);
@@ -50,14 +50,49 @@ describe("sprite jobs: ensure, priorities, dedupe", () => {
     await f.service.settle("u1");
     const [observatory, garden] = staging.plates.map((plate) => plate.plateKey);
     const order = f.started();
-    expect(order.slice(0, 3)).toEqual([label(setKey, "smile"), label(setKey, "crying_with_eyes_open"), observatory!]);
-    expect(order.slice(3, 5)).toEqual([label(setKey, "happy_tears"), garden!]);
+    // Paragraph 0 needs the observatory plate and the smile; paragraph 1 the crying fallback.
+    expect(order.slice(0, 3)).toEqual([observatory!, label(setKey, "smile"), label(setKey, "crying_with_eyes_open")]);
+    // "next": both needed at paragraph 1; the plate (it fills the screen) first.
+    expect(order.slice(3, 5)).toEqual([garden!, label(setKey, "happy_tears")]);
     expect(order.slice(5)).toEqual(SPRITE_HOT_SET.filter((expression) => expression !== "smile" && expression !== "crying_with_eyes_open").map((expression) => label(setKey, expression)));
     expect(f.calls).toHaveLength(SPRITE_HOT_SET.length + 3);
     const lib = await f.library();
     expect(lib.sets[setKey]!.images.smile!.status).toBe("cutting");
     expect(lib.plates[observatory!]!.status).toBe("ready");
-    expect(lib.plates[observatory!]!.url).toBe("/api/v1/images/raw-3");
+    expect(lib.plates[observatory!]!.url).toBe("/api/v1/images/raw-1");
+  });
+
+  test("a later character's first sprite does not wait behind every expression of the first one", async () => {
+    const f = setup({ gated: true });
+    const plate = plateKeyFor({ location: "Classroom", timeOfDay: "noon" }, f.styleKey);
+    const actor = (characterKey: string, expression: string, slot: "left" | "center" | "right") => ({ characterKey, expression, slot, facing: "viewer" as const, focus: false, motion: "none" as const, emote: "none" as const, intensity: 3 });
+    const staging: SpriteStaging = {
+      version: 1,
+      source: "planner",
+      cast: [MIRA, KAI],
+      plates: [{ plateKey: plate, location: "Classroom", timeOfDay: "noon", weather: null, description: "desks" }],
+      paragraphs: [
+        { actors: [actor("mira", "smile", "center")], plateKey: plate, light: "day" },
+        { actors: [actor("mira", "smile", "left"), actor("kai", "idle", "right")], plateKey: plate, light: "day" },
+        { actors: [actor("mira", "angry", "left"), actor("kai", "idle", "right")], plateKey: plate, light: "day" },
+        { actors: [actor("mira", "sad", "left"), actor("kai", "surprised", "right")], plateKey: plate, light: "day" },
+      ],
+    };
+    await f.service.ensureForStaging("u1", staging, spriteConfig());
+    for (let index = 0; index < 6; index += 1) {
+      await waitFor(() => f.gates.length > index);
+      f.gates[index]!.release();
+    }
+    const mira = spriteSetKeyFor(MIRA, f.styleKey);
+    const kai = spriteSetKeyFor(KAI, f.styleKey);
+    expect(f.started().slice(0, 6)).toEqual([
+      plate,
+      label(mira, "smile"),
+      label(kai, "idle"),
+      label(mira, "angry"),
+      label(mira, "sad"),
+      label(kai, "surprised"),
+    ]);
   });
 
   test("ensuring the same staging again starts nothing twice", async () => {
@@ -135,7 +170,8 @@ describe("sprite jobs: view gating", () => {
 
   test("pause cancels queued work (kept queued) and keeps a render that finishes after the pause", async () => {
     const f = setup({ gated: true });
-    await f.service.ensureForStaging("u1", sampleStaging(f.styleKey), spriteConfig());
+    const noPlates = { ...sampleStaging(f.styleKey), plates: [], paragraphs: sampleStaging(f.styleKey).paragraphs.map((p) => ({ ...p, plateKey: null })) };
+    await f.service.ensureForStaging("u1", noPlates, spriteConfig());
     await waitFor(() => f.gates.length === 1);
     f.setOpen(false);
     f.service.pause("u1");
