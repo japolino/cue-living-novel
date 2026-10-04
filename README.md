@@ -29,7 +29,7 @@ It targets Lumiverse staging `1.1.6`, audited at commit `33dfa9ee62999fa3e256706
 
 ## Optional System One decisions
 
-Advanced settings configure Cue's own System One URL and model. Save the API key in Cue's settings; Lumiverse encrypts it in Cue's private enclave. Cue sends Jev's typed `state` and `questions` request through the Spindle HTTP proxy. This requires the `cors_proxy` permission. If no key is saved or the request fails, Cue uses its existing story reader.
+The **Connections** settings section configures Cue's own System One URL and model (applied with **Apply**). Save the API key there; Lumiverse encrypts it in Cue's private enclave. Cue sends Jev's typed `state` and `questions` request through the Spindle HTTP proxy. This requires the `cors_proxy` permission. If no key is saved or the request fails, Cue uses its existing story reader.
 
 **Compare** logs decision latency, input tokens, and speaker/expression agreement without changing the turn. **Use for presentation and familiar scenes** applies confident speaker, expression, and audio decisions. For replies of up to seven short paragraphs, Cue can reuse a known scene without calling the prose planner when Jev finds no scene or visual change. Longer replies use the story reader and split Jev's presentation questions into requests that fit the API limits. This setting is off by default.
 
@@ -174,7 +174,7 @@ Open **Panels** at the top left of VN. Newly planned replies expose complete HTM
 
 SimTracker is optional. Panels shows available cards from the current reply first; **Advanced tools** holds SimTracker capture, pasted HTML, and status template rules. Opening or closing advanced tools does not disable saved rules or pinned updates.
 
-Settings starts with presentation, AI connections, reading, and audio. Expand **Advanced settings** for prompt editing, context controls, model overrides, JSON parameters, text filtering, and custom CSS. These controls keep their saved values while hidden.
+Settings are split into sections — **Reading**, **Look**, **Pictures**, **Sound**, **Voice**, **Connections** and **Advanced** — shown as a side rail on wide screens and a tab strip on narrow ones; the search box at the top jumps to any setting, and the last open section is remembered. Everyday settings save as you change them. **Advanced** (prompts, story-reader context, model overrides, JSON parameters, text filtering, custom CSS) and the System One fields wait for **Apply**: a bar shows how many changes are not applied yet, with **Apply** and **Discard**, and drafts survive switching sections.
 
 For a regex status template, expand **Add status template rule**, enter the pattern without slash delimiters, flags, and the multiline HTML replacement. Captures through `$36` and named captures are supported and escaped. Host macros in replacements are resolved through Lumiverse without committing variable changes. Use **Refresh live sources** after changing language variables. Rules operate on the first 200,000 source characters and reveal at the end of the turn. Multiple matches offer snapshots only, to avoid following the wrong character.
 

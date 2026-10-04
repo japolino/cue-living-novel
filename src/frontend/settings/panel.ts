@@ -296,8 +296,13 @@ label[data-check] small { margin-top: .1rem; }
 [data-reset][data-confirming] { border-color: var(--set-danger); color: var(--set-danger); background: transparent; }
 input, select, textarea, button { scroll-margin: 4.5rem 0 8.5rem; }
 
+@media (pointer: coarse) {
+  :is([data-jump], [data-text-fx-code], [data-sample-label]) button { min-height: 2.75rem; }
+}
 @container (max-width: 520px) {
-  [data-row], [data-preset-row] { grid-template-columns: 1fr; }
+  [data-row] { grid-template-columns: 1fr; }
+  [data-preset-row] { grid-template-columns: 1fr 1fr; }
+  [data-preset-row] > :is(select, input) { grid-column: 1 / -1; }
   [data-group] { padding: .85rem .8rem .95rem; }
   [data-topbar] > [data-open-preview] { margin-left: 0; }
   [data-sample-stage] { height: 7.5rem; }
