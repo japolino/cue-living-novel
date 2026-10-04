@@ -24,6 +24,7 @@ import {
   type SpriteClassifierInput,
   type SpriteStagingOverrides,
 } from "./system-one-sprites.js";
+import { applyKeyMoments, keyIllustrationCap, keyMomentCues } from "./sprites/key-moments.js";
 
 /**
  * Sprite staging: who stands where, with which expression, motion, emote and
@@ -721,6 +722,8 @@ export function stageParagraphs(
     const light = (scene && extra.sceneLight.get(scene.index)) ?? scene?.light ?? "neutral";
     return { actors, plateKey: scene ? scenePlateKey.get(scene.index) ?? null : null, light };
   });
+  // Key moments (config keyIllustrations): a few paragraphs become full illustrations.
+  const staged = applyKeyMoments(paragraphs, context.input.plan, keyIllustrationCap(context.input.config), extra.keyMoments ?? null);
 
   const cast: SpriteCastMember[] = [];
   for (const key of pool.members.keys()) {
@@ -728,7 +731,7 @@ export function stageParagraphs(
     const member = pool.toCastMember(key);
     if (member) cast.push(member);
   }
-  return enforceSpriteStagingInvariants({ version: 1, source, cast, plates, paragraphs });
+  return enforceSpriteStagingInvariants({ version: 1, source, cast, plates, paragraphs: staged });
 }
 
 /**
@@ -830,8 +833,11 @@ export function spriteClassifierInput(context: SpriteStagingContext, determinist
       })),
     };
   });
+  // Key moments: only paragraphs whose cue could be painted are asked about.
+  const keyMomentParagraphs = keyIllustrationCap(input.config) > 0 ? [...keyMomentCues(input.plan).keys()].sort((a, b) => a - b) : [];
   return {
     paragraphs,
+    ...(keyMomentParagraphs.length ? { keyMomentParagraphs } : {}),
     scenes: scenes.map((scene) => ({
       index: scene.index,
       startParagraph: scene.startParagraph,
