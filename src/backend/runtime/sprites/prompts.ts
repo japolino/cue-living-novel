@@ -21,8 +21,8 @@ import { NOVELAI_NEGATIVE_DEFAULT, novelAiCapabilities, novelAiQualityTags, rend
  * plain-language sentence is the only part that gives side margin; it holds
  * commas, so the top-level tag split makes it three "tags": keep it last.
  */
-export const SPRITE_FRAMING_TAGS = "solo, standing, (centered:1.2), front view, (straight-on:1.2), facing viewer, looking at viewer, feet out of frame, white background, simple background, no shadow, The whole character is centered in the frame, seen straight on at eye level, with empty white space on both sides";
-export const SPRITE_NEGATIVE_TAGS = "scenery, background, shadow, drop shadow, gradient background, multiple people, text, multiple girls, 2girls, multiple views, split screen, border, (from below:1.3), from above, (dutch angle:1.2), (cropped, out of frame:1.2)";
+export const SPRITE_FRAMING_TAGS = "solo, standing, centered, front view, straight-on, facing viewer, looking at viewer, cowboy shot, simple background, white background, no shadow";
+export const SPRITE_NEGATIVE_TAGS = "scenery, background, shadow, drop shadow, gradient background, multiple people, text, multiple girls, 2girls, multiple views, split screen, border, from below, from above, dutch angle, cropped, out of frame";
 /** Plate framing: an empty place. */
 export const PLATE_TAGS = "scenery, no humans, detailed background, wide shot";
 export const PLATE_NEGATIVE_TAGS = "1girl, 1boy, people, person, character, text";

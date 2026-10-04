@@ -120,24 +120,27 @@ scene mode), through the existing per-provider scheduler and concurrency.
   the set's `idle` render as reference image where reference anchoring is on
   and supported, for consistency (see "Seeds, reference strength and the
   duplicate check").
-  - Framing (prompt version `sprite-prompt-v2`): `solo, standing,
-    (centered:1.2), front view, (straight-on:1.2), facing viewer, looking at
-    viewer, feet out of frame, white background, simple background, no
-    shadow, The whole character is centered in the frame, seen straight on at
-    eye level, with empty white space on both sides`. Negative add-on:
+  - Framing (prompt version `sprite-prompt-v2`): `solo, standing, centered,
+    front view, straight-on, facing viewer, looking at viewer, cowboy shot,
+    simple background, white background, no shadow`. Negative add-on:
     `scenery, background, shadow, drop shadow, gradient background, multiple
     people, text, multiple girls, 2girls, multiple views, split screen,
-    border, (from below:1.3), from above, (dutch angle:1.2), (cropped, out of
-    frame:1.2)`. This is variant F6 of the October 2026 ComfyUI tests
-    (Anima, 624×912, 3 characters × 4 seeds) without its `(white
-    background:1.2)` weight and `grey background` negative, which had no
-    measured effect: side clipping 100% → 58%, figure width share 1.00 →
-    0.80, low-angle or tilted figures ≈ 12/18 → 3/18. The plain-language
-    sentence is the only part that gives side margin. It holds commas, so the
-    top-level tag split (dedupe) sees three "tags"; it stays last in the
-    framing. Weights survive every syntax: ComfyUI `(tag:w)`, NovelAI V4+
-    `w::tag::`, legacy NovelAI braces. Side effect: more flat grey or beige
-    backgrounds, which the cut-out removes.
+    border, from below, from above, dutch angle, cropped, out of frame`. This
+    is variant V2 of the October 2026 ComfyUI tests. On idles alone (F2:
+    Anima, 624×912, 3 characters × 4 seeds) it turned low-angle or tilted
+    figures from ≈ 12/18 into ≈ 3/18. On whole sets (idle + angry, laughing,
+    smug at reference strength 0.5, 3 characters × 3 seeds) it gave 0/27
+    doubled expressions vs 3/27 for the old framing, and each set keeps one
+    pose with only the face changing. A variant with a plain-language
+    sentence ("The whole character is centered in the frame, seen straight on
+    at eye level, with empty white space on both sides") and `feet out of
+    frame` gave more side margin on idles, but on whole sets it made small
+    full-body figures, more doubled expressions and large background
+    creatures, so it is not used. Weights, if added, survive every syntax:
+    ComfyUI `(tag:w)`, NovelAI V4+ `w::tag::`, legacy NovelAI braces. Still
+    open: monster identities (`hellhound`, `slime girl`) sometimes draw a
+    beast, pattern or text behind the figure (≈ 2–3 of 9 sets), and some
+    seeds give a face close-up.
   - Skin colour: in sprite identities a non-natural skin colour tag (`blue
     skin`, `light green skin`, `purple_skin`…) not already weighted gets
     weight 1.15 (`weightSkinColourTags`); natural tones (pale, fair, dark, tan,

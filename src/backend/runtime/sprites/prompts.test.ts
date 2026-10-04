@@ -67,7 +67,9 @@ describe("sprite prompts: ComfyUI syntax", () => {
     // Outfit override drops the identity's clothing.
     expect(request.prompt).not.toContain("school uniform");
     expect(request.prompt).toContain("white background");
-    expect(request.prompt).toContain("feet out of frame");
+    expect(request.prompt).toContain("cowboy shot");
+    expect(request.prompt).toContain("front view");
+    expect(request.prompt).toContain("straight-on");
     expect(request.prompt).toContain("no shadow");
     // Catalogue braces become ComfyUI (tag:weight) groups.
     expect(request.prompt).not.toMatch(/\{/);
@@ -233,23 +235,27 @@ describe("sprite prompts: NovelAI syntax", () => {
   });
 });
 
-describe("sprite framing: weights and the plain-language sentence survive every provider syntax", () => {
+describe("sprite framing: tags, weights and any plain-language sentence survive every provider syntax", () => {
   const framing = splitTopLevelCsv(SPRITE_FRAMING_TAGS).map((tag) => tag.trim());
   const negative = splitTopLevelCsv(SPRITE_NEGATIVE_TAGS).map((tag) => tag.trim());
   const weighted = (tags: string[]) => tags.map((tag) => /^\((.+):([0-9.]+)\)$/.exec(tag)).filter((match): match is RegExpExecArray => match !== null);
-  const sentence = framing.slice(framing.findIndex((tag) => /^[A-Z]/.test(tag))).join(", ");
+  const sentenceStart = framing.findIndex((tag) => /^[A-Z]/.test(tag));
+  /** A plain-language sentence at the end of the framing, if there is one ("" otherwise). */
+  const sentence = sentenceStart >= 0 ? framing.slice(sentenceStart).join(", ") : "";
+  const bare = (tag: string) => /^\((.+):([0-9.]+)\)$/.exec(tag)?.[1] ?? tag;
   const plain = { name: "Ren", identity: "1boy, black hair", attire: null, subjectCategory: "male" as const };
 
   test("the prompt version is bumped for the new framing", () => {
     expect(SPRITE_PROMPT_VERSION).toBe("sprite-prompt-v2");
   });
 
-  test("ComfyUI: weights kept as (tag:w), the sentence whole and last", () => {
+  test("ComfyUI: every framing and negative tag is sent, weights kept as (tag:w), a sentence whole and last", () => {
     const request = compileSpriteRequest({ config: config(), provider: "comfyui", member: plain, expression: "idle", seed: 1 });
+    for (const tag of framing) expect(request.prompt).toContain(tag);
+    for (const tag of negative) expect(request.negativePrompt).toContain(tag);
     for (const match of weighted(framing)) expect(request.prompt).toContain(match[0]);
     for (const match of weighted(negative)) expect(request.negativePrompt).toContain(match[0]);
-    expect(sentence.length).toBeGreaterThan(20);
-    expect(request.prompt.trimEnd().endsWith(sentence)).toBe(true);
+    if (sentence) expect(request.prompt.trimEnd().endsWith(sentence)).toBe(true);
     expect(request.prompt.match(/\bsolo\b/g)?.length).toBe(1);
   });
 
@@ -258,18 +264,20 @@ describe("sprite framing: weights and the plain-language sentence survive every 
       const request = compileSpriteRequest({ config: config({ imageModel: model }), provider: "novelai", member: plain, expression: "idle", seed: 1 });
       for (const match of weighted(framing)) expect(request.prompt).toContain(`${Number(match[2])}::${match[1]}::`);
       for (const match of weighted(negative)) expect(request.negativePrompt).toContain(`${Number(match[2])}::${match[1]}::`);
-      expect(request.prompt).toContain(sentence);
+      for (const tag of framing) expect(request.prompt).toContain(bare(tag));
       expect(request.prompt).not.toMatch(/\(/);
-      // The sentence is the end of the framing: only quality tags follow it.
-      const after = request.prompt.slice(request.prompt.indexOf(sentence) + sentence.length);
-      expect(after.split(",").map((tag) => tag.trim()).filter(Boolean).every((tag) => !framing.includes(tag))).toBe(true);
+      if (sentence) {
+        // The sentence is the end of the framing: only quality tags follow it.
+        const after = request.prompt.slice(request.prompt.indexOf(sentence) + sentence.length);
+        expect(after.split(",").map((tag) => tag.trim()).filter(Boolean).every((tag) => !framing.includes(tag))).toBe(true);
+      }
     }
   });
 
   test("NovelAI legacy (V3): brace emphasis, the sentence whole", () => {
     const request = compileSpriteRequest({ config: config({ imageModel: "nai-diffusion-3" }), provider: "novelai", member: plain, expression: "idle", seed: 1 });
     for (const match of weighted(framing)) expect(request.prompt).toMatch(new RegExp(`\\{+${match[1]!.replace(/[-]/g, "\\-")}\\}+`));
-    expect(request.prompt).toContain(sentence);
+    for (const tag of framing) expect(request.prompt).toContain(bare(tag));
     expect(request.prompt).not.toMatch(/\(|::/);
     expect(request.negativePrompt).not.toMatch(/\(|::/);
   });
