@@ -22,7 +22,7 @@ Under Advanced, NovelAI has toggles for model-specific quality tags and default 
 - swipe, edit, delete, duplicate-submit, and stale-image reconciliation
 - view-gated generation: Cue only plans turns and generates images for chats whose Cue view is open; closing the view (or leaving the chat) aborts the in-flight image batch and marks it cancelled, opening the view plans the latest reply only when nothing current is stored, and cancelled images wait for a manual Retry instead of resuming on their own
 - per-user and per-chat persisted continuity
-- a settings tab, a user-selectable scene-image fit (Cover / Contain / Stretch / Original size / Scale down), five built-in theme presets (Lumiverse, Golden hour, Boxed console, Paper novel, Midnight noir), and a shadow-DOM custom CSS contract that is always the final styling layer
+- a settings tab, a user-selectable scene-image fit (Cover / Contain / Stretch / Original size / Scale down), seven built-in theme presets (Lumiverse, Golden hour, Boxed console, Paper novel, Midnight noir, Yamaku classic, Literature club), and a shadow-DOM custom CSS contract that is always the final styling layer
 - an always-accessible **Back to chat** control that restores native Lumiverse
 
 It targets Lumiverse staging `1.1.6`, audited at commit `33dfa9ee62999fa3e2567066ed5cdadf61635323`, and `lumiverse-spindle-types` `0.6.23`.
@@ -159,7 +159,7 @@ Dialogue can style a few words with an inline tag. Wrap the words and close the 
 - A tag that is never closed, or a stray closing tag, is dropped; it never swallows the rest of the paragraph. Unknown tags (`<sparkle>`) and tags with attributes stay visible as plain text, like other unsupported HTML. Tags inside backticks stay literal.
 - The output form `<span data-vn-text-fx="wave">…</span>` is also accepted. Only catalogue ids pass the sanitizer; any other value is removed.
 - The tags are display markup only. Cue removes them from planner and image prompts and from text sent to speech (TTS), so they are never read aloud.
-- The **Text effects** setting (config `textEffects`) has three modes: **Animated** (default), **Static** (colours, glow, and sizes stay; nothing moves), and **Off** (plain text). The OS "reduce motion" setting always behaves as Static. Effect intensity **Gentle** makes text motion smaller and slower. History always shows effects Static.
+- The **Text effects** setting (config `textEffects`) has three modes: **Animated** (default), **Still** (config value `static`: colours, glow, and sizes stay; nothing moves), and **Off** (plain text). The OS "reduce motion" setting always behaves as Still. Effect intensity **Gentle** makes text motion smaller and slower. History always shows effects Still.
 - **Display regex rules** run before the tags are read, so a rule can add effects. For example, to make every "magic" shimmer: `/\b(magic)\b/gi => <rainbow>$1</rainbow>`.
 - **Teaching the model.** Paste this into a character card, lorebook entry, or preset (Settings also shows it with a Copy button):
 

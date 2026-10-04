@@ -55,7 +55,7 @@ Lumiverse staging host
 | `src/frontend/host` | staging API feature detection, activation, overrides, chat switching, frontend/backend routing |
 | `src/frontend/stage` | framework-free full-screen VN renderer, accessibility, keyboard input, image swaps |
 | `src/frontend/store` | deterministic paragraph, acknowledgement, choice, and input gating |
-| `src/frontend/settings` | Lumiverse settings surface |
+| `src/frontend/settings` | Lumiverse settings surface: tabbed sections (Reading, Look, Pictures, Sound, Voice, Connections, Advanced), setting search, auto-save for everyday controls, explicit Apply/Discard for advanced drafts |
 | `src/frontend/theme` | stable `data-vn-*` selectors, base theme, scene-image fit attribute, CSS isolation, network-fetch stripping |
 | `src/backend/runtime/controller.ts` | host event handling, submission reconciliation, active-turn ownership, visual-state and portrait load/save |
 | `src/backend/runtime/message-text.ts` | macro resolution and cleanup of assistant message text before planning |
@@ -175,7 +175,7 @@ The rendered scene image obeys a user-selectable fit preset persisted in `config
 
 ## Theme presets
 
-The stage ships exactly five built-in visual presets: **Lumiverse**, **Golden hour**, **Boxed console**, **Paper novel**, and **Midnight noir**. Their ids are the single canonical, host-neutral `THEME_PRESET_IDS` tuple and the derived `VisualNovelThemePreset` type, both declared in `src/config.ts` so the shared config module never imports frontend or browser code. `src/frontend/theme/presets.ts` only supplies the CSS payload (`THEME_PRESET_CSS`) keyed by those ids; the settings selector (`THEME_PRESET_OPTIONS`) and the config normalizer consume the same tuple, so the three can never drift. The removed experimental `retro-crt` id is gone everywhere.
+The stage ships exactly seven built-in visual presets: **Lumiverse**, **Golden hour**, **Boxed console**, **Paper novel**, **Midnight noir**, **Yamaku classic**, and **Literature club**. Their ids are the single canonical, host-neutral `THEME_PRESET_IDS` tuple and the derived `VisualNovelThemePreset` type, both declared in `src/config.ts` so the shared config module never imports frontend or browser code. `src/frontend/theme/presets.ts` only supplies the CSS payload (`THEME_PRESET_CSS`) keyed by those ids; the settings selector (`THEME_PRESET_OPTIONS`) and the config normalizer consume the same tuple, so the three can never drift. The removed experimental `retro-crt` id is gone everywhere.
 
 Inside the nested theme shadow root the style layers are appended in a fixed cascade order, made explicit by `THEME_STYLE_LAYER_ORDER` (`src/frontend/theme/style-layers.ts`):
 
@@ -184,6 +184,10 @@ Inside the nested theme shadow root the style layers are appended in a fixed cas
 3. `user` — the sanitized custom-CSS layer. It is always last, so a user rule of equal specificity wins over a preset rule.
 
 The `Lumiverse` preset maps the VN custom properties onto the real host tokens the Lumiverse page exposes — `--lumiverse-text`, `--lumiverse-text-muted`, `--lumiverse-primary` (accent), `--lumiverse-card-bg` (card), `--lumiverse-border`, `--lumiverse-font-family`, and `--lumiverse-*` key-control tokens (`primary-contrast`, `fill-medium`, `bg-elevated`) — each with a hard fallback so a host that does not export a token still renders the original default look.
+
+Presets restyle the stage chrome through root custom properties rather than by re-declaring layout: `--vn-accent-contrast`, `--vn-focus-ring`, `--vn-chrome-*` (reading toolbar and buttons), `--vn-panel-*` (interaction panel), `--vn-overlay-text` / `--vn-overlay-muted` (text drawn directly over the scene, such as the "Your turn" heading), `--vn-odds-*` (game-move odds pills), `--vn-interaction-width`, `--vn-interaction-clearance`, `--vn-composer-width`, `--vn-nameplate-lift`, and `--vn-error` / `--vn-error-title`. Stable chrome hooks include `[data-vn-control-icon]` on every reading control, `[data-vn-submit-label]` / `[data-vn-submit-icon]`, and `[data-vn-empty-card]` / `[data-vn-empty-icon]` / `[data-vn-empty-text]`.
+
+The outer safety root (Back to chat) cannot see the theme shadow root, so `VnStage.setThemePreset` mirrors `data-vn-preset` onto `[data-vn-shell]` and the outer CSS reads `--vn-shell-*` tokens. The Panels launcher/drawer and the speech dock use the same tokens, so they follow the active preset while staying outside the preset and user CSS layers.
 
 The frontend controller applies the whole presentation config (theme preset, scene-image fit, custom CSS) on every save and on every `vn_state` / `vn_config` response through a single `applyVisualConfigToStage` helper, always from the *merged* config, so a saved patch never leaves the stage on stale values. The Exit control stays in the outer safety root, unreachable by any preset or user CSS.
 
