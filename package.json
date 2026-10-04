@@ -14,6 +14,7 @@
     "test:reading": "bun run ./scripts/test-reading-browser.ts",
     "test:speech": "bun run ./scripts/test-speech-browser.ts",
     "test:speech:stage": "bun run ./scripts/test-speech-stage-browser.ts",
+    "test:text-effects": "bun run ./scripts/test-text-effects-browser.ts",
     "typecheck": "tsc --project tsconfig.json --noEmit",
     "typecheck:build": "tsc --project tsconfig.build.json --noEmit",
     "build": "bun run typecheck:build && bun build ./src/backend.ts ./src/frontend.ts --outdir ./dist --target browser --format esm",
