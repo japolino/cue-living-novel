@@ -139,7 +139,7 @@ scene illustration: the ordinary scene-image job of that paragraph's cue.
   paragraph with nobody on stage ranks 1. The strongest wins, earliest on
   ties, within the cap. Classifier: per qualifying paragraph a `score`
   question (5 levels, "ordinary" first) and a `noul` "can a standing sprite
-  show this?"; a level ≥ 3 with yes ≤ 0.4, or level 4 with yes ≤ 0.6
+  show this?"; a level ≥ 3 with yes ≤ 0.5, or level 4 with yes ≤ 0.6
   qualifies (score confidence ≥ 0.5); top level first, then the lowest yes.
   When no score answer is confident, the deterministic rule decides.
 - **Jobs** (controller). Planning in sprite mode creates the scene-image job
@@ -221,16 +221,91 @@ Classifier staging:
 
 - At most 4 cast candidates per paragraph. Expression options: `keep_current`, the
   12 hot-set ids, then 42 curated rare catalogue ids.
-- Thresholds (`SPRITE_THRESHOLDS`): present ≥ 0.75 adds and ≤ 0.2 removes; keep
-  ≥ 0.4; hot-set expression ≥ 0.5; rare expression ≥ 0.65, else its hot-set
-  fallback (a rare id costs one generation); motion and emote ≥ 0.6 (a
-  confident `none` does not erase an explicit text cue); intensity ≥ 0.5;
-  light ≥ 0.6; place reuse ≥ 0.7 (at most 96 known plates offered). Not yet
-  calibrated against live Jev.
+- Thresholds (`SPRITE_THRESHOLDS`, calibrated, see "Calibration"): present ≥ 0.75
+  adds and ≤ 0.4 removes; keep ≥ 0.2; hot-set expression ≥ 0.15; rare
+  expression ≥ 0.2, else its hot-set fallback (a rare id costs one
+  generation); motion ≥ 0.8 and emote ≥ 0.75 (a confident `none` does not
+  erase an explicit text cue); intensity ≥ 0.7; light ≥ 0.35; place reuse
+  ≥ 0.7 (at most 96 known plates offered). Key moments
+  (`KEY_MOMENT_THRESHOLDS`): score confidence ≥ 0.5, level ≥ 3 with
+  standing yes ≤ 0.5 or level 4 with yes ≤ 0.6, interaction ≥ 0.4.
 - Requests: ≤ 7 paragraphs and ≤ 60,000 bytes per body; all batches in
   parallel; up to 105 paragraphs classified (later ones keep deterministic
   staging); 8 s timeout; one retry on 429/529; a failed batch only loses its
   own paragraphs.
+
+### Calibration (live Jev, October 2026)
+
+Harness: `scripts/jev-eval` (see its README; not part of `bun run test`,
+skips without a key). It turns each labeled reply into a planner-shaped
+`TurnPlan`, runs the real staging context, deterministic staging,
+`spriteClassifierInput` and `buildSpriteRequests`, sends the exact bodies to
+`jev-latest` (jev-1.13.0) and caches the raw answers outside the repo.
+
+- Dataset: 16 hand-labeled replies, 162 paragraphs, 24 scenes (slice of
+  life, romance, comedy, action, horror, sci-fi, drama, fantasy; first,
+  second and third person), 9 plate revisits worded differently plus
+  distractor plates (same place at another time or weather), characters on
+  the phone / remembered / leaving / arriving, negations, idioms, sarcasm.
+  Per paragraph and cast member: present, expression (best + acceptable),
+  motion, emote, intensity; per scene light and plate; per paragraph key
+  moment level, "standing sprite can show it", interaction. 2,031 questions
+  per pass; two passes of identical bodies (records below are pooled).
+- Utility per item (final value = the answer if it passes its gate, else the
+  deterministic value): +1 best label, +0.5 another acceptable value, −1
+  wrong but unchanged, −2 wrong and changed by the classifier (visible),
+  −3 wrong rare expression (visible and a generation). Grid 0.05; 1-D
+  decisions use a 3-point smoothed utility; ties keep the old value. Rare
+  is set 0.05 above hot (costs 1% utility) so the most uncertain rare
+  answers still use their pre-generated fallback.
+- Question changes kept: the emote question now asks for a visible reaction
+  in the narration ("a feeling that is only spoken, implied, mild or hidden
+  gets none"): non-`none` emote precision at 0.6 went from 47% (19%
+  coverage) to 77% (5%), staged wrong emotes from 32 to 9 of 264 actors. The
+  standing question now says yes for talk and facial reactions and no only
+  for poses, contact or a view of the place: standing accuracy 52% → 77%
+  (95% on level ≥ 3 paragraphs), mean yes 0.58 when a sprite can show it vs
+  0.21 when not (was 0.24 vs 0.08).
+
+Per decision (pooled, n items; accuracy of the final value; precision /
+coverage of the answers that changed the deterministic value):
+
+| Decision | n | deterministic | old thresholds | calibrated |
+|---|---|---|---|---|
+| presence | 442 | 83% | 92% (96% / 10%) | 94% (96% / 12%) |
+| expression | 520 | 41% | 63% (79% / 44%) | 88% (87% / 79%) |
+| motion | 520 | 97% | 96% (60% / 5%) | 98% (83% / 2%) |
+| emote | 520 | 95% | 95% (77% / 5%) | 96% (100% / 2%) |
+| intensity (with a motion or emote) | 144 | 92% | 90% (86% / 49%) | 92% (90% / 28%) |
+| light | 48 | 83% | 100% | 100% |
+| place reuse | 48 | 63% | 100% (100% / 38%) | 100% (100% / 38%) |
+| interaction (moment paragraphs) | 192 | 74% | 91% (100% / 30%) | 95% (96% / 37%) |
+| key-moment pick per reply (cap 1) | 32 | 6 right, 26 missed | 28 right, 2 wrong, 2 missed | 30 right, 2 wrong |
+
+End to end (the real staging engine on the same plans, per actor): presence
+89% deterministic → 94% old → 95% calibrated (ghost sprites 72 → 50 → 42);
+expression 40% → 58% → 83% (same hot family 54% → 76% → 91%); motion
+97% → 96% → 98%; emote 95% → 95% → 96%; light 85% → 100%; plate 63% →
+100%, no wrong plate.
+
+Observations: Jev's expression answer is right 78–100% in every confidence
+band (confidence ≈ top probability with 56 options), far above the
+deterministic selector, so its gates are low. Motion and emote answers below
+≈ 0.75 are mostly wrong, and `none` is almost always acceptable, so they are
+gated high. Light and place answers were never wrong. The answer's
+`probabilities` grouped by hot-set family and the argmax intensity level
+were tried and did not help. Determinism: identical bodies gave the same
+answer for 97.7% of questions (mean |Δ| 0.02, max 0.21); different batching
+of the same text moves results by a few points. Performance: p50 361 ms, p90
+592 ms per request; ≈ 15.5k input tokens per request, ≈ 32k per reply
+(≈ $0.0013); bodies ≤ 59.9 KB.
+
+Limits: one annotator per reply and labels written for this purpose; the
+thresholds are chosen on the same 16 replies they are scored on (flat
+optima for expression, light and place; clear optima for motion and emote);
+key-moment questions were asked for every paragraph (production asks only
+paragraphs with a paintable cue); the "keep_current" value is scored
+against the previous paragraph's label.
 
 Library and generation:
 
@@ -267,8 +342,7 @@ Stage:
 ## Not in v1
 
 Mouth/blink variants (lip flap), face-only repaint for expression variants,
-persona sprite, a per-image face box / natural orientation, calibrated
-classifier thresholds. Known gap: after switching back to scene mode, a
+persona sprite, a per-image face box / natural orientation. Known gap: after switching back to scene mode, a
 sprite-planned turn is replanned only on the next reply, swipe or refresh.
 (Wave 2 added key-moment illustrations with two-character interactions, the
 front ambient layer, parallax, grounding and rim light, the narrow 3-actor

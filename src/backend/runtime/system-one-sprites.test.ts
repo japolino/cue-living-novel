@@ -6,23 +6,27 @@ import { SPRITE_HOT_SET, SPRITE_INTERACTIONS, plateKeyFor, type SpritePlateRef }
 import { assertStagingInvariants, makePlan, stagingInput } from "./__fixtures__/sprite-staging-plans.js";
 import { buildSpriteStaging, deterministicSpriteStaging, type SpriteStagingInput } from "./sprite-staging.js";
 import {
+  applySpriteAnswers,
+  buildSpriteRequests,
   MAX_CLASSIFIED_PARAGRAPHS,
   SPRITE_EXPRESSION_GUIDE,
   SPRITE_REQUEST_BYTE_LIMIT,
   SPRITE_THRESHOLDS,
+  type SpriteStagingOverrides,
 } from "./system-one-sprites.js";
+import { KEY_MOMENT_THRESHOLDS } from "./sprites/key-moments.js";
 
 type Question = { type: "noul" | "choice" | "score"; instructions: string; criteria?: unknown };
 type Body = { model: string; state: Record<string, any>; questions: Record<string, Question> };
 type Answers = Record<string, unknown>;
 
-/** Low-confidence default answers: the first option at 0.3, noul 0.5, score 0.2 confidence. */
+/** Low-confidence default answers: the first option at 0.1, noul 0.5, score 0.2 confidence. */
 function lowAnswers(body: Body): Answers {
   return Object.fromEntries(Object.entries(body.questions).map(([key, question]) => {
     if (question.type === "noul") return [key, { type: "noul", noul: 0.5 }];
     if (question.type === "score") return [key, { type: "score", score: 2, legend: {}, probabilities: {}, confidence: 0.2 }];
     const first = Object.keys(question.criteria as Record<string, unknown>)[0]!;
-    return [key, { type: "choice", choice: first, confidence: 0.3, probabilities: { [first]: 0.3 } }];
+    return [key, { type: "choice", choice: first, confidence: 0.1, probabilities: { [first]: 0.1 } }];
   }));
 }
 
@@ -168,10 +172,10 @@ test("confident expressions apply; low confidence and keep_current hold; rare on
   const plan = duoPlan(["\"Hi,\" Mira says.", "\"Hey,\" Kai says.", "Mira smiles at Kai.", "\"Well?\" Kai asks.", "\"Fine,\" Mira says."]);
   const mock = mockSpindle(withAnswers((_body, set) => {
     set(0, "Mira", "expression", choice("sad", 0.9));
-    set(1, "Kai", "expression", choice("jealous", 0.55)); // rare, mid confidence -> hot fallback (angry)
+    set(1, "Kai", "expression", choice("jealous", 0.17)); // rare, between the hot and rare gates -> hot fallback (angry)
     set(2, "Mira", "expression", choice("keep_current", 0.8)); // overrides the text keyword "smiles"
     set(3, "Kai", "expression", choice("lovestruck", 0.9)); // rare, confident -> rare
-    set(4, "Mira", "expression", choice("laughing", 0.3)); // low -> deterministic/keep
+    set(4, "Mira", "expression", choice("laughing", 0.1)); // low -> deterministic/keep
   }));
   const staging = await buildSpriteStaging(mock.spindle, stagingInput(plan, { config: on }));
   assertStagingInvariants(staging, 5);
@@ -254,7 +258,7 @@ test("a confident light answer replaces the deterministic light for the scene", 
   const mock = mockSpindle((body) => ({ ...lowAnswers(body), s0_light: choice("candle", 0.8) }));
   const staging = await buildSpriteStaging(mock.spindle, stagingInput(plan, { config: on }));
   assert.ok(staging.paragraphs.every((stage) => stage.light === "candle"));
-  const unsure = mockSpindle((body) => ({ ...lowAnswers(body), s0_light: choice("candle", 0.4) }));
+  const unsure = mockSpindle((body) => ({ ...lowAnswers(body), s0_light: choice("candle", 0.3) }));
   assert.equal((await buildSpriteStaging(unsure.spindle, stagingInput(plan, { config: on }))).paragraphs[0]!.light, "indoor_warm");
 });
 
@@ -432,7 +436,7 @@ test("key moments: a choice question for the interaction (none first); a confide
   assert.equal(staging.paragraphs[2]!.moment?.interaction, "sitting_together");
   assert.deepEqual(staging.paragraphs[2]!.moment?.characters, staging.paragraphs[2]!.actors.map((actor) => actor.characterKey).slice(0, 1));
   // Low confidence (or a confident "none"): the narration rule decides ("sits on the bench").
-  for (const answer of [choice("dancing", 0.4), choice("none", 0.95)]) {
+  for (const answer of [choice("dancing", 0.3), choice("none", 0.95)]) {
     const mock = mockSpindle((body) => ({ ...lowAnswers(body), p2_moment: score(4, 0.9), p2_standing: noul(0.1), p2_interaction: answer }));
     const result = await buildSpriteStaging(mock.spindle, stagingInput(plan, { config: { ...on, ...few } }));
     assert.equal(result.paragraphs[2]!.moment?.interaction, "sitting");
@@ -448,4 +452,33 @@ test("key moments few, deterministic: the chosen paragraph stores its interactio
   assert.equal(moment.characters.length, 1);
   assert.ok(staging.cast.some((member) => member.characterKey === moment.characters[0]));
   assert.ok(staging.paragraphs.every((stage, index) => index === 1 || stage.moment === undefined));
+});
+
+test("thresholds are the calibrated values (scripts/jev-eval, docs/SPRITE_MODE.md Calibration)", () => {
+  assert.deepEqual({ ...SPRITE_THRESHOLDS }, {
+    presentYes: 0.75, presentNo: 0.4, keep: 0.2, hotExpression: 0.15, rareExpression: 0.2,
+    motion: 0.8, emote: 0.75, intensity: 0.7, light: 0.35, place: 0.7,
+  });
+  assert.deepEqual({ ...KEY_MOMENT_THRESHOLDS }, {
+    momentConfidence: 0.5, majorLevel: 3, majorStandingMax: 0.5, climaxLevel: 4, climaxStandingMax: 0.6, interactionConfidence: 0.4,
+  });
+});
+
+test("applySpriteAnswers takes candidate thresholds (calibration harness)", () => {
+  const plan = makePlan({ paragraphs: ["\"Hi,\" Mira says.", "Mira waves."], speakers: ["Mira", ""] });
+  const context = stagingInput(plan, { config: { systemOneMode: "on" } });
+  const staging = deterministicSpriteStaging(context);
+  const input = {
+    paragraphs: plan.paragraphs.map((paragraph, index) => ({ index, text: paragraph.text, speaker: index === 0 ? "Mira" : "Narrator", sceneIndex: 0, candidates: [{ key: "mira", name: "Mira", onStage: true, speaking: index === 0 }] })),
+    scenes: [{ index: 0, startParagraph: 0, location: "Library", timeOfDay: "evening", weather: null, lighting: "lamplight", description: "", light: staging.paragraphs[0]!.light, plateKey: "k", plateKnown: true }],
+    knownPlates: [], previousPlateKey: null, cast: [{ key: "mira", name: "Mira", attire: null }],
+  };
+  const [batch] = buildSpriteRequests(input, "jev-latest");
+  const answers = { p1_c0_motion: { type: "choice", choice: "nod", confidence: 0.7 } };
+  const strict: SpriteStagingOverrides = { paragraphs: new Map(), sceneLight: new Map(), scenePlate: new Map() };
+  applySpriteAnswers(strict, batch!.meta, answers);
+  assert.equal(strict.paragraphs.get(1)?.motion.get("mira"), undefined, "0.7 is below the calibrated motion gate");
+  const loose: SpriteStagingOverrides = { paragraphs: new Map(), sceneLight: new Map(), scenePlate: new Map() };
+  applySpriteAnswers(loose, batch!.meta, answers, { ...SPRITE_THRESHOLDS, motion: 0.6 });
+  assert.equal(loose.paragraphs.get(1)?.motion.get("mira"), "nod");
 });

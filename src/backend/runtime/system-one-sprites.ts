@@ -53,24 +53,35 @@ export const SPRITE_PARAGRAPH_TEXT_LIMIT = 2_000;
 /** Known places offered for reuse per scene. */
 export const MAX_PLACE_OPTIONS = 96;
 
-/** Confidence thresholds (Jev confidence 0..1; for a large choice it is close to the top probability). */
+/**
+ * Confidence thresholds (Jev confidence 0..1; for a large choice it is close
+ * to the top probability). Calibrated against live Jev (jev-1.13.0) on the
+ * labeled set in scripts/jev-eval (16 replies, 162 paragraphs, two passes):
+ * see docs/SPRITE_MODE.md "Calibration". Expression answers are right far
+ * more often than the deterministic selector even at low confidence, so their
+ * gates are low; motion and emote answers are only trusted when confident,
+ * because a wrong motion or mark is visible and "none" is almost always fine.
+ */
 export const SPRITE_THRESHOLDS = {
   /** present = yes adds a character at or above this probability. */
   presentYes: 0.75,
   /** present = yes at or below this probability removes a character. */
-  presentNo: 0.2,
+  presentNo: 0.4,
   /** keep_current is honoured at or above this confidence. */
-  keep: 0.4,
+  keep: 0.2,
   /** A hot-set expression is used at or above this confidence. */
-  hotExpression: 0.5,
-  /** A rare expression costs a generation: it needs more confidence, else its hot-set fallback is used. */
-  rareExpression: 0.65,
-  motion: 0.6,
-  emote: 0.6,
-  intensity: 0.5,
-  light: 0.6,
+  hotExpression: 0.15,
+  /** A rare expression costs a generation: it needs a little more confidence, else its hot-set fallback is used. */
+  rareExpression: 0.2,
+  motion: 0.8,
+  emote: 0.75,
+  intensity: 0.7,
+  light: 0.35,
   place: 0.7,
 } as const;
+
+/** Threshold shape (the calibration harness passes candidate values). */
+export type SpriteThresholds = { readonly [K in keyof typeof SPRITE_THRESHOLDS]: number };
 
 /** Hot set first (cheap: pre-generated), then curated rare expressions (generated on demand). */
 export const SPRITE_EXPRESSION_GUIDE: Readonly<Record<string, string>> = {
@@ -331,8 +342,8 @@ function paragraphQuestions(
     }, meta("motion")]);
     out.push([`${id}_emote`, {
       type: "choice",
-      instructions: `Which manga-style mark from \`emotes\` fits ${name} during paragraph ${ref}? Choose none unless ${name}'s feeling is clear and strong.`,
-      criteria: { none: "No mark", ...Object.fromEntries(SPRITE_EMOTES.filter((emote) => emote !== "none").map((emote) => [emote, null])) },
+      instructions: `Would a manga-style mark from \`emotes\` appear over ${name}'s head during paragraph ${ref}? Choose none unless the narration of this paragraph shows ${name} visibly reacting the way the mark stands for (blushing, sweating, a startled jolt, a flash of anger, gloom, humming). A feeling that is only spoken, implied, mild or hidden gets none.`,
+      criteria: { none: "No mark (the usual answer)", ...Object.fromEntries(SPRITE_EMOTES.filter((emote) => emote !== "none").map((emote) => [emote, null])) },
     }, meta("emote")]);
     out.push([`${id}_intensity`, {
       type: "score",
@@ -354,8 +365,8 @@ function keyMomentQuestions(index: number): Array<[string, Question, QuestionMet
     }, { kind: "moment", paragraph: index }],
     [`p${index}_standing`, {
       type: "noul",
-      instructions: `Can a single standing character cut-out (facing the viewer, with a facial expression) over an empty background show what happens in paragraph ${ref} well? Answer no when it needs a body pose (sitting, lying, kneeling, running, falling), contact between people (a kiss, a hug, a fight), an action with an object, or a view of the scene itself.`,
-      criteria: { true: "A standing sprite with an expression shows it well", false: "It needs a full illustration" },
+      instructions: `Can paragraph ${ref} be shown well by character sprites standing side by side, each facing the viewer with a facial expression, over an empty background? Yes for talk, looks and facial reactions, even strong ones. No only when the moment needs a body pose (sitting, lying, kneeling, running, falling), contact between people (a kiss, a hug, a fight), or a view of the place itself.`,
+      criteria: { true: "Standing sprites with expressions show it well", false: "It needs a full illustration" },
     }, { kind: "standing", paragraph: index }],
     [`p${index}_interaction`, {
       type: "choice",
@@ -524,8 +535,10 @@ export function applySpriteAnswers(
   overrides: SpriteStagingOverrides,
   meta: ReadonlyMap<string, QuestionMeta>,
   answers: Record<string, unknown>,
+  thresholds: SpriteThresholds = SPRITE_THRESHOLDS,
+  keyThresholds: { readonly interactionConfidence: number; readonly momentConfidence: number } = KEY_MOMENT_THRESHOLDS,
 ): void {
-  const t = SPRITE_THRESHOLDS;
+  const t = thresholds;
   for (const [questionKey, info] of meta) {
     const parsed = AnyAnswer.safeParse(answers[questionKey]);
     if (!parsed.success) continue;
@@ -542,7 +555,7 @@ export function applySpriteAnswers(
       continue;
     }
     if (info.kind === "interaction") {
-      if (answer.type === "choice" && answer.choice !== "none" && isSpriteInteraction(answer.choice) && answer.confidence >= KEY_MOMENT_THRESHOLDS.interactionConfidence) {
+      if (answer.type === "choice" && answer.choice !== "none" && isSpriteInteraction(answer.choice) && answer.confidence >= keyThresholds.interactionConfidence) {
         const moments = overrides.keyMoments ?? (overrides.keyMoments = new Map());
         moments.set(info.paragraph, { ...(moments.get(info.paragraph) ?? {}), interaction: answer.choice });
       }
@@ -551,7 +564,7 @@ export function applySpriteAnswers(
     if (info.kind === "moment" || info.kind === "standing") {
       const moments = overrides.keyMoments ?? (overrides.keyMoments = new Map());
       const current = moments.get(info.paragraph) ?? {};
-      if (info.kind === "moment" && answer.type === "score" && answer.confidence >= KEY_MOMENT_THRESHOLDS.momentConfidence && Number.isFinite(answer.score)) {
+      if (info.kind === "moment" && answer.type === "score" && answer.confidence >= keyThresholds.momentConfidence && Number.isFinite(answer.score)) {
         moments.set(info.paragraph, { ...current, moment: Math.max(0, Math.min(KEY_MOMENT_LEVELS.length - 1, Math.round(answer.score))) });
       } else if (info.kind === "standing" && answer.type === "noul") {
         moments.set(info.paragraph, { ...current, standing: answer.noul });

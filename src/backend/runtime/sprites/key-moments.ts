@@ -295,18 +295,21 @@ export type KeyMomentAnswer = {
   interaction?: SpriteInteraction;
 };
 
-/** Selection thresholds for classifier answers (not yet calibrated against live Jev). */
+/**
+ * Selection thresholds for classifier answers, calibrated against live Jev
+ * (scripts/jev-eval; docs/SPRITE_MODE.md "Calibration").
+ */
 export const KEY_MOMENT_THRESHOLDS = {
   /** Score confidence needed to trust a moment level. */
   momentConfidence: 0.5,
-  /** A major moment (level >= 3) qualifies when a sprite clearly cannot show it. */
+  /** A major moment (level >= 3) qualifies when a sprite cannot show it (standing yes at or below this). */
   majorLevel: 3,
-  majorStandingMax: 0.4,
+  majorStandingMax: 0.5,
   /** The defining moment (level 4) qualifies unless a sprite clearly can show it. */
   climaxLevel: 4,
   climaxStandingMax: 0.6,
   /** Choice confidence needed to take the classifier's interaction over the text rule. */
-  interactionConfidence: 0.6,
+  interactionConfidence: 0.4,
 } as const;
 
 /* ------------------------------------------------------------------------ */
