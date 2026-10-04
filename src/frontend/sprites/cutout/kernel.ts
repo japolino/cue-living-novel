@@ -22,7 +22,7 @@ export type CutoutPixelsResult = {
   alpha: Float32Array;
   /** Opaque bounding box, normalized 0..1: [x, y, width, height]. */
   bbox: CutoutBBox;
-  /** Background colour (median of the 4-px image border). */
+  /** Background colour (median of the background part of the 4-px image border). */
   background: [number, number, number];
 };
 
@@ -38,8 +38,9 @@ export type CutoutKernel = {
   readonly params: {
     seed: number; grow: number; guard: number; holeMask: number; holeArea: number;
     speckMask: number; band: number; dFull: number; bboxAlpha: number;
+    bgMask: number; lightMin: number; lightSpread: number; bgMinPixels: number; bgMinShare: number;
   };
-  backgroundColor(rgba: Uint8ClampedArray, width: number, height: number): [number, number, number];
+  backgroundColor(rgba: Uint8ClampedArray, width: number, height: number, mask?: Float32Array | null): [number, number, number];
   colorDistance(rgba: Uint8ClampedArray, width: number, height: number, bg: [number, number, number]): Float32Array;
   floodBackground(distance: Float32Array, width: number, height: number): Uint8Array;
   cutoutPixels(rgba: Uint8ClampedArray, width: number, height: number, mask: Float32Array | null): CutoutPixelsResult;
@@ -70,6 +71,15 @@ export function createCutoutKernel(): CutoutKernel {
     dFull: 70,
     /** Alpha (0..255) that counts as opaque for the bounding box. */
     bboxAlpha: 64,
+    /** Background colour: border pixels the model scores below this are background. */
+    bgMask: 0.3,
+    /** Without a model: "light" border pixels have every channel at least this ... */
+    lightMin: 160,
+    /** ... and at most this spread between channels (near-neutral). */
+    lightSpread: 30,
+    /** A border subset is used only with at least this many pixels and this share of the border. */
+    bgMinPixels: 64,
+    bgMinShare: 0.02,
   };
 
   function medianFromHistogram(hist: Uint32Array, count: number): number {
@@ -86,15 +96,37 @@ export function createCutoutKernel(): CutoutKernel {
     return (pick(count / 2 - 1) + pick(count / 2)) / 2;
   }
 
-  /** Median of the 4-px border strips (rows and columns; corners count twice, like the reference). */
-  function backgroundColor(rgba: Uint8ClampedArray, width: number, height: number): [number, number, number] {
-    const hist = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
-    const h0 = hist[0]!, h1 = hist[1]!, h2 = hist[2]!;
-    let count = 0;
+  /**
+   * Background colour from the 4-px border strips (rows and columns; corners
+   * count twice, like the reference). A sprite that fills the frame touches the
+   * border with hair, tails or legs, so the plain median can be the
+   * character's colour. Pick, in order:
+   *   1. with a mask: border pixels the model calls background;
+   *   2. without one: light, near-neutral border pixels (the prompt asks for
+   *      a white or grey background);
+   *   3. all border pixels (the original rule).
+   * Each subset is used only when it holds enough pixels.
+   */
+  function backgroundColor(rgba: Uint8ClampedArray, width: number, height: number, mask: Float32Array | null = null): [number, number, number] {
+    const all = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
+    const byMask = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
+    const light = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
+    let count = 0, maskCount = 0, lightCount = 0;
     const add = (x: number, y: number): void => {
-      const o = (y * width + x) * 4;
-      h0[rgba[o]!]!++; h1[rgba[o + 1]!]!++; h2[rgba[o + 2]!]!++;
+      const i = y * width + x;
+      const o = i * 4;
+      const r = rgba[o]!, g = rgba[o + 1]!, b = rgba[o + 2]!;
+      all[0]![r]!++; all[1]![g]!++; all[2]![b]!++;
       count++;
+      if (mask && mask[i]! < params.bgMask) {
+        byMask[0]![r]!++; byMask[1]![g]!++; byMask[2]![b]!++;
+        maskCount++;
+      }
+      const hi = Math.max(r, g, b), lo = Math.min(r, g, b);
+      if (lo >= params.lightMin && hi - lo <= params.lightSpread) {
+        light[0]![r]!++; light[1]![g]!++; light[2]![b]!++;
+        lightCount++;
+      }
     };
     const rows = Math.min(4, height), cols = Math.min(4, width);
     for (let y = 0; y < rows; y++) for (let x = 0; x < width; x++) add(x, y);
@@ -103,7 +135,10 @@ export function createCutoutKernel(): CutoutKernel {
       for (let x = 0; x < cols; x++) add(x, y);
       for (let x = width - cols; x < width; x++) add(x, y);
     }
-    return [medianFromHistogram(h0, count), medianFromHistogram(h1, count), medianFromHistogram(h2, count)];
+    const enough = Math.max(params.bgMinPixels, Math.round(count * params.bgMinShare));
+    const hist = mask && maskCount >= enough ? byMask : !mask && lightCount >= enough ? light : all;
+    const used = hist === byMask ? maskCount : hist === light ? lightCount : count;
+    return [medianFromHistogram(hist[0]!, used), medianFromHistogram(hist[1]!, used), medianFromHistogram(hist[2]!, used)];
   }
 
   function colorDistance(rgba: Uint8ClampedArray, width: number, height: number, bg: [number, number, number]): Float32Array {
@@ -221,7 +256,7 @@ export function createCutoutKernel(): CutoutKernel {
     const n = width * height;
     if (rgba.length < n * 4) throw new Error("cutoutPixels: pixel buffer is too small");
     if (mask && mask.length < n) throw new Error("cutoutPixels: mask is too small");
-    const bg = backgroundColor(rgba, width, height);
+    const bg = backgroundColor(rgba, width, height, mask);
     const distance = colorDistance(rgba, width, height, bg);
     const bgmask = floodBackground(distance, width, height);
 

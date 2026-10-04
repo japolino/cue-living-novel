@@ -109,6 +109,21 @@ describe("sprite cut-out kernel", () => {
     expect(k.backgroundColor(img.rgba, 64, 64)).toEqual([255, 255, 255]);
   });
 
+  test("a figure that fills most of the border does not become the background colour", () => {
+    // Big hair or spider legs touch the left, right and bottom edges; only a
+    // strip along the top (and the top corners) shows the white background.
+    const img = image(120, 160);
+    figure(img, 0, 30, 120, 160, [70, 60, 90]);
+    const m = mask(img, [[0, 30, 120, 160, 1]]);
+    expect(k.backgroundColor(img.rgba, img.w, img.h, m)).toEqual([255, 255, 255]);
+    // Without a model, light near-neutral border pixels win over the dark figure.
+    expect(k.backgroundColor(img.rgba, img.w, img.h)).toEqual([255, 255, 255]);
+    const r = k.cutoutPixels(img.rgba, img.w, img.h, m);
+    expect(alphaAt(r.rgba, 120, 60, 10)).toBe(0);
+    expect(alphaAt(r.rgba, 120, 60, 100)).toBe(255);
+    expect(r.background).toEqual([255, 255, 255]);
+  });
+
   test("edge defringe: soft edge pixels lose the background colour", () => {
     const img = image(60, 60);
     fill(img, 20, 20, 40, 40, [200, 0, 0]);
