@@ -58,6 +58,17 @@ export const TEXT_EFFECT_CATALOGUE: readonly TextEffectInfo[] = [
   { id: "fade", label: "Fade", description: "Letters drift in slowly like a ghost. Memories, the uncanny.", example: "<fade>Remember me...</fade>", perLetter: true, motion: true },
 ];
 
+/**
+ * A short, ready-to-paste instruction that teaches a chat model (character
+ * card, lorebook entry, or preset) to use the tags above sparingly. The
+ * settings panel shows it with a Copy button. Owner: text-effects.
+ */
+export const TEXT_EFFECT_AUTHOR_GUIDE: string = [
+  "You may wrap a few short words of dialogue in one of these tags for a visual-novel text effect:",
+  TEXT_EFFECT_CATALOGUE.map((effect) => `<${effect.id}>`).join(" "),
+  "Use them rarely, only for strong moments, and always close the tag.",
+].join("\n");
+
 const TEXT_EFFECT_ID_SET: ReadonlySet<string> = new Set(TEXT_EFFECT_IDS);
 
 export function isTextEffectId(value: unknown): value is TextEffectId {
