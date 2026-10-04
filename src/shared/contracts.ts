@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { ActionPropFieldSchema, ActionPropSchema, type ActionProp } from "./action-prop.js";
 import { PanelArtifactSchema } from "./panels.js";
+import { SpriteStagingSchema } from "./sprites.js";
 
 export { ActionPropFieldSchema, ActionPropSchema, type ActionProp };
 
@@ -318,6 +319,9 @@ export const TurnPlanSchema = z.object({
   audioCues: z.array(AudioCueSchema).default([]),
   // Uncapped paragraph effects. Absent on legacy records; [] is authoritative.
   effectCues: z.array(EffectCueSchema).optional(),
+  // Sprite mode only: per-paragraph sprite staging (src/shared/sprites.ts).
+  // Absent in scene mode and on turns planned before sprite mode existed.
+  spriteStaging: SpriteStagingSchema.optional(),
   choices: z.array(ChoiceSchema).default([]),
   initialContinuity: ContinuityStateSchema,
   continuityDeltas: z.array(IndexedContinuityDeltaSchema).default([]),

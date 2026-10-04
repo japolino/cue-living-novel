@@ -1,6 +1,7 @@
 import type { VisualNovelConfig } from "./config.js";
 import type { PanelArtifact } from "./shared/panels.js";
 import type { CueImageRequest, CueImageResult } from "./shared/cue-images.js";
+import type { PlateView, SpriteCutMeta, SpriteImageView, SpriteSetView, SpriteTurnView } from "./shared/sprites.js";
 
 export type FrontendRequest =
   | { type: "vn_external_image"; request: CueImageRequest }
@@ -52,6 +53,31 @@ export type FrontendRequest =
       requestId: string;
       dataUrl?: string;
       error?: string;
+    }
+  /**
+   * Sprite mode: reply to `vn_sprite_cut`. The cut-out PNG (base64, no data
+   * URL prefix) arrives in ordered chunks of at most SPRITE_CUT_CHUNK_CHARS;
+   * `meta` rides on chunk 0. A failure is one message with `error` set.
+   */
+  | {
+      type: "vn_sprite_cut_result";
+      requestId: string;
+      chunkIndex: number;
+      chunkCount: number;
+      dataBase64?: string;
+      meta?: SpriteCutMeta;
+      error?: string;
+    }
+  /** Sprite mode: ask for the whole sprite library (sets and plates). */
+  | { type: "vn_get_sprite_library" }
+  /** Sprite mode: library actions from settings or the stage. */
+  | {
+      type: "vn_sprite_action";
+      action: "prepare_chat" | "regenerate" | "recut" | "delete_set" | "regenerate_plate" | "delete_plate";
+      chatId?: string;
+      setKey?: string;
+      expression?: string;
+      plateKey?: string;
     };
 
 /** Upper bound for a relayed reference image (decoded bytes, checked on both sides). */
@@ -102,6 +128,8 @@ export type TurnView = {
   choices: Array<{ id: string; label: string; value: string }>;
   assets: AssetView[];
   audioCues?: AudioCueView[];
+  /** Sprite mode only: per-paragraph staging plus the sprite sets and plates it uses. */
+  sprites?: SpriteTurnView;
   status: "planning" | "ready" | "failed" | "cancelled";
   error?: string;
 };
@@ -155,6 +183,18 @@ export type BackendResponse =
       imageId: string;
       characterKey: string;
     }
+  /**
+   * Sprite mode: cut a generated sprite. The frontend fetches
+   * `/api/v1/images/<imageId>` (same origin), removes the white background,
+   * and answers with `vn_sprite_cut_result` chunks carrying `requestId`.
+   */
+  | { type: "vn_sprite_cut"; requestId: string; imageId: string; setKey: string; expression: string }
+  /** Sprite mode: one sprite image changed state (any chat; apply when the set is on stage). */
+  | { type: "vn_sprite_update"; setKey: string; image: SpriteImageView }
+  /** Sprite mode: one background plate changed state. */
+  | { type: "vn_plate_update"; plate: PlateView }
+  /** Sprite mode: the whole library, answering `vn_get_sprite_library` or after a library action. */
+  | { type: "vn_sprite_library"; sets: SpriteSetView[]; plates: PlateView[] }
   | { type: "vn_error"; chatId?: string; operation: string; error: string };
 
 export function isFrontendRequest(value: unknown): value is FrontendRequest {

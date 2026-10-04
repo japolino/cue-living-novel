@@ -1,4 +1,5 @@
 import { DEFAULT_SPEECH_SETTINGS, normalizeSpeechSettings, type SpeechSettings } from "./speech-config.js";
+import { DEFAULT_SPRITE_MODEL_URL } from "./shared/sprites.js";
 
 export type VisualNovelMode = "standard" | "cyoa";
 
@@ -22,6 +23,16 @@ export type VisualNovelEffectIntensity = (typeof EFFECT_INTENSITIES)[number];
  * downgrades "animated" to "static".
  */
 export const TEXT_EFFECT_MODES = ["animated", "static", "off"] as const;
+/**
+ * How the stage shows a reply. "scene" paints one full picture per cue (the
+ * original pipeline). "sprites" stages reusable character cut-outs over
+ * reusable background plates (see docs/SPRITE_MODE.md).
+ */
+export const PRESENTATION_MODES = ["scene", "sprites"] as const;
+export type VisualNovelPresentationMode = (typeof PRESENTATION_MODES)[number];
+/** Sprite cut-out quality: "best" downloads and runs the segmentation model, "basic" never downloads anything. */
+export const SPRITE_CUTOUT_QUALITIES = ["best", "basic"] as const;
+export type VisualNovelSpriteCutout = (typeof SPRITE_CUTOUT_QUALITIES)[number];
 export type VisualNovelTextEffectMode = (typeof TEXT_EFFECT_MODES)[number];
 
 /**
@@ -114,6 +125,12 @@ export type VisualNovelConfig = {
   effectIntensity: VisualNovelEffectIntensity;
   /** Inline dialogue text effects (<shake>, <rainbow>, ...). Default "animated". */
   textEffects: VisualNovelTextEffectMode;
+  /** Full scene pictures (default) or sprite mode. */
+  presentationMode: VisualNovelPresentationMode;
+  /** Sprite cut-out quality. */
+  spriteCutout: VisualNovelSpriteCutout;
+  /** Where the sprite cut-out model is downloaded from (once, then cached in the browser). */
+  spriteModelUrl: string;
   /** Dialogue text size multiplier, 1 = the theme's own size. */
   textScale: number;
   audioDirectory: string;
@@ -166,6 +183,9 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   skipMode: "read",
   effectIntensity: "full",
   textEffects: "animated",
+  presentationMode: "scene",
+  spriteCutout: "best",
+  spriteModelUrl: DEFAULT_SPRITE_MODEL_URL,
   textScale: 1,
   audioDirectory: "",
   bgmVolume: 0.7,
@@ -247,6 +267,32 @@ function textEffectMode(value: unknown): VisualNovelTextEffectMode {
     : DEFAULT_CONFIG.textEffects;
 }
 
+function presentationMode(value: unknown): VisualNovelPresentationMode {
+  return typeof value === "string" && (PRESENTATION_MODES as readonly string[]).includes(value)
+    ? value as VisualNovelPresentationMode
+    : DEFAULT_CONFIG.presentationMode;
+}
+
+function spriteCutout(value: unknown): VisualNovelSpriteCutout {
+  return typeof value === "string" && (SPRITE_CUTOUT_QUALITIES as readonly string[]).includes(value)
+    ? value as VisualNovelSpriteCutout
+    : DEFAULT_CONFIG.spriteCutout;
+}
+
+function spriteModelUrl(value: unknown): string {
+  if (typeof value !== "string") return DEFAULT_CONFIG.spriteModelUrl;
+  const trimmed = value.trim();
+  if (!trimmed) return DEFAULT_CONFIG.spriteModelUrl;
+  try {
+    const url = new URL(trimmed);
+    return url.protocol === "https:" || (url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))
+      ? url.toString()
+      : DEFAULT_CONFIG.spriteModelUrl;
+  } catch {
+    return DEFAULT_CONFIG.spriteModelUrl;
+  }
+}
+
 function textScale(value: unknown): number {
   const scale = floatBetween(value, TEXT_SCALE_MIN, TEXT_SCALE_MAX, DEFAULT_CONFIG.textScale);
   return Math.round(scale * 100) / 100;
@@ -318,6 +364,9 @@ export function normalizeConfig(value: unknown): VisualNovelConfig {
     skipMode: input.skipMode === "all" ? "all" : "read",
     effectIntensity: effectIntensity(input.effectIntensity),
     textEffects: textEffectMode(input.textEffects),
+    presentationMode: presentationMode(input.presentationMode),
+    spriteCutout: spriteCutout(input.spriteCutout),
+    spriteModelUrl: spriteModelUrl(input.spriteModelUrl),
     textScale: textScale(input.textScale),
     audioDirectory: stringValue(input.audioDirectory, DEFAULT_CONFIG.audioDirectory).trim(),
     bgmVolume: floatBetween(input.bgmVolume, 0, 1, DEFAULT_CONFIG.bgmVolume),
