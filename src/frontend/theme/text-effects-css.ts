@@ -179,9 +179,9 @@ export const VN_TEXT_EFFECTS_CSS = `
   --vn-tfx-tint-lag: 300ms;
   --vn-tfx-rb-mix: var(--vn-text-fx-rainbow-mix, 82%);
 }
+/* Hues are listed backwards: with each letter lagging, a frozen frame
+   reads red, orange, yellow, green... from left to right. */
 @keyframes vn-tfx-rainbow {
-  /* Listed backwards: with each letter lagging, a frozen frame reads
-     red, orange, yellow, green... from left to right. */
   0%, 100% { color: color-mix(in oklab, var(--vn-text-fx-rainbow-1, #ff5a6e) var(--vn-tfx-rb-mix), currentColor); }
   14% { color: color-mix(in oklab, var(--vn-text-fx-rainbow-7, #c473ff) var(--vn-tfx-rb-mix), currentColor); }
   28% { color: color-mix(in oklab, var(--vn-text-fx-rainbow-6, #6e8bff) var(--vn-tfx-rb-mix), currentColor); }
