@@ -1,11 +1,28 @@
 import type { AmbientEffect, StageEffect } from "../store";
+import { svgDataUri } from "../theme/effects-css";
+
+/**
+ * Procedural stage particles (ambient weather + one-shot bursts).
+ *
+ * Markup is plain HTML (`<i>` / `<b>` nodes) styled by VN_EFFECTS_CSS. Every
+ * particle carries its seeded placement and timing as inline custom
+ * properties; the stylesheet turns those into compositor-only animations on
+ * the independent `translate` / `rotate` / `scale` / `transform` / `opacity`
+ * properties, so one node can fall, sway and tumble at the same time.
+ * Overlays are size containers, so `cqw` / `cqh` / `cqmin` units keep fields
+ * aspect-correct at 1280x720 and 390x844 alike. Rain uses a few scrolling
+ * tiles (seeded SVG textures) instead of hundreds of nodes.
+ *
+ * Node budget at "full" (asserted by tests): every ambient stays under ~120
+ * nodes; "gentle" hides every other `.vn-pt` particle via CSS.
+ */
 
 /**
  * Deterministic pseudo-random helper based on an integer avalanche hash.
  * A plain linear-congruential progression correlates across sequential
  * indices and visibly arranges particles into diagonal lattice lines, so the
  * seed/index pair is avalanched first. Deterministic across platforms, which
- * keeps tests stable and SVG output byte-identical.
+ * keeps tests stable and markup byte-identical.
  */
 function pseudo(seed: number, index: number, min: number, max: number): number {
   let h = (Math.imul(seed ^ 0x9e3779b9, 0x85ebca6b) ^ Math.imul(index + 0x632be5ab, 0xc2b2ae35)) >>> 0;
@@ -13,7 +30,8 @@ function pseudo(seed: number, index: number, min: number, max: number): number {
   h = Math.imul(h, 0x7feb352d) >>> 0;
   h ^= h >>> 15;
   h = Math.imul(h, 0x846ca68b) >>> 0;
-  h ^= h >>> 16;
+  // `^` yields a signed 32-bit int; force unsigned so v stays inside [0, 1].
+  h = (h ^ (h >>> 16)) >>> 0;
   const v = h / 0xffffffff;
   return min + v * (max - min);
 }
@@ -27,6 +45,16 @@ function pseudo(seed: number, index: number, min: number, max: number): number {
 function strat(seed: number, index: number, count: number, min: number, max: number): number {
   const jitter = pseudo(seed, index, 0.06, 0.94);
   return min + ((index + jitter) / count) * (max - min);
+}
+
+/** Fixed-precision number formatting (keeps markup compact and stable). */
+function n(value: number, digits = 1): string {
+  return Number(value.toFixed(digits)).toString();
+}
+
+/** Inline style from custom-property pairs. */
+function vars(entries: Record<string, string>): string {
+  return Object.entries(entries).map(([k, v]) => `${k}:${v}`).join(";");
 }
 
 export function generateAmbientMarkup(effect: AmbientEffect): string {
@@ -50,7 +78,8 @@ export function generateAmbientMarkup(effect: AmbientEffect): string {
     case "desaturate":
     case "dream_haze":
     case "danger_pulse":
-      // Mood grades are handled via CSS filter & gradient overlays on scene / ambient container
+      // Mood grades are pure CSS: scene-image filters plus the overlay's own
+      // background and ::before / ::after layers (grain, bloom, edge pulse).
       return "";
   }
 }
@@ -65,373 +94,397 @@ export function generateCueEffectMarkup(effect: StageEffect): string {
       return generateHeartsBurstMarkup();
     case "confetti":
       return generateConfettiMarkup();
+    case "lightning":
+      return generateLightningMarkup();
     default:
       return "";
   }
 }
 
+/* -------------------------------------------------------------------------- */
+/* Rain                                                                        */
+/* -------------------------------------------------------------------------- */
+
+interface RainLayerSpec {
+  cls: string;
+  seed: number;
+  /** Tile size in CSS px (density stays constant at any stage size). */
+  w: number;
+  h: number;
+  count: number;
+  len: [number, number];
+  width: number;
+  alpha: [number, number];
+  color: string;
+  /** Fall speed in px per second. */
+  speed: number;
+  /** Pre-baked softness (stdDeviation) for near, out-of-focus streaks. */
+  blur?: number;
+}
+
+/**
+ * One seamless rain texture: seeded streaks that fade in from the tail and
+ * brighten toward the leading drop. Streaks crossing the bottom edge are
+ * wrapped to the top so a vertical scroll by one tile height is seamless.
+ */
+function rainTile(spec: RainLayerSpec): string {
+  const rects: string[] = [];
+  for (let i = 0; i < spec.count; i++) {
+    const x = strat(spec.seed, i, spec.count, spec.width, spec.w - spec.width);
+    const y = pseudo(spec.seed + 1, i, 0, spec.h);
+    const len = pseudo(spec.seed + 2, i, spec.len[0], spec.len[1]);
+    const alpha = pseudo(spec.seed + 3, i, spec.alpha[0], spec.alpha[1]);
+    const rect = (top: number) =>
+      `<rect x="${n(x - spec.width / 2)}" y="${n(top)}" width="${n(spec.width, 2)}" height="${n(len)}" rx="${n(spec.width / 2, 2)}" fill="url(#g)" opacity="${n(alpha, 2)}"/>`;
+    rects.push(rect(y));
+    if (y + len > spec.h) rects.push(rect(y - spec.h));
+  }
+  const filter = spec.blur ? `<filter id="b" x="-50%" y="-5%" width="200%" height="110%"><feGaussianBlur stdDeviation="${spec.blur}"/></filter>` : "";
+  const group = spec.blur ? `<g filter="url(#b)">${rects.join("")}</g>` : rects.join("");
+  return svgDataUri(
+    `<defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${spec.color}" stop-opacity="0"/><stop offset=".7" stop-color="${spec.color}" stop-opacity=".55"/><stop offset="1" stop-color="${spec.color}" stop-opacity="1"/></linearGradient>${filter}</defs>${group}`,
+    spec.w,
+    spec.h,
+  );
+}
+
+function rainLayer(spec: RainLayerSpec, tilt: number): string {
+  const style = vars({
+    "--tile": rainTile(spec),
+    "--tw": `${spec.w}px`,
+    "--th": `${spec.h}px`,
+    "--dur": `${n(spec.h / spec.speed, 3)}s`,
+    "--tilt": `${tilt}deg`,
+  });
+  return `<div class="vn-rain-layer ${spec.cls}" style="${style}"><i></i></div>`;
+}
+
 function generateRainMarkup(heavy: boolean): string {
-  const bgCount = heavy ? 44 : 34;
-  const mgCount = heavy ? 34 : 26;
-  const fgCount = heavy ? 22 : 16;
-  const slant = heavy ? 9 : 5;
-  const lenBg = heavy ? 24 : 18;
-  const lenMg = heavy ? 34 : 26;
-  const lenFg = heavy ? 44 : 34;
-
-  const bgLines: string[] = [];
-  for (let i = 0; i < bgCount; i++) {
-    const x = strat(1, i, bgCount, 10, 790);
-    const y = pseudo(2, i, 0, 600);
-    const delay = -pseudo(3, i, 0, 0.6);
-    bgLines.push(
-      `<line x1="${x.toFixed(1)}" y1="${y.toFixed(1)}" x2="${(x - slant).toFixed(1)}" y2="${(y + lenBg).toFixed(1)}" stroke="#a8c8ec" stroke-width="1" opacity="0.38" style="animation-delay: ${delay.toFixed(2)}s;" />`
-    );
-  }
-
-  const mgLines: string[] = [];
-  for (let i = 0; i < mgCount; i++) {
-    const x = strat(4, i, mgCount, 10, 790);
-    const y = pseudo(5, i, 0, 600);
-    const delay = -pseudo(6, i, 0, 0.7);
-    mgLines.push(
-      `<line x1="${x.toFixed(1)}" y1="${y.toFixed(1)}" x2="${(x - slant).toFixed(1)}" y2="${(y + lenMg).toFixed(1)}" stroke="#c0daf7" stroke-width="1.5" opacity="0.65" style="animation-delay: ${delay.toFixed(2)}s;" />`
-    );
-  }
-
-  const fgLines: string[] = [];
-  for (let i = 0; i < fgCount; i++) {
-    const x = strat(7, i, fgCount, 10, 790);
-    const y = pseudo(8, i, 0, 600);
-    const delay = -pseudo(9, i, 0, 0.5);
-    fgLines.push(
-      `<line x1="${x.toFixed(1)}" y1="${y.toFixed(1)}" x2="${(x - slant).toFixed(1)}" y2="${(y + lenFg).toFixed(1)}" stroke="#e8f2ff" stroke-width="2.2" opacity="0.88" style="animation-delay: ${delay.toFixed(2)}s;" />`
-    );
-  }
-
-  let extraOverlay = `<rect width="800" height="600" fill="rgba(30, 42, 66, 0.10)" />`;
+  const prefix = heavy ? "vn-heavy-rain" : "vn-rain";
+  const tilt = heavy ? 13 : 8;
+  const layers: RainLayerSpec[] = [
+    { cls: `${prefix}-bg`, seed: heavy ? 201 : 101, w: 230, h: 320, count: heavy ? 30 : 20, len: [12, 26], width: 1, alpha: [0.22, 0.42], color: "#b4c8e2", speed: heavy ? 1300 : 1000 },
+    { cls: `${prefix}-mg`, seed: heavy ? 211 : 111, w: 310, h: 440, count: heavy ? 20 : 13, len: [30, 54], width: 1.4, alpha: [0.38, 0.62], color: "#c9dbf2", speed: heavy ? 1900 : 1500 },
+    { cls: `${prefix}-fg`, seed: heavy ? 221 : 121, w: 430, h: 640, count: heavy ? 9 : 6, len: [70, 130], width: 2.4, alpha: [0.42, 0.66], color: "#e6f0ff", speed: heavy ? 2700 : 2200, blur: 0.7 },
+  ];
   if (heavy) {
-    // Wet-lens effect: atmospheric storm mist + 7 droplet-refraction spots on camera lens
-    const droplets: string[] = [];
-    const dropletCoords = [
-      { x: 120, y: 140, r: 16 },
-      { x: 260, y: 420, r: 12 },
-      { x: 440, y: 180, r: 20 },
-      { x: 620, y: 360, r: 14 },
-      { x: 710, y: 110, r: 18 },
-      { x: 180, y: 510, r: 15 },
-      { x: 550, y: 490, r: 22 },
-    ];
-    for (const d of dropletCoords) {
-      droplets.push(`
-        <g transform="translate(${d.x}, ${d.y})">
-          <ellipse rx="${d.r}" ry="${(d.r * 0.9).toFixed(1)}" fill="rgba(255, 255, 255, 0.08)" stroke="rgba(255, 255, 255, 0.32)" stroke-width="1.2" />
-          <ellipse cx="${(-d.r * 0.28).toFixed(1)}" cy="${(-d.r * 0.28).toFixed(1)}" rx="${(d.r * 0.35).toFixed(1)}" ry="${(d.r * 0.24).toFixed(1)}" fill="rgba(255, 255, 255, 0.65)" />
-          <ellipse cx="${(d.r * 0.25).toFixed(1)}" cy="${(d.r * 0.28).toFixed(1)}" rx="${(d.r * 0.22).toFixed(1)}" ry="${(d.r * 0.16).toFixed(1)}" fill="rgba(255, 255, 255, 0.28)" />
-        </g>
-      `);
-    }
-    extraOverlay = `
-      <rect width="800" height="600" fill="rgba(18, 28, 48, 0.22)" />
-      <g data-vn-lens-droplets>${droplets.join("")}</g>
-    `;
+    // Wind-driven sheet: long faint streaks that read as rain "curtains".
+    layers.push({ cls: "vn-heavy-rain-sheet", seed: 231, w: 260, h: 700, count: 22, len: [160, 300], width: 1, alpha: [0.1, 0.22], color: "#d7e4f5", speed: 3200 });
   }
 
-  const bgCls = heavy ? "vn-heavy-rain-bg" : "vn-rain-bg";
-  const mgCls = heavy ? "vn-heavy-rain-mg" : "vn-rain-mg";
-  const fgCls = heavy ? "vn-heavy-rain-fg" : "vn-rain-fg";
+  const splashCount = heavy ? 22 : 14;
+  const splashes: string[] = [];
+  for (let i = 0; i < splashCount; i++) {
+    const dur = pseudo(305, i, 0.55, 0.95);
+    splashes.push(`<i class="vn-pt vn-splash" style="${vars({
+      left: `${n(strat(301, i, splashCount, 2, 98))}%`,
+      top: `${n(pseudo(302, i, 74, 97))}%`,
+      "--sz": `${n(pseudo(303, i, 10, heavy ? 26 : 20))}px`,
+      "--dur": `${n(dur, 2)}s`,
+      "--dl": `${n(-pseudo(304, i, 0, dur), 2)}s`,
+    })}"></i>`);
+  }
 
-  return `
-    <svg viewBox="0 0 800 600" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;" aria-hidden="true">
-      ${extraOverlay}
-      <g class="${bgCls}">${bgLines.join("")}</g>
-      <g class="${mgCls}">${mgLines.join("")}</g>
-      <g class="${fgCls}">${fgLines.join("")}</g>
-    </svg>
-  `.trim();
+  let lens = "";
+  if (heavy) {
+    // Wet lens: water beads on the camera glass. A few grow heavy and run.
+    const dropCount = 12;
+    const drops: string[] = [];
+    for (let i = 0; i < dropCount; i++) {
+      const run = i % 4 === 1;
+      const dur = pseudo(315, i, 9, 15);
+      drops.push(`<i class="vn-pt vn-drop${run ? " vn-drop--run" : ""}" style="${vars({
+        left: `${n(strat(311, i, dropCount, 3, 95))}%`,
+        top: `${n(pseudo(312, i, run ? 4 : 6, run ? 40 : 82))}%`,
+        "--sz": `${n(pseudo(313, i, 9, 24))}px`,
+        "--sq": n(pseudo(314, i, 0.9, 1.2), 2),
+        "--dur": `${n(dur, 2)}s`,
+        "--dl": `${n(-pseudo(316, i, 0, dur), 2)}s`,
+      })}"></i>`);
+    }
+    lens = `<div class="vn-rain-mist"></div><div class="vn-rain-lens" data-vn-lens-droplets>${drops.join("")}</div>`;
+  }
+
+  return `<div class="vn-rain-wash"></div>${layers.map((layer) => rainLayer(layer, tilt)).join("")}<div class="vn-rain-splashes">${splashes.join("")}</div>${lens}`;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Snow                                                                        */
+/* -------------------------------------------------------------------------- */
+
+interface FallLayer {
+  cls: string;
+  seed: number;
+  count: number;
+  size: [number, number];
+  fall: [number, number];
+  opacity: [number, number];
+}
+
+/**
+ * Falling particle: seeded column (`left`), resting row (`--y`, shown under
+ * reduced motion), and independent fall / sway / spin durations so the field
+ * never moves in lockstep.
+ */
+function fallingParticle(cls: string, layer: FallLayer, i: number, extra: Record<string, string> = {}): string {
+  const fall = pseudo(layer.seed + 2, i, layer.fall[0], layer.fall[1]);
+  const sway = pseudo(layer.seed + 4, i, 2.6, 5.2);
+  return `<i class="vn-pt ${cls}" style="${vars({
+    left: `${n(strat(layer.seed, i, layer.count, 0.5, 99.5))}%`,
+    "--y": `${n(pseudo(layer.seed + 1, i, 2, 96))}cqh`,
+    "--sz": `${n(pseudo(layer.seed + 3, i, layer.size[0], layer.size[1]))}px`,
+    "--o": n(pseudo(layer.seed + 5, i, layer.opacity[0], layer.opacity[1]), 2),
+    "--fd": `${n(fall, 2)}s`,
+    "--sd": `${n(sway, 2)}s`,
+    "--dl": `${n(-pseudo(layer.seed + 6, i, 0, fall), 2)}s`,
+    "--sdl": `${n(-pseudo(layer.seed + 7, i, 0, sway), 2)}s`,
+    "--dx": `${n(pseudo(layer.seed + 8, i, -7, 3))}cqw`,
+    "--sw": `${n(pseudo(layer.seed + 9, i, 8, 26))}px`,
+    ...extra,
+  })}"></i>`;
 }
 
 function generateSnowMarkup(): string {
-  const bgCount = 36;
-  const mgCount = 26;
-  const fgCount = 16;
-
-  const bgCircles: string[] = [];
-  for (let i = 0; i < bgCount; i++) {
-    const x = strat(10, i, bgCount, 15, 785);
-    const y = pseudo(11, i, 0, 600);
-    const r = pseudo(12, i, 1.5, 2.5);
-    const delay = -pseudo(13, i, 0, 5.6);
-    bgCircles.push(
-      `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(1)}" fill="rgba(255, 255, 255, 0.45)" style="animation-delay: ${delay.toFixed(2)}s;" />`
-    );
-  }
-
-  const mgCircles: string[] = [];
-  for (let i = 0; i < mgCount; i++) {
-    const x = strat(14, i, mgCount, 15, 785);
-    const y = pseudo(15, i, 0, 600);
-    const r = pseudo(16, i, 3.0, 4.5);
-    const delay = -pseudo(17, i, 0, 4.2);
-    mgCircles.push(
-      `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(1)}" fill="rgba(255, 255, 255, 0.72)" style="animation-delay: ${delay.toFixed(2)}s;" />`
-    );
-  }
-
-  const fgCircles: string[] = [];
-  for (let i = 0; i < fgCount; i++) {
-    const x = strat(18, i, fgCount, 15, 785);
-    const y = pseudo(19, i, 0, 600);
-    const r = pseudo(20, i, 5.0, 6.8);
-    const delay = -pseudo(21, i, 0, 3.0);
-    fgCircles.push(
-      `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(1)}" fill="rgba(255, 255, 255, 0.92)" style="animation-delay: ${delay.toFixed(2)}s;" />`
-    );
-  }
-
-  return `
-    <svg viewBox="0 0 800 600" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;" aria-hidden="true">
-      <g class="vn-snow-sway-node">
-        <g class="vn-snow-bg">${bgCircles.join("")}</g>
-        <g class="vn-snow-mg">${mgCircles.join("")}</g>
-        <g class="vn-snow-fg">${fgCircles.join("")}</g>
-      </g>
-    </svg>
-  `.trim();
+  const far: FallLayer = { cls: "vn-snow-bg", seed: 10, count: 50, size: [3.5, 6], fall: [11, 16], opacity: [0.55, 0.85] };
+  const mid: FallLayer = { cls: "vn-snow-mg", seed: 20, count: 32, size: [9, 15], fall: [7.5, 10.5], opacity: [0.75, 0.95] };
+  const near: FallLayer = { cls: "vn-snow-fg", seed: 30, count: 12, size: [24, 36], fall: [4.6, 6.4], opacity: [0.7, 0.95] };
+  const group = (layer: FallLayer, cls: (i: number) => string, extra?: (i: number) => Record<string, string>) => {
+    const out: string[] = [];
+    for (let i = 0; i < layer.count; i++) out.push(fallingParticle(cls(i), layer, i, extra?.(i)));
+    return `<div class="vn-fx-layer ${layer.cls}">${out.join("")}</div>`;
+  };
+  return [
+    `<div class="vn-snow-chill"></div>`,
+    group(far, () => "vn-flake vn-flake--far"),
+    group(mid, () => "vn-flake vn-flake--mid"),
+    // Near flakes: crystal and soft bokeh alternate; crystals turn slowly.
+    group(near, (i) => (i % 3 === 0 ? "vn-flake vn-flake--bokeh" : "vn-flake vn-flake--crystal"), (i) => ({
+      "--rd": `${n(pseudo(37, i, 6, 12), 2)}s`,
+      ...(i % 3 === 0 ? { "--sz": `${n(pseudo(38, i, 40, 64))}px` } : {}),
+    })),
+  ].join("");
 }
+
+/* -------------------------------------------------------------------------- */
+/* Sakura                                                                      */
+/* -------------------------------------------------------------------------- */
 
 function generateSakuraMarkup(): string {
-  const bgCount = 20;
-  const mgCount = 14;
-  const fgCount = 10;
-  const petalPath = "M 0,-7 C 3,-7 7,-3 7,0 C 7,4 3,8 0,9 C -3,8 -7,4 -7,0 C -7,-3 -3,-7 0,-7 Z";
-
-  const renderPetals = (count: number, seedBase: number, scale: number, opacity: number, maxDelay: number) => {
-    const petals: string[] = [];
-    for (let i = 0; i < count; i++) {
-      const x = strat(seedBase, i, count, 20, 780);
-      const y = pseudo(seedBase + 1, i, 0, 600);
-      const rot = pseudo(seedBase + 2, i, -45, 45);
-      const delay = -pseudo(seedBase + 3, i, 0, maxDelay);
-      petals.push(
-        `<g transform="translate(${x.toFixed(1)}, ${y.toFixed(1)}) scale(${scale}) rotate(${rot.toFixed(1)})">
-          <g class="vn-petal" style="animation-delay: ${delay.toFixed(2)}s;">
-            <path d="${petalPath}" fill="#ffb7c5" opacity="${opacity}" />
-          </g>
-        </g>`
-      );
+  const far: FallLayer = { cls: "vn-sakura-bg", seed: 40, count: 20, size: [10, 14], fall: [12, 16], opacity: [0.6, 0.8] };
+  const mid: FallLayer = { cls: "vn-sakura-mg", seed: 50, count: 18, size: [17, 23], fall: [8.5, 11.5], opacity: [0.85, 0.97] };
+  const near: FallLayer = { cls: "vn-sakura-fg", seed: 60, count: 9, size: [30, 42], fall: [5.6, 7.4], opacity: [0.88, 1] };
+  const group = (layer: FallLayer, depth: string) => {
+    const out: string[] = [];
+    for (let i = 0; i < layer.count; i++) {
+      // Tumble axis is seeded per petal so no two flip the same way.
+      const ax = n(pseudo(layer.seed + 10, i, 0.4, 1), 2);
+      const ay = n(pseudo(layer.seed + 11, i, -0.6, 0.9), 2);
+      out.push(fallingParticle(`vn-petal vn-petal--${depth} vn-petal--${"abc"[i % 3]}`, layer, i, {
+        "--rd": `${n(pseudo(layer.seed + 12, i, 2.2, 4.4), 2)}s`,
+        "--ax": `${ax} ${ay} 0.8`,
+        "--r0": `${Math.round(pseudo(layer.seed + 13, i, -60, 60))}deg`,
+        "--dx": `${n(pseudo(layer.seed + 8, i, -26, -8))}cqw`,
+      }));
     }
-    return petals.join("");
+    return `<div class="vn-fx-layer ${layer.cls}">${out.join("")}</div>`;
   };
-
-  return `
-    <svg viewBox="0 0 800 600" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;" aria-hidden="true">
-      <g class="vn-sakura-sway-node">
-        <g class="vn-sakura-bg">${renderPetals(bgCount, 30, 0.6, 0.55, 6.2)}</g>
-        <g class="vn-sakura-mg">${renderPetals(mgCount, 35, 0.9, 0.78, 4.8)}</g>
-        <g class="vn-sakura-fg">${renderPetals(fgCount, 40, 1.25, 0.95, 3.6)}</g>
-      </g>
-    </svg>
-  `.trim();
+  return `<div class="vn-sakura-light"></div>${group(far, "far")}${group(mid, "mid")}${group(near, "near")}`;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Fireflies & embers                                                          */
+/* -------------------------------------------------------------------------- */
+
 function generateFirefliesMarkup(): string {
-  const count = 16;
+  const count = 26;
   const flies: string[] = [];
-
   for (let i = 0; i < count; i++) {
-    const x = strat(50, i, count, 40, 760);
-    const y = pseudo(51, i, 40, 560);
-    const r = pseudo(52, i, 2.5, 4.5);
-    const delay = -pseudo(53, i, 0, 4.0);
-    const duration = pseudo(54, i, 3.2, 4.6);
-
-    flies.push(`
-      <g class="vn-firefly-node" style="animation-delay: ${delay.toFixed(2)}s; animation-duration: ${duration.toFixed(2)}s;">
-        <circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${(r * 2.5).toFixed(1)}" fill="rgba(212, 255, 51, 0.2)" />
-        <circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(1)}" fill="#eaff59" />
-      </g>
-    `);
+    const near = i % 5 === 2;
+    const far = i % 3 === 0 && !near;
+    const wander = pseudo(56, i, 12, 20);
+    const blink = pseudo(57, i, 2.6, 4.8);
+    const offset = (seed: number) => `${n(pseudo(seed, i, -46, 46))}px ${n(pseudo(seed + 1, i, -34, 34))}px`;
+    flies.push(`<i class="vn-pt vn-firefly${near ? " vn-firefly--near" : far ? " vn-firefly--far" : ""}" style="${vars({
+      left: `${n(strat(50, i, count, 2, 98))}%`,
+      top: `${n(pseudo(51, i, near ? 30 : 14, 88))}%`,
+      "--sz": `${n(near ? pseudo(52, i, 44, 64) : far ? pseudo(52, i, 12, 16) : pseudo(52, i, 20, 30))}px`,
+      "--wd": `${n(wander, 2)}s`,
+      "--bd": `${n(blink, 2)}s`,
+      "--dl": `${n(-pseudo(53, i, 0, wander), 2)}s`,
+      "--bdl": `${n(-pseudo(54, i, 0, blink), 2)}s`,
+      "--p1": offset(58),
+      "--p2": offset(60),
+      "--p3": offset(62),
+    })}"></i>`);
   }
-
-  return `
-    <svg viewBox="0 0 800 600" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;" aria-hidden="true">
-      ${flies.join("")}
-    </svg>
-  `.trim();
+  return `<div class="vn-firefly-haze"></div><div class="vn-fx-layer vn-fireflies">${flies.join("")}</div>`;
 }
 
 function generateEmbersMarkup(): string {
-  const count = 32;
+  const count = 44;
   const sparks: string[] = [];
-  const colors = ["#ff4500", "#ff7700", "#ffaa00", "#ffd700"];
-
   for (let i = 0; i < count; i++) {
-    const x = strat(60, i, count, 20, 780);
-    const r = pseudo(61, i, 2.4, 4.8);
-    const color = colors[i % colors.length]!;
-    const delay = -pseudo(62, i, 0, 3.2);
-    const duration = pseudo(63, i, 2.8, 3.8);
-
-    sparks.push(`
-      <g class="vn-ember-node" style="animation-delay: ${delay.toFixed(2)}s; animation-duration: ${duration.toFixed(2)}s;">
-        <circle cx="${x.toFixed(1)}" cy="0" r="${(r * 2.4).toFixed(1)}" fill="${color}" opacity="0.18" />
-        <circle cx="${x.toFixed(1)}" cy="0" r="${r.toFixed(1)}" fill="${color}" opacity="0.9" />
-      </g>
-    `);
+    const kind = i % 7 === 3 ? "bokeh" : i % 3 === 1 ? "streak" : i % 2 === 0 ? "far" : "spark";
+    const rise = kind === "bokeh" ? pseudo(63, i, 5.5, 7.5) : kind === "far" ? pseudo(63, i, 5.2, 7.2) : pseudo(63, i, 3.2, 5.2);
+    const size = kind === "bokeh" ? pseudo(61, i, 26, 40) : kind === "far" ? pseudo(61, i, 5, 8) : pseudo(61, i, 9, 14);
+    sparks.push(`<i class="vn-pt vn-ember vn-ember--${kind}" style="${vars({
+      left: `${n(strat(60, i, count, 1, 99))}%`,
+      "--y": `${n(pseudo(64, i, 8, 92))}cqh`,
+      "--sz": `${n(size)}px`,
+      "--fd": `${n(rise, 2)}s`,
+      "--dl": `${n(-pseudo(62, i, 0, rise), 2)}s`,
+      "--dx": `${n(pseudo(65, i, -4, 10))}cqw`,
+      "--sw": `${n(pseudo(66, i, 8, 22))}px`,
+      "--sd": `${n(pseudo(67, i, 1.1, 2.2), 2)}s`,
+      "--fl": `${n(pseudo(68, i, 0.12, 0.3), 2)}s`,
+    })}"></i>`);
   }
-
-  return `
-    <svg viewBox="0 0 800 600" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;" aria-hidden="true">
-      ${sparks.join("")}
-    </svg>
-  `.trim();
+  return `<div class="vn-ember-glow"></div><div class="vn-fx-layer vn-embers">${sparks.join("")}</div>`;
 }
+
+/* -------------------------------------------------------------------------- */
+/* Fog                                                                         */
+/* -------------------------------------------------------------------------- */
 
 function generateFogMarkup(): string {
-  return `
-    <svg viewBox="0 0 800 600" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;" aria-hidden="true">
-      <defs>
-        <radialGradient id="vn-fog-g1" cx="50%" cy="50%" r="50%">
-          <stop offset="0%" stop-color="rgba(235, 242, 250, 0.72)" />
-          <stop offset="60%" stop-color="rgba(235, 242, 250, 0.42)" />
-          <stop offset="100%" stop-color="rgba(235, 242, 250, 0)" />
-        </radialGradient>
-        <radialGradient id="vn-fog-g2" cx="50%" cy="50%" r="50%">
-          <stop offset="0%" stop-color="rgba(220, 232, 245, 0.6)" />
-          <stop offset="70%" stop-color="rgba(220, 232, 245, 0.32)" />
-          <stop offset="100%" stop-color="rgba(220, 232, 245, 0)" />
-        </radialGradient>
-      </defs>
-      <rect width="800" height="600" fill="rgba(226, 236, 246, 0.16)" />
-      <g class="vn-fog-layer-1">
-        <ellipse cx="280" cy="200" rx="460" ry="170" fill="url(#vn-fog-g1)" />
-        <ellipse cx="660" cy="440" rx="420" ry="150" fill="url(#vn-fog-g2)" />
-      </g>
-      <g class="vn-fog-layer-2">
-        <ellipse cx="560" cy="270" rx="480" ry="180" fill="url(#vn-fog-g2)" />
-        <ellipse cx="180" cy="470" rx="430" ry="160" fill="url(#vn-fog-g1)" />
-      </g>
-      <g class="vn-fog-layer-3">
-        <ellipse cx="400" cy="560" rx="520" ry="150" fill="url(#vn-fog-g1)" />
-      </g>
-    </svg>
-  `.trim();
+  // Three seamless noise banks (textures live in VN_EFFECTS_CSS) drifting at
+  // different speeds and directions, denser toward the ground.
+  return [
+    `<div class="vn-fog-wash"></div>`,
+    `<div class="vn-fog-layer vn-fog-layer-1"><i></i></div>`,
+    `<div class="vn-fog-layer vn-fog-layer-2"><i></i></div>`,
+    `<div class="vn-fog-layer vn-fog-layer-3"><i></i></div>`,
+  ].join("");
 }
 
+/* -------------------------------------------------------------------------- */
+/* One-shot bursts                                                             */
+/* -------------------------------------------------------------------------- */
+
+const BURST_SVG_ATTRS = `viewBox="0 0 800 600" preserveAspectRatio="none" aria-hidden="true"`;
+
+/**
+ * Manga focus lines: tapered wedges converge on an irregular clear centre.
+ * Two interleaved sets flicker against each other while the frame settles.
+ */
 function generateSpeedLinesMarkup(): string {
-  const count = 32;
-  const lines: string[] = [];
-  const cx = 400;
-  const cy = 300;
-  const innerRadius = 170;
-  const outerRadius = 520;
-
+  const count = 76;
+  const sets: [string[], string[]] = [[], []];
   for (let i = 0; i < count; i++) {
-    const angle = (i * 360) / count + pseudo(70, i, -3, 3);
-    const rad = (angle * Math.PI) / 180;
-    const cos = Math.cos(rad);
-    const sin = Math.sin(rad);
-
-    const x1 = cx + innerRadius * cos;
-    const y1 = cy + innerRadius * sin;
-    const x2 = cx + outerRadius * cos;
-    const y2 = cy + outerRadius * sin;
-    const width = pseudo(71, i, 2.0, 5.5);
-
-    lines.push(
-      `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="rgba(255, 255, 255, 0.92)" stroke-width="${width.toFixed(1)}" stroke-linecap="round" />`
-    );
+    const angle = ((i + pseudo(70, i, -0.35, 0.35)) / count) * Math.PI * 2;
+    const inner = pseudo(71, i, 0.5, 0.78);
+    const half = (pseudo(72, i, 0.25, 1.15) * Math.PI) / 180;
+    const outer = 1.35;
+    const point = (a: number, r: number) => `${n(400 + 400 * r * Math.cos(a))},${n(300 + 300 * r * Math.sin(a))}`;
+    const opacity = n(pseudo(73, i, 0.55, 0.95), 2);
+    sets[i % 2]!.push(`<polygon points="${point(angle, inner)} ${point(angle - half, outer)} ${point(angle + half, outer)}" opacity="${opacity}"/>`);
   }
+  return `<svg class="vn-speed-lines" ${BURST_SVG_ATTRS}>
+    <defs><radialGradient id="vn-sl-focus" cx="50%" cy="50%" r="72%"><stop offset=".45" stop-color="#05060a" stop-opacity="0"/><stop offset="1" stop-color="#05060a" stop-opacity=".42"/></radialGradient></defs>
+    <rect class="vn-speed-lines-vignette" width="800" height="600" fill="url(#vn-sl-focus)"/>
+    <g class="vn-speed-lines-a" fill="#fff">${sets[0].join("")}</g>
+    <g class="vn-speed-lines-b" fill="#fff">${sets[1].join("")}</g>
+  </svg>`.replace(/\n\s*/g, "");
+}
 
-  return `
-    <svg viewBox="0 0 800 600" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;" aria-hidden="true">
-      <g>${lines.join("")}</g>
-    </svg>
-  `.trim();
+/** Shared burst particle: flies from the origin to (--tx, --ty). */
+function burstParticle(cls: string, style: Record<string, string>): string {
+  return `<i class="vn-pt ${cls}" style="${vars(style)}"></i>`;
 }
 
 function generateSparkleBurstMarkup(): string {
-  const count = 16;
-  const sparkles: string[] = [];
-  const starPath = "M 0,-14 Q 0,0 14,0 Q 0,0 0,14 Q 0,0 -14,0 Q 0,0 0,-14 Z";
-  const colors = ["#ffd700", "#ffffff", "#7df9ff", "#ffb6c1"];
-
+  const count = 22;
+  const out: string[] = [];
   for (let i = 0; i < count; i++) {
-    const angle = (i * 360) / count + pseudo(80, i, -8, 8);
-    const dist = pseudo(81, i, 80, 220);
-    const rad = (angle * Math.PI) / 180;
-    const x = 400 + dist * Math.cos(rad);
-    const y = 300 + dist * Math.sin(rad);
-    const scale = pseudo(82, i, 0.6, 1.25);
-    const color = colors[i % colors.length]!;
-
-    sparkles.push(`
-      <g transform="translate(${x.toFixed(1)}, ${y.toFixed(1)}) scale(${scale.toFixed(2)})">
-        <path d="${starPath}" fill="${color}" />
-      </g>
-    `);
+    const angle = ((i + pseudo(80, i, -0.3, 0.3)) / count) * Math.PI * 2;
+    const dist = pseudo(81, i, 16, 42);
+    out.push(burstParticle(`vn-sparkle vn-sparkle--${"abcd"[i % 4]}`, {
+      "--tx": `${n(Math.cos(angle) * dist)}cqmin`,
+      "--ty": `${n(Math.sin(angle) * dist * 0.85)}cqmin`,
+      "--sz": `${n(pseudo(82, i, 26, 58))}px`,
+      "--dl": `${Math.round(pseudo(83, i, 0, 110))}ms`,
+      "--rot": `${Math.round(pseudo(84, i, 45, 140))}deg`,
+    }));
   }
-
-  return `
-    <svg viewBox="0 0 800 600" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;" aria-hidden="true">
-      <g>${sparkles.join("")}</g>
-    </svg>
-  `.trim();
+  const dust = 14;
+  for (let i = 0; i < dust; i++) {
+    const angle = ((i + 0.5 + pseudo(85, i, -0.4, 0.4)) / dust) * Math.PI * 2;
+    const dist = pseudo(86, i, 24, 46);
+    out.push(burstParticle("vn-sparkle-dust", {
+      "--tx": `${n(Math.cos(angle) * dist)}cqmin`,
+      "--ty": `${n(Math.sin(angle) * dist * 0.85)}cqmin`,
+      "--sz": `${n(pseudo(87, i, 5, 10))}px`,
+      "--dl": `${Math.round(pseudo(88, i, 40, 160))}ms`,
+    }));
+  }
+  return `<div class="vn-burst vn-burst--sparkle"><b class="vn-burst-bloom"></b><b class="vn-burst-ring"></b>${out.join("")}</div>`;
 }
 
 function generateHeartsBurstMarkup(): string {
-  const count = 12;
-  const hearts: string[] = [];
-  const heartPath = "M 0,-4 A 4 4 0 0 0 -8 -4 Q -8 3 0 9 Q 8 3 8 -4 A 4 4 0 0 0 0 -4 Z";
-  const colors = ["#ff3366", "#ff6b81", "#ff9ff3", "#e056fd"];
-
+  const count = 16;
+  const out: string[] = [];
   for (let i = 0; i < count; i++) {
-    const x = 400 + strat(90, i, count, -220, 220);
-    const y = 300 + pseudo(91, i, -140, 60);
-    const scale = pseudo(92, i, 0.9, 1.8);
-    const rot = pseudo(93, i, -25, 25);
-    const color = colors[i % colors.length]!;
-
-    hearts.push(`
-      <g transform="translate(${x.toFixed(1)}, ${y.toFixed(1)}) scale(${scale.toFixed(2)}) rotate(${rot.toFixed(1)})">
-        <path d="${heartPath}" fill="${color}" />
-      </g>
-    `);
+    const soft = i % 5 === 4;
+    const x = strat(90, i, count, -34, 34);
+    out.push(burstParticle(`vn-heart vn-heart--${"abc"[i % 3]}${soft ? " vn-heart--soft" : ""}`, {
+      "--tx": `${n(x)}cqmin`,
+      "--ty": `${n(-pseudo(91, i, 22, 46))}cqh`,
+      "--sw": `${n(pseudo(94, i, -5, 5))}cqmin`,
+      "--sz": `${n(soft ? pseudo(92, i, 60, 84) : pseudo(92, i, 28, 54))}px`,
+      "--dl": `${Math.round(pseudo(93, i, 0, 170))}ms`,
+      "--r0": `${Math.round(pseudo(95, i, -22, 22))}deg`,
+    }));
   }
-
-  return `
-    <svg viewBox="0 0 800 600" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;" aria-hidden="true">
-      <g>${hearts.join("")}</g>
-    </svg>
-  `.trim();
+  return `<div class="vn-burst vn-burst--hearts"><b class="vn-burst-bloom"></b>${out.join("")}</div>`;
 }
 
 function generateConfettiMarkup(): string {
-  const count = 28;
-  const pieces: string[] = [];
-  const colors = ["#ff4757", "#2ed573", "#ffa502", "#1e90ff", "#9b59b6", "#eccc68"];
-
+  const count = 46;
+  const shapes = ["rect", "ribbon", "rect", "dot", "square"];
+  const out: string[] = [];
   for (let i = 0; i < count; i++) {
-    const x = strat(100, i, count, 40, 760);
-    const y = pseudo(101, i, 20, 250);
-    const color = colors[i % colors.length]!;
-    const rot = pseudo(102, i, -45, 45);
-
-    if (i % 3 === 0) {
-      pieces.push(`
-        <circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="6" fill="${color}" />
-      `);
-    } else {
-      pieces.push(`
-        <rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="10" height="16" rx="2" fill="${color}" transform="rotate(${rot.toFixed(1)}, ${x.toFixed(1)}, ${y.toFixed(1)})" />
-      `);
-    }
+    out.push(`<i class="vn-pt vn-confetti-piece vn-confetti--${shapes[i % shapes.length]} vn-confetti--c${i % 6}" style="${vars({
+      left: `${n(strat(100, i, count, 4, 96))}%`,
+      top: `${n(pseudo(101, i, 4, 40))}%`,
+      "--kx": `${n(pseudo(102, i, -4, 4))}cqw`,
+      "--ky": `${n(-pseudo(103, i, 2, 6))}cqh`,
+      "--tx": `${n(pseudo(104, i, -8, 8))}cqw`,
+      "--ty": `${n(pseudo(105, i, 50, 76))}cqh`,
+      "--ax": `${n(pseudo(106, i, 0.2, 1), 2)} ${n(pseudo(107, i, -1, 1), 2)} ${n(pseudo(108, i, 0.1, 0.6), 2)}`,
+      "--spin": `${Math.round(pseudo(109, i, 540, 1260)) * (i % 2 ? 1 : -1)}deg`,
+      "--dl": `${Math.round(pseudo(110, i, 0, 90))}ms`,
+    })}"></i>`);
   }
+  return `<div class="vn-burst vn-burst--confetti">${out.join("")}</div>`;
+}
 
-  return `
-    <svg viewBox="0 0 800 600" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;" aria-hidden="true">
-      <g>${pieces.join("")}</g>
-    </svg>
-  `.trim();
+/** Jagged bolt polyline from the top edge toward the horizon, plus forks. */
+function generateLightningMarkup(): string {
+  const segments = 11;
+  const x0 = 545;
+  const points: Array<[number, number]> = [];
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    const x = x0 - 60 * t + (i === 0 ? 0 : pseudo(120, i, -26, 26));
+    const y = -10 + t * 400 + (i === 0 || i === segments ? 0 : pseudo(121, i, -10, 10));
+    points.push([x, y]);
+  }
+  const fork = (from: number, seed: number, dir: number, steps: number) => {
+    const out: Array<[number, number]> = [points[from]!];
+    let [x, y] = points[from]!;
+    for (let i = 1; i <= steps; i++) {
+      x += dir * pseudo(seed, i, 14, 30);
+      y += pseudo(seed + 1, i, 22, 36);
+      out.push([x, y]);
+    }
+    return out;
+  };
+  const d = (pts: Array<[number, number]>) => `M${pts.map(([x, y]) => `${n(x)} ${n(y)}`).join("L")}`;
+  const main = d(points);
+  const forks = [fork(3, 122, 1, 4), fork(6, 124, -1, 3), fork(8, 126, 1, 2)].map(d);
+  const path = (dd: string, cls: string) => `<path class="${cls}" d="${dd}" vector-effect="non-scaling-stroke"/>`;
+  return `<div class="vn-bolt"><b class="vn-bolt-sky"></b><svg ${BURST_SVG_ATTRS}>
+    <g class="vn-bolt-glow">${path(main, "vn-bolt-main")}${forks.map((f) => path(f, "vn-bolt-fork")).join("")}</g>
+    <g class="vn-bolt-core">${path(main, "vn-bolt-main")}${forks.map((f) => path(f, "vn-bolt-fork")).join("")}</g>
+  </svg></div>`.replace(/\n\s*/g, "");
 }

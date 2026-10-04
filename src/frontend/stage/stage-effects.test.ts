@@ -9,6 +9,8 @@ import {
 import type { VnTurnInput } from "../store";
 import type { TurnView } from "../../protocol";
 import { stageTurnInput } from "../host/controller";
+import { generateAmbientMarkup, generateCueEffectMarkup } from "./procedural-particles";
+import type { AmbientEffect } from "../store";
 
 describe("stage effects heuristics & schemas", () => {
   test("isStageEffect validates only recognized stage effects", () => {
@@ -602,19 +604,58 @@ describe("extended stage effects & ambient overlays", () => {
     expect(flash.dataset.vnFlash).toBeUndefined();
   });
 
-  test("particle bursts mount procedural SVG into the fx overlay and clear after their duration", async () => {
+  test("particle bursts mount procedural particles into the fx overlay and clear after their duration", async () => {
     const stage = new VnStage({ mount });
     const fx = stage.getFxOverlay() as unknown as MockNode;
     stage.triggerEffect("sparkle_burst");
     expect(fx.dataset.vnEffect).toBe("sparkle_burst");
-    expect(fx.innerHTML).toContain("<svg");
+    expect(fx.innerHTML).toContain('class="vn-burst vn-burst--sparkle"');
+    expect(fx.innerHTML).toContain("vn-sparkle");
     await new Promise((r) => setTimeout(r, 910));
     expect(fx.dataset.vnEffect).toBeUndefined();
     expect(fx.innerHTML).toBe("");
 
     stage.triggerEffect("confetti");
     expect(fx.dataset.vnEffect).toBe("confetti");
+    expect(fx.innerHTML).toContain("vn-confetti-piece");
+
+    stage.triggerEffect("speed_lines");
+    expect(fx.dataset.vnEffect).toBe("speed_lines");
     expect(fx.innerHTML).toContain("<svg");
+  });
+
+  test("lightning pairs the double flash with a drawn bolt that self-clears", async () => {
+    const stage = new VnStage({ mount });
+    const fx = stage.getFxOverlay() as unknown as MockNode;
+    const flash = stage.getFlashOverlay() as unknown as MockNode;
+    stage.triggerEffect("lightning");
+    expect(flash.dataset.vnFlash).toBe("lightning");
+    expect(fx.dataset.vnEffect).toBe("lightning");
+    expect(fx.innerHTML).toContain("vn-bolt");
+    await new Promise((r) => setTimeout(r, 610));
+    expect(flash.dataset.vnFlash).toBeUndefined();
+    expect(fx.dataset.vnEffect).toBeUndefined();
+    expect(fx.innerHTML).toBe("");
+  });
+
+  test("effect intensity 'off' leaves the fx overlay untouched", () => {
+    const stage = new VnStage({ mount });
+    const fx = stage.getFxOverlay() as unknown as MockNode;
+    stage.setEffectIntensity("off");
+    stage.triggerEffect("lightning");
+    stage.triggerEffect("confetti");
+    expect(fx.innerHTML).toBe("");
+    expect(fx.dataset.vnEffect).toBeUndefined();
+  });
+
+  test("resetEffects clears a running burst immediately", () => {
+    const stage = new VnStage({ mount });
+    const fx = stage.getFxOverlay() as unknown as MockNode;
+    stage.triggerEffect("hearts_burst");
+    expect(fx.innerHTML).not.toBe("");
+    stage.resetEffects();
+    expect(fx.innerHTML).toBe("");
+    expect(fx.dataset.vnEffect).toBeUndefined();
   });
 
   test("applyAmbient mounts weather markup, persists across paragraph advance, and clears on reset", () => {
@@ -718,5 +759,99 @@ describe("extended stage effects & ambient overlays", () => {
     expect(stage.getCurrentAmbient()).toBe("snow");
     stage.reset();
     expect(stage.getCurrentAmbient()).toBe(null);
+  });
+});
+
+
+describe("procedural particle markup", () => {
+  const WEATHER: AmbientEffect[] = ["rain", "heavy_rain", "snow", "sakura", "fog", "fireflies", "embers"];
+  const GRADES: AmbientEffect[] = ["vignette_dark", "sepia_flashback", "desaturate", "dream_haze", "danger_pulse"];
+  const BURSTS: StageEffect[] = ["speed_lines", "sparkle_burst", "hearts_burst", "confetti", "lightning"];
+  const nodeCount = (html: string) => (html.match(/<(?:i|b|div|svg|path|polygon|rect|g)\b/g) ?? []).length;
+  const particles = (html: string) => (html.match(/class="vn-pt /g) ?? []).length;
+
+  test("markup is deterministic (byte-identical across calls)", () => {
+    for (const id of WEATHER) expect(generateAmbientMarkup(id)).toBe(generateAmbientMarkup(id));
+    for (const id of BURSTS) expect(generateCueEffectMarkup(id)).toBe(generateCueEffectMarkup(id));
+  });
+
+  test("weather fields stay within the node budget and are not empty", () => {
+    for (const id of WEATHER) {
+      const html = generateAmbientMarkup(id);
+      expect(html.length).toBeGreaterThan(0);
+      expect(nodeCount(html)).toBeLessThanOrEqual(120);
+    }
+    // Particle fields carry enough particles to read as weather.
+    expect(particles(generateAmbientMarkup("snow"))).toBeGreaterThanOrEqual(60);
+    expect(particles(generateAmbientMarkup("sakura"))).toBeGreaterThanOrEqual(30);
+    expect(particles(generateAmbientMarkup("fireflies"))).toBeGreaterThanOrEqual(16);
+    expect(particles(generateAmbientMarkup("embers"))).toBeGreaterThanOrEqual(30);
+    // Rain is a few scrolling tiles (three depths, plus a sheet when heavy), not hundreds of nodes.
+    expect((generateAmbientMarkup("rain").match(/class="vn-rain-layer /g) ?? []).length).toBe(3);
+    expect((generateAmbientMarkup("heavy_rain").match(/class="vn-rain-layer /g) ?? []).length).toBe(4);
+  });
+
+  test("bursts stay within the node budget", () => {
+    for (const id of BURSTS) {
+      const html = generateCueEffectMarkup(id);
+      expect(html.length).toBeGreaterThan(0);
+      expect(nodeCount(html)).toBeLessThanOrEqual(170);
+    }
+    expect(generateCueEffectMarkup("shake")).toBe("");
+    expect(generateCueEffectMarkup("flash_white")).toBe("");
+  });
+
+  test("mood grades mount no markup (pure CSS)", () => {
+    for (const id of GRADES) expect(generateAmbientMarkup(id)).toBe("");
+  });
+
+  test("stratified columns cover the full width for every particle layer", () => {
+    for (const id of ["snow", "sakura", "embers", "fireflies"] as AmbientEffect[]) {
+      const lefts = [...generateAmbientMarkup(id).matchAll(/class="vn-pt [^"]*" style="left:([\d.]+)%/g)].map((m) => Number(m[1]));
+      expect(lefts.length).toBeGreaterThan(10);
+      const deciles = new Set(lefts.map((x) => Math.min(9, Math.floor(x / 10))));
+      expect(deciles.size).toBe(10);
+    }
+  });
+
+  test("seeded values stay inside their declared ranges", () => {
+    // Opacity attributes on speed lines are seeded in [0.55, 0.95].
+    const opacities = [...generateCueEffectMarkup("speed_lines").matchAll(/\sopacity="([\d.]+)"/g)].map((m) => Number(m[1]));
+    expect(opacities.length).toBeGreaterThan(60);
+    for (const o of opacities) {
+      expect(o).toBeGreaterThanOrEqual(0.55);
+      expect(o).toBeLessThanOrEqual(0.95);
+    }
+    // Particle sizes are seeded positive px values.
+    for (const id of ["snow", "sakura", "embers", "fireflies"] as AmbientEffect[]) {
+      for (const m of generateAmbientMarkup(id).matchAll(/--sz:([\d.-]+)px/g)) expect(Number(m[1])).toBeGreaterThan(2);
+    }
+  });
+
+  test("speed lines keep a clear centre", () => {
+    const html = generateCueEffectMarkup("speed_lines");
+    const tips = [...html.matchAll(/points="([\d.-]+),([\d.-]+) /g)].map((m) => [Number(m[1]), Number(m[2])] as const);
+    expect(tips.length).toBeGreaterThanOrEqual(60);
+    for (const [x, y] of tips) {
+      const r = Math.hypot((x - 400) / 400, (y - 300) / 300);
+      expect(r).toBeGreaterThanOrEqual(0.49);
+    }
+  });
+
+  test("markup only references inline data URIs (no network assets)", () => {
+    const all = [...WEATHER.map(generateAmbientMarkup), ...BURSTS.map(generateCueEffectMarkup)].join("");
+    expect(all).not.toMatch(/https?:/i);
+    for (const m of all.matchAll(/url\(([^)]*)\)/g)) {
+      expect(m[1]!.startsWith("data:image/svg+xml;base64,") || m[1]!.startsWith("#")).toBe(true);
+    }
+  });
+
+  test("rain tiles are seeded per depth and differ between rain and heavy_rain", () => {
+    const tiles = (html: string) => [...html.matchAll(/--tile:url\(([^)]*)\)/g)].map((m) => m[1]);
+    const light = tiles(generateAmbientMarkup("rain"));
+    const heavy = tiles(generateAmbientMarkup("heavy_rain"));
+    expect(new Set(light).size).toBe(3);
+    expect(new Set(heavy).size).toBe(4);
+    for (const t of light) expect(heavy).not.toContain(t);
   });
 });
