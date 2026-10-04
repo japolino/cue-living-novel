@@ -27,6 +27,7 @@ import {
   type SpriteActorStage,
   type SpriteEmote,
   type SpriteFacing,
+  type SpriteIllustrationView,
   type SpriteImageView,
   type SpriteLight,
   type SpriteMotion,
@@ -60,6 +61,9 @@ export const SPRITE_ENTER_MS = 460;
 export const SPRITE_EXIT_MS = 420;
 export const SPRITE_CROSSFADE_MS = 260;
 export const SPRITE_EMOTE_POP_MS = 420;
+
+/** Sprites fade out under a key illustration (and back) with the scene-image crossfade. */
+export const SPRITE_ILLUSTRATION_FADE_MS = 350;
 
 /** Paragraphs ahead whose sprites and plate are preloaded. */
 export const SPRITE_PRELOAD_AHEAD = 2;
@@ -143,6 +147,17 @@ export function effectivePlateKey(view: SpriteTurnView | null, index: number): s
     if (key) return key;
   }
   return null;
+}
+
+/**
+ * The key-moment illustration to show at a paragraph: its stage says
+ * `illustrate` and the picture is ready. Null otherwise (the sprites stay).
+ */
+export function illustrationFor(view: SpriteTurnView | null, index: number): (SpriteIllustrationView & { url: string }) | null {
+  if (!view || index < 0 || index >= view.staging.paragraphs.length) return null;
+  if (!view.staging.paragraphs[index]?.illustrate) return null;
+  const found = view.illustrations?.find((item) => item.paragraphIndex === index);
+  return found && found.status === "ready" && typeof found.url === "string" && found.url ? { ...found, url: found.url } : null;
 }
 
 /** The staged paragraph in effect at an index (the last one for indexes past the end). */
@@ -250,6 +265,7 @@ export function spritePreloadUrls(view: SpriteTurnView | null, index: number, ah
     const plateKey = effectivePlateKey(view, i);
     const plate = plateKey ? view.plates[plateKey] : undefined;
     if (plate?.status === "ready") add(plate.url);
+    add(illustrationFor(view, i)?.url);
   }
   return urls;
 }
@@ -359,6 +375,8 @@ export type SpriteActorSnapshot = {
 export type SpriteLayerSnapshot = {
   enabled: boolean;
   index: number;
+  /** The key illustration covering the sprites now, or null. */
+  illustration: string | null;
   light: SpriteLight | null;
   plateKey: string | null;
   actors: SpriteActorSnapshot[];
@@ -417,6 +435,9 @@ export class SpriteLayer {
   private destroyed = false;
   /** Resolved on first use, so scene mode never creates or touches the layer. */
   private containerEl: HTMLElement | null = null;
+  /** URL of the key illustration the sprites are hidden under, or null. */
+  private illustration: string | null = null;
+  private illustrationFade: { cancel(): void } | null = null;
 
   constructor(private readonly options: SpriteLayerOptions) {}
 
@@ -469,8 +490,44 @@ export class SpriteLayer {
     return key ? this.view?.plates[key] ?? null : null;
   }
 
+  /** The ready key illustration for a paragraph (see `illustrationFor`). */
+  illustrationFor(index: number): (SpriteIllustrationView & { url: string }) | null {
+    return illustrationFor(this.view, index);
+  }
+
+  /**
+   * Hide the sprites under a key illustration (`url`), or show them again
+   * (null). The stage paints the picture itself through its scene layers.
+   * The fade follows the scene crossfade; no fade when `animate` is false
+   * or the reader prefers reduced motion.
+   */
+  setIllustrated(url: string | null, animate: boolean): void {
+    if (this.destroyed || this.illustration === url) return;
+    const wasHidden = this.illustration !== null;
+    this.illustration = url;
+    if (!this.enabled && !this.containerEl) return;
+    const container = this.container();
+    const hide = url !== null;
+    if (hide) container.dataset.vnSpriteIllustrated = "true";
+    else delete container.dataset.vnSpriteIllustrated;
+    this.illustrationFade?.cancel();
+    this.illustrationFade = null;
+    const style = container.style as CSSStyleDeclaration | undefined;
+    if (style) style.opacity = hide ? "0" : "";
+    const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (animate && !reduced && wasHidden !== hide && typeof container.animate === "function") {
+      this.illustrationFade = container.animate(
+        [{ opacity: hide ? 1 : 0 }, { opacity: hide ? 0 : 1 }],
+        { duration: SPRITE_ILLUSTRATION_FADE_MS, easing: "ease" },
+      );
+    }
+    this.options.onStatusChange?.();
+  }
+
   badges(index = this.index): SpriteStatusBadge[] {
     if (!this.enabled || index < 0) return [];
+    // A key illustration covers the stage: no "Preparing" badges over it.
+    if (this.illustration !== null && index === this.index) return [];
     return spriteStatusBadges(this.view, index);
   }
 
@@ -501,9 +558,14 @@ export class SpriteLayer {
     this.appliedView = null;
     this.stage = null;
     this.talking = false;
+    this.illustration = null;
+    this.illustrationFade?.cancel();
+    this.illustrationFade = null;
     if (this.enabled || this.containerEl) {
       const container = this.container();
       container.replaceChildren();
+      delete container.dataset.vnSpriteIllustrated;
+      if (container.style) container.style.opacity = "";
       delete container.dataset.vnSpriteLight;
       container.dataset.vnSpriteCount = "0";
       container.hidden = !this.enabled;
@@ -571,6 +633,7 @@ export class SpriteLayer {
     return {
       enabled: this.enabled,
       index: this.index,
+      illustration: this.illustration,
       light: this.stage?.light ?? null,
       plateKey: this.index >= 0 ? effectivePlateKey(view, this.index) : null,
       actors,
@@ -580,6 +643,8 @@ export class SpriteLayer {
 
   destroy(): void {
     if (this.destroyed) return;
+    this.illustrationFade?.cancel();
+    this.illustrationFade = null;
     for (const entry of this.actors.values()) this.disposeActor(entry);
     this.actors.clear();
     this.destroyed = true;

@@ -60,6 +60,8 @@ import {
   NOVELAI_STEPS_MIN,
   PRESENTATION_MODE_OPTIONS,
   SPRITE_CUTOUT_OPTIONS,
+  KEY_ILLUSTRATION_OPTIONS,
+  normalizeKeyIllustrations,
   describeCutoutModel,
   normalizePresentationMode,
   normalizeSpriteCutout,
@@ -616,6 +618,12 @@ export class VisualNovelSettingsPanel {
                 <fieldset aria-label="How the story is shown">
                   ${optionList("presentationMode", PRESENTATION_MODE_OPTIONS)}
                 </fieldset>
+                <div data-key-moments hidden>
+                  <fieldset aria-label="Key moments" ${find("Key moments", "key moment illustration full picture scene picture sprites kiss fight sit run hybrid")}>
+                    <legend>Key moments</legend>
+                    ${optionList("keyIllustrations", KEY_ILLUSTRATION_OPTIONS)}
+                  </fieldset>
+                </div>
               `, { id: "presentation", find: find("Scene pictures or character sprites", "presentation mode sprites sprite mode character expressions cut-out plates backgrounds scene pictures vn") })}
               <div data-sprites-only hidden>
                 ${group("Sprite cut-out", `
@@ -1383,6 +1391,7 @@ export class VisualNovelSettingsPanel {
       case "textEffects": return { textEffects: normalizeTextEffects(target.value) };
       case "presentationMode": return { presentationMode: normalizePresentationMode(target.value) };
       case "spriteCutout": return { spriteCutout: normalizeSpriteCutout(target.value) };
+      case "keyIllustrations": return { keyIllustrations: normalizeKeyIllustrations(target.value) };
       case "textScaleStep": {
         if (target.value === "custom") { this.showCustom("textScale", true); return null; }
         return { textScale: Number(target.value) };
@@ -1846,8 +1855,11 @@ export class VisualNovelSettingsPanel {
   private syncSprites(config: VisualNovelConfig, source: ImageSource): void {
     this.setRadio("presentationMode", config.presentationMode);
     this.setRadio("spriteCutout", config.spriteCutout);
+    this.setRadio("keyIllustrations", config.keyIllustrations);
     const sprites = config.presentationMode === "sprites";
     this.root.querySelector<HTMLElement>("[data-sprites-only]")!.hidden = !sprites;
+    // Key moments sit under the presentation choice and also exist only for sprites.
+    this.root.querySelector<HTMLElement>("[data-key-moments]")!.hidden = !sprites;
     // Scene-only controls keep their values; they only read as not applying.
     for (const element of this.root.querySelectorAll<HTMLElement>("[data-scene-only]")) {
       element.toggleAttribute("data-inactive", sprites);

@@ -29,9 +29,12 @@ own expression and there is no picture cap.
 | `presentationMode` | `"scene"` \| `"sprites"` | `"scene"` | at once (everyday) |
 | `spriteCutout` | `"best"` (model) \| `"basic"` (no download) | `"best"` | at once (everyday) |
 | `spriteModelUrl` | https URL | ISNet-anime on Hugging Face | Advanced (Apply) |
+| `keyIllustrations` | `"off"` \| `"few"` (≤ 1 per reply) | `"off"` | at once (everyday, sprite mode only) |
 
-Scene mode is unchanged. In sprite mode no scene-image jobs run; the planner
-still plans scenes, environments, speakers and cues (they feed staging).
+Scene mode is unchanged. In sprite mode no scene-image jobs run, except one
+per reply for a key moment when `keyIllustrations` is `"few"` (see "Key
+moments"); the planner still plans scenes, environments, speakers and cues
+(they feed staging).
 
 ## Data flow
 
@@ -118,6 +121,48 @@ intensity), the plate key, and the light preset.
   light (choice), and place reuse (choice among the user's known plates,
   `new_place` first) so a revisit reuses its plate even when worded
   differently. Low-confidence answers keep the previous value (no flicker).
+
+## Key moments (sprite mode, `keyIllustrations: "few"`)
+
+Sprites cannot show sitting, running, kissing, fighting or a reveal. A few
+paragraphs per reply (`KEY_ILLUSTRATION_CAP`: off 0, few 1) get
+`illustrate: true` on their `SpriteParagraphStage` and are shown as a full
+scene illustration: the ordinary scene-image job of that paragraph's cue.
+
+- **Choice** (`src/backend/runtime/sprites/key-moments.ts`). Only paragraphs
+  with a paintable cue (budgeted `visualCues`, then reuse-only `cacheCues`;
+  an unresolved identity is skipped) qualify. Deterministic rule, narration
+  only (quoted speech ignored, negated verbs ignored): contact or a fight
+  (kiss, hug, embrace, fight, punch, carry him…) ranks 3; a pose a standing
+  cut-out cannot show (sit, kneel, lie down, run to, leap over, dance, fall
+  to her knees…) or a `wielding` cue action ranks 2; a scene's first
+  paragraph with nobody on stage ranks 1. The strongest wins, earliest on
+  ties, within the cap. Classifier: per qualifying paragraph a `score`
+  question (5 levels, "ordinary" first) and a `noul` "can a standing sprite
+  show this?"; a level ≥ 3 with yes ≤ 0.4, or level 4 with yes ≤ 0.6
+  qualifies (score confidence ≥ 0.5); top level first, then the lowest yes.
+  When no score answer is confident, the deterministic rule decides.
+- **Jobs** (controller). Planning in sprite mode creates the scene-image job
+  of each flagged cue (`createAssetJobs`), and `startAssets` runs the normal
+  pipeline on a plan narrowed to those cues (`keyIllustrationPlan`: no
+  reuse-only candidates, no classifier budget), so prompts, scene cache,
+  scheduler, concurrency and view gating are the scene-mode ones. The turn
+  record is marked `settingsSnapshot.presentationMode = "sprites"`; scene
+  mode replans such a turn. Retry keeps finished pictures and regenerates
+  the rest (cache bypassed); reusing the stored turn (same reply processed
+  again) resumes unfinished ones.
+- **View**. The jobs stay in `TurnView.assets`; `TurnView.sprites.illustrations`
+  mirrors them (`SpriteIllustrationView`: paragraph, job, `pending` /
+  `ready` / `failed`, URL). When a job finishes or fails the backend re-sends
+  the same turn (`vn_turn`), which the host applies as a same-turn update.
+- **Stage**. On a paragraph with `illustrate` and a ready picture, the stage
+  paints it through the scene layers (request id `illustration:…`, alt
+  "Illustration for paragraph N") and, once it is on screen, fades the
+  sprite layer out (350 ms, Web Animations, none with reduced motion or
+  effects off); the staging still applies underneath. The next paragraph
+  without the flag brings the plate (crossfade) and the sprites back; with
+  no ready plate the picture is cleared. A pending or failed picture never
+  hides the sprites.
 
 ## Stage (frontend)
 
@@ -221,8 +266,7 @@ Stage:
 
 ## Not in v1
 
-Mouth/blink variants (lip flap), full key-moment illustrations mixed into
-sprite mode, face-only repaint for expression variants, parallax, front
+Mouth/blink variants (lip flap), face-only repaint for expression variants, parallax, front
 ambient layer, persona sprite, a per-image face box / natural orientation,
 calibrated classifier thresholds. Known gaps: with anchoring on, expressions
 wait for `idle` even on providers that cannot anchor; after switching back to
