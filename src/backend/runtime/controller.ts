@@ -11,6 +11,11 @@ import {
   ChoiceSchema
 } from "../../shared/contracts.js";
 import type { FrontendRequest, AssetView, TurnView } from "../../protocol.js";
+import type { VisualNovelConfig } from "../../config.js";
+import { SpriteCastMemberSchema, SpriteStagingSchema, type SpriteCastMember, type SpriteParagraphStage, type SpriteStaging } from "../../shared/sprites.js";
+import { characterAppearanceKey } from "../../shared/identity.js";
+import { buildSpriteStaging, deterministicSpriteStaging } from "./sprite-staging.js";
+import { SpriteService, spriteStyleKey } from "./sprites/index.js";
 import { resolvePanelTemplate } from "./panel-templates.js";
 import { ViewRegistry } from "./view-registry.js";
 import { isFrontendRequest } from "../../protocol.js";
@@ -72,6 +77,29 @@ function externalImages(spindle: SpindleAPI) {
   return service;
 }
 const assetControllers = new Map<string, AbortController>();
+/**
+ * Sprite mode: one library/generation service per backend worker. It gates
+ * generation on the same view registry as scene mode (any open Cue view of
+ * the user) and reads config through storage.
+ */
+const spriteServices = new WeakMap<SpindleAPI, SpriteService>();
+export function spriteService(spindle: SpindleAPI): SpriteService {
+  let service = spriteServices.get(spindle);
+  if (!service) {
+    service = new SpriteService(spindle, {
+      isViewOpen: (userId) => views.openChat(userId) !== null,
+      openChatId: (userId) => views.openChat(userId),
+      loadConfig: async (userId) => {
+        const config = await loadConfig(spindle, userId);
+        rememberDebugFlag(userId, config);
+        return config;
+      },
+      log: (line, userId) => dbg(spindle, userId, line),
+    });
+    spriteServices.set(spindle, service);
+  }
+  return service;
+}
 /**
  * Per-chat intake epoch. Macro resolution awaits the host before the planning
  * queue can see the job, so a cancel, a new generation, a deletion, or a
@@ -207,6 +235,12 @@ function openView(spindle: SpindleAPI, userId: string | undefined, chatId: strin
     dbg(spindle, userId, `view closed chat=${displaced} reason=view_switched`);
     abortChatWork(spindle, userId, displaced, "The visual novel view moved to another chat.");
   }
+  // Sprite mode: queued library work resumes while a view is open.
+  if (!wasOpen && spriteModeCached(userId)) {
+    void spriteService(spindle).onViewOpened(userId).catch((error) => {
+      spindle.log.warn(`Sprite queue resume failed: ${errorText(error)}`);
+    });
+  }
 }
 
 /** Close whichever chat's view is open for this user (home screen, no active chat). */
@@ -220,6 +254,8 @@ function closeView(spindle: SpindleAPI, userId: string | undefined, chatId: stri
   if (!views.close(userId, chatId)) return;
   dbg(spindle, userId, `view closed chat=${chatId} reason=${reason}`);
   abortChatWork(spindle, userId, chatId, "The visual novel view closed before this turn settled.");
+  // Sprite generation is per user: it pauses once no Cue view is open.
+  if (views.openChat(userId) === null) spriteServices.get(spindle)?.pause(userId);
 }
 
 /**
@@ -340,8 +376,19 @@ export function sanitizeAudioImportPath(relativePath: string): string | null {
   return parts.join("/");
 }
 
-function rememberDebugFlag(userId: string | undefined, config: { debugLogging: boolean }): void {
+function rememberDebugFlag(userId: string | undefined, config: { debugLogging: boolean; presentationMode?: VisualNovelConfig["presentationMode"] }): void {
   debugFlags.set(userId ?? "owner", config.debugLogging);
+  if (config.presentationMode) presentationModes.set(userId ?? "owner", config.presentationMode);
+}
+
+/**
+ * Last presentation mode seen per user (refreshed on every config load, like
+ * the debug flag). Lets synchronous decisions (stored-turn reuse, view
+ * building) follow the mode without an extra storage read in scene mode.
+ */
+const presentationModes = new Map<string, VisualNovelConfig["presentationMode"]>();
+function spriteModeCached(userId: string | undefined): boolean {
+  return presentationModes.get(userId ?? "owner") === "sprites";
 }
 
 function dbg(spindle: SpindleAPI, userId: string | undefined, message: string): void {
@@ -470,6 +517,156 @@ export function turnView(record: StoredTurnRecord): TurnView {
   };
 }
 
+/**
+ * The view sent to the frontend. Scene mode: exactly `turnViewWithAudio`.
+ * Sprite mode adds `sprites` (staging + the sets and plates it uses) and
+ * makes sure the library has (or is generating) them. A turn stored without
+ * staging (planned in scene mode) gets deterministic staging here, once.
+ */
+async function buildTurnView(
+  spindle: SpindleAPI,
+  record: StoredTurnRecord,
+  userId: string | undefined,
+  config?: VisualNovelConfig
+): Promise<TurnView> {
+  const view = await turnViewWithAudio(spindle, record);
+  if (config ? config.presentationMode !== "sprites" : !spriteModeCached(userId)) return view;
+  try {
+    const effective = config ?? await loadConfig(spindle, userId);
+    if (effective.presentationMode !== "sprites") return view;
+    const service = spriteService(spindle);
+    const staging = await stagingForRecord(spindle, record, effective, userId);
+    await service.ensureForStaging(userId, staging, effective);
+    return { ...view, sprites: await service.turnView(userId, staging, effective) };
+  } catch (error) {
+    spindle.log.warn(`Sprite view could not be built; sending the turn without sprites: ${errorText(error)}`);
+    return view;
+  }
+}
+
+/** Valid staging for every paragraph of the plan, or null. */
+function usableStaging(staging: unknown, paragraphCount: number): SpriteStaging | null {
+  const parsed = SpriteStagingSchema.safeParse(staging);
+  if (!parsed.success || parsed.data.paragraphs.length !== paragraphCount) return null;
+  return parsed.data;
+}
+
+/** The stored staging, or deterministic staging saved onto the record (turns planned before sprite mode was on). */
+async function stagingForRecord(
+  spindle: SpindleAPI,
+  record: StoredTurnRecord,
+  config: VisualNovelConfig,
+  userId: string | undefined
+): Promise<SpriteStaging> {
+  const stored = usableStaging(record.plan.spriteStaging, record.plan.paragraphs.length);
+  if (stored) return stored;
+  const styleKey = spriteStyleKey(config);
+  const staging = deterministicSpriteStaging({
+    plan: record.plan,
+    config,
+    styleKey,
+    knownPlates: await spriteService(spindle).knownPlates(userId, config),
+    previousCast: [],
+    previousStage: null,
+    characterAppearance: await loadCharacterAppearance(spindle, userId, record.plan.key.chatId).catch(() => ({})),
+    ...(record.userSpeaker && record.userSpeaker !== "You" ? { personaName: record.userSpeaker } : {}),
+  });
+  const key = record.plan.key;
+  try {
+    await saveTurnRecord(spindle, turnPath(key.chatId, key.assistantMessageId, key.swipeId), {
+      ...record,
+      plan: { ...record.plan, spriteStaging: staging },
+      updatedAt: new Date().toISOString()
+    }, userId);
+    dbg(spindle, userId, `sprite staging added to stored turn chat=${key.chatId} message=${key.assistantMessageId}`);
+  } catch (error) {
+    spindle.log.warn(`Sprite staging could not be saved on the stored turn: ${errorText(error)}`);
+  }
+  return staging;
+}
+
+/**
+ * Plan sprite staging for a freshly planned turn. Never throws: a staging
+ * failure (or an invalid result) falls back to deterministic staging.
+ */
+async function planSpriteStaging(
+  spindle: SpindleAPI,
+  input: {
+    plan: StoredTurnRecord["plan"];
+    config: VisualNovelConfig;
+    previous: StoredTurnRecord | null;
+    personaName: string;
+    characterAppearance: Readonly<Record<string, string>>;
+    signal: AbortSignal;
+  },
+  userId: string | undefined
+): Promise<SpriteStaging> {
+  const previousStaging = input.previous && input.previous.plan.key.assistantMessageId !== input.plan.key.assistantMessageId
+    ? usableStaging(input.previous.plan.spriteStaging, input.previous.plan.paragraphs.length)
+    : null;
+  const previousStage: SpriteParagraphStage | null = previousStaging?.paragraphs.at(-1) ?? null;
+  const stagingInput = {
+    plan: input.plan,
+    config: input.config,
+    styleKey: spriteStyleKey(input.config),
+    knownPlates: await spriteService(spindle).knownPlates(userId, input.config).catch(() => []),
+    previousCast: previousStaging?.cast ?? [],
+    previousStage,
+    ...(previousStaging ? { previousSceneId: input.previous?.plan.scenes.at(-1)?.sceneId ?? null } : {}),
+    characterAppearance: input.characterAppearance,
+    ...(input.personaName ? { personaName: input.personaName } : {}),
+  };
+  try {
+    const staged = await buildSpriteStaging(spindle, { ...stagingInput, ...(userId ? { userId } : {}), signal: input.signal });
+    const usable = usableStaging(staged, input.plan.paragraphs.length);
+    if (usable) return usable;
+    spindle.log.warn("Sprite staging was invalid; using deterministic staging.");
+  } catch (error) {
+    spindle.log.warn(`Sprite staging failed; using deterministic staging: ${errorText(error)}`);
+  }
+  return deterministicSpriteStaging(stagingInput);
+}
+
+/**
+ * "Prepare for this chat": the cast of the chat's latest staged turn, plus
+ * every registry character with a known appearance (identity tags, no
+ * outfit override).
+ */
+async function spriteCastForChat(spindle: SpindleAPI, chatId: string, userId: string | undefined): Promise<SpriteCastMember[]> {
+  const cast: SpriteCastMember[] = [];
+  const seen = new Set<string>();
+  try {
+    const chatState = await loadChatState(spindle, chatId, userId);
+    const record = await loadTurnRecord(spindle, chatState.activeTurnPath, userId);
+    const staging = record ? usableStaging(record.plan.spriteStaging, record.plan.paragraphs.length) : null;
+    for (const member of staging?.cast ?? []) {
+      const key = characterAppearanceKey(member.name);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      cast.push(member);
+    }
+  } catch {
+    // No stored turn: the registry alone decides.
+  }
+  const registry = await loadCharacterRegistry(spindle, chatId, userId).catch(() => ({}));
+  for (const entry of Object.values(registry)) {
+    const key = characterAppearanceKey(entry.name);
+    if (!key || seen.has(key) || !entry.tags.trim()) continue;
+    const parsed = SpriteCastMemberSchema.safeParse({
+      characterKey: entry.id || key,
+      name: entry.name.slice(0, 200),
+      ...(entry.id ? { characterId: entry.id } : {}),
+      identity: entry.tags.slice(0, 4000),
+      attire: null,
+      subjectCategory: entry.subjectCategory,
+    });
+    if (!parsed.success) continue;
+    seen.add(key);
+    cast.push(parsed.data);
+  }
+  return cast.slice(0, 16);
+}
+
 async function bootstrapLatestAssistantTurn(spindle: SpindleAPI, chatId: string, userId?: string): Promise<void> {
   const messages = await spindle.chat.getMessages(chatId) as NormalizedChatMessage[];
   const latest = [...messages].reverse().find((message) => !message.is_user && message.content.trim());
@@ -596,8 +793,14 @@ export async function sendState(
     type: "vn_state",
     chatId,
     config,
-    turn: record && !stale ? await turnViewWithAudio(spindle, record) : null
+    turn: record && !stale ? await buildTurnView(spindle, record, userId, config) : null
   }, userId);
+  if (config.presentationMode === "sprites" && views.isOpen(userId, chatId)) {
+    // A reloaded frontend lost its cut requests; re-send them and resume the queue.
+    void spriteService(spindle).onStateRequested(userId).catch((error) => {
+      spindle.log.warn(`Sprite queue resume failed: ${errorText(error)}`);
+    });
+  }
   const canPlan = config.enabled && views.isOpen(userId, chatId);
   if (!record) {
     if (canPlan) await bootstrapLatestAssistantTurn(spindle, chatId, userId);
@@ -741,7 +944,7 @@ async function processAssistantMessage(
     const key = runtimeKey(userId, chatId);
     activeTurnKeys.set(key, existing.plan.key);
     await persistActiveTurn(spindle, existing, path, userId);
-    spindle.sendToFrontend({ type: "vn_turn", turn: await turnViewWithAudio(spindle, existing) }, userId);
+    spindle.sendToFrontend({ type: "vn_turn", turn: await buildTurnView(spindle, existing, userId) }, userId);
     return;
   }
   if (isUnselectedGreeting(content, resolved)) {
@@ -752,15 +955,20 @@ async function processAssistantMessage(
   const fingerprint = selectionFingerprint(message, intake);
   const rawFingerprint = fingerprintForMessage({ id: message.id, swipe_id: message.swipe_id, content });
   if (!options?.retry && !options?.forceRegenerate && existing && relation === "current") {
-    const hasIncompleteJobs = existing.jobs.some(
-      (job) => job.status === "failed" || job.status === "cancelled" || job.status === "queued" || job.status === "generating"
-    );
+    // Sprite mode never runs scene jobs, so their state does not matter; a
+    // turn planned for sprites has no scene jobs and is replanned in scene mode.
+    const spriteMode = spriteModeCached(userId);
+    const hasIncompleteJobs = spriteMode
+      ? false
+      : existing.jobs.some(
+        (job) => job.status === "failed" || job.status === "cancelled" || job.status === "queued" || job.status === "generating"
+      ) || (existing.plan.spriteStaging !== undefined && existing.jobs.length === 0);
     if (!hasIncompleteJobs) {
       dbg(spindle, userId, `turn reused from storage chat=${chatId} message=${message.id} fingerprint=${fingerprint}`);
       const key = runtimeKey(userId, chatId);
       activeTurnKeys.set(key, existing.plan.key);
       await persistActiveTurn(spindle, existing, path, userId);
-      spindle.sendToFrontend({ type: "vn_turn", turn: await turnViewWithAudio(spindle, existing) }, userId);
+      spindle.sendToFrontend({ type: "vn_turn", turn: await buildTurnView(spindle, existing, userId) }, userId);
       return;
     }
   }
@@ -838,7 +1046,11 @@ async function processAssistantMessage(
     // Persist stable ids, explicit aliases and subject categories learned this turn.
     await saveCharacterRegistry(spindle, chatId, result.characterRegistry, userId);
         let jobs: StoredTurnRecord["jobs"] = [];
-    if (config.useNativeCardImages) {
+    // Sprite mode: the plan still feeds staging, but no scene image runs.
+    const spriteMode = config.presentationMode === "sprites";
+    if (spriteMode) {
+      dbg(spindle, userId, `sprite mode: no scene-image jobs for chat=${chatId} message=${message.id}`);
+    } else if (config.useNativeCardImages) {
       try {
         jobs = await resolveNativeCardJobs({
           spindle,
@@ -885,6 +1097,22 @@ async function processAssistantMessage(
       } catch {}
     }
 
+    let plan = result.plan;
+    if (spriteMode) {
+      if (operation.controller.signal.aborted) return;
+      const previous = await loadTurnRecord(spindle, chatState.activeTurnPath, userId).catch(() => null);
+      const staging = await planSpriteStaging(spindle, {
+        plan,
+        config,
+        previous,
+        personaName: userSpeaker === "You" ? "" : userSpeaker,
+        characterAppearance,
+        signal: operation.controller.signal
+      }, userId);
+      plan = { ...plan, spriteStaging: staging };
+      dbg(spindle, userId, `sprite staging source=${staging.source} cast=[${staging.cast.map((member) => member.name).join(", ")}] plates=${staging.plates.length} paragraphs=${staging.paragraphs.length}`);
+    }
+
     const settingsSnapshot: Record<string, unknown> = {
       promptPrefix: config.promptPrefix,
       promptSuffix: config.promptSuffix,
@@ -899,7 +1127,7 @@ async function processAssistantMessage(
       speaker: message.name || "Narrator",
       userSpeaker,
       status: "ready",
-      plan: result.plan,
+      plan,
       jobs,
       updatedAt: nowTime,
       resolvedSourceText: resolved,
@@ -923,8 +1151,8 @@ async function processAssistantMessage(
     activeTurnKeys.set(key, record.plan.key);
     await persistActiveTurn(spindle, record, path, userId);
     if (operation.controller.signal.aborted) return;
-    spindle.sendToFrontend({ type: "vn_turn", turn: await turnViewWithAudio(spindle, record) }, userId);
-    if (!config.useNativeCardImages && config.generateImages) {
+    spindle.sendToFrontend({ type: "vn_turn", turn: await buildTurnView(spindle, record, userId, config) }, userId);
+    if (!spriteMode && !config.useNativeCardImages && config.generateImages) {
       void startAssets(spindle, record, path, userId).catch((error) => {
         if (!isAbortError(error)) {
           spindle.log.error(`Visual novel asset pipeline failed: ${errorText(error)}`);
@@ -1066,6 +1294,19 @@ async function retryTurn(
   rememberDebugFlag(userId, config);
   const characterAppearance = await loadCharacterAppearance(spindle, userId, chatId);
 
+  // Sprite mode: a usable stored turn keeps its plan; Retry re-queues the
+  // failed sprites and plates it uses instead of replanning.
+  if (config.presentationMode === "sprites" && existing && existing.status !== "failed") {
+    activeTurnKeys.set(key, existing.plan.key);
+    await persistActiveTurn(spindle, existing, path, userId);
+    const staging = await stagingForRecord(spindle, existing, config, userId);
+    const requeued = await spriteService(spindle).retryFailed(userId, staging, config);
+    dbg(spindle, userId, `sprite retry re-queued ${requeued} image(s) chat=${chatId} message=${message.id}`);
+    const current = await loadTurnRecord(spindle, path, userId) ?? existing;
+    spindle.sendToFrontend({ type: "vn_turn", turn: await buildTurnView(spindle, current, userId, config) }, userId);
+    return;
+  }
+
   if (!existing || existing.status === "failed" || existing.jobs.length === 0
     || existing.plan.visualCues.some((cue) => cue.resolvedIdentity !== undefined && !cue.resolvedIdentity.trim())) {
     await processAssistantMessage(spindle, chatId, message, message.content, userId, { retry: true });
@@ -1140,7 +1381,7 @@ async function retryTurn(
   activeTurnKeys.set(key, updatedRecord.plan.key);
   await saveTurnRecord(spindle, path, updatedRecord, userId);
   await persistActiveTurn(spindle, updatedRecord, path, userId);
-  spindle.sendToFrontend({ type: "vn_turn", turn: await turnViewWithAudio(spindle, updatedRecord) }, userId);
+  spindle.sendToFrontend({ type: "vn_turn", turn: await buildTurnView(spindle, updatedRecord, userId, config) }, userId);
 
   if (!config.useNativeCardImages && config.generateImages) {
     void startAssets(spindle, updatedRecord, path, userId, { bypassJobIds }).catch((error) => {
@@ -1203,6 +1444,14 @@ async function handleFrontendMessage(spindle: SpindleAPI, request: FrontendReque
         void scanAudioCatalog(spindle, config.audioDirectory);
       }
       spindle.sendToFrontend({ type: "vn_config", config }, userId);
+      // Switching to sprite mode restages the open chat's current turn at once.
+      if (request.patch.presentationMode === "sprites" && typeof request.chatId === "string" && request.chatId && views.isOpen(userId, request.chatId)) {
+        const chatState = await loadChatState(spindle, request.chatId, userId);
+        const record = await loadTurnRecord(spindle, chatState.activeTurnPath, userId).catch(() => null);
+        if (record && record.plan.key.chatId === request.chatId) {
+          spindle.sendToFrontend({ type: "vn_turn", turn: await buildTurnView(spindle, record, userId, config) }, userId);
+        }
+      }
       return;
     }
     case "vn_scan_audio": {
@@ -1290,6 +1539,26 @@ async function handleFrontendMessage(spindle: SpindleAPI, request: FrontendReque
       // stage leaves its planning phase instead of waiting forever.
       if (typeof request.chatId !== "string" || !request.chatId) return;
       await sendState(spindle, request.chatId, userId, { viewOpen: true });
+      return;
+    }
+    case "vn_sprite_cut_result": {
+      // Chunked cut-out PNG from the browser. Routed by request id only; the
+      // base64 body is never logged.
+      if (typeof request.requestId !== "string" || request.requestId.length > 100) return;
+      spriteService(spindle).handleCutResult(userId, request);
+      return;
+    }
+    case "vn_get_sprite_library":
+      await spriteService(spindle).sendLibrary(userId);
+      return;
+    case "vn_sprite_action": {
+      const config = await loadConfig(spindle, userId);
+      rememberDebugFlag(userId, config);
+      dbg(spindle, userId, `sprite action ${request.action}${request.setKey ? ` set=${request.setKey}` : ""}${request.expression ? ` expression=${request.expression}` : ""}${request.plateKey ? ` plate=${request.plateKey}` : ""}`);
+      await spriteService(spindle).action(userId, request, {
+        config,
+        castForChat: (chatId) => spriteCastForChat(spindle, chatId, userId)
+      });
       return;
     }
     case "vn_reference_image": {
