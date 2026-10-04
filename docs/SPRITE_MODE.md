@@ -30,6 +30,31 @@ own expression and there is no picture cap.
 | `spriteCutout` | `"best"` (model) \| `"basic"` (no download) | `"best"` | at once (everyday) |
 | `spriteModelUrl` | https URL | ISNet-anime on Hugging Face | Advanced (Apply) |
 | `keyIllustrations` | `"off"` \| `"few"` (≤ 1 per reply) | `"off"` | at once (everyday, sprite mode only) |
+| `spriteImageSize` | `"standard"` \| `"upscaled"` | `"standard"` | at once (everyday, sprite mode only) |
+
+### Image size (`spriteImageSize`)
+
+Applies to providers that take a width and height (ComfyUI, SwarmUI):
+
+| Setting | Sprites | Plates | Key moments |
+|---|---|---|---|
+| Standard (default) | 624×912 | 912×624 | 912×624 |
+| Upscaled | 832×1216 | 1216×832 | 1216×832 |
+
+Standard is fast and fits small GPUs: on an RTX 5060 8 GB (≈ 2.7 GB free
+VRAM) a 624×912 sprite takes ≈ 11 s; at 832×1216 the model spills out of
+VRAM and a sprite takes 57–180 s. A sprite draws ≈ 900 px tall on a 1080p
+stage, so 624×912 looks fine. Upscaled is sharper but slower.
+
+NovelAI ignores the setting: it always gets its largest size that costs no
+Anlas on Opus (≤ 1024×1024 = 1,048,576 pixels), 832×1216 for sprites and
+1216×832 for plates and key moments. Providers that take no size get none.
+`spriteImageSizeFor` / `sizeParameters` in `sprites/prompts.ts` hold the rule.
+
+The size is not part of the style key, so changing it does not start new
+sets: images already made stay, and only new or regenerated images use the
+new size. A set can mix both sizes; both have the same aspect, and the stage
+sizes a sprite from its normalized bbox, never from its pixel size.
 
 Scene mode is unchanged. In sprite mode no scene-image jobs run, except one
 per reply for a key moment when `keyIllustrations` is `"few"` (see "Key
@@ -92,13 +117,13 @@ scene mode), through the existing per-provider scheduler and concurrency.
   viewer, simple background, white background, no shadow` + style suffix.
   Negative: style negative + `scenery, background, shadow, drop shadow,
   gradient background, multiple people, text`. Portrait size where the
-  provider takes a size (NovelAI 832×1216). One fixed seed per set where the
+  provider takes a size (`spriteImageSize`; NovelAI always 832×1216). One fixed seed per set where the
   provider takes a seed, and the set's ready `idle` sprite as reference image
   where reference anchoring is on and supported, for consistency.
 - Plate: style prefix + location, time of day, weather, description +
   `scenery, no humans, detailed background, wide shot` + style suffix.
   Negative: style negative + `1girl, 1boy, people, person, character,
-  text`. Landscape size (NovelAI 1216×832).
+  text`. Landscape size (`spriteImageSize`; NovelAI always 1216×832).
 
 ## Staging (backend)
 
@@ -185,7 +210,8 @@ layers, crossfaded) → ambient overlay (behind sprites) → `[data-vn-sprites]`
 
 ## Settings (frontend)
 
-Presentation mode control; cut-out quality; model status (absent /
+Presentation mode control; image size (Standard / Upscaled, sprite mode
+only); cut-out quality; model status (absent /
 downloading / ready / unsupported) with Download and Remove; a sprite library
 gallery (sets with their expressions on a checkerboard, plates) with Prepare
 for this chat, Regenerate, Re-cut, and Delete; the model URL under Advanced.
@@ -312,8 +338,10 @@ Library and generation:
 - `sprites/library.json` per user; newest 64 sets / 128 plates by last use;
   evicted entries delete their images (best effort).
 - One fixed seed per set (`spriteSeedFor`); regeneration changes it.
-  NovelAI: character caption on V4+, `resolution` 832×1216 (plates 1216×832);
-  ComfyUI / SwarmUI: `width`, `height`, `seed`.
+  NovelAI: character caption on V4+, `resolution` 832×1216 (plates and key
+  moments 1216×832) whatever `spriteImageSize` says;
+  ComfyUI / SwarmUI: `width`, `height` from `spriteImageSize` (standard
+  624×912 / 912×624, upscaled 832×1216 / 1216×832), `seed`.
 - With reference anchoring, `idle` is generated first and the other
   expressions use it as the reference; providers without anchoring skip it.
 - Cut bridge: ≤ 2 cuts in flight per user, chunks in any order, PNG signature
@@ -332,6 +360,15 @@ Cut-out runtime:
   basic ≈ 0.1 s (IoU 0.954). The kernel alone ≈ 50 ms.
 - Fallbacks: download failure → basic (retry after 60 s); no WebAssembly or
   session failure → "unsupported", basic until the user prepares again.
+- Image size: the kernel's pixel parameters (edge band 3 px, holes > 30 px,
+  4-px border strip; `bgMinPixels` 64 never binds, the 2% border share does
+  at both sizes) were tuned on 832×1216 and are kept at 624×912. Check on 30
+  real 624×912 sprites (fp32, WASM): the cut at 624×912 against the same
+  image upscaled to 832×1216, cut, and scaled back: mean IoU 0.998 (min
+  0.991), basic 0.999 (min 0.996), bbox within 0.002. Scaling the hole area
+  to the image (17 px) or the band to 2 px changed nothing measurable (≤ 105
+  px per image, IoU ±0.0003). `bun run test:sprite-cutout` repeats the check
+  on the folder in `CUE_SPRITE_STANDARD`.
 
 Queue order: within a priority, work starts in the latest turn's reading
 order (the first paragraph that needs it; a plate before a sprite needed at

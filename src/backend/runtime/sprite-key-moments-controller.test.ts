@@ -156,7 +156,8 @@ describe("controller: key illustrations in sprite mode", () => {
     expect(scene).toHaveLength(1);
     expect(scene[0]!.prompt).toContain("incoming kiss");
     expect(scene[0]!.prompt).toContain("silver hair");
-    expect(scene[0]!.parameters).toMatchObject({ width: 1216, height: 832 });
+    // Default spriteImageSize "standard": landscape 912x624.
+    expect(scene[0]!.parameters).toMatchObject({ width: 912, height: 624 });
     // A fresh view of the turn carries the finished picture in both channels.
     const view = await f.stateTurn("km-1", "k1");
     expect(illustrations(view)[0]).toMatchObject({ paragraphIndex: 1, status: "ready", url: generated.imageUrl! });

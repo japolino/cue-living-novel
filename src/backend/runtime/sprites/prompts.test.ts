@@ -1,6 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_CONFIG, type VisualNovelConfig } from "../../../config.js";
-import { compilePlateRequest, compileSpriteRequest, PLATE_SIZE, SPRITE_SIZE } from "./prompts.js";
+import {
+  compilePlateRequest,
+  compileSpriteRequest,
+  NOVELAI_PLATE_SIZE,
+  NOVELAI_SPRITE_SIZE,
+  PLATE_SIZE,
+  SPRITE_IMAGE_SIZE_PRESETS,
+  SPRITE_SIZE,
+  spriteImageSizeFor,
+} from "./prompts.js";
 import { spriteSeedFor, spriteStyleKey } from "./style.js";
 
 const mira = { name: "Mira", identity: "1girl, silver hair, green eyes, school uniform", attire: "red kimono", subjectCategory: "female" as const };
@@ -64,7 +73,8 @@ describe("sprite prompts: ComfyUI syntax", () => {
     expect(request.negativePrompt).toContain("drop shadow");
     expect(request.negativePrompt).toContain("multiple people");
     expect(request.negativePrompt).toContain("watermark");
-    expect(request.parameters).toEqual({ width: SPRITE_SIZE.width, height: SPRITE_SIZE.height, seed: 42 });
+    // Default "standard" size: 624x912.
+    expect(request.parameters).toEqual({ width: 624, height: 912, seed: 42 });
   });
 
   test("a custom prefix and suffix are kept (they carry the user's style)", () => {
@@ -95,7 +105,76 @@ describe("sprite prompts: ComfyUI syntax", () => {
     expect(request.prompt).toContain("scenery");
     expect(request.negativePrompt).toContain("1girl");
     expect(request.negativePrompt).toContain("person");
-    expect(request.parameters).toEqual({ width: PLATE_SIZE.width, height: PLATE_SIZE.height, seed: 9 });
+    expect(request.parameters).toEqual({ width: 912, height: 624, seed: 9 });
+  });
+});
+
+describe("sprite image size (spriteImageSize)", () => {
+  const plate = { location: "Harbor", timeOfDay: "sunset", weather: null, description: "Harbor" };
+
+  test("presets: standard 624x912 / 912x624, upscaled 832x1216 / 1216x832", () => {
+    expect(SPRITE_IMAGE_SIZE_PRESETS.standard).toEqual({ sprite: { width: 624, height: 912 }, plate: { width: 912, height: 624 } });
+    expect(SPRITE_IMAGE_SIZE_PRESETS.upscaled).toEqual({ sprite: { width: 832, height: 1216 }, plate: { width: 1216, height: 832 } });
+    expect(SPRITE_SIZE).toEqual({ width: 832, height: 1216 });
+    expect(PLATE_SIZE).toEqual({ width: 1216, height: 832 });
+    // Same aspect, so a set may mix both sizes.
+    const { standard, upscaled } = SPRITE_IMAGE_SIZE_PRESETS;
+    expect(standard.sprite.width / standard.sprite.height).toBeCloseTo(upscaled.sprite.width / upscaled.sprite.height, 10);
+    // Multiples of 8 (latent size).
+    for (const size of [standard.sprite, standard.plate, upscaled.sprite, upscaled.plate]) {
+      expect(size.width % 8).toBe(0);
+      expect(size.height % 8).toBe(0);
+    }
+  });
+
+  test("ComfyUI and SwarmUI follow the setting; a missing setting is standard", () => {
+    for (const provider of ["comfyui", "swarmui"]) {
+      for (const [setting, sprite, landscape] of [
+        ["standard", [624, 912], [912, 624]],
+        ["upscaled", [832, 1216], [1216, 832]],
+      ] as const) {
+        const cfg = config({ spriteImageSize: setting });
+        expect(compileSpriteRequest({ config: cfg, provider, member: mira, expression: "idle", seed: 1 }).parameters)
+          .toEqual({ width: sprite[0], height: sprite[1], seed: 1 });
+        expect(compilePlateRequest({ config: cfg, provider, plate, seed: 2 }).parameters)
+          .toEqual({ width: landscape[0], height: landscape[1], seed: 2 });
+      }
+    }
+    expect(spriteImageSizeFor("comfyui", "sprite", undefined)).toEqual({ width: 624, height: 912 });
+    expect(spriteImageSizeFor("comfyui", "moment", undefined)).toEqual({ width: 912, height: 624 });
+    expect(spriteImageSizeFor("swarmui", "moment", "upscaled")).toEqual({ width: 1216, height: 832 });
+  });
+
+  test("NovelAI always uses its largest free size (832x1216 / 1216x832), whatever the setting", () => {
+    expect(NOVELAI_SPRITE_SIZE.width * NOVELAI_SPRITE_SIZE.height).toBeLessThanOrEqual(1024 * 1024);
+    expect(NOVELAI_PLATE_SIZE.width * NOVELAI_PLATE_SIZE.height).toBeLessThanOrEqual(1024 * 1024);
+    const requests = (["standard", "upscaled"] as const).map((spriteImageSize) => {
+      const cfg = config({ imageModel: "nai-diffusion-4-5-full", spriteImageSize });
+      return {
+        sprite: compileSpriteRequest({ config: cfg, provider: "novelai", member: mira, expression: "idle", seed: 4 }),
+        plate: compilePlateRequest({ config: cfg, provider: "novelai", plate, seed: 4 }),
+      };
+    });
+    for (const { sprite, plate: plateRequest } of requests) {
+      expect(sprite.parameters.resolution).toBe("832x1216");
+      expect(plateRequest.parameters.resolution).toBe("1216x832");
+      expect(sprite.parameters).not.toHaveProperty("width");
+      expect(sprite.parameters).not.toHaveProperty("height");
+    }
+    // The setting does not change the NovelAI request at all.
+    expect(requests[0]).toEqual(requests[1]!);
+  });
+
+  test("providers without a size stay unchanged", () => {
+    for (const spriteImageSize of ["standard", "upscaled"] as const) {
+      const cfg = config({ spriteImageSize });
+      expect(compileSpriteRequest({ config: cfg, provider: "openai", member: mira, expression: "idle", seed: 5 }).parameters).toEqual({});
+      expect(compilePlateRequest({ config: cfg, provider: null, plate, seed: 5 }).parameters).toEqual({});
+    }
+  });
+
+  test("the size is not part of the style key (existing sets stay)", () => {
+    expect(spriteStyleKey(config({ spriteImageSize: "upscaled" }))).toBe(spriteStyleKey(config({ spriteImageSize: "standard" })));
   });
 });
 

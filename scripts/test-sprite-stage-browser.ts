@@ -307,6 +307,60 @@ try {
     await page.close();
   }
 
+  // ---- Mixed image sizes in one set (spriteImageSize) ---------------------------
+  // A set made partly at "standard" (624x912) and partly at "upscaled"
+  // (832x1216) shows the same figure size: the stage sizes a sprite from its
+  // normalized bbox and aspect, never from its pixel size.
+  {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+    watch(page);
+    await open(page);
+    await page.evaluate(async () => {
+      const source = new Image();
+      source.src = "/sprites/mira_idle.webp";
+      await source.decode();
+      const scaled = (w: number, h: number) => {
+        const canvas = document.createElement("canvas");
+        canvas.width = w; canvas.height = h;
+        canvas.getContext("2d")!.drawImage(source, 0, 0, w, h);
+        return canvas.toDataURL("image/png");
+      };
+      const fx = (window as any).fx;
+      const base = fx.spriteImage("mira_idle", "idle");
+      const sets = {
+        mira: {
+          setKey: "set_mira", name: "Mira", attire: null, readyCount: 2, updatedAt: "2026-10-01T00:00:00Z",
+          expressions: {
+            idle: { ...base, url: scaled(624, 912), width: 624, height: 912 },
+            surprised: { ...base, expression: "surprised", url: scaled(832, 1216), width: 832, height: 1216 },
+          },
+        },
+      };
+      fx.load([{ actors: [{ characterKey: "mira", expression: "idle" }] }, { actors: [{ characterKey: "mira", expression: "surprised" }] }], { sets });
+    });
+    await waitImages(page);
+    await page.waitForTimeout(700);
+    const measure = () => page.evaluate(() => {
+      const theme = document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!;
+      const img = theme.querySelector<HTMLImageElement>("[data-vn-sprite-image][data-vn-sprite-layer='active'] img")!;
+      const layer = img.closest<HTMLElement>("[data-vn-sprite-image]")!;
+      const bh = Number.parseFloat(getComputedStyle(layer).getPropertyValue("--vn-sprite-bh")) || 1;
+      // Layout size (offset*), not the rect: idle breathing scales the rect a little.
+      return { natural: [img.naturalWidth, img.naturalHeight], width: img.offsetWidth, height: img.offsetHeight, figure: layer.offsetHeight * bh };
+    });
+    const small = await measure();
+    await go(page, 1);
+    await waitImages(page);
+    await page.waitForTimeout(700);
+    const large = await measure();
+    assert.deepEqual(small.natural, [624, 912], "standard-size sprite loaded");
+    assert.deepEqual(large.natural, [832, 1216], "upscaled sprite loaded");
+    assert.ok(Math.abs(small.height - large.height) <= 1 && Math.abs(small.width - large.width) <= 1, `same drawn size for 624x912 and 832x1216 (${small.width}x${small.height} vs ${large.width}x${large.height})`);
+    assert.ok(Math.abs(small.figure - large.figure) <= 1, `same figure height (${small.figure.toFixed(1)} vs ${large.figure.toFixed(1)})`);
+    assertLayout(await geometry(page), "mixed-size set", 1);
+    await page.close();
+  }
+
   // ---- Key illustrations (keyIllustrations "few") ------------------------------
   {
     const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });

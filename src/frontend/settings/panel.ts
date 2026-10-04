@@ -60,11 +60,14 @@ import {
   NOVELAI_STEPS_MIN,
   PRESENTATION_MODE_OPTIONS,
   SPRITE_CUTOUT_OPTIONS,
+  SPRITE_IMAGE_SIZE_HELP,
+  SPRITE_IMAGE_SIZE_OPTIONS,
   KEY_ILLUSTRATION_OPTIONS,
   normalizeKeyIllustrations,
   describeCutoutModel,
   normalizePresentationMode,
   normalizeSpriteCutout,
+  normalizeSpriteImageSize,
   parseSpriteModelUrl,
   type ConnectionCatalogKind,
   type ConnectionCatalogState,
@@ -626,6 +629,11 @@ export class VisualNovelSettingsPanel {
                 </div>
               `, { id: "presentation", find: find("Scene pictures or character sprites", "presentation mode sprites sprite mode character expressions cut-out plates backgrounds scene pictures vn") })}
               <div data-sprites-only hidden>
+                ${group("Image size", `
+                  <fieldset aria-label="Image size">
+                    ${optionList("spriteImageSize", SPRITE_IMAGE_SIZE_OPTIONS)}
+                  </fieldset>
+                `, { id: "sprite-size", help: esc(SPRITE_IMAGE_SIZE_HELP), find: find("Image size", "sprites sprite size resolution standard upscaled vram gpu memory faster sharper comfyui swarmui novelai") })}
                 ${group("Sprite cut-out", `
                   <fieldset aria-label="Cut-out quality" ${find("Cut-out quality", "sprites cutout cut-out background removal transparent model download isnet quality basic best")}>
                     ${optionList("spriteCutout", SPRITE_CUTOUT_OPTIONS)}
@@ -1391,6 +1399,7 @@ export class VisualNovelSettingsPanel {
       case "textEffects": return { textEffects: normalizeTextEffects(target.value) };
       case "presentationMode": return { presentationMode: normalizePresentationMode(target.value) };
       case "spriteCutout": return { spriteCutout: normalizeSpriteCutout(target.value) };
+      case "spriteImageSize": return { spriteImageSize: normalizeSpriteImageSize(target.value) };
       case "keyIllustrations": return { keyIllustrations: normalizeKeyIllustrations(target.value) };
       case "textScaleStep": {
         if (target.value === "custom") { this.showCustom("textScale", true); return null; }
@@ -1855,6 +1864,7 @@ export class VisualNovelSettingsPanel {
   private syncSprites(config: VisualNovelConfig, source: ImageSource): void {
     this.setRadio("presentationMode", config.presentationMode);
     this.setRadio("spriteCutout", config.spriteCutout);
+    this.setRadio("spriteImageSize", config.spriteImageSize);
     this.setRadio("keyIllustrations", config.keyIllustrations);
     const sprites = config.presentationMode === "sprites";
     this.root.querySelector<HTMLElement>("[data-sprites-only]")!.hidden = !sprites;

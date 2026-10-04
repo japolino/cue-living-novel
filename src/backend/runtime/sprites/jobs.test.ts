@@ -120,8 +120,9 @@ describe("sprite jobs: ensure, priorities, dedupe", () => {
     await f.service.settle("u1");
     const set = (await f.library()).sets[spriteSetKeyFor(MIRA, f.styleKey)]!;
     for (const call of f.calls) {
-      expect(call.parameters.width).toBe(832);
-      expect(call.parameters.height).toBe(1216);
+      // Default spriteImageSize "standard" (the mock provider is ComfyUI).
+      expect(call.parameters.width).toBe(624);
+      expect(call.parameters.height).toBe(912);
       expect(call.parameters.seed).toBe(set.seed);
       expect((call as Record<string, unknown>).owner_chat_id).toBeUndefined();
       expect(call.userId).toBe("u1");
@@ -211,7 +212,9 @@ describe("sprite jobs: reference anchoring", () => {
     expect(f.started()[0]).toBe(label(setKey, "idle"));
     expect(f.calls[0]!.includeDataUrl).toBe(true);
     expect(f.calls[0]!.parameters.resolvedReferenceImages).toBeUndefined();
+    // NovelAI ignores spriteImageSize (default "standard"): its largest free size.
     expect(f.calls[0]!.parameters.resolution).toBe("832x1216");
+    expect(f.calls[0]!.parameters.width).toBeUndefined();
     for (const call of f.calls.slice(1)) {
       expect(call.includeDataUrl).toBe(false);
       const refs = call.parameters.resolvedReferenceImages as Array<{ data: string }>;
@@ -380,6 +383,24 @@ describe("sprite jobs: library actions", () => {
     expect(f.calls.at(-1)!.parameters.seed).not.toBe((await f.library()).sets[setKey]!.seed);
     expect((await f.library()).sets[setKey]!.images.smile!.status).toBe("cutting");
     expect(f.of("vn_sprite_library").length).toBeGreaterThan(0);
+  });
+
+  test("changing spriteImageSize keeps the set: nothing regenerates; new renders use the new size", async () => {
+    const f = setup();
+    const setKey = await readySet(f);
+    expect(f.calls.every((call) => call.parameters.width === 624 && call.parameters.height === 912)).toBe(true);
+    const calls = f.calls.length;
+    f.setConfig({ spriteImageSize: "upscaled" });
+    const upscaled = spriteConfig({ spriteImageSize: "upscaled" });
+    expect(spriteStyleKey(upscaled)).toBe(f.styleKey);
+    await f.service.prepareCast("u1", [MIRA], upscaled);
+    await f.service.settle("u1");
+    expect(f.calls.length).toBe(calls);
+    expect(spriteSetKeyFor(MIRA, spriteStyleKey(upscaled))).toBe(setKey);
+    await f.service.action("u1", { type: "vn_sprite_action", action: "regenerate", setKey, expression: "smile" }, { config: upscaled });
+    await f.service.settle("u1");
+    expect(f.calls.length).toBe(calls + 1);
+    expect(f.calls.at(-1)!.parameters).toMatchObject({ width: 832, height: 1216 });
   });
 
   test("recut re-sends the raw image; without one it rejects cleanly after replying", async () => {

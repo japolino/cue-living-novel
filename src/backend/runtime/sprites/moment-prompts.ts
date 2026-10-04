@@ -42,7 +42,10 @@ import {
   type SpritePromptMember,
 } from "./prompts.js";
 
-/** Key moments are landscape, like plates (NovelAI 1216×832). */
+/**
+ * Key moments are landscape, like plates: 912×624 ("standard") or 1216×832
+ * ("upscaled") on ComfyUI / SwarmUI, always 1216×832 on NovelAI.
+ */
 export const KEY_MOMENT_SIZE = PLATE_SIZE;
 
 /** Extra negative tags for every key moment: a real scene, one picture. */
@@ -289,7 +292,7 @@ function novelAiActions(scene: KeyMomentScene, subjects: Subject[]): string[] {
  * character caption per character (identity + outfit + face + action tag),
  * as scene prompts do for one character. ComfyUI and others: count tags,
  * interaction, then both characters' tag blocks, framing, place, light.
- * Landscape size; no fixed seed (Retry gives a new picture).
+ * Landscape size (plate size, see spriteImageSizeFor); no fixed seed (Retry gives a new picture).
  */
 export function compileKeyMomentRequest(input: {
   config: VisualNovelConfig;
@@ -315,7 +318,7 @@ export function compileKeyMomentRequest(input: {
   const negativeExtra = subjects.length === 0
     ? PLATE_NEGATIVE_TAGS
     : [KEY_MOMENT_NEGATIVE_TAGS, pair ? KEY_MOMENT_PAIR_NEGATIVE_TAGS : ""].filter(Boolean).join(", ");
-  const extra = sizeParameters(provider, KEY_MOMENT_SIZE);
+  const extra = sizeParameters(provider, "moment", config);
   if (provider === "novelai") {
     const model = config.imageModel || "nai-diffusion-4-5-full";
     const caps = novelAiCapabilities(model);

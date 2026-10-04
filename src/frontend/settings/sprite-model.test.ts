@@ -1,13 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
-import { DEFAULT_CONFIG, KEY_ILLUSTRATION_MODES, PRESENTATION_MODES, SPRITE_CUTOUT_QUALITIES } from "../../config.js";
+import { DEFAULT_CONFIG, KEY_ILLUSTRATION_MODES, PRESENTATION_MODES, SPRITE_CUTOUT_QUALITIES, SPRITE_IMAGE_SIZES } from "../../config.js";
 import { DEFAULT_SPRITE_MODEL_URL, SPRITE_HOT_SET, type PlateView, type SpriteSetView } from "../../shared/sprites.js";
 import {
   KEY_ILLUSTRATION_OPTIONS,
   normalizeKeyIllustrations,
   PRESENTATION_MODE_OPTIONS,
   SPRITE_CUTOUT_OPTIONS,
+  SPRITE_IMAGE_SIZE_HELP,
+  SPRITE_IMAGE_SIZE_OPTIONS,
   SPRITE_STATUS_LABELS,
   countReady,
   describeCutoutModel,
@@ -18,6 +20,7 @@ import {
   mergeSpriteImage,
   normalizePresentationMode,
   normalizeSpriteCutout,
+  normalizeSpriteImageSize,
   orderedExpressions,
   parseSpriteModelUrl,
   plateDetails,
@@ -52,6 +55,22 @@ describe("sprite mode options", () => {
     expect(SPRITE_CUTOUT_OPTIONS[1]!.label).toBe("Basic (no download)");
     expect(normalizeSpriteCutout("basic")).toBe("basic");
     expect(normalizeSpriteCutout("")).toBe("best");
+  });
+});
+
+describe("image size option", () => {
+  test("Standard first (the default), then Upscaled; short help; NovelAI named in the hint", () => {
+    expect(SPRITE_IMAGE_SIZE_OPTIONS.map((option) => option.value)).toEqual([...SPRITE_IMAGE_SIZES]);
+    expect(SPRITE_IMAGE_SIZE_OPTIONS.map((option) => option.label)).toEqual(["Standard", "Upscaled"]);
+    expect(SPRITE_IMAGE_SIZE_OPTIONS[0]!.value).toBe(DEFAULT_CONFIG.spriteImageSize);
+    for (const option of SPRITE_IMAGE_SIZE_OPTIONS) expect(option.help.split(". ").length).toBeLessThanOrEqual(2);
+    expect(SPRITE_IMAGE_SIZE_OPTIONS[0]!.help).toContain("624×912");
+    expect(SPRITE_IMAGE_SIZE_OPTIONS[1]!.help).toContain("832×1216");
+    expect(SPRITE_IMAGE_SIZE_OPTIONS[1]!.help).toContain("VRAM");
+    expect(SPRITE_IMAGE_SIZE_HELP).toContain("NovelAI always uses its largest free size");
+    expect(normalizeSpriteImageSize("upscaled")).toBe("upscaled");
+    expect(normalizeSpriteImageSize("huge")).toBe("standard");
+    expect(normalizeSpriteImageSize("")).toBe("standard");
   });
 });
 

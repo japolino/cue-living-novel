@@ -116,6 +116,13 @@ describe("sprite layout and choice helpers", () => {
     expect(spriteGeometry({ bbox: [Number.NaN, 0, 5, -1] as never }).bh).toBeGreaterThan(0);
   });
 
+  test("geometry does not depend on the pixel size: 624x912 and 832x1216 cut-outs give the same figure", () => {
+    const bbox: [number, number, number, number] = [0.1, 0.05, 0.6, 0.95];
+    const standard = spriteGeometryVars(spriteGeometry({ bbox, width: 624, height: 912 }));
+    const upscaled = spriteGeometryVars(spriteGeometry({ bbox, width: 832, height: 1216 }));
+    expect(standard).toEqual(upscaled);
+  });
+
   test("facing mirrors only toward the side opposite the natural orientation", () => {
     expect(spriteMirrored("viewer")).toBe(false);
     expect(spriteMirrored("left")).toBe(false);

@@ -73,6 +73,16 @@ describe("settings panel markup", () => {
     expect(source).toContain('spriteModelUrl: parseSpriteModelUrl(');
   });
 
+  test("sprite image size: one everyday control in the sprite-only block, before the cut-out", () => {
+    expect(source.match(/optionList\("spriteImageSize"/g)).toHaveLength(1);
+    expect(source).toContain('case "spriteImageSize": return { spriteImageSize: normalizeSpriteImageSize(target.value) };');
+    expect(source).toContain('this.setRadio("spriteImageSize", config.spriteImageSize);');
+    expect(advancedKeys).not.toContain("spriteImageSize");
+    const spritesOnly = source.slice(source.indexOf("<div data-sprites-only hidden>"), source.indexOf('${group("Sprite library"'));
+    expect(spritesOnly).toContain('optionList("spriteImageSize", SPRITE_IMAGE_SIZE_OPTIONS)');
+    expect(spritesOnly.indexOf("spriteImageSize")).toBeLessThan(spritesOnly.indexOf('optionList("spriteCutout"'));
+  });
+
   test("the sprite controls sit with the generated-picture settings in Pictures", () => {
     const pictures = source.slice(source.indexOf('${pane("pictures"'), source.indexOf('${pane("sound"'));
     expect(pictures).toContain("presentationMode");

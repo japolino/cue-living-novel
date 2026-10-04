@@ -41,6 +41,15 @@ export type VisualNovelSpriteCutout = (typeof SPRITE_CUTOUT_QUALITIES)[number];
  */
 export const KEY_ILLUSTRATION_MODES = ["off", "few"] as const;
 export type VisualNovelKeyIllustrations = (typeof KEY_ILLUSTRATION_MODES)[number];
+/**
+ * Sprite mode only: pixel size of generated sprites, plates and key moments on
+ * providers that take a width and height (ComfyUI, SwarmUI). "standard"
+ * (624×912 / 912×624) is fast and fits small GPUs; "upscaled" (832×1216 /
+ * 1216×832) is sharper but slower and needs more VRAM. NovelAI always uses
+ * its largest free size (832×1216 / 1216×832), whatever this says.
+ */
+export const SPRITE_IMAGE_SIZES = ["standard", "upscaled"] as const;
+export type VisualNovelSpriteImageSize = (typeof SPRITE_IMAGE_SIZES)[number];
 /** Key illustrations per reply for each mode. */
 export const KEY_ILLUSTRATION_CAP: Readonly<Record<VisualNovelKeyIllustrations, number>> = { off: 0, few: 1 };
 export type VisualNovelTextEffectMode = (typeof TEXT_EFFECT_MODES)[number];
@@ -141,6 +150,8 @@ export type VisualNovelConfig = {
   spriteCutout: VisualNovelSpriteCutout;
   /** Sprite mode: full illustrations for a few key moments per reply. */
   keyIllustrations: VisualNovelKeyIllustrations;
+  /** Sprite mode: image size on ComfyUI / SwarmUI (NovelAI ignores it). */
+  spriteImageSize: VisualNovelSpriteImageSize;
   /** Where the sprite cut-out model is downloaded from (once, then cached in the browser). */
   spriteModelUrl: string;
   /** Dialogue text size multiplier, 1 = the theme's own size. */
@@ -198,6 +209,7 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   presentationMode: "scene",
   spriteCutout: "best",
   keyIllustrations: "off",
+  spriteImageSize: "standard",
   spriteModelUrl: DEFAULT_SPRITE_MODEL_URL,
   textScale: 1,
   audioDirectory: "",
@@ -298,6 +310,12 @@ function keyIllustrations(value: unknown): VisualNovelKeyIllustrations {
     : DEFAULT_CONFIG.keyIllustrations;
 }
 
+function spriteImageSize(value: unknown): VisualNovelSpriteImageSize {
+  return typeof value === "string" && (SPRITE_IMAGE_SIZES as readonly string[]).includes(value)
+    ? value as VisualNovelSpriteImageSize
+    : DEFAULT_CONFIG.spriteImageSize;
+}
+
 function spriteModelUrl(value: unknown): string {
   if (typeof value !== "string") return DEFAULT_CONFIG.spriteModelUrl;
   const trimmed = value.trim();
@@ -386,6 +404,7 @@ export function normalizeConfig(value: unknown): VisualNovelConfig {
     presentationMode: presentationMode(input.presentationMode),
     spriteCutout: spriteCutout(input.spriteCutout),
     keyIllustrations: keyIllustrations(input.keyIllustrations),
+    spriteImageSize: spriteImageSize(input.spriteImageSize),
     spriteModelUrl: spriteModelUrl(input.spriteModelUrl),
     textScale: textScale(input.textScale),
     audioDirectory: stringValue(input.audioDirectory, DEFAULT_CONFIG.audioDirectory).trim(),

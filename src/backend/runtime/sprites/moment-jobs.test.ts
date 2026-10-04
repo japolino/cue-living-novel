@@ -62,7 +62,8 @@ describe("key moments on the sprite scheduler", () => {
     expect(updates).toEqual([["job-a", "queued"], ["job-a", "generating"], ["job-a", "generated"]]);
     expect(f.calls).toHaveLength(1);
     expect(f.calls[0]!.prompt).toContain("a girl with silver hair");
-    expect(f.calls[0]!.parameters).toMatchObject({ width: 1216, height: 832 });
+    // Default spriteImageSize "standard": landscape 912x624.
+    expect(f.calls[0]!.parameters).toMatchObject({ width: 912, height: 624 });
     expect((f.calls[0] as Record<string, unknown>).owner_chat_id).toBe("chat-1");
   });
 

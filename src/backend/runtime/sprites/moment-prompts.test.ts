@@ -43,7 +43,8 @@ describe("key-moment prompts: ComfyUI and other tag providers", () => {
     expect(list).not.toContain("half-closed eyes");
     expect(prompt.indexOf("kiss")).toBeLessThan(prompt.indexOf("a girl with"));
     expect(prompt.indexOf("a girl with")).toBeLessThan(prompt.indexOf("a boy with"));
-    expect(request.parameters).toEqual({ width: KEY_MOMENT_SIZE.width, height: KEY_MOMENT_SIZE.height });
+    // Default "standard" size: 912x624.
+    expect(request.parameters).toEqual({ width: 912, height: 624 });
     expect(tags(request.negativePrompt)).toEqual(["lowres", "bad anatomy", "simple background", "white background", "multiple views", "text", "solo"]);
   });
 
@@ -98,6 +99,29 @@ describe("key-moment prompts: ComfyUI and other tag providers", () => {
     expect(keyMomentFaceTags("embarrassed")).toBe("embarrassed, raised eyebrows, furrowed brow");
     expect(keyMomentFaceTags("embarrassed", true)).toBe("embarrassed, raised eyebrows, furrowed brow");
     expect(keyMomentFaceTags("think")).not.toMatch(/hand|chin|looking/);
+  });
+});
+
+describe("key-moment prompts: image size (spriteImageSize)", () => {
+  test("ComfyUI / SwarmUI: standard 912x624, upscaled 1216x832", () => {
+    for (const provider of ["comfyui", "swarmui"]) {
+      expect(compileKeyMomentRequest({ config: { ...config, spriteImageSize: "standard" }, provider, scene: scene("hug", [mira, kai]) }).parameters)
+        .toEqual({ width: 912, height: 624 });
+      expect(compileKeyMomentRequest({ config: { ...config, spriteImageSize: "upscaled" }, provider, scene: scene("hug", [mira, kai]) }).parameters)
+        .toEqual({ width: KEY_MOMENT_SIZE.width, height: KEY_MOMENT_SIZE.height });
+    }
+    expect(KEY_MOMENT_SIZE).toEqual({ width: 1216, height: 832 });
+  });
+
+  test("NovelAI ignores the setting (always 1216x832); sizeless providers get no size", () => {
+    const nai = { ...config, imageModel: "nai-diffusion-4-5-full" };
+    const standard = compileKeyMomentRequest({ config: { ...nai, spriteImageSize: "standard" }, provider: "novelai", scene: scene("kiss", [mira, kai]) });
+    const upscaled = compileKeyMomentRequest({ config: { ...nai, spriteImageSize: "upscaled" }, provider: "novelai", scene: scene("kiss", [mira, kai]) });
+    expect(standard.parameters.resolution).toBe("1216x832");
+    expect(standard).toEqual(upscaled);
+    for (const spriteImageSize of ["standard", "upscaled"] as const) {
+      expect(compileKeyMomentRequest({ config: { ...config, spriteImageSize }, provider: "openai", scene: scene("kiss", [mira, kai]) }).parameters).toEqual({});
+    }
   });
 });
 

@@ -23,12 +23,19 @@ import { mkdir, writeFile } from "node:fs/promises";
  *     against the reference. Requirements: int8 (same model as the
  *     reference) mean IoU >= 0.99 and min >= 0.98; fp32 mean IoU >= 0.97 and
  *     min >= 0.93;
+ *   - "standard" image size (624x912, CUE_SPRITE_STANDARD, default the
+ *     owner's reply-test raw_lr folder; skipped when missing): each sprite is
+ *     cut as it is and again upscaled to 832x1216 (the size the kernel
+ *     parameters were tuned on); the alphas must agree (IoU mean >= 0.99,
+ *     min >= 0.98) and the bbox must not move, for "basic" on every sprite and
+ *     with the model on 3 (all on WebGPU or with SPRITE_CUTOUT_FULL=1);
  *   - model cache: a second load reads the cache (no download), clear removes it;
  *   - cut service: ordered base64 chunks with meta, duplicate requestIds ignored.
  *
  * WASM is slow (~15-20 s per sprite single-threaded), so by default WASM runs
  * on 3 sprites per model and WebGPU on all; SPRITE_CUTOUT_FULL=1 runs all
- * sprites everywhere. Composites on a dark background: .cache/sprite-cutout/.
+ * sprites everywhere. SPRITE_CUTOUT_NO_GPU=1 skips WebGPU (keeps the GPU free
+ * for other work). Composites on a dark background: .cache/sprite-cutout/.
  * Run: bun run test:sprite-cutout
  */
 const BAKEOFF = (process.env.CUE_SPRITE_BAKEOFF ?? "C:/Users/eme4/cue-sprite-bakeoff").replace(/\\/g, "/");
@@ -36,6 +43,11 @@ const RAW = `${BAKEOFF}/fixtures/raw`;
 const REF = `${BAKEOFF}/fixtures/sprites`;
 const MODELS = `${BAKEOFF}/models`;
 const FULL = process.env.SPRITE_CUTOUT_FULL === "1";
+const NO_GPU = process.env.SPRITE_CUTOUT_NO_GPU === "1";
+const STANDARD = (process.env.CUE_SPRITE_STANDARD ?? "C:/Users/eme4/cue-living-novel/.cache/reply-test/raw_lr").replace(/\\/g, "/");
+const standardNames = existsSync(STANDARD)
+  ? readdirSync(STANDARD).filter((file) => file.endsWith(".png") && file !== "plate.png").map((file) => file.slice(0, -4)).sort()
+  : [];
 const OUT = ".cache/sprite-cutout";
 
 if (!existsSync(RAW)) {
@@ -68,6 +80,7 @@ const server = Bun.serve({
     if (path.startsWith("/models/")) return send(`${MODELS}/${path.slice(8)}`);
     if (path.startsWith("/raw/")) return send(`${RAW}/${path.slice(5)}`);
     if (path.startsWith("/ref/")) return send(`${REF}/${path.slice(5)}`);
+    if (path.startsWith("/std/")) return send(`${STANDARD}/${path.slice(5)}`);
     return new Response('<html><head><meta charset="utf-8"></head><body><script type="module" src="/fixture.js"></script></body></html>', { headers: { "Content-Type": "text/html" } });
   },
 });
@@ -147,8 +160,8 @@ try {
   assert.match(fallback.state.error, /404/);
 
   // ---- Models x backends --------------------------------------------------------
-  const gpu = await page.evaluate(async () => !!(await (navigator as any).gpu?.requestAdapter().catch(() => null)));
-  if (!gpu) console.log("\nSKIP WebGPU: headless Chromium offers no adapter here.");
+  const gpu = !NO_GPU && await page.evaluate(async () => !!(await (navigator as any).gpu?.requestAdapter().catch(() => null)));
+  if (!gpu) console.log(NO_GPU ? "\nSKIP WebGPU: SPRITE_CUTOUT_NO_GPU=1." : "\nSKIP WebGPU: headless Chromium offers no adapter here.");
   const backends: Array<"wasm" | "webgpu"> = gpu ? ["webgpu", "wasm"] : ["wasm"];
   for (const model of models) {
     const url = `${origin}/models/${model}`;
@@ -176,6 +189,46 @@ try {
         assert.ok(stats.meanIou >= 0.97 && stats.minIou >= 0.93, `${model}/${backend}: IoU vs reference mean >= 0.97, min >= 0.93 (${fmt(stats.meanIou)}, ${fmt(stats.minIou)})`);
       }
       summary[`${model}/${backend}`] = { ...stats, loadMs: load.ms, sessionMs: load.info.loadMs, sprites: rows.length };
+    }
+  }
+
+  // ---- Standard image size (624x912) ----------------------------------------------
+  // The kernel has pixel-based parameters (edge band 3 px, holes > 30 px, a
+  // 4-px border strip for the background colour). Cutting a 624x912 sprite
+  // must give the same result as cutting it at the 832x1216 the parameters
+  // were tuned on.
+  if (!standardNames.length) {
+    console.log(`\nSKIP standard-size check: no 624x912 sprites at ${STANDARD} (set CUE_SPRITE_STANDARD).`);
+  } else {
+    const model = models.at(-1);
+    const runs: Array<{ quality: "basic" | "best"; list: string[] }> = [{ quality: "basic", list: standardNames }];
+    if (model) runs.push({ quality: "best", list: gpu || FULL ? standardNames : standardNames.filter((name) => ["Mio_idle", "Ryoko_idle", "Viola_worried"].includes(name)).slice(0, 3) });
+    if (model) {
+      await page.evaluate(async ({ url, backend, base }) => {
+        const c = (window as any).cutout;
+        c.resetCutoutRuntime();
+        c.configureCutoutRuntime({ ortBaseUrl: base, backend });
+        await c.prepareCutoutModel(url);
+      }, { url: `${origin}/models/${model}`, backend: gpu ? "webgpu" : "wasm", base: `${origin}/ort/` });
+    }
+    for (const { quality, list } of runs) {
+      const rows: Array<{ name: string; iou: number; mad: number; size: number[]; upSize: number[]; quality: string; bbox: number[]; upBbox: number[] }> = [];
+      for (const name of list) {
+        rows.push({ name, ...await page.evaluate(({ name, quality, modelUrl }) => (window as any).cutout.scaleCompare(`/std/${name}.png`, { quality, modelUrl }), { name, quality, modelUrl: model ? `${origin}/models/${model}` : `${origin}/models/none.onnx` }) });
+      }
+      const ious = rows.map((row) => row.iou);
+      const stats = { meanIou: mean(ious), minIou: Math.min(...ious), sprites: rows.length };
+      console.log(`\nstandard size 624x912 vs 832x1216, ${quality}${quality === "best" ? ` (${model})` : ""}: mean IoU ${fmt(stats.meanIou)}, min ${fmt(stats.minIou)}`);
+      for (const row of rows) console.log(`  ${row.name.padEnd(26)} IoU ${fmt(row.iou)}  MAD ${fmt(row.mad)}  bbox ${row.bbox.map((v) => v.toFixed(3)).join(",")} vs ${row.upBbox.map((v) => v.toFixed(3)).join(",")}`);
+      for (const row of rows) {
+        assert.deepEqual(row.size, [624, 912], `${row.name}: a standard-size sprite`);
+        assert.deepEqual(row.upSize, [832, 1216]);
+        assert.equal(row.quality, quality, `${row.name}: ${quality} cut`);
+        assert.equal(row.upQuality, quality);
+        assert.ok(row.bbox.every((v, i) => Math.abs(v - row.upBbox[i]!) <= 0.01), `${row.name}: bbox does not depend on the size`);
+      }
+      assert.ok(stats.meanIou >= 0.99 && stats.minIou >= 0.98, `standard size (${quality}): IoU vs the 832x1216 cut mean >= 0.99, min >= 0.98 (${fmt(stats.meanIou)}, ${fmt(stats.minIou)})`);
+      summary[`standard-624x912/${quality}`] = stats;
     }
   }
 

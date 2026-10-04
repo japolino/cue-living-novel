@@ -8,6 +8,7 @@ import {
   TEXT_SCALE_MIN,
   normalizeConfig,
   SCENE_IMAGE_FITS,
+  SPRITE_IMAGE_SIZES,
   THEME_PRESET_IDS,
 } from "./config";
 
@@ -49,6 +50,19 @@ test("scene image fit preserves every supported mode and rejects unknown ones", 
   assert.equal(normalizeConfig({ sceneImageFit: "original" }).sceneImageFit, "cover");
 });
 
+test("sprite image size defaults to standard (also for old configs) and keeps upscaled", () => {
+  assert.equal(DEFAULT_CONFIG.spriteImageSize, "standard");
+  assert.deepEqual([...SPRITE_IMAGE_SIZES], ["standard", "upscaled"]);
+  // An old config saved before the field existed.
+  const old = { ...DEFAULT_CONFIG, presentationMode: "sprites" } as Record<string, unknown>;
+  delete old.spriteImageSize;
+  assert.equal(normalizeConfig(old).spriteImageSize, "standard");
+  assert.equal(normalizeConfig({ spriteImageSize: "upscaled" }).spriteImageSize, "upscaled");
+  assert.equal(normalizeConfig({ spriteImageSize: "standard" }).spriteImageSize, "standard");
+  for (const value of ["UPSCALED", "large", 832, null, {}]) {
+    assert.equal(normalizeConfig({ spriteImageSize: value }).spriteImageSize, "standard");
+  }
+});
 
 test("reference source defaults to captured and rejects unknown values", () => {
   assert.equal(DEFAULT_CONFIG.referenceSource, "captured");
