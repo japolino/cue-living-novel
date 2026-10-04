@@ -6,7 +6,7 @@ import { AudioEngine, VnStage, isAmbientEffect, isStageEffect } from "../stage/i
 import type { AmbientEffect, StageEffect } from "../store/index.js";
 import { VisualNovelSettingsPanel } from "../settings/panel.js";
 import { DEFAULT_SPRITE_MODEL_URL } from "../../shared/sprites.js";
-import { clearCutoutModel, getCutoutModelState, onCutoutModelState, prepareCutoutModel } from "../sprites/cutout/index.js";
+import { clearCutoutModel, getCachedCutoutModelBytes, getCutoutModelState, onCutoutModelState, prepareCutoutModel } from "../sprites/cutout/index.js";
 import type { VnChoice, VnTurnInput } from "../store/index.js";
 import { createVnHeaderLauncher } from "./manual-launcher.js";
 import { captureSimTrackerCards } from "./panel-capture.js";
@@ -724,12 +724,25 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     },
     onClearCutoutModel: () => {
       clearCutoutModel()
-        .then(() => settingsPanel?.setCutoutModelState(getCutoutModelState()))
+        .then(() => {
+          settingsPanel?.setCutoutModelCachedBytes(null);
+          settingsPanel?.setCutoutModelState(getCutoutModelState());
+        })
         .catch((error: unknown) => settingsPanel?.setCutoutModelState({ state: "error", error: error instanceof Error ? error.message : String(error) }));
     },
   }) : null;
   settingsPanel?.setCutoutModelState(getCutoutModelState());
   const unsubCutoutModel = settingsPanel ? onCutoutModelState((state) => settingsPanel.setCutoutModelState(state)) : () => {};
+  // A model cached by an earlier visit is not loaded in this page yet: show it as downloaded.
+  let cachedModelUrl = "";
+  function refreshCachedCutoutModel(url: string): void {
+    if (!settingsPanel || url === cachedModelUrl) return;
+    cachedModelUrl = url;
+    getCachedCutoutModelBytes(url)
+      .then((bytes) => { if (cachedModelUrl === url) settingsPanel.setCutoutModelCachedBytes(bytes); })
+      .catch(() => {});
+  }
+  refreshCachedCutoutModel(DEFAULT_SPRITE_MODEL_URL);
   // Speech settings render inside the panel's Voice section (own shadow root,
   // own save path). Profile/voice listing happens only on explicit button
   // presses inside it (metadata calls, no synthesis).
@@ -1011,6 +1024,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       speechDock.setEnabled(configRef.current.speech.enabled);
       speechSettings?.setConfig(configRef.current.speech);
       settingsPanel?.setConfig(configRef.current);
+      refreshCachedCutoutModel(configRef.current.spriteModelUrl);
       if (configRef.current?.autoEnter && !active) activate();
       if (bootPending) {
         // The boot request said nothing about the view. Now that the config is
@@ -1043,6 +1057,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       speechDock.setEnabled(configRef.current.speech.enabled);
       speechSettings?.setConfig(configRef.current.speech);
       settingsPanel?.setConfig(configRef.current);
+      refreshCachedCutoutModel(configRef.current.spriteModelUrl);
       settingsPanel?.setSaveStatus?.({ kind: "saved" });
       return;
     }

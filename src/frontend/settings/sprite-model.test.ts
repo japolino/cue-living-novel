@@ -64,6 +64,16 @@ describe("cut-out model status", () => {
     expect(basic.level).toBe("ready");
   });
 
+  test("a model cached by an earlier visit reads as downloaded, not absent", () => {
+    const cached = describeCutoutModel({ state: "absent" }, "best", DEFAULT_SPRITE_MODEL_URL, 176_069_933);
+    expect(cached.title).toBe("Model downloaded");
+    expect(cached.action).toBe("remove");
+    expect(cached.level).toBe("ready");
+    expect(cached.detail).toContain("MB");
+    // Other states ignore the cached size.
+    expect(describeCutoutModel({ state: "loading" }, "best", DEFAULT_SPRITE_MODEL_URL, 1).title).toBe("Loading the model…");
+  });
+
   test("downloading shows progress when the size is known", () => {
     const known = describeCutoutModel({ state: "downloading", receivedBytes: 44 * MB, totalBytes: 176 * MB }, "best");
     expect(known.progress).toBeCloseTo(0.25);

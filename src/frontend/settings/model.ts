@@ -694,13 +694,22 @@ export type CutoutModelSummary = {
 };
 
 /** Plain-words status of the cut-out model for the settings row. */
-export function describeCutoutModel(state: CutoutModelState, quality: VisualNovelSpriteCutout, modelUrl = ""): CutoutModelSummary {
+export function describeCutoutModel(state: CutoutModelState, quality: VisualNovelSpriteCutout, modelUrl = "", cachedBytes: number | null = null): CutoutModelSummary {
   let host = "";
   try { host = modelUrl ? new URL(modelUrl).hostname : ""; } catch { host = ""; }
   const from = host ? ` from ${host}` : "";
   const basicNote = quality === "basic" ? " Not used while cut-out quality is Basic." : "";
   switch (state.state) {
     case "absent":
+      if (cachedBytes && cachedBytes > 0) {
+        return {
+          level: "ready",
+          title: "Model downloaded",
+          detail: `${formatBytes(cachedBytes)} stored in this browser. It starts when the next sprite is cut.${basicNote}`,
+          action: "remove",
+          progress: null,
+        };
+      }
       return {
         level: quality === "basic" ? "ready" : "attention",
         title: "Model not downloaded",

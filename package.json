@@ -15,6 +15,7 @@
     "test:speech": "bun run ./scripts/test-speech-browser.ts",
     "test:speech:stage": "bun run ./scripts/test-speech-stage-browser.ts",
     "test:text-effects": "bun run ./scripts/test-text-effects-browser.ts",
+    "test:sprite-stage": "bun run ./scripts/test-sprite-stage-browser.ts",
     "test:sprite-cutout": "bun run ./scripts/test-sprite-cutout-browser.ts",
     "typecheck": "tsc --project tsconfig.json --noEmit",
     "typecheck:build": "tsc --project tsconfig.build.json --noEmit",

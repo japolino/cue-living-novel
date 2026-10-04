@@ -456,6 +456,8 @@ export class VisualNovelSettingsPanel {
   private spriteLibrary!: SpriteLibraryView;
   private spriteLibraryVisible = false;
   private cutoutModelState: CutoutModelState = { state: "absent" };
+  /** Bytes of a model cached in this browser but not loaded in this page yet. */
+  private cutoutCachedBytes: number | null = null;
   private cutoutConfirmTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly connectionStates: Record<ConnectionCatalogKind, ConnectionCatalogState> = {
     planner: { status: "idle", options: [] },
@@ -1891,7 +1893,7 @@ export class VisualNovelSettingsPanel {
 
   private renderCutoutModel(config: VisualNovelConfig = this.config): void {
     const row = this.root.querySelector<HTMLElement>('[data-readiness="cutout"]')!;
-    const summary = describeCutoutModel(this.cutoutModelState, config.spriteCutout, config.spriteModelUrl);
+    const summary = describeCutoutModel(this.cutoutModelState, config.spriteCutout, config.spriteModelUrl, this.cutoutCachedBytes);
     row.dataset.level = summary.level;
     row.dataset.state = this.cutoutModelState.state;
     row.querySelector("[data-readiness-title]")!.textContent = summary.title;
@@ -1914,6 +1916,15 @@ export class VisualNovelSettingsPanel {
   /** Cut-out model state from the browser cut-out module (`onCutoutModelState`). */
   setCutoutModelState(state: CutoutModelState): void {
     this.cutoutModelState = state;
+    this.renderCutoutModel();
+  }
+
+  /**
+   * Size of a model already cached in this browser (`getCachedCutoutModelBytes`),
+   * shown as "downloaded" while the page has not loaded it yet. null = not cached.
+   */
+  setCutoutModelCachedBytes(bytes: number | null): void {
+    this.cutoutCachedBytes = bytes && bytes > 0 ? bytes : null;
     this.renderCutoutModel();
   }
 
