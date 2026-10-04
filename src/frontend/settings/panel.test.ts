@@ -63,6 +63,25 @@ describe("settings panel markup", () => {
     expect(TEXT_EFFECT_CATALOGUE.length).toBeGreaterThan(0);
   });
 
+  test("sprite mode: presentation and cut-out quality save at once, the model URL waits for Apply", () => {
+    expect(source).toContain('optionList("presentationMode", PRESENTATION_MODE_OPTIONS)');
+    expect(source).toContain('case "presentationMode": return { presentationMode: normalizePresentationMode(target.value) };');
+    expect(source).toContain('case "spriteCutout": return { spriteCutout: normalizeSpriteCutout(target.value) };');
+    expect(advancedKeys).toContain("spriteModelUrl");
+    expect(advancedKeys).not.toContain("presentationMode");
+    expect(advancedKeys).not.toContain("spriteCutout");
+    expect(source).toContain('spriteModelUrl: parseSpriteModelUrl(');
+  });
+
+  test("the sprite controls sit with the generated-picture settings in Pictures", () => {
+    const pictures = source.slice(source.indexOf('${pane("pictures"'), source.indexOf('${pane("sound"'));
+    expect(pictures).toContain("presentationMode");
+    expect(pictures.indexOf("<div data-generated-only>")).toBeLessThan(pictures.indexOf("presentationMode"));
+    expect(pictures).toContain("<div data-sprites-only hidden>");
+    expect(pictures).toContain("data-sprite-library-mount");
+    expect(pictures).toContain("sceneOnly: true");
+  });
+
   test("there are no network assets in the panel styles", () => {
     expect(source).not.toMatch(/url\(\s*["']?https?:/i);
     expect(source).not.toMatch(/@import/i);

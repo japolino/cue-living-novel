@@ -7,6 +7,10 @@ import {
   TEXT_SCALE_MIN,
   TEXT_EFFECT_MODES,
   THEME_PRESET_IDS,
+  PRESENTATION_MODES,
+  SPRITE_CUTOUT_QUALITIES,
+  type VisualNovelPresentationMode,
+  type VisualNovelSpriteCutout,
   type VisualNovelConfig,
   type VisualNovelEffectIntensity,
   type VisualNovelReferenceSource,
@@ -15,6 +19,16 @@ import {
   type VisualNovelThemePreset,
 } from "../../config.js";
 import { THEME_PRESET_CSS } from "../theme/presets.js";
+import {
+  DEFAULT_SPRITE_MODEL_URL,
+  SPRITE_HOT_SET,
+  bestAvailableExpression,
+  type PlateView,
+  type SpriteImageStatus,
+  type SpriteImageView,
+  type SpriteSetView,
+} from "../../shared/sprites.js";
+import type { CutoutModelState } from "../sprites/cutout/index.js";
 
 /* ------------------------------------------------------------------------ */
 /* Image source: one choice that maps onto two stored flags.                 */
@@ -633,4 +647,203 @@ export function readNovelAiParameters(params: Record<string, unknown> | undefine
     width: dims.width,
     height: dims.height,
   };
+}
+
+/* ------------------------------------------------------------------------ */
+/* Sprite mode: presentation, cut-out quality, model state, library.         */
+/* ------------------------------------------------------------------------ */
+
+export const PRESENTATION_MODE_OPTIONS: ReadonlyArray<{ value: VisualNovelPresentationMode; label: string; help: string }> = [
+  { value: "scene", label: "Scene pictures", help: "Paints a new picture for each scene. Slower, and limited per reply." },
+  { value: "sprites", label: "Character sprites", help: "Reuses cut-out characters over background plates, so every paragraph gets its own expression." },
+];
+
+export function normalizePresentationMode(value: string): VisualNovelPresentationMode {
+  return (PRESENTATION_MODES as readonly string[]).includes(value)
+    ? value as VisualNovelPresentationMode
+    : DEFAULT_CONFIG.presentationMode;
+}
+
+export const SPRITE_CUTOUT_OPTIONS: ReadonlyArray<{ value: VisualNovelSpriteCutout; label: string; help: string }> = [
+  { value: "best", label: "Best (downloads a 176 MB model once)", help: "Clean edges, also on white clothes and hair. The model stays in this browser." },
+  { value: "basic", label: "Basic (no download)", help: "Removes the plain background without a model. Edges can be rougher." },
+];
+
+export function normalizeSpriteCutout(value: string): VisualNovelSpriteCutout {
+  return (SPRITE_CUTOUT_QUALITIES as readonly string[]).includes(value)
+    ? value as VisualNovelSpriteCutout
+    : DEFAULT_CONFIG.spriteCutout;
+}
+
+/** "12.3 MB" style sizes for the model download. */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 MB";
+  const mb = bytes / (1024 * 1024);
+  if (mb < 1) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${mb < 10 ? mb.toFixed(1).replace(/\.0$/, "") : Math.round(mb)} MB`;
+}
+
+export type CutoutModelSummary = {
+  level: "ready" | "loading" | "attention" | "blocked";
+  title: string;
+  detail: string;
+  /** Which button to show. */
+  action: "download" | "retry" | "remove" | null;
+  /** 0..1 while downloading with a known size; null otherwise. */
+  progress: number | null;
+};
+
+/** Plain-words status of the cut-out model for the settings row. */
+export function describeCutoutModel(state: CutoutModelState, quality: VisualNovelSpriteCutout, modelUrl = ""): CutoutModelSummary {
+  let host = "";
+  try { host = modelUrl ? new URL(modelUrl).hostname : ""; } catch { host = ""; }
+  const from = host ? ` from ${host}` : "";
+  const basicNote = quality === "basic" ? " Not used while cut-out quality is Basic." : "";
+  switch (state.state) {
+    case "absent":
+      return {
+        level: quality === "basic" ? "ready" : "attention",
+        title: "Model not downloaded",
+        detail: quality === "basic"
+          ? "Basic quality needs no model."
+          : `It downloads once${from} when the first sprite is cut. You can download it now instead.`,
+        action: quality === "basic" ? null : "download",
+        progress: null,
+      };
+    case "downloading": {
+      const total = state.totalBytes && state.totalBytes > 0 ? state.totalBytes : null;
+      const progress = total ? Math.min(1, Math.max(0, state.receivedBytes / total)) : null;
+      return {
+        level: "loading",
+        title: total ? `Downloading the model… ${Math.round(progress! * 100)}%` : "Downloading the model…",
+        detail: total ? `${formatBytes(state.receivedBytes)} of ${formatBytes(total)}${from}.` : `${formatBytes(state.receivedBytes)} so far${from}.`,
+        action: null,
+        progress,
+      };
+    }
+    case "loading":
+      return { level: "loading", title: "Loading the model…", detail: "Starting the cut-out model in this browser.", action: null, progress: null };
+    case "ready":
+      return {
+        level: "ready",
+        title: "Model ready",
+        detail: `${formatBytes(state.bytes)} stored in this browser · runs on ${state.backend === "webgpu" ? "the graphics card (WebGPU)" : "the processor (WebAssembly)"}.${basicNote}`,
+        action: "remove",
+        progress: null,
+      };
+    case "unsupported":
+      return { level: "blocked", title: "This browser cannot run the model", detail: `${state.reason} Basic cut-out is used instead.`, action: null, progress: null };
+    case "error":
+      return { level: "blocked", title: "The model could not be prepared", detail: `${state.error} Basic cut-out is used until this works.`, action: "retry", progress: null };
+  }
+}
+
+/** Sprite model URL for Advanced: https (or http on this computer). Empty restores the default. */
+export function parseSpriteModelUrl(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return DEFAULT_SPRITE_MODEL_URL;
+  let url: URL;
+  try { url = new URL(trimmed); } catch { throw new Error("Sprite model URL is not a valid web address. Fix it in Advanced before applying."); }
+  const local = url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  if (url.protocol !== "https:" && !local) throw new Error("Sprite model URL must start with https://. Fix it in Advanced before applying.");
+  return url.toString();
+}
+
+export const SPRITE_STATUS_LABELS: Record<SpriteImageStatus, string> = {
+  missing: "Not made yet",
+  queued: "Waiting",
+  generating: "Drawing",
+  cutting: "Cutting out",
+  ready: "Ready",
+  failed: "Failed",
+};
+
+/** True while the backend is still working on the image. */
+export function spriteStatusBusy(status: SpriteImageStatus): boolean {
+  return status === "queued" || status === "generating" || status === "cutting";
+}
+
+/** "crying_with_eyes_open" -> "Crying with eyes open". */
+export function expressionLabel(id: string): string {
+  const words = id.replace(/[_-]+/g, " ").trim();
+  return words ? words[0]!.toUpperCase() + words.slice(1) : "Expression";
+}
+
+/** The hot set first, in its fixed order, then any rare expressions alphabetically. */
+export function orderedExpressions(set: Pick<SpriteSetView, "expressions">): SpriteImageView[] {
+  const known = set.expressions;
+  const hot = SPRITE_HOT_SET.map((id) => known[id] ?? { expression: id, status: "missing" as const });
+  const rare = Object.keys(known).filter((id) => !(SPRITE_HOT_SET as readonly string[]).includes(id)).sort().map((id) => known[id]!);
+  return [...hot, ...rare];
+}
+
+export function countReady(set: Pick<SpriteSetView, "expressions">): number {
+  return Object.values(set.expressions).filter((image) => image.status === "ready").length;
+}
+
+/** The picture that represents a set: idle when ready, else the first ready hot-set sprite. */
+export function setCoverImage(set: Pick<SpriteSetView, "expressions">): SpriteImageView | null {
+  const ready = new Set(Object.values(set.expressions).filter((image) => image.status === "ready" && image.url).map((image) => image.expression));
+  const id = bestAvailableExpression("idle", ready);
+  return id ? set.expressions[id] ?? null : null;
+}
+
+/** Applies one live image update to a set; returns a new set with a fresh ready count. */
+export function mergeSpriteImage(set: SpriteSetView, image: SpriteImageView): SpriteSetView {
+  const expressions = { ...set.expressions, [image.expression]: image };
+  return { ...set, expressions, readyCount: countReady({ expressions }), updatedAt: new Date().toISOString() };
+}
+
+/** Adds or replaces one plate (by key). */
+export function mergePlate(plates: readonly PlateView[], plate: PlateView): PlateView[] {
+  const index = plates.findIndex((candidate) => candidate.plateKey === plate.plateKey);
+  if (index < 0) return [...plates, plate];
+  const next = plates.slice();
+  next[index] = plate;
+  return next;
+}
+
+/** Newest first; name breaks ties so the order is stable. */
+export function sortSpriteSets(sets: readonly SpriteSetView[]): SpriteSetView[] {
+  return [...sets].sort((left, right) => (right.updatedAt ?? "").localeCompare(left.updatedAt ?? "") || left.name.localeCompare(right.name));
+}
+
+export function plateDetails(plate: Pick<PlateView, "timeOfDay" | "weather">): string {
+  return [plate.timeOfDay, plate.weather].map((part) => (part ?? "").trim()).filter(Boolean).join(" · ");
+}
+
+export type SpriteLibrarySummary = {
+  sets: number;
+  readySprites: number;
+  totalSprites: number;
+  plates: number;
+  readyPlates: number;
+  busy: number;
+  failed: number;
+};
+
+export function summarizeSpriteLibrary(sets: readonly SpriteSetView[], plates: readonly PlateView[]): SpriteLibrarySummary {
+  let readySprites = 0, totalSprites = 0, busy = 0, failed = 0;
+  for (const set of sets) {
+    for (const image of orderedExpressions(set)) {
+      totalSprites += 1;
+      if (image.status === "ready") readySprites += 1;
+      else if (image.status === "failed") failed += 1;
+      else if (spriteStatusBusy(image.status)) busy += 1;
+    }
+  }
+  for (const plate of plates) {
+    if (plate.status === "failed") failed += 1;
+    else if (spriteStatusBusy(plate.status)) busy += 1;
+  }
+  return { sets: sets.length, readySprites, totalSprites, plates: plates.length, readyPlates: plates.filter((plate) => plate.status === "ready").length, busy, failed };
+}
+
+export function describeSpriteLibrary(summary: SpriteLibrarySummary): string {
+  if (summary.sets === 0 && summary.plates === 0) return "No sprites yet.";
+  const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`;
+  const parts = [`${plural(summary.sets, "character")} (${summary.readySprites}/${summary.totalSprites} sprites ready)`, `${plural(summary.plates, "background")}`];
+  if (summary.busy) parts.push(`${summary.busy} in progress`);
+  if (summary.failed) parts.push(`${summary.failed} failed`);
+  return parts.join(" · ");
 }
