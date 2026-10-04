@@ -1,3 +1,4 @@
+import { DEFAULT_SPRITE_MODEL_URL } from "../../shared/sprites.js";
 import {
   DEFAULT_CONFIG,
   type VisualNovelConfig,
@@ -57,6 +58,12 @@ import {
   parseNovelAiSeed,
   NOVELAI_STEPS_MAX,
   NOVELAI_STEPS_MIN,
+  PRESENTATION_MODE_OPTIONS,
+  SPRITE_CUTOUT_OPTIONS,
+  describeCutoutModel,
+  normalizePresentationMode,
+  normalizeSpriteCutout,
+  parseSpriteModelUrl,
   type ConnectionCatalogKind,
   type ConnectionCatalogState,
   type ImageSource,
@@ -65,6 +72,9 @@ import {
   type SetupFlagStorage,
 } from "./model.js";
 import { SETTINGS_TOKENS_CSS } from "./controls-css.js";
+import { SPRITE_LIBRARY_CSS, SpriteLibraryView, type SpriteLibraryAction } from "./sprite-library.js";
+import type { PlateView, SpriteImageView, SpriteSetView } from "../../shared/sprites.js";
+import type { CutoutModelState } from "../sprites/cutout/index.js";
 import { TEXT_EFFECT_AUTHOR_GUIDE, TEXT_EFFECT_CATALOGUE } from "../../shared/text-effects.js";
 import { formatDialogueText } from "../stage/rich-text.js";
 import { applyTextEffects } from "../stage/text-effects.js";
@@ -82,6 +92,8 @@ export {
   type SettingsSectionId,
 } from "./model.js";
 
+export type { SpriteLibraryAction } from "./sprite-library.js";
+
 export type SaveStatus = { kind: "saved" } | { kind: "error"; error: string };
 
 export type SettingsPanelOptions = {
@@ -97,6 +109,14 @@ export type SettingsPanelOptions = {
   onImportAudio?: (files: readonly File[]) => Promise<void> | void;
   /** Where the "setup guide done" flag lives. Defaults to localStorage when available. */
   setupStorage?: SetupFlagStorage | null;
+  /** Sprite mode: a library action (the host sends `vn_sprite_action`, adding the chat id for "prepare_chat"). */
+  onSpriteAction?: (action: SpriteLibraryAction) => void;
+  /** Sprite mode: the library section opened; the host sends `vn_get_sprite_library`. */
+  onRequestSpriteLibrary?: () => void;
+  /** Sprite mode: download and load the cut-out model now (`prepareCutoutModel(config.spriteModelUrl)`). */
+  onPrepareCutoutModel?: () => void;
+  /** Sprite mode: forget the downloaded cut-out model (`clearCutoutModel()`). */
+  onClearCutoutModel?: () => void;
 };
 
 /** Keys the Advanced section owns. Everything else saves as soon as it changes. */
@@ -105,7 +125,7 @@ const ADVANCED_KEYS = [
   "imageModel", "imageConcurrency", "parserParameters", "imageParameters", "audioDirectory", "systemOneMode", "systemOneApiUrl", "systemOneModel",
   "includeRecentMessages", "includeCharacterContext", "includePersonaContext", "includeLorebookContext", "debugLogging",
   "promptPrefix", "promptSuffix", "negativePrompt", "originalReference", "originalCreationName", "customPlannerInstructions",
-  "ignoredTags", "displayRegexRules", "customCss",
+  "ignoredTags", "displayRegexRules", "customCss", "spriteModelUrl",
 ] as const;
 type AdvancedKey = (typeof ADVANCED_KEYS)[number];
 
@@ -315,7 +335,15 @@ input, select, textarea, button { scroll-margin: 4.5rem 0 8.5rem; }
   [data-flash] { animation: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--set-accent) 70%, transparent); }
 }
 
-[data-generated-only] { display: grid; gap: .9rem; }
+[data-generated-only], [data-sprites-only] { display: grid; gap: .9rem; }
+
+/* Sprite mode: scene-only controls stay editable but read as not applying. */
+[data-scene-note] { display: flex; gap: .45rem; align-items: baseline; padding: .4rem .65rem; border-radius: .55rem; background: var(--set-hover); color: var(--set-muted); font-size: .84rem; }
+[data-scene-note]::before { content: "i"; flex: none; display: grid; place-items: center; width: 1.05rem; height: 1.05rem; border: 1.5px solid currentColor; border-radius: 50%; font: 700 .68rem/1 Georgia, serif; }
+[data-scene-only][data-inactive] > :not(header):not([data-scene-note]):not(legend) { opacity: .5; }
+[data-scene-only][data-inactive] > header h3 { color: var(--set-muted); }
+[data-readiness] progress { width: 100%; height: .45rem; margin-top: .35rem; accent-color: var(--set-accent); }
+${SPRITE_LIBRARY_CSS}
 `;
 
 type StatusKind = "idle" | "saved" | "saving" | "dirty" | "error";
@@ -368,10 +396,13 @@ function more(html: string): string {
   return `<details data-more><summary>More</summary><div>${html}</div></details>`;
 }
 
-function group(title: string, body: string, options: { id?: string; apply?: boolean; help?: string; find?: string } = {}): string {
+/** Shown on scene-only controls while character sprites are on. */
+const SCENE_NOTE = `<p data-scene-note hidden>Used only with scene pictures. Your choice is kept for when you switch back.</p>`;
+
+function group(title: string, body: string, options: { id?: string; apply?: boolean; help?: string; find?: string; sceneOnly?: boolean } = {}): string {
   const chip = options.apply ? `<span data-apply-chip title="Changes here wait for the Apply button">Applies with Apply</span>` : "";
   const help = options.help ? `<small>${options.help}</small>` : "";
-  return `<section data-group${options.id ? ` data-group-id="${options.id}"` : ""}${options.apply ? " data-apply-group" : ""} ${options.find ?? find(title)}><header data-group-head><h3>${esc(title)}</h3>${chip}${help}</header>${body}</section>`;
+  return `<section data-group${options.id ? ` data-group-id="${options.id}"` : ""}${options.apply ? " data-apply-group" : ""}${options.sceneOnly ? " data-scene-only" : ""} ${options.find ?? find(title)}><header data-group-head><h3>${esc(title)}</h3>${chip}${help}</header>${options.sceneOnly ? SCENE_NOTE : ""}${body}</section>`;
 }
 
 function optionList(name: string, options: ReadonlyArray<{ value: string; label: string; help: string }>): string {
@@ -422,6 +453,10 @@ export class VisualNovelSettingsPanel {
   private voiceMounted = false;
   private resizeObserver: ResizeObserver | null = null;
   private audioLibrary: { bgmCount: number; sfxCount: number } | null = null;
+  private spriteLibrary!: SpriteLibraryView;
+  private spriteLibraryVisible = false;
+  private cutoutModelState: CutoutModelState = { state: "absent" };
+  private cutoutConfirmTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly connectionStates: Record<ConnectionCatalogKind, ConnectionCatalogState> = {
     planner: { status: "idle", options: [] },
     image: { status: "idle", options: [] },
@@ -444,6 +479,10 @@ export class VisualNovelSettingsPanel {
     // The live sample starts in Reading; openSection moves it to Look when needed.
     this.root.querySelector('[data-pane="reading"] [data-sample-slot]')!.append(this.root.querySelector("[data-sample]")!);
     this.renderTextEffectCards();
+    this.spriteLibrary = new SpriteLibraryView(this.root.querySelector<HTMLElement>("[data-sprite-library-mount]")!, {
+      ...(options.onSpriteAction ? { onAction: (action: SpriteLibraryAction) => options.onSpriteAction?.(action) } : {}),
+      ...(options.onRequestSpriteLibrary ? { onRequest: () => options.onRequestSpriteLibrary?.() } : {}),
+    });
     this.wire();
     this.wireNavigation();
     this.wireSearch();
@@ -571,13 +610,33 @@ export class VisualNovelSettingsPanel {
           ${pane("pictures", `
             ${group("Where pictures come from", imageSourceOptions("imageSource"), { find: find("Picture source", "image source card generated illustrations text only") })}
             <div data-generated-only>
+              ${group("How the story is shown", `
+                <fieldset aria-label="How the story is shown">
+                  ${optionList("presentationMode", PRESENTATION_MODE_OPTIONS)}
+                </fieldset>
+              `, { id: "presentation", find: find("Scene pictures or character sprites", "presentation mode sprites sprite mode character expressions cut-out plates backgrounds scene pictures vn") })}
+              <div data-sprites-only hidden>
+                ${group("Sprite cut-out", `
+                  <fieldset aria-label="Cut-out quality" ${find("Cut-out quality", "sprites cutout cut-out background removal transparent model download isnet quality basic best")}>
+                    ${optionList("spriteCutout", SPRITE_CUTOUT_OPTIONS)}
+                  </fieldset>
+                  <div data-readiness="cutout" data-level="loading" ${find("Cut-out model", "sprites cutout cut-out background removal model download remove onnx isnet storage")}>
+                    <div>
+                      <b data-readiness-title></b><small data-readiness-action></small>
+                      <progress data-cutout-progress max="1" value="0" hidden aria-label="Model download"></progress>
+                      <div data-actions><button type="button" data-cutout-download>Download model</button><button type="button" data-cutout-remove>Remove downloaded model</button></div>
+                    </div>
+                  </div>
+                `, { id: "cutout", help: "Sprites are drawn on a white background. Your browser removes it, so no extra service or cost is involved.", find: find("Sprite cut-out", "sprites cutout background removal transparent") })}
+                ${group("Sprite library", `<div data-sprite-library-mount></div>`, { id: "sprite-library", help: "Characters and backgrounds are made once and reused in every chat with the same image style.", find: find("Sprite library", "sprites expressions characters plates backgrounds gallery prepare regenerate re-cut recut delete") })}
+              </div>
               ${group("Pictures per reply", `
                 <fieldset aria-label="Pictures per reply">
                   ${segments("budgetPreset", BUDGET_PRESETS.map((preset) => ({ label: preset.label, value: preset.id })), true)}
                   <small data-budget-help></small>
                   <label data-field data-custom="maxImagesPerTurn" hidden><span>Maximum pictures per reply</span><input name="maxImagesPerTurn" type="number" min="0" max="12" step="1" /><small>0 removes the limit. Long replies can then cost more than you expect.</small></label>
                 </fieldset>
-              `, { find: find("Pictures per reply", "budget limit images cost light balanced rich") })}
+              `, { sceneOnly: true, find: find("Pictures per reply", "budget limit images cost light balanced rich") })}
               ${group("Consistent characters", `
                 <label data-check><input name="referenceAnchoring" type="checkbox" /><span>Keep each character looking the same between pictures<small>Reuses a character's first portrait as a reference for later ones.</small></span></label>
                 <fieldset data-reference-source hidden>
@@ -593,8 +652,9 @@ export class VisualNovelSettingsPanel {
               `, { find: find("Image connection", "image model provider stability comfyui novelai") })}
               <section data-group data-novelai-controls hidden ${find("NovelAI", "novelai dimensions steps sampler seed guidance cfg anlas")}>
                 <header data-group-head><h3>NovelAI</h3><small>Shown because the image connection is NovelAI.</small></header>
-                <fieldset>
+                <fieldset data-scene-only>
                   <legend>Image dimensions</legend>
+                  ${SCENE_NOTE.replace("Used only with scene pictures.", "Used only with scene pictures. Sprites and backgrounds pick their own shape.")}
                   ${segments("novelAiResolutionPreset", [
                     { label: "Landscape (1216×832)", value: "landscape" },
                     { label: "Portrait (832×1216)", value: "portrait" },
@@ -727,6 +787,7 @@ export class VisualNovelSettingsPanel {
                 <label data-field ${find("Story reader parameters (JSON)", "planner parser json temperature parameters")}><span>Story reader parameters (JSON)</span><textarea name="parserParameters" spellcheck="false"></textarea></label>
                 <label data-field ${find("Image parameters (JSON)", "image json parameters steps")}><span>Image parameters (JSON)</span><textarea name="imageParameters" spellcheck="false"></textarea></label>
               </div>
+              <label data-field ${find("Sprite cut-out model URL", "sprites cutout cut-out background removal model onnx isnet download url huggingface")}><span>Sprite cut-out model URL</span><input name="spriteModelUrl" type="url" spellcheck="false" placeholder="${esc(DEFAULT_SPRITE_MODEL_URL)}" /><small>Where the Best cut-out model downloads from, once. Must start with https://. Leave empty for the default.</small></label>
             `, { id: "models", apply: true })}
             ${group("Custom CSS", `
               <label data-field ${find("Theme CSS", "custom css style stylesheet")}><span>Theme CSS</span><textarea name="customCss" spellcheck="false"></textarea><small>Selectors beginning with data-vn are stable. Remote imports and URL fetches are removed.</small></label>
@@ -809,6 +870,8 @@ export class VisualNovelSettingsPanel {
     if (options.remember !== false) {
       try { this.storage?.setItem(SETTINGS_SECTION_KEY, next); } catch { /* storage is optional */ }
     }
+    // The library is fetched each time its section is opened (cheap: one stored index).
+    if (next === "pictures" && this.spriteLibraryVisible) this.spriteLibrary.request();
   }
 
   /**
@@ -1156,6 +1219,8 @@ export class VisualNovelSettingsPanel {
       }
     });
 
+    this.wireCutoutModel();
+
     for (const button of this.root.querySelectorAll("[data-open-preview]")) {
       button.addEventListener("click", () => this.options.onOpenPreview());
     }
@@ -1314,6 +1379,8 @@ export class VisualNovelSettingsPanel {
       case "sceneImageFit": return { sceneImageFit: normalizeSceneImageFit(target.value) };
       case "effectIntensity": return { effectIntensity: normalizeEffectIntensity(target.value) };
       case "textEffects": return { textEffects: normalizeTextEffects(target.value) };
+      case "presentationMode": return { presentationMode: normalizePresentationMode(target.value) };
+      case "spriteCutout": return { spriteCutout: normalizeSpriteCutout(target.value) };
       case "textScaleStep": {
         if (target.value === "custom") { this.showCustom("textScale", true); return null; }
         return { textScale: Number(target.value) };
@@ -1594,9 +1661,14 @@ export class VisualNovelSettingsPanel {
       patch = this.readAdvanced();
     } catch (error) {
       // Show the field that failed, wherever the user is.
+      let revealed = false;
       for (const [name, label] of [["parserParameters", "Story reader parameters"], ["imageParameters", "Image parameters"]] as const) {
         try { jsonObject(this.control<HTMLTextAreaElement>(name).value, label); }
-        catch { this.reveal(this.control<HTMLTextAreaElement>(name)); break; }
+        catch { this.reveal(this.control<HTMLTextAreaElement>(name)); revealed = true; break; }
+      }
+      if (!revealed) {
+        try { parseSpriteModelUrl(this.control<HTMLInputElement>("spriteModelUrl").value); }
+        catch { this.reveal(this.control<HTMLInputElement>("spriteModelUrl")); }
       }
       this.setStatus(error instanceof Error ? error.message : String(error), "error");
       return;
@@ -1642,6 +1714,7 @@ export class VisualNovelSettingsPanel {
       ignoredTags: this.control<HTMLInputElement>("ignoredTags").value,
       displayRegexRules: this.control<HTMLTextAreaElement>("displayRegexRules").value,
       customCss: this.control<HTMLTextAreaElement>("customCss").value,
+      spriteModelUrl: parseSpriteModelUrl(this.control<HTMLInputElement>("spriteModelUrl").value),
     };
   }
 
@@ -1702,6 +1775,7 @@ export class VisualNovelSettingsPanel {
     set("ignoredTags", () => { this.control<HTMLInputElement>("ignoredTags").value = config.ignoredTags; });
     set("displayRegexRules", () => { this.control<HTMLTextAreaElement>("displayRegexRules").value = config.displayRegexRules; });
     set("customCss", () => { this.control<HTMLTextAreaElement>("customCss").value = config.customCss; });
+    set("spriteModelUrl", () => { this.control<HTMLInputElement>("spriteModelUrl").value = config.spriteModelUrl; });
     this.promptPresets = config.promptPresets.map((preset) => ({ ...preset }));
     this.renderPromptPresetOptions(this.control<HTMLSelectElement>("promptPresetSelect").value);
     this.updateImageModelHint();
@@ -1758,8 +1832,117 @@ export class VisualNovelSettingsPanel {
     this.renderConnectionSelects("planner", config.parserConnectionId);
     this.renderConnectionSelects("image", config.imageConnectionId);
     this.syncNovelAiControls(config, source);
+    this.syncSprites(config, source);
     this.updateSummaries(config);
     this.updateSample(config);
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* Sprite mode                                                             */
+  /* ---------------------------------------------------------------------- */
+
+  private syncSprites(config: VisualNovelConfig, source: ImageSource): void {
+    this.setRadio("presentationMode", config.presentationMode);
+    this.setRadio("spriteCutout", config.spriteCutout);
+    const sprites = config.presentationMode === "sprites";
+    this.root.querySelector<HTMLElement>("[data-sprites-only]")!.hidden = !sprites;
+    // Scene-only controls keep their values; they only read as not applying.
+    for (const element of this.root.querySelectorAll<HTMLElement>("[data-scene-only]")) {
+      element.toggleAttribute("data-inactive", sprites);
+      const note = element.querySelector<HTMLElement>(":scope > [data-scene-note]");
+      if (note) note.hidden = !sprites;
+    }
+    this.renderCutoutModel(config);
+    const visible = sprites && source === "generated";
+    const becameVisible = visible && !this.spriteLibraryVisible;
+    this.spriteLibraryVisible = visible;
+    if (becameVisible && this.section === "pictures") this.spriteLibrary.request();
+  }
+
+  private wireCutoutModel(): void {
+    const download = this.root.querySelector<HTMLButtonElement>("[data-cutout-download]")!;
+    const remove = this.root.querySelector<HTMLButtonElement>("[data-cutout-remove]")!;
+    download.addEventListener("click", () => {
+      if (!this.options.onPrepareCutoutModel) return;
+      // Immediate feedback; the host's model state replaces it as soon as it reports.
+      this.setCutoutModelState({ state: "downloading", receivedBytes: 0, totalBytes: null });
+      this.options.onPrepareCutoutModel();
+    });
+    remove.addEventListener("click", () => {
+      if (!this.options.onClearCutoutModel) return;
+      if (!remove.hasAttribute("data-confirming")) {
+        remove.setAttribute("data-confirming", "");
+        remove.textContent = "Confirm remove?";
+        if (this.cutoutConfirmTimer) clearTimeout(this.cutoutConfirmTimer);
+        this.cutoutConfirmTimer = setTimeout(() => this.resetCutoutRemove(), 4000);
+        return;
+      }
+      this.resetCutoutRemove();
+      this.options.onClearCutoutModel();
+    });
+  }
+
+  private resetCutoutRemove(): void {
+    if (this.cutoutConfirmTimer) { clearTimeout(this.cutoutConfirmTimer); this.cutoutConfirmTimer = null; }
+    const remove = this.root.querySelector<HTMLButtonElement>("[data-cutout-remove]")!;
+    remove.removeAttribute("data-confirming");
+    remove.textContent = "Remove downloaded model";
+  }
+
+  private renderCutoutModel(config: VisualNovelConfig = this.config): void {
+    const row = this.root.querySelector<HTMLElement>('[data-readiness="cutout"]')!;
+    const summary = describeCutoutModel(this.cutoutModelState, config.spriteCutout, config.spriteModelUrl);
+    row.dataset.level = summary.level;
+    row.dataset.state = this.cutoutModelState.state;
+    row.querySelector("[data-readiness-title]")!.textContent = summary.title;
+    row.querySelector("[data-readiness-action]")!.textContent = summary.detail;
+    const progress = row.querySelector<HTMLProgressElement>("[data-cutout-progress]")!;
+    progress.hidden = this.cutoutModelState.state !== "downloading";
+    if (summary.progress === null) progress.removeAttribute("value");
+    else progress.value = summary.progress;
+    const download = row.querySelector<HTMLButtonElement>("[data-cutout-download]")!;
+    const remove = row.querySelector<HTMLButtonElement>("[data-cutout-remove]")!;
+    download.hidden = summary.action !== "download" && summary.action !== "retry";
+    download.textContent = summary.action === "retry" ? "Try again" : "Download model";
+    download.disabled = !this.options.onPrepareCutoutModel;
+    remove.hidden = summary.action !== "remove";
+    remove.disabled = !this.options.onClearCutoutModel;
+    if (remove.hidden) this.resetCutoutRemove();
+    row.querySelector<HTMLElement>("[data-actions]")!.hidden = download.hidden && remove.hidden;
+  }
+
+  /** Cut-out model state from the browser cut-out module (`onCutoutModelState`). */
+  setCutoutModelState(state: CutoutModelState): void {
+    this.cutoutModelState = state;
+    this.renderCutoutModel();
+  }
+
+  /** The whole sprite library (answer to `vn_get_sprite_library`, or after an action). */
+  setSpriteLibrary(sets: readonly SpriteSetView[], plates: readonly PlateView[]): void {
+    this.spriteLibrary.setLibrary(sets, plates);
+    this.updateSummaries(this.config);
+  }
+
+  /** One sprite image changed (`vn_sprite_update`). An unknown set refreshes the library while it is shown. */
+  applySpriteUpdate(setKey: string, image: SpriteImageView): void {
+    const known = this.spriteLibrary.applySpriteUpdate(setKey, image);
+    if (!known && this.spriteLibrary.isLoaded() && this.spriteLibraryVisible && this.section === "pictures") this.requestLibrarySoon();
+  }
+
+  /** One background plate changed (`vn_plate_update`). */
+  applyPlateUpdate(plate: PlateView): void {
+    this.spriteLibrary.applyPlateUpdate(plate);
+  }
+
+  private libraryTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Coalesces bursts of updates for sets this panel has not seen yet into one request. */
+  private requestLibrarySoon(): void {
+    if (this.libraryTimer) return;
+    this.libraryTimer = setTimeout(() => {
+      this.libraryTimer = null;
+      this.spriteLibrary.request();
+    }, 600);
   }
 
   private showCustomQuiet(name: string, visible: boolean): void {
@@ -1785,7 +1968,7 @@ export class VisualNovelSettingsPanel {
     const sourceLabel = IMAGE_SOURCE_OPTIONS.find((option) => option.value === source)?.label ?? source;
     const budget = budgetPresetFor(config.maxImagesPerTurn);
     const budgetLabel = budget === "custom" ? (config.maxImagesPerTurn === 0 ? "No limit" : `${config.maxImagesPerTurn} per reply`) : BUDGET_PRESETS.find((preset) => preset.id === budget)!.label;
-    summary("pictures", source === "generated" ? `Generated · ${budgetLabel}` : sourceLabel);
+    summary("pictures", source !== "generated" ? sourceLabel : config.presentationMode === "sprites" ? "Character sprites" : `Generated · ${budgetLabel}`);
     const library = this.audioLibrary ? `${this.audioLibrary.bgmCount} track${this.audioLibrary.bgmCount === 1 ? "" : "s"}` : "No music yet";
     summary("sound", `${library} · ${Math.round(config.bgmVolume * 100)}%`);
     summary("voice", config.speech?.enabled ? "On" : "Off");
@@ -1991,7 +2174,8 @@ export class VisualNovelSettingsPanel {
   }
 
   destroy(): void {
-    for (const timer of [this.statusTimer, this.resetTimer, this.saveTimer, this.sampleTimer, this.flashTimer, this.copyTimer]) if (timer) clearTimeout(timer);
+    for (const timer of [this.statusTimer, this.resetTimer, this.saveTimer, this.sampleTimer, this.flashTimer, this.copyTimer, this.cutoutConfirmTimer, this.libraryTimer]) if (timer) clearTimeout(timer);
+    this.spriteLibrary.destroy();
     this.resizeObserver?.disconnect();
     this.host.remove();
   }
