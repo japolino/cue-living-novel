@@ -1,8 +1,8 @@
 # Sprite mode — design
 
-Status: v1 implementation in progress (October 2026). This file is the contract
-for the parallel implementation. `src/shared/sprites.ts` holds the shared
-types; `src/protocol.ts` holds the messages.
+Status: v1 implemented (October 2026, Cue 1.8.0-beta). `src/shared/sprites.ts` holds
+the shared types; `src/protocol.ts` holds the messages. "Implementation notes"
+at the end records the concrete limits and numbers.
 
 ## Why
 
@@ -157,8 +157,74 @@ edge band). The background colour is the median of the image border.
 `spriteModelUrl` and cached in the browser; onnxruntime-web is loaded lazily
 (WebGPU, else WASM) so the frontend bundle stays small.
 
+## Implementation notes (v1)
+
+Code map:
+
+| Area | Files |
+|---|---|
+| Shared contract | `src/shared/sprites.ts` |
+| Staging | `src/backend/runtime/sprite-staging.ts`, `system-one-sprites.ts` |
+| Library, prompts, jobs, cut bridge, views | `src/backend/runtime/sprites/**` |
+| Controller hooks | `src/backend/runtime/controller.ts` (`buildTurnView`, sprite request handlers) |
+| Cut-out | `src/frontend/sprites/cutout/**` (`kernel.ts` is the DOM-free algorithm), `cut-service.ts` |
+| Stage | `src/frontend/stage/sprite-layer.ts`, `src/frontend/theme/sprite-css.ts`, VnStage sprite API |
+| Settings | `src/frontend/settings/sprite-library.ts`, sprite controls in `panel.ts` / `model.ts` |
+| Browser checks | `bun run test:sprite-stage`, `bun run test:sprite-cutout` |
+
+Classifier staging:
+
+- At most 4 cast candidates per paragraph. Expression options: `keep_current`, the
+  12 hot-set ids, then 42 curated rare catalogue ids.
+- Thresholds (`SPRITE_THRESHOLDS`): present ≥ 0.75 adds and ≤ 0.2 removes; keep
+  ≥ 0.4; hot-set expression ≥ 0.5; rare expression ≥ 0.65, else its hot-set
+  fallback (a rare id costs one generation); motion and emote ≥ 0.6 (a
+  confident `none` does not erase an explicit text cue); intensity ≥ 0.5;
+  light ≥ 0.6; place reuse ≥ 0.7 (at most 96 known plates offered). Not yet
+  calibrated against live Jev.
+- Requests: ≤ 7 paragraphs and ≤ 60,000 bytes per body; all batches in
+  parallel; up to 105 paragraphs classified (later ones keep deterministic
+  staging); 8 s timeout; one retry on 429/529; a failed batch only loses its
+  own paragraphs.
+
+Library and generation:
+
+- `sprites/library.json` per user; newest 64 sets / 128 plates by last use;
+  evicted entries delete their images (best effort).
+- One fixed seed per set (`spriteSeedFor`); regeneration changes it.
+  NovelAI: character caption on V4+, `resolution` 832×1216 (plates 1216×832);
+  ComfyUI / SwarmUI: `width`, `height`, `seed`.
+- With reference anchoring, `idle` is generated first and the other
+  expressions use it as the reference; providers without anchoring skip it.
+- Cut bridge: ≤ 2 cuts in flight per user, chunks in any order, PNG signature
+  and IHDR checked, 5-minute inactivity timeout, failed after 3 timeouts.
+  A "basic" cut made while "best" is selected is re-cut once on the next view
+  open.
+
+Cut-out runtime:
+
+- onnxruntime-web 1.30.0, imported lazily from jsDelivr into a blob-URL
+  module Worker (inline fallback); WebGPU first, then WASM. The model is
+  cached in Cache Storage (IndexedDB on http origins).
+- Measured on the bake-off set (19 sprites, Chromium): fp32 + WebGPU ≈ 0.35–0.4 s
+  per sprite (IoU 0.995 vs. the reference); fp32 + WASM ≈ 14–16 s; int8 runs
+  on both but is not faster (ConvInteger falls back to the CPU on WebGPU);
+  basic ≈ 0.1 s (IoU 0.954). The kernel alone ≈ 50 ms.
+- Fallbacks: download failure → basic (retry after 60 s); no WebAssembly or
+  session failure → "unsupported", basic until the user prepares again.
+
+Stage:
+
+- Facing rule: sprites are assumed to face the viewer or screen left
+  (`SPRITE_NATURAL_FACING = "left"`); "right" mirrors around the bbox centre.
+- Head position is estimated from the bbox top (emotes, blush).
+
 ## Not in v1
 
 Mouth/blink variants (lip flap), full key-moment illustrations mixed into
 sprite mode, face-only repaint for expression variants, parallax, front
-ambient layer, persona sprite.
+ambient layer, persona sprite, a per-image face box / natural orientation,
+calibrated classifier thresholds. Known gaps: with anchoring on, expressions
+wait for `idle` even on providers that cannot anchor; after switching back to
+scene mode, a sprite-planned turn is replanned only on the next reply, swipe
+or refresh; on 390×844 a third actor is mostly hidden.
