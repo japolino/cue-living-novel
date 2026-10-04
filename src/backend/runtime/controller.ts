@@ -568,7 +568,8 @@ async function stagingForRecord(
     knownPlates: await spriteService(spindle).knownPlates(userId, config),
     previousCast: [],
     previousStage: null,
-    ...(record.userSpeaker ? { personaName: record.userSpeaker } : {}),
+    characterAppearance: await loadCharacterAppearance(spindle, userId, record.plan.key.chatId).catch(() => ({})),
+    ...(record.userSpeaker && record.userSpeaker !== "You" ? { personaName: record.userSpeaker } : {}),
   });
   const key = record.plan.key;
   try {
@@ -595,6 +596,7 @@ async function planSpriteStaging(
     config: VisualNovelConfig;
     previous: StoredTurnRecord | null;
     personaName: string;
+    characterAppearance: Readonly<Record<string, string>>;
     signal: AbortSignal;
   },
   userId: string | undefined
@@ -610,6 +612,8 @@ async function planSpriteStaging(
     knownPlates: await spriteService(spindle).knownPlates(userId, input.config).catch(() => []),
     previousCast: previousStaging?.cast ?? [],
     previousStage,
+    ...(previousStaging ? { previousSceneId: input.previous?.plan.scenes.at(-1)?.sceneId ?? null } : {}),
+    characterAppearance: input.characterAppearance,
     ...(input.personaName ? { personaName: input.personaName } : {}),
   };
   try {
@@ -1102,6 +1106,7 @@ async function processAssistantMessage(
         config,
         previous,
         personaName: userSpeaker === "You" ? "" : userSpeaker,
+        characterAppearance,
         signal: operation.controller.signal
       }, userId);
       plan = { ...plan, spriteStaging: staging };
@@ -1439,6 +1444,14 @@ async function handleFrontendMessage(spindle: SpindleAPI, request: FrontendReque
         void scanAudioCatalog(spindle, config.audioDirectory);
       }
       spindle.sendToFrontend({ type: "vn_config", config }, userId);
+      // Switching to sprite mode restages the open chat's current turn at once.
+      if (request.patch.presentationMode === "sprites" && typeof request.chatId === "string" && request.chatId && views.isOpen(userId, request.chatId)) {
+        const chatState = await loadChatState(spindle, request.chatId, userId);
+        const record = await loadTurnRecord(spindle, chatState.activeTurnPath, userId).catch(() => null);
+        if (record && record.plan.key.chatId === request.chatId) {
+          spindle.sendToFrontend({ type: "vn_turn", turn: await buildTurnView(spindle, record, userId, config) }, userId);
+        }
+      }
       return;
     }
     case "vn_scan_audio": {
@@ -1526,6 +1539,26 @@ async function handleFrontendMessage(spindle: SpindleAPI, request: FrontendReque
       // stage leaves its planning phase instead of waiting forever.
       if (typeof request.chatId !== "string" || !request.chatId) return;
       await sendState(spindle, request.chatId, userId, { viewOpen: true });
+      return;
+    }
+    case "vn_sprite_cut_result": {
+      // Chunked cut-out PNG from the browser. Routed by request id only; the
+      // base64 body is never logged.
+      if (typeof request.requestId !== "string" || request.requestId.length > 100) return;
+      spriteService(spindle).handleCutResult(userId, request);
+      return;
+    }
+    case "vn_get_sprite_library":
+      await spriteService(spindle).sendLibrary(userId);
+      return;
+    case "vn_sprite_action": {
+      const config = await loadConfig(spindle, userId);
+      rememberDebugFlag(userId, config);
+      dbg(spindle, userId, `sprite action ${request.action}${request.setKey ? ` set=${request.setKey}` : ""}${request.expression ? ` expression=${request.expression}` : ""}${request.plateKey ? ` plate=${request.plateKey}` : ""}`);
+      await spriteService(spindle).action(userId, request, {
+        config,
+        castForChat: (chatId) => spriteCastForChat(spindle, chatId, userId)
+      });
       return;
     }
     case "vn_reference_image": {
