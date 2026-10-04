@@ -104,20 +104,27 @@ const SHAPE_HEART_B = heart("#ffd0dc", "#ff86a6", "#e24f7a");
 const SHAPE_HEART_C = heart("#f4c2ff", "#d667ff", "#9a2fd0");
 const SHAPE_HEART_SOFT = heart("#ffc2d2", "#ff7aa0", "#e0457a", true);
 
-/** Seamless (stitched) fractal noise rendered as soft white mist. */
-function mistNoise(width: number, height: number, freq: string, seed: number, alphaGain: number, alphaOffset: number): string {
+/**
+ * Seamless (stitched) fractal noise rendered as soft white mist. The vertical
+ * density profile (`stops`: offset/opacity pairs, top to bottom) is baked into
+ * the texture, so the drifting layers need no per-frame CSS mask.
+ */
+function mistNoise(width: number, height: number, freq: string, seed: number, alphaGain: number, alphaOffset: number, stops: Array<[number, number]>): string {
+  const gradient = stops.map(([offset, opacity]) => `<stop offset="${offset}" stop-color="#fff" stop-opacity="${opacity}"/>`).join("");
   return svgDataUri(
-    `<filter id="n" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency="${freq}" numOctaves="4" seed="${seed}" stitchTiles="stitch"/>` +
+    `<defs><linearGradient id="v" x1="0" y1="0" x2="0" y2="1">${gradient}</linearGradient><mask id="m"><rect width="${width}" height="${height}" fill="url(#v)"/></mask></defs>` +
+      `<filter id="n" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency="${freq}" numOctaves="4" seed="${seed}" stitchTiles="stitch"/>` +
       `<feColorMatrix values="0 0 0 0 .9 0 0 0 0 .93 0 0 0 0 .97 ${alphaGain} 0 0 0 ${alphaOffset}"/></filter>` +
-      `<rect width="${width}" height="${height}" filter="url(#n)"/>`,
+      `<g mask="url(#m)"><rect width="${width}" height="${height}" filter="url(#n)"/></g>`,
     width,
     height,
   );
 }
 
-const TEX_FOG_FAR = mistNoise(1024, 384, "0.0039 0.0104", 7, 1.9, -0.62);
-const TEX_FOG_MID = mistNoise(896, 384, "0.0045 0.013", 13, 2.1, -0.7);
-const TEX_FOG_NEAR = mistNoise(1280, 448, "0.0031 0.0089", 21, 2.4, -0.78);
+const TEX_FOG_FAR = mistNoise(1024, 384, "0.0039 0.0104", 7, 1.9, -0.62, [[0, 0], [0.4, 1], [0.72, 1], [1, 0]]);
+const TEX_FOG_MID = mistNoise(896, 384, "0.0045 0.013", 13, 2.1, -0.7, [[0, 0], [0.35, 1], [1, 1]]);
+const TEX_FOG_NEAR = mistNoise(1280, 448, "0.0031 0.0089", 21, 2.4, -0.78, [[0, 0], [0.55, 1], [1, 1]]);
+const TEX_FOG_BANK = mistNoise(896, 384, "0.0045 0.013", 13, 2.1, -0.7, [[0, 0], [0.75, 1], [1, 1]]);
 
 /** Seamless monochrome film grain (used with an overlay blend). */
 const TEX_GRAIN = svgDataUri(
@@ -714,7 +721,6 @@ export const VN_EFFECTS_CSS = `
   mix-blend-mode: overlay;
   opacity: 0.16;
   pointer-events: none;
-  animation: vn-grain 0.6s steps(1, end) infinite;
 }
 
 @keyframes vn-grain {
@@ -762,6 +768,7 @@ export const VN_EFFECTS_CSS = `
 
 [data-vn-ambient].vn-ambient-sepia_flashback::after {
   opacity: 0.24;
+  animation: vn-grain 0.6s steps(1, end) infinite;
 }
 
 @keyframes vn-projector-flicker {
@@ -799,9 +806,8 @@ export const VN_EFFECTS_CSS = `
 
 [data-vn-ambient].vn-ambient-dream_haze {
   background:
-    radial-gradient(ellipse 85% 80% at 50% 42%, rgba(255, 240, 248, 0) 48%, rgba(246, 230, 255, 0.42) 100%),
-    radial-gradient(circle at 50% 38%, rgba(255, 236, 246, 0.22) 0%, rgba(230, 212, 255, 0.12) 60%, rgba(186, 166, 226, 0.22) 100%);
-  mix-blend-mode: screen;
+    radial-gradient(ellipse 85% 80% at 50% 42%, rgba(255, 240, 248, 0) 44%, rgba(246, 230, 255, 0.5) 100%),
+    radial-gradient(circle at 50% 38%, rgba(255, 236, 246, 0.18) 0%, rgba(230, 212, 255, 0.1) 60%, rgba(186, 166, 226, 0.2) 100%);
   opacity: 1;
 }
 
@@ -893,10 +899,16 @@ export const VN_EFFECTS_CSS = `
   background: linear-gradient(180deg, rgba(8, 14, 28, 0.5) 0%, rgba(18, 28, 48, 0.24) 46%, rgba(80, 100, 132, 0.2) 100%);
 }
 
+/* Skewed (not rotated) frame: streaks and their fall direction slant together,
+   and the layer only needs extra width, not a 1.5x oversized square. */
 [data-vn-ambient] .vn-rain-layer {
   position: absolute;
-  inset: -24%;
-  rotate: var(--tilt);
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: calc(-100cqh * var(--slope));
+  transform: skewX(calc(var(--tilt) * -1));
+  transform-origin: 0 0;
   pointer-events: none;
 }
 
@@ -958,9 +970,7 @@ export const VN_EFFECTS_CSS = `
   bottom: 0;
   width: calc(100% + 896px);
   height: 46%;
-  background: ${TEX_FOG_MID} 0 0 / 896px 100% repeat-x;
-  -webkit-mask-image: linear-gradient(to top, #000 0%, #000 25%, transparent 100%);
-  mask-image: linear-gradient(to top, #000 0%, #000 25%, transparent 100%);
+  background: ${TEX_FOG_BANK} 0 0 / 896px 100% repeat-x;
   opacity: 0.42;
   pointer-events: none;
   animation: vn-mist-drift 34s linear infinite;
@@ -1135,8 +1145,7 @@ export const VN_EFFECTS_CSS = `
   right: 0;
   bottom: 0;
   height: 80%;
-  background: radial-gradient(ellipse 90% 80% at 50% 100%, rgba(255, 110, 34, 0.42) 0%, rgba(255, 84, 24, 0.16) 48%, rgba(255, 80, 20, 0) 78%);
-  mix-blend-mode: screen;
+  background: radial-gradient(ellipse 90% 80% at 50% 100%, rgba(255, 120, 40, 0.34) 0%, rgba(255, 90, 30, 0.12) 48%, rgba(255, 80, 20, 0) 78%);
   pointer-events: none;
   animation: vn-ember-heat 2.8s ease-in-out infinite alternate;
 }
@@ -1249,8 +1258,6 @@ export const VN_EFFECTS_CSS = `
   --bd: 14s;
   --o0: 0.36;
   --o1: 0.58;
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 40%, #000 72%, transparent 100%);
-  mask-image: linear-gradient(to bottom, transparent 0%, #000 40%, #000 72%, transparent 100%);
 }
 
 .vn-fog-layer-1 > i { background-image: ${TEX_FOG_FAR}; }
@@ -1263,8 +1270,6 @@ export const VN_EFFECTS_CSS = `
   --bd: 17s;
   --o0: 0.38;
   --o1: 0.62;
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 35%, #000 100%);
-  mask-image: linear-gradient(to bottom, transparent 0%, #000 35%, #000 100%);
 }
 
 .vn-fog-layer-2 > i {
@@ -1280,8 +1285,6 @@ export const VN_EFFECTS_CSS = `
   --bd: 11s;
   --o0: 0.72;
   --o1: 0.95;
-  -webkit-mask-image: linear-gradient(to top, #000 0%, #000 45%, transparent 100%);
-  mask-image: linear-gradient(to top, #000 0%, #000 45%, transparent 100%);
 }
 
 .vn-fog-layer-3 > i { background-image: ${TEX_FOG_NEAR}; }
@@ -1293,8 +1296,7 @@ export const VN_EFFECTS_CSS = `
 [data-vn-effect-intensity="gentle"] [data-vn-ambient] .vn-pt:nth-child(2n),
 [data-vn-effect-intensity="gentle"] [data-vn-fx] .vn-pt:nth-child(3n),
 [data-vn-effect-intensity="gentle"] [data-vn-ambient] .vn-rain-fg,
-[data-vn-effect-intensity="gentle"] [data-vn-ambient] .vn-heavy-rain-fg,
-[data-vn-effect-intensity="gentle"] [data-vn-ambient] .vn-heavy-rain-sheet {
+[data-vn-effect-intensity="gentle"] [data-vn-ambient] .vn-heavy-rain-fg {
   display: none;
 }
 

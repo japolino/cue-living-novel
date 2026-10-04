@@ -786,9 +786,9 @@ describe("procedural particle markup", () => {
     expect(particles(generateAmbientMarkup("sakura"))).toBeGreaterThanOrEqual(30);
     expect(particles(generateAmbientMarkup("fireflies"))).toBeGreaterThanOrEqual(16);
     expect(particles(generateAmbientMarkup("embers"))).toBeGreaterThanOrEqual(30);
-    // Rain is a few scrolling tiles (three depths, plus a sheet when heavy), not hundreds of nodes.
-    expect((generateAmbientMarkup("rain").match(/class="vn-rain-layer /g) ?? []).length).toBe(3);
-    expect((generateAmbientMarkup("heavy_rain").match(/class="vn-rain-layer /g) ?? []).length).toBe(4);
+    // Rain is two scrolling tile sheets (back + soft front), not hundreds of nodes.
+    expect((generateAmbientMarkup("rain").match(/class="vn-rain-layer /g) ?? []).length).toBe(2);
+    expect((generateAmbientMarkup("heavy_rain").match(/class="vn-rain-layer /g) ?? []).length).toBe(2);
   });
 
   test("bursts stay within the node budget", () => {
@@ -850,8 +850,8 @@ describe("procedural particle markup", () => {
     const tiles = (html: string) => [...html.matchAll(/--tile:url\(([^)]*)\)/g)].map((m) => m[1]);
     const light = tiles(generateAmbientMarkup("rain"));
     const heavy = tiles(generateAmbientMarkup("heavy_rain"));
-    expect(new Set(light).size).toBe(3);
-    expect(new Set(heavy).size).toBe(4);
+    expect(new Set(light).size).toBe(2);
+    expect(new Set(heavy).size).toBe(2);
     for (const t of light) expect(heavy).not.toContain(t);
   });
 });

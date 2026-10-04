@@ -105,47 +105,54 @@ export function generateCueEffectMarkup(effect: StageEffect): string {
 /* Rain                                                                        */
 /* -------------------------------------------------------------------------- */
 
+interface StreakGroup {
+  count: number;
+  len: [number, number];
+  width: number;
+  alpha: [number, number];
+  color: string;
+}
+
 interface RainLayerSpec {
   cls: string;
   seed: number;
   /** Tile size in CSS px (density stays constant at any stage size). */
   w: number;
   h: number;
-  count: number;
-  len: [number, number];
-  width: number;
-  alpha: [number, number];
-  color: string;
   /** Fall speed in px per second. */
   speed: number;
   /** Pre-baked softness (stdDeviation) for near, out-of-focus streaks. */
   blur?: number;
+  groups: StreakGroup[];
 }
 
 /**
  * One seamless rain texture: seeded streaks that fade in from the tail and
  * brighten toward the leading drop. Streaks crossing the bottom edge are
  * wrapped to the top so a vertical scroll by one tile height is seamless.
+ * A tile can carry several depth groups (thin far streaks + longer mid ones)
+ * so the field keeps its depth with only two scrolling layers.
  */
 function rainTile(spec: RainLayerSpec): string {
   const rects: string[] = [];
-  for (let i = 0; i < spec.count; i++) {
-    const x = strat(spec.seed, i, spec.count, spec.width, spec.w - spec.width);
-    const y = pseudo(spec.seed + 1, i, 0, spec.h);
-    const len = pseudo(spec.seed + 2, i, spec.len[0], spec.len[1]);
-    const alpha = pseudo(spec.seed + 3, i, spec.alpha[0], spec.alpha[1]);
-    const rect = (top: number) =>
-      `<rect x="${n(x - spec.width / 2)}" y="${n(top)}" width="${n(spec.width, 2)}" height="${n(len)}" rx="${n(spec.width / 2, 2)}" fill="url(#g)" opacity="${n(alpha, 2)}"/>`;
-    rects.push(rect(y));
-    if (y + len > spec.h) rects.push(rect(y - spec.h));
-  }
+  const gradients: string[] = [];
+  spec.groups.forEach((group, g) => {
+    const seed = spec.seed + g * 10;
+    gradients.push(`<linearGradient id="g${g}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${group.color}" stop-opacity="0"/><stop offset=".7" stop-color="${group.color}" stop-opacity=".55"/><stop offset="1" stop-color="${group.color}" stop-opacity="1"/></linearGradient>`);
+    for (let i = 0; i < group.count; i++) {
+      const x = strat(seed, i, group.count, group.width, spec.w - group.width);
+      const y = pseudo(seed + 1, i, 0, spec.h);
+      const len = pseudo(seed + 2, i, group.len[0], group.len[1]);
+      const alpha = pseudo(seed + 3, i, group.alpha[0], group.alpha[1]);
+      const rect = (top: number) =>
+        `<rect x="${n(x - group.width / 2)}" y="${n(top)}" width="${n(group.width, 2)}" height="${n(len)}" rx="${n(group.width / 2, 2)}" fill="url(#g${g})" opacity="${n(alpha, 2)}"/>`;
+      rects.push(rect(y));
+      if (y + len > spec.h) rects.push(rect(y - spec.h));
+    }
+  });
   const filter = spec.blur ? `<filter id="b" x="-50%" y="-5%" width="200%" height="110%"><feGaussianBlur stdDeviation="${spec.blur}"/></filter>` : "";
-  const group = spec.blur ? `<g filter="url(#b)">${rects.join("")}</g>` : rects.join("");
-  return svgDataUri(
-    `<defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${spec.color}" stop-opacity="0"/><stop offset=".7" stop-color="${spec.color}" stop-opacity=".55"/><stop offset="1" stop-color="${spec.color}" stop-opacity="1"/></linearGradient>${filter}</defs>${group}`,
-    spec.w,
-    spec.h,
-  );
+  const body = spec.blur ? `<g filter="url(#b)">${rects.join("")}</g>` : rects.join("");
+  return svgDataUri(`<defs>${gradients.join("")}${filter}</defs>${body}`, spec.w, spec.h);
 }
 
 function rainLayer(spec: RainLayerSpec, tilt: number): string {
@@ -155,6 +162,7 @@ function rainLayer(spec: RainLayerSpec, tilt: number): string {
     "--th": `${spec.h}px`,
     "--dur": `${n(spec.h / spec.speed, 3)}s`,
     "--tilt": `${tilt}deg`,
+    "--slope": n(Math.tan((tilt * Math.PI) / 180), 3),
   });
   return `<div class="vn-rain-layer ${spec.cls}" style="${style}"><i></i></div>`;
 }
@@ -162,15 +170,22 @@ function rainLayer(spec: RainLayerSpec, tilt: number): string {
 function generateRainMarkup(heavy: boolean): string {
   const prefix = heavy ? "vn-heavy-rain" : "vn-rain";
   const tilt = heavy ? 13 : 8;
+  // Two scrolling sheets keep compositing cheap: a back sheet (fine far
+  // streaks + mid streaks) and a fast, soft, out-of-focus front sheet.
   const layers: RainLayerSpec[] = [
-    { cls: `${prefix}-bg`, seed: heavy ? 201 : 101, w: 230, h: 320, count: heavy ? 30 : 20, len: [12, 26], width: 1, alpha: [0.22, 0.42], color: "#b4c8e2", speed: heavy ? 1300 : 1000 },
-    { cls: `${prefix}-mg`, seed: heavy ? 211 : 111, w: 310, h: 440, count: heavy ? 20 : 13, len: [30, 54], width: 1.4, alpha: [0.38, 0.62], color: "#c9dbf2", speed: heavy ? 1900 : 1500 },
-    { cls: `${prefix}-fg`, seed: heavy ? 221 : 121, w: 430, h: 640, count: heavy ? 9 : 6, len: [70, 130], width: 2.4, alpha: [0.42, 0.66], color: "#e6f0ff", speed: heavy ? 2700 : 2200, blur: 0.7 },
+    {
+      cls: `${prefix}-bg`, seed: heavy ? 201 : 101, w: 280, h: 400, speed: heavy ? 1500 : 1150,
+      groups: [
+        { count: heavy ? 40 : 24, len: [12, 26], width: 1, alpha: [0.22, 0.42], color: "#b4c8e2" },
+        { count: heavy ? 22 : 13, len: [30, 54], width: 1.4, alpha: [0.38, 0.62], color: "#c9dbf2" },
+      ],
+    },
+    {
+      cls: `${prefix}-fg`, seed: heavy ? 221 : 121, w: 430, h: 520, speed: heavy ? 2700 : 2200, blur: 0.7,
+      groups: [{ count: heavy ? 9 : 6, len: [70, 130], width: 2.4, alpha: [0.42, 0.66], color: "#e6f0ff" }],
+    },
   ];
-  if (heavy) {
-    // Wind-driven sheet: long faint streaks that read as rain "curtains".
-    layers.push({ cls: "vn-heavy-rain-sheet", seed: 231, w: 260, h: 700, count: 22, len: [160, 300], width: 1, alpha: [0.1, 0.22], color: "#d7e4f5", speed: 3200 });
-  }
+
 
   const splashCount = heavy ? 22 : 14;
   const splashes: string[] = [];
