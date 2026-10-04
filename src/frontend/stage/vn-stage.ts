@@ -1013,7 +1013,9 @@ export class VnStage {
         this.triggerFlashPreset("fade_to_white", 800);
         break;
       case "lightning":
+        // Double flash on the flash overlay plus a drawn bolt under the dialogue box.
         this.triggerFlashPreset("lightning", 550);
+        this.triggerFxBurst("lightning", 550);
         break;
       case "speed_lines":
         this.triggerFxBurst("speed_lines", 650);
