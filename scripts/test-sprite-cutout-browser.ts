@@ -1,0 +1,234 @@
+import { chromium, type Browser, type Page } from "playwright";
+import assert from "node:assert/strict";
+import { existsSync, readdirSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
+
+/**
+ * Sprite cut-out in a real browser (Chromium): the real worker, kernel,
+ * onnxruntime-web and model cache, on the owner's bake-off sprites.
+ *
+ * Inputs (not in the repo): CUE_SPRITE_BAKEOFF (default
+ * C:/Users/eme4/cue-sprite-bakeoff) with fixtures/raw/*.png (generated
+ * sprites on white), fixtures/sprites/*.png (Python reference cut-outs:
+ * `hybrid2` with isnetis_int8.onnx) and models/isnetis.onnx +
+ * models/isnetis_int8.onnx. onnxruntime-web is served from node_modules (the
+ * pinned devDependency) instead of the CDN, so the test runs offline.
+ *
+ * Checks:
+ *   - nothing heavy loads before a cut; the cut runs in a Worker;
+ *   - "basic" (no model) on every sprite, IoU reported, sanity floor;
+ *   - fallback: "best" with an unreachable model gives "basic" + state "error";
+ *   - for each model (int8, fp32) x backend (wasm, webgpu when headless
+ *     Chromium gets an adapter): load time, per-image time, IoU (alpha >= 128)
+ *     against the reference. Requirements: int8 (same model as the
+ *     reference) mean IoU >= 0.99 and min >= 0.98; fp32 mean IoU >= 0.97 and
+ *     min >= 0.93;
+ *   - model cache: a second load reads the cache (no download), clear removes it;
+ *   - cut service: ordered base64 chunks with meta, duplicate requestIds ignored.
+ *
+ * WASM is slow (~15-20 s per sprite single-threaded), so by default WASM runs
+ * on 3 sprites per model and WebGPU on all; SPRITE_CUTOUT_FULL=1 runs all
+ * sprites everywhere. Composites on a dark background: .cache/sprite-cutout/.
+ * Run: bun run test:sprite-cutout
+ */
+const BAKEOFF = (process.env.CUE_SPRITE_BAKEOFF ?? "C:/Users/eme4/cue-sprite-bakeoff").replace(/\\/g, "/");
+const RAW = `${BAKEOFF}/fixtures/raw`;
+const REF = `${BAKEOFF}/fixtures/sprites`;
+const MODELS = `${BAKEOFF}/models`;
+const FULL = process.env.SPRITE_CUTOUT_FULL === "1";
+const OUT = ".cache/sprite-cutout";
+
+if (!existsSync(RAW)) {
+  console.log(`SKIP sprite cut-out browser test: no bake-off sprites at ${RAW} (set CUE_SPRITE_BAKEOFF).`);
+  process.exit(0);
+}
+const names = readdirSync(RAW).filter((file) => file.endsWith(".png")).map((file) => file.slice(0, -4)).sort();
+const withRef = names.filter((name) => existsSync(`${REF}/${name}.png`));
+const models = ["isnetis_int8.onnx", "isnetis.onnx"].filter((file) => existsSync(`${MODELS}/${file}`));
+if (models.length < 2) console.log(`SKIP model part for missing files in ${MODELS}: ${["isnetis_int8.onnx", "isnetis.onnx"].filter((f) => !models.includes(f)).join(", ")}`);
+const SAMPLE = ["02_silver_white_dress", "06_windy_hair", "p02_silver_white_dress"].filter((name) => withRef.includes(name));
+
+const build = await Bun.build({ entrypoints: ["scripts/sprite-cutout-browser-fixture.ts"], target: "browser" });
+if (!build.success) throw new Error(String(build.logs));
+const bundle = await build.outputs[0]!.text();
+const TYPES: Record<string, string> = { mjs: "text/javascript", js: "text/javascript", wasm: "application/wasm", png: "image/png" };
+const requests: string[] = [];
+const server = Bun.serve({
+  hostname: "127.0.0.1",
+  port: 0,
+  fetch(request) {
+    const path = decodeURIComponent(new URL(request.url).pathname);
+    requests.push(path);
+    const send = (file: string) => {
+      if (file.includes("..") || !existsSync(file)) return new Response("missing", { status: 404 });
+      return new Response(Bun.file(file), { headers: { "Content-Type": TYPES[file.split(".").pop()!] ?? "application/octet-stream" } });
+    };
+    if (path === "/fixture.js") return new Response(bundle, { headers: { "Content-Type": "text/javascript" } });
+    if (path.startsWith("/ort/")) return send(`node_modules/onnxruntime-web/dist/${path.slice(5)}`);
+    if (path.startsWith("/models/")) return send(`${MODELS}/${path.slice(8)}`);
+    if (path.startsWith("/raw/")) return send(`${RAW}/${path.slice(5)}`);
+    if (path.startsWith("/ref/")) return send(`${REF}/${path.slice(5)}`);
+    return new Response('<html><head><meta charset="utf-8"></head><body><script type="module" src="/fixture.js"></script></body></html>', { headers: { "Content-Type": "text/html" } });
+  },
+});
+const origin = `http://127.0.0.1:${server.port}`;
+await mkdir(OUT, { recursive: true });
+
+type Row = { name: string; quality: string; ms: number; modelMs: number; cutMs: number; iou: number | null; mad: number | null; bbox: number[]; jpeg?: string };
+
+async function cutAll(page: Page, list: string[], quality: "best" | "basic", modelUrl: string, keepJpeg: boolean): Promise<Row[]> {
+  const rows: Row[] = [];
+  for (const name of list) {
+    rows.push(await page.evaluate(async ({ name, quality, modelUrl, keepJpeg, hasRef }) => {
+      const c = (window as any).cutout;
+      const blob = await c.fetchBlob(`/raw/${name}.png`);
+      const r = await c.cutSprite(blob, { quality, modelUrl });
+      const cmp = hasRef ? await c.compareAlpha(r.png, `/ref/${name}.png`) : { iou: null, mad: null };
+      return { name, quality: r.quality, ms: r.durationMs, modelMs: r.timings?.modelMs ?? 0, cutMs: r.timings?.cutMs ?? 0, iou: cmp.iou, mad: cmp.mad, bbox: r.bbox, ...(keepJpeg ? { jpeg: await c.composite(r.png) } : {}) };
+    }, { name, quality, modelUrl, keepJpeg, hasRef: withRef.includes(name) }));
+  }
+  return rows;
+}
+
+async function saveJpegs(rows: Row[], tag: string): Promise<void> {
+  for (const row of rows) if (row.jpeg) await writeFile(`${OUT}/${row.name}__${tag}.jpg`, Buffer.from(row.jpeg.split(",")[1]!, "base64"));
+}
+
+const mean = (values: number[]) => values.reduce((a, b) => a + b, 0) / Math.max(1, values.length);
+const fmt = (value: number, digits = 4) => value.toFixed(digits);
+function summarize(label: string, rows: Row[]): { meanIou: number; minIou: number; meanMs: number; meanModelMs: number } {
+  const ious = rows.map((r) => r.iou).filter((v): v is number => v !== null);
+  const steady = rows.length > 1 ? rows.slice(1) : rows; // first run warms up (shader compile, JIT)
+  const out = { meanIou: mean(ious), minIou: Math.min(...ious), meanMs: mean(steady.map((r) => r.ms)), meanModelMs: mean(steady.map((r) => r.modelMs)) };
+  console.log(`\n${label}: mean IoU ${fmt(out.meanIou)}, min ${fmt(out.minIou)}, mean ${Math.round(out.meanMs)} ms/sprite (model ${Math.round(out.meanModelMs)} ms; first ${Math.round(rows[0]?.ms ?? 0)} ms)`);
+  for (const r of rows) console.log(`  ${r.name.padEnd(26)} ${r.quality.padEnd(5)} ${String(Math.round(r.ms)).padStart(6)} ms  model ${String(Math.round(r.modelMs)).padStart(6)}  kernel ${String(Math.round(r.cutMs)).padStart(4)}  IoU ${r.iou === null ? "  -   " : fmt(r.iou)}  MAD ${r.mad === null ? "-" : fmt(r.mad)}`);
+  return out;
+}
+
+const summary: Record<string, unknown> = {};
+let browser: Browser | undefined;
+try {
+  // GPU flags: real adapter in headless Chromium; Playwright's Chromium has no
+  // dxil.dll, so Dawn must use FXC on Windows.
+  browser = await chromium.launch({ headless: true, args: ["--enable-unsafe-webgpu", "--enable-gpu", "--ignore-gpu-blocklist", "--disable-dawn-features=use_dxc"] });
+  const page = await browser.newPage();
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(`${origin}/`);
+  await page.waitForFunction(() => document.title === "sprite-cutout-ready");
+
+  // ---- Nothing heavy before a cut -------------------------------------------
+  assert.ok(!requests.some((p) => p.startsWith("/ort/") || p.startsWith("/models/")), "no runtime or model fetch at load");
+  assert.deepEqual(await page.evaluate(() => (window as any).cutout.getCutoutModelState()), { state: "absent" });
+  await page.evaluate((base) => (window as any).cutout.configureCutoutRuntime({ ortBaseUrl: base, backend: "wasm" }), `${origin}/ort/`);
+  assert.equal(await page.evaluate(() => (window as any).cutout.getCutoutRunnerMode()), "worker", "the cut-out runs in a Worker");
+
+  // ---- Basic quality ----------------------------------------------------------
+  const basic = await cutAll(page, names, "basic", `${origin}/models/none.onnx`, true);
+  await saveJpegs(basic, "basic");
+  const basicStats = summarize("basic (no model) vs reference", basic);
+  assert.ok(basic.every((r) => r.quality === "basic"), "basic stays basic");
+  assert.ok(!requests.some((p) => p.startsWith("/ort/") || p.startsWith("/models/")), "basic never loads the runtime or a model");
+  const kernelMs = mean(basic.slice(1).map((r) => r.cutMs));
+  console.log(`  kernel (flood fill + matte + defringe) mean ${Math.round(kernelMs)} ms per 832x1216 sprite`);
+  assert.ok(kernelMs < 300, `kernel under 300 ms (${kernelMs})`);
+  assert.ok(basicStats.meanIou >= 0.85, `basic mean IoU sanity floor 0.85 (${basicStats.meanIou})`);
+  assert.ok(basic.every((r) => r.bbox[2]! > 0.2 && r.bbox[3]! > 0.5), "basic bbox covers the figure");
+  summary.basic = basicStats;
+
+  // ---- Fallback: unreachable model ---------------------------------------------
+  const fallback = await page.evaluate(async (url) => {
+    const c = (window as any).cutout;
+    const r = await c.cutSprite(await c.fetchBlob("/raw/01_dark_uniform.png"), { quality: "best", modelUrl: url });
+    return { quality: r.quality, state: c.getCutoutModelState() };
+  }, `${origin}/models/missing.onnx`);
+  assert.equal(fallback.quality, "basic", "missing model falls back to basic");
+  assert.equal(fallback.state.state, "error", "state says the model failed");
+  assert.match(fallback.state.error, /404/);
+
+  // ---- Models x backends --------------------------------------------------------
+  const gpu = await page.evaluate(async () => !!(await (navigator as any).gpu?.requestAdapter().catch(() => null)));
+  if (!gpu) console.log("\nSKIP WebGPU: headless Chromium offers no adapter here.");
+  const backends: Array<"wasm" | "webgpu"> = gpu ? ["webgpu", "wasm"] : ["wasm"];
+  for (const model of models) {
+    const url = `${origin}/models/${model}`;
+    const int8 = model.includes("int8");
+    for (const backend of backends) {
+      const list = backend === "webgpu" && !int8 ? withRef : FULL ? withRef : SAMPLE;
+      const load = await page.evaluate(async ({ url, backend, base }) => {
+        const c = (window as any).cutout;
+        c.resetCutoutRuntime();
+        c.configureCutoutRuntime({ ortBaseUrl: base, backend });
+        c.states.length = 0;
+        const t = performance.now();
+        await c.prepareCutoutModel(url);
+        return { ms: performance.now() - t, info: c.getCutoutRuntimeInfo().model, states: c.states.map((s: any) => s.state) };
+      }, { url, backend, base: `${origin}/ort/` });
+      assert.equal(load.info.backend, backend, `${model} runs on ${backend}`);
+      const keep = (backend === "webgpu" || !gpu) && !int8 ? true : backend === "wasm" && int8;
+      const rows = await cutAll(page, list, "best", url, keep);
+      await saveJpegs(rows, `${int8 ? "int8" : "fp32"}_${backend}`);
+      const stats = summarize(`${model} on ${backend} (load ${Math.round(load.ms)} ms, session ${Math.round(load.info.loadMs)} ms; states ${[...new Set(load.states)].join(" > ")})`, rows);
+      assert.ok(rows.every((r) => r.quality === "best"), `${model}/${backend}: model used for every sprite`);
+      if (int8) {
+        assert.ok(stats.meanIou >= 0.99 && stats.minIou >= 0.98, `${model}/${backend}: IoU vs reference mean >= 0.99, min >= 0.98 (${fmt(stats.meanIou)}, ${fmt(stats.minIou)})`);
+      } else {
+        assert.ok(stats.meanIou >= 0.97 && stats.minIou >= 0.93, `${model}/${backend}: IoU vs reference mean >= 0.97, min >= 0.93 (${fmt(stats.meanIou)}, ${fmt(stats.minIou)})`);
+      }
+      summary[`${model}/${backend}`] = { ...stats, loadMs: load.ms, sessionMs: load.info.loadMs, sprites: rows.length };
+    }
+  }
+
+  // ---- Model cache --------------------------------------------------------------
+  if (models.length) {
+    const model = models[0]!;
+    const url = `${origin}/models/${model}`;
+    const before = requests.filter((p) => p === `/models/${model}`).length;
+    const cache = await page.evaluate(async ({ url, base }) => {
+      const c = (window as any).cutout;
+      c.resetCutoutRuntime();
+      c.configureCutoutRuntime({ ortBaseUrl: base, backend: "wasm" });
+      c.states.length = 0;
+      const cachedBefore = await c.getCachedCutoutModelBytes(url);
+      await c.prepareCutoutModel(url);
+      const states = c.states.map((s: any) => s.state);
+      const ready = c.getCutoutModelState();
+      await c.clearCutoutModel();
+      return { cachedBefore, states, ready, after: c.getCutoutModelState(), cachedAfter: await c.getCachedCutoutModelBytes(url) };
+    }, { url, base: `${origin}/ort/` });
+    assert.ok((cache.cachedBefore ?? 0) > 1_000_000, "model is cached after the first download");
+    assert.equal(requests.filter((p) => p === `/models/${model}`).length, before, "second load reads the browser cache, not the network");
+    assert.ok(!cache.states.includes("downloading"), "no download state on a cached load");
+    assert.equal(cache.ready.state, "ready");
+    assert.equal(cache.ready.bytes, cache.cachedBefore);
+    assert.deepEqual(cache.after, { state: "absent" });
+    assert.equal(cache.cachedAfter, null, "clear removes the cached model");
+  }
+
+  // ---- Cut service -----------------------------------------------------------------
+  const service = await page.evaluate(async () => {
+    const c = (window as any).cutout;
+    const { service, sent } = c.startService();
+    const a = { type: "vn_sprite_cut", requestId: "r1", imageId: "05_boy_jacket", setKey: "s", expression: "idle" };
+    const b = { type: "vn_sprite_cut", requestId: "r2", imageId: "missing_image", setKey: "s", expression: "smile" };
+    await Promise.all([service.handle(a), service.handle(a), service.handle(b)]);
+    const first = sent.filter((m: any) => m.requestId === "r1");
+    const data = first.map((m: any) => m.dataBase64).join("");
+    const bytes = Uint8Array.from(atob(data), (ch) => ch.charCodeAt(0));
+    const px = await c.pixels(new Blob([bytes], { type: "image/png" }));
+    return { count: first.length, indexes: first.map((m: any) => m.chunkIndex), chunkCount: first[0].chunkCount, meta: first[0].meta, size: [px.width, px.height], error: sent.find((m: any) => m.requestId === "r2")?.error ?? null };
+  });
+  assert.equal(service.count, service.chunkCount, "one message per chunk, duplicate ignored");
+  assert.deepEqual(service.indexes, [...Array(service.chunkCount).keys()], "chunks in order");
+  assert.deepEqual(service.size, [832, 1216], "chunks reassemble to the PNG");
+  assert.equal(service.meta.quality, "basic");
+  assert.deepEqual([service.meta.width, service.meta.height], [832, 1216]);
+  assert.ok(service.error && /404/.test(service.error), "failed fetch replies with an error");
+
+  assert.deepEqual(errors, [], "no page errors");
+  await writeFile(`${OUT}/summary.json`, JSON.stringify(summary, null, 2));
+  console.log(`\nsprite cut-out browser test passed (composites in ${OUT}/)`);
+} finally {
+  await browser?.close();
+  server.stop(true);
+}
