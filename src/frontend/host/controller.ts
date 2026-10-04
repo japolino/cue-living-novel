@@ -5,6 +5,8 @@ import type { AssetView, BackendResponse, ConnectionCatalogOption, FrontendReque
 import { AudioEngine, VnStage, isAmbientEffect, isStageEffect } from "../stage/index.js";
 import type { AmbientEffect, StageEffect } from "../store/index.js";
 import { VisualNovelSettingsPanel } from "../settings/panel.js";
+import { DEFAULT_SPRITE_MODEL_URL } from "../../shared/sprites.js";
+import { clearCutoutModel, getCutoutModelState, onCutoutModelState, prepareCutoutModel } from "../sprites/cutout/index.js";
 import type { VnChoice, VnTurnInput } from "../store/index.js";
 import { createVnHeaderLauncher } from "./manual-launcher.js";
 import { captureSimTrackerCards } from "./panel-capture.js";
@@ -663,8 +665,26 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
         settingsPanel?.setConfig(next);
       }
       ctx.sendToBackend({ type: "vn_set_config", patch, chatId: chatId() });
-    }
+    },
+    // Sprite mode: library actions and requests go to the backend; the cut-out
+    // model lives in this browser, so its buttons call the cut-out module.
+    onSpriteAction: (action) => {
+      ctx.sendToBackend({ type: "vn_sprite_action", ...action, ...(action.action === "prepare_chat" && !action.chatId ? { chatId: chatId() } : {}) });
+    },
+    onRequestSpriteLibrary: () => ctx.sendToBackend({ type: "vn_get_sprite_library" }),
+    onPrepareCutoutModel: () => {
+      prepareCutoutModel(configRef.current?.spriteModelUrl ?? DEFAULT_SPRITE_MODEL_URL).catch((error: unknown) => {
+        settingsPanel?.setCutoutModelState({ state: "error", error: error instanceof Error ? error.message : String(error) });
+      });
+    },
+    onClearCutoutModel: () => {
+      clearCutoutModel()
+        .then(() => settingsPanel?.setCutoutModelState(getCutoutModelState()))
+        .catch((error: unknown) => settingsPanel?.setCutoutModelState({ state: "error", error: error instanceof Error ? error.message : String(error) }));
+    },
   }) : null;
+  settingsPanel?.setCutoutModelState(getCutoutModelState());
+  const unsubCutoutModel = settingsPanel ? onCutoutModelState((state) => settingsPanel.setCutoutModelState(state)) : () => {};
   // Speech settings render inside the panel's Voice section (own shadow root,
   // own save path). Profile/voice listing happens only on explicit button
   // presses inside it (metadata calls, no synthesis).
@@ -908,6 +928,10 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       settingsPanel?.setSystemOneKeyStatus(message.saved);
       return;
     }
+    if (type === "vn_sprite_library" && message.type === "vn_sprite_library") {
+      settingsPanel?.setSpriteLibrary(message.sets, message.plates);
+      return;
+    }
     if (type === "vn_audio_scanned" && message.type === "vn_audio_scanned") {
       settingsPanel?.setAudioStatus(`Scanned ${message.bgmCount} BGM, ${message.sfxCount} SFX.`);
       settingsPanel?.setAudioLibrary?.({ bgmCount: message.bgmCount, sfxCount: message.sfxCount });
@@ -1097,6 +1121,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     speech.dispose();
     speechDock.destroy();
     speechSettings?.destroy();
+    unsubCutoutModel();
     settingsPanel?.destroy();
     settingsHandle?.destroy();
     audioEngine.destroy();
