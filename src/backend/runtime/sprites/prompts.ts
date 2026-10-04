@@ -96,10 +96,16 @@ function novelAiNegative(config: VisualNovelConfig, extra: string, model: string
   return renderNovelAiEmphasis(dedupeSections([base, extra]).join(", "), model);
 }
 
-function novelAiQuality(config: VisualNovelConfig, model: string, present: string[]): string[] {
+/**
+ * NovelAI quality tags. V4.5 ones start with "location" (a background-focus
+ * tag), which suits plates but would pull a sprite off its white background.
+ */
+function novelAiQuality(config: VisualNovelConfig, model: string, present: string[], forSprite: boolean): string[] {
   if (config.novelAiQualityTags === false) return [];
   const have = new Set(present.flatMap((section) => splitTopLevelCsv(section)).map(tagKey));
-  return splitTopLevelCsv(novelAiQualityTags(model)).map((tag) => tag.trim()).filter((tag) => tag && !have.has(tagKey(tag)));
+  return splitTopLevelCsv(novelAiQualityTags(model))
+    .map((tag) => tag.trim())
+    .filter((tag) => tag && !have.has(tagKey(tag)) && !(forSprite && tagKey(tag) === "location"));
 }
 
 /** Identity tags with the outfit swapped in (the same rule scene prompts use). */
@@ -135,7 +141,7 @@ export function compileSpriteRequest(input: {
     const base = caps.structured
       ? dedupeSections([stylePrefix(config, true), subject, SPRITE_FRAMING_TAGS, config.promptSuffix])
       : dedupeSections([stylePrefix(config, true), subject, identity, pose.suffix, SPRITE_FRAMING_TAGS, config.promptSuffix]);
-    const quality = novelAiQuality(config, model, [...base, ...(caps.structured ? characterSections : [])]);
+    const quality = novelAiQuality(config, model, [...base, ...(caps.structured ? characterSections : [])], true);
     const prompt = renderNovelAiEmphasis([...base, ...quality].join(", "), model);
     const negativePrompt = novelAiNegative(config, SPRITE_NEGATIVE_TAGS, model);
     return {
@@ -172,7 +178,7 @@ export function compilePlateRequest(input: {
   if (provider === "novelai") {
     const model = config.imageModel || "nai-diffusion-4-5-full";
     const base = dedupeSections([stylePrefix(config, true), place, redundant ? "" : description, PLATE_TAGS, config.promptSuffix]);
-    const quality = novelAiQuality(config, model, base);
+    const quality = novelAiQuality(config, model, base, false);
     const prompt = renderNovelAiEmphasis([...base, ...quality].join(", "), model);
     const negativePrompt = novelAiNegative(config, PLATE_NEGATIVE_TAGS, model);
     return { prompt, negativePrompt, parameters: { qualityToggle: false, negativePrompt, characterTags: [], ...extra } };

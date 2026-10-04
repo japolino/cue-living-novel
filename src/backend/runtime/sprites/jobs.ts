@@ -142,6 +142,8 @@ export class SpriteService {
   readonly bridge: SpriteCutBridge;
   private readonly users = new Map<string, UserState>();
   private readonly references = new Map<string, { imageId: string; data: string; mimeType: string }>();
+  /** Relay misses per set (raw image id + until): later expressions do not wait for the same timeout again. */
+  private readonly referenceMisses = new Map<string, { imageId: string; until: number }>();
   private readonly cutTasks = new Set<Promise<void>>();
 
   constructor(private readonly spindle: SpindleAPI, private readonly deps: SpriteServiceDeps) {
@@ -403,6 +405,7 @@ export class SpriteService {
     image.width = null;
     image.height = null;
     image.quality = null;
+    image.upgrade = null;
     image.error = null;
     image.cutAttempts = 0;
     image.updatedAt = now;
@@ -415,7 +418,33 @@ export class SpriteService {
   /** A Cue view opened: resume queued work (sprite mode only) and re-send cuts the browser may have lost. */
   async onViewOpened(userId: string | undefined): Promise<void> {
     this.bridge.resend(userId, 10_000);
+    await this.queueCutUpgrades(userId);
     await this.pump(userId);
+  }
+
+  /**
+   * Cut-outs made with the "basic" fallback while "best" is selected (the
+   * model was not ready yet) are re-cut once from the raw render. The old
+   * cut stays on stage until the new one replaces it.
+   */
+  async queueCutUpgrades(userId: string | undefined): Promise<number> {
+    const config = await this.deps.loadConfig(userId);
+    if (config.spriteCutout !== "best") return 0;
+    const library = await this.library.get(userId);
+    const due = Object.values(library.sets).some((set) => Object.values(set.images).some((image) => image.status === "ready" && image.quality === "basic" && image.rawImageId && image.upgrade === null));
+    if (!due) return 0;
+    return this.library.update(userId, (lib, now) => {
+      let count = 0;
+      for (const set of Object.values(lib.sets)) {
+        for (const image of Object.values(set.images)) {
+          if (image.status !== "ready" || image.quality !== "basic" || !image.rawImageId || image.upgrade !== null) continue;
+          image.upgrade = "pending";
+          image.updatedAt = now;
+          count += 1;
+        }
+      }
+      return count;
+    });
   }
 
   /** `vn_get_state`: a reloaded frontend lost its cut requests; re-send stale ones. */
@@ -517,10 +546,11 @@ export class SpriteService {
     const pending: Array<{ target: SpriteCutTarget; rank: number }> = [];
     for (const set of Object.values(library.sets)) {
       for (const image of Object.values(set.images)) {
-        if (image.status !== "cutting" || !image.rawImageId) continue;
+        const upgrade = image.status === "ready" && image.upgrade === "pending";
+        if ((image.status !== "cutting" && !upgrade) || !image.rawImageId) continue;
         if (this.bridge.isOutstanding(userId, set.setKey, image.expression)) continue;
         const wanted = state.wanted.get(spriteWorkKey(set.setKey, image.expression));
-        pending.push({ target: { setKey: set.setKey, expression: image.expression, imageId: image.rawImageId }, rank: wanted ? PRIORITY_RANK[wanted] : 3 });
+        pending.push({ target: { setKey: set.setKey, expression: image.expression, imageId: image.rawImageId }, rank: upgrade ? 4 : wanted ? PRIORITY_RANK[wanted] : 3 });
       }
     }
     pending.sort((left, right) => left.rank - right.rank);
@@ -725,6 +755,8 @@ export class SpriteService {
     if (!idle?.rawImageId) return null;
     const memo = this.references.get(set.setKey);
     if (memo && memo.imageId === idle.rawImageId) return memo;
+    const miss = this.referenceMisses.get(set.setKey);
+    if (miss && miss.imageId === idle.rawImageId && miss.until > Date.now()) return null;
     const dataUrl = await fetchReferenceImageViaFrontend(this.spindle, {
       chatId: this.deps.openChatId?.(userId) ?? "",
       imageId: idle.rawImageId,
@@ -734,7 +766,18 @@ export class SpriteService {
       signal,
     });
     const parsed = parseDataUrl(dataUrl ?? undefined);
-    if (!parsed || Math.floor(parsed.data.length * 3 / 4) > REFERENCE_IMAGE_MAX_BYTES) return null;
+    if (!parsed || Math.floor(parsed.data.length * 3 / 4) > REFERENCE_IMAGE_MAX_BYTES) {
+      if (!signal.aborted) {
+        this.referenceMisses.set(set.setKey, { imageId: idle.rawImageId, until: Date.now() + 5 * 60_000 });
+        while (this.referenceMisses.size > 64) {
+          const oldest = this.referenceMisses.keys().next().value;
+          if (oldest === undefined) break;
+          this.referenceMisses.delete(oldest);
+        }
+      }
+      return null;
+    }
+    this.referenceMisses.delete(set.setKey);
     const reference = { imageId: idle.rawImageId, ...parsed };
     this.rememberReference(set.setKey, reference);
     return reference;
@@ -860,9 +903,24 @@ export class SpriteService {
     const library = await this.library.get(userId);
     const current = (): StoredSpriteImage | null => {
       const image = library.sets[target.setKey]?.images[target.expression];
-      return image && image.status === "cutting" && image.rawImageId === target.imageId ? image : null;
+      if (!image || image.rawImageId !== target.imageId) return null;
+      return image.status === "cutting" || (image.status === "ready" && image.upgrade === "pending") ? image : null;
     };
-    if (!current()) return;
+    const first = current();
+    if (!first) return;
+    if (first.status === "ready") {
+      // A silent upgrade re-cut: any failure keeps the basic cut; it is tried only once.
+      if (!outcome.ok || outcome.meta.quality !== "best") {
+        await this.library.update(userId, (_library, now) => {
+          const image = current();
+          if (!image) return;
+          image.upgrade = "done";
+          image.updatedAt = now;
+        });
+        void this.pump(userId);
+        return;
+      }
+    }
     if (!outcome.ok) {
       const limit = this.deps.maxCutTimeouts ?? 3;
       const broadcast = await this.library.update(userId, (_library, now) => {
@@ -903,6 +961,11 @@ export class SpriteService {
         stale = true;
         return null;
       }
+      if (!uploaded && image.status === "ready") {
+        image.upgrade = "done";
+        image.updatedAt = now;
+        return null;
+      }
       if (!uploaded) {
         image.status = "failed";
         image.error = `Could not save the cut-out: ${uploadError ?? "unknown error"}`;
@@ -917,6 +980,8 @@ export class SpriteService {
       image.width = outcome.meta.width;
       image.height = outcome.meta.height;
       image.quality = outcome.meta.quality;
+      // A basic cut while "best" is selected gets one silent upgrade later.
+      image.upgrade = image.upgrade === "pending" ? "done" : null;
       image.error = null;
       image.cutAttempts = 0;
       image.updatedAt = now;

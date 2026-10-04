@@ -40,6 +40,12 @@ export const StoredSpriteImageSchema = z.object({
   width: z.number().int().positive().nullable().default(null),
   height: z.number().int().positive().nullable().default(null),
   quality: z.enum(["best", "basic"]).nullable().default(null),
+  /**
+   * A "basic" cut made while "best" was selected (the model was not ready)
+   * is re-cut once, silently, from the raw render: "pending" until that cut
+   * settles, then "done" (never retried again).
+   */
+  upgrade: z.enum(["pending", "done"]).nullable().default(null),
   error: z.string().max(2000).nullable().default(null),
   /** Finished provider generations (success or failure); varies the regeneration seed. */
   attempts: z.number().int().nonnegative().default(0),
@@ -137,6 +143,7 @@ export function newSpriteImage(expression: string, now: string, status: SpriteIm
     width: null,
     height: null,
     quality: null,
+    upgrade: null,
     error: null,
     attempts: 0,
     cutAttempts: 0,
