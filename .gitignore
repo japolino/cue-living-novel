@@ -3,6 +3,7 @@ node_modules/
 *.log
 .DS_Store
 demo/demo.js
+demo/fixtures/
 
 .cache/
 
