@@ -1,5 +1,5 @@
 import type { SpindleFrontendContext } from "lumiverse-spindle-types";
-import type { VisualNovelConfig, VisualNovelEffectIntensity, VisualNovelTextEffectMode } from "../../config.js";
+import type { VisualNovelConfig, VisualNovelEffectIntensity, VisualNovelPresentationMode, VisualNovelTextEffectMode } from "../../config.js";
 import { REFERENCE_IMAGE_MAX_BYTES, REFERENCE_IMAGE_MIMES } from "../../protocol.js";
 import type { AssetView, BackendResponse, ConnectionCatalogOption, FrontendRequest, TurnView } from "../../protocol.js";
 import { AudioEngine, VnStage, isAmbientEffect, isStageEffect } from "../stage/index.js";
@@ -23,6 +23,9 @@ import { SpeechController, type SpeechCursor } from "../speech/controller.js";
 import { createSpeechTransport } from "../speech/transport.js";
 import { SpeechDock } from "../speech/ui.js";
 import { SpeechSettingsSection } from "../speech/settings-ui.js";
+import { createSpriteCutService } from "../sprites/cut-service.js";
+import { withPlate, withSpriteImage } from "../stage/sprite-layer.js";
+import type { PlateView, SpriteImageView } from "../../shared/sprites.js";
 
 const CLEANUP_KEY = Symbol.for("visual-novel-preview.frontend-cleanup");
 
@@ -48,9 +51,7 @@ export async function relayReferenceFetch(
   send: (reply: Extract<FrontendRequest, { type: "vn_reference_image" }>) => void
 ): Promise<void> {
   try {
-    const response = await fetchImpl(`/api/v1/images/${encodeURIComponent(message.imageId)}`, { credentials: "same-origin" });
-    if (!response.ok) throw new Error(`Image fetch failed (${response.status}).`);
-    const blob = await response.blob();
+    const blob = await fetchLumiverseImage(message.imageId, fetchImpl);
     if (blob.size > REFERENCE_IMAGE_MAX_BYTES) throw new Error("Reference image exceeds the 8 MiB relay limit.");
     const mimeType = blob.type.toLowerCase();
     if (!REFERENCE_IMAGE_MIMES.has(mimeType)) throw new Error("Reference asset is not a supported image.");
@@ -59,6 +60,19 @@ export async function relayReferenceFetch(
   } catch (error) {
     send({ type: "vn_reference_image", requestId: message.requestId, error: error instanceof Error ? error.message : String(error) });
   }
+}
+
+/**
+ * Fetch a Lumiverse image's bytes from the logged-in origin (same-origin
+ * credentials). Shared by reference anchoring and the sprite cut-out.
+ */
+export async function fetchLumiverseImage(
+  imageId: string,
+  fetchImpl: (input: string, init?: RequestInit) => Promise<Response>,
+): Promise<Blob> {
+  const response = await fetchImpl(`/api/v1/images/${encodeURIComponent(imageId)}`, { credentials: "same-origin" });
+  if (!response.ok) throw new Error(`Image fetch failed (${response.status}).`);
+  return response.blob();
 }
 
 function messageType(value: unknown): string {
@@ -236,7 +250,8 @@ export function stageTurnInput(
     })),
     choices: next.choices.map((choice) => ({ id: choice.id, label: choice.label, value: choice.value })),
     preserveImage,
-    ...(next.ambients !== undefined ? { ambient: firstAmbient(next, intensity) } : {})
+    ...(next.ambients !== undefined ? { ambient: firstAmbient(next, intensity) } : {}),
+    ...(next.sprites ? { sprites: next.sprites } : {})
   };
 }
 
@@ -304,6 +319,8 @@ export type VisualStageThemeTarget = Pick<
   setEffectIntensity?: (level: VisualNovelEffectIntensity) => void;
   /** Inline dialogue text effects mode (stage sets `data-vn-text-effects`). */
   setTextEffects?: (mode: VisualNovelTextEffectMode) => void;
+  /** Scene pictures or sprite mode (stage shows or removes the sprite layer). */
+  setPresentationMode?: (mode: VisualNovelPresentationMode) => void;
 };
 
 /**
@@ -327,6 +344,30 @@ export function applyVisualConfigToStage(
   stage.setTextScale?.(config.textScale);
   stage.setEffectIntensity?.(config.effectIntensity);
   stage.setTextEffects?.(config.textEffects);
+  stage.setPresentationMode?.(config.presentationMode);
+}
+
+/**
+ * Whether the stage paints this turn itself in sprite mode (plates and
+ * sprites from `turn.sprites`). Scene-image sync stays off then, so plates
+ * and leftover scene assets never fight over the background.
+ */
+export function stageOwnsBackground(config: Pick<VisualNovelConfig, "presentationMode"> | null, turn: Pick<TurnView, "sprites"> | null): boolean {
+  return config?.presentationMode === "sprites" && Boolean(turn?.sprites);
+}
+
+/** Apply a `vn_sprite_update` to a turn's sprite view (unchanged turns are returned as is). */
+export function turnWithSpriteImage<T extends Pick<TurnView, "sprites">>(turn: T, setKey: string, image: SpriteImageView): T {
+  if (!turn.sprites) return turn;
+  const { view, changed } = withSpriteImage(turn.sprites, setKey, image);
+  return changed.length ? { ...turn, sprites: view } : turn;
+}
+
+/** Apply a `vn_plate_update` to a turn's sprite view (unchanged turns are returned as is). */
+export function turnWithPlate<T extends Pick<TurnView, "sprites">>(turn: T, plate: PlateView): T {
+  if (!turn.sprites) return turn;
+  const { view, changed } = withPlate(turn.sprites, plate);
+  return changed ? { ...turn, sprites: view } : turn;
 }
 
 /**
@@ -343,6 +384,10 @@ export type SettingsFeedbackTarget = {
   setSaveStatus?(status: { kind: "saved" } | { kind: "error"; error: string }): void;
   /** Exact library counts from the last scan/import. */
   setAudioLibrary?(library: { bgmCount: number; sfxCount: number }): void;
+  /** Sprite mode: one sprite image changed (library gallery). */
+  applySpriteUpdate?(setKey: string, image: SpriteImageView): void;
+  /** Sprite mode: one plate changed (library gallery). */
+  applyPlateUpdate?(plate: PlateView): void;
 };
 
 export type ConnectionCatalogFeedback =
@@ -657,7 +702,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       if (current) {
         const next = { ...current, ...patch };
         configRef.current = next;
-        applyVisualConfigToStage(stage, next);
+        pushConfigToStage(next);
         audioEngine.setBgmVolume(next.bgmVolume);
         audioEngine.setSfxVolume(next.sfxVolume);
         settingsPanel?.setConfig(next);
@@ -682,6 +727,23 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   function chatId(): string {
     return ctx.getActiveChat().chatId ?? "";
   }
+
+  // Presentation mode last pushed to the stage; a switch re-syncs the background.
+  let stagePresentationMode: VisualNovelPresentationMode | null = null;
+  function pushConfigToStage(config: VisualNovelConfig): void {
+    applyVisualConfigToStage(stage, config);
+    const changed = stagePresentationMode !== null && stagePresentationMode !== config.presentationMode;
+    stagePresentationMode = config.presentationMode;
+    if (changed && turn) void syncImageForParagraph(stage.getState().currentParagraphIndex);
+  }
+
+  // Sprite cut-outs: the backend cannot read image bytes, so the logged-in
+  // frontend fetches the generated sprite, cuts it and relays the PNG.
+  const spriteCuts = createSpriteCutService({
+    sendToBackend: (request) => ctx.sendToBackend(request),
+    fetchImage: (imageId) => fetchLumiverseImage(imageId, (input, init) => fetch(input, init)),
+    getConfig: () => configRef.current,
+  });
 
   let lastAnnouncedChatId = "";
   // True until the first vn_state answers the boot request; that reply decides
@@ -805,6 +867,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
 
   async function syncImageForParagraph(paragraphIndex: number): Promise<void> {
     if (!turn) return;
+    if (stageOwnsBackground(configRef.current, turn)) return;
     const assetFailure = currentAssetFailure(turn, paragraphIndex);
     if (assetFailure) reportStageError(assetFailure);
     const asset = selectCurrentImage(turn, paragraphIndex);
@@ -869,6 +932,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       // a same-turn rebroadcast (e.g. an image/asset update) never replays speech.
       syncSpeechCursor(next, decision.paragraphIndex);
       panels.setTurn(next, decision.paragraphIndex);
+      stage.setSpriteTurn(next.sprites ?? null);
       void syncImageForParagraph(decision.paragraphIndex);
       return;
     }
@@ -916,7 +980,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     if (type === "vn_state" && message.type === "vn_state") {
       configRef.current = message.config;
       imageBridge.fit(message.config.sceneImageFit);
-      applyVisualConfigToStage(stage, configRef.current);
+      pushConfigToStage(configRef.current);
       audioEngine.setBgmVolume(configRef.current.bgmVolume);
       audioEngine.setSfxVolume(configRef.current.sfxVolume);
       speech.setSettings(configRef.current.speech);
@@ -948,7 +1012,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       // The echo of a persisted config is the only save acknowledgment the
       // transport offers; "saved" is claimed here and nowhere earlier.
       configRef.current = message.config;
-      applyVisualConfigToStage(stage, configRef.current);
+      pushConfigToStage(configRef.current);
       audioEngine.setBgmVolume(configRef.current.bgmVolume);
       audioEngine.setSfxVolume(configRef.current.sfxVolume);
       speech.setSettings(configRef.current.speech);
@@ -995,6 +1059,25 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       // the active chat: the backend keeps generating for its own chat and the
       // image id came from the backend, not from user input.
       void relayReferenceFetch(message, (input, init) => fetch(input, init), (reply) => ctx.sendToBackend(reply));
+      return;
+    }
+    if (type === "vn_sprite_cut" && message.type === "vn_sprite_cut") {
+      // Like vn_reference_fetch: served for any chat; the ids come from the backend.
+      void spriteCuts.handle(message);
+      return;
+    }
+    if (type === "vn_sprite_update" && message.type === "vn_sprite_update") {
+      if (turn) turn = turnWithSpriteImage(turn, message.setKey, message.image);
+      if (pendingNextTurn) pendingNextTurn = turnWithSpriteImage(pendingNextTurn, message.setKey, message.image);
+      stage.updateSpriteImage(message.setKey, message.image);
+      settingsPanel?.applySpriteUpdate?.(message.setKey, message.image);
+      return;
+    }
+    if (type === "vn_plate_update" && message.type === "vn_plate_update") {
+      if (turn) turn = turnWithPlate(turn, message.plate);
+      if (pendingNextTurn) pendingNextTurn = turnWithPlate(pendingNextTurn, message.plate);
+      stage.updatePlate(message.plate);
+      settingsPanel?.applyPlateUpdate?.(message.plate);
       return;
     }
     if (type === "vn_planning" && message.type === "vn_planning") {
@@ -1103,6 +1186,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     panels.destroy();
     gameBridge?.destroy();
     imageBridge.destroy();
+    spriteCuts.dispose();
     for (const pending of panelRequests.values()) { clearTimeout(pending.timer); pending.reject(new Error("Panel layer closed.")); }
     panelRequests.clear();
     stage.destroy();

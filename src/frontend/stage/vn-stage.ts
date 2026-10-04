@@ -22,6 +22,8 @@ import {
   type VnTurnInput,
 } from "../store";
 import { generateAmbientMarkup, generateCueEffectMarkup } from "./procedural-particles.js";
+import { SpriteLayer, type SpriteLayerSnapshot } from "./sprite-layer.js";
+import type { PlateView, SpriteImageView, SpriteTurnView } from "../../shared/sprites.js";
 
 export type { StageEffect };
 export type { AmbientEffect };
@@ -94,6 +96,7 @@ import {
   TEXT_SCALE_MAX,
   TEXT_SCALE_MIN,
   type VisualNovelEffectIntensity,
+  type VisualNovelPresentationMode,
   type VisualNovelSceneImageFit,
   type VisualNovelTextEffectMode,
   type VisualNovelThemePreset,
@@ -163,6 +166,7 @@ const THEME_MARKUP = `
       <img data-vn-scene-image data-vn-layer="incoming" data-vn-empty="true" alt="" />
       <div data-vn-ambient aria-hidden="true"></div>
       <div data-vn-scrim></div>
+      <div data-vn-sprites hidden aria-hidden="true"></div>
     </div>
 
     ${VN_ORNAMENT_LAYER_MARKUP}
@@ -239,6 +243,9 @@ const THEME_MARKUP = `
     </div>
   </main>
 `;
+
+/** Scene-image request ids of sprite-mode plates start with this. */
+const PLATE_REQUEST_PREFIX = "plate:";
 
 const queryRequired = <T extends Element>(
   root: ParentNode,
@@ -486,6 +493,13 @@ export class VnStage {
   /** Host-reported image failure that must not stop reading. */
   private hostImageError: VnStageErrorDetails | null = null;
   private lastSkipStop: "unread" | null = null;
+  /** Sprite mode (config `presentationMode`); "scene" keeps the classic stage untouched. */
+  private presentationMode: VisualNovelPresentationMode = "scene";
+  private readonly spriteLayer: SpriteLayer;
+  private spritesEl: HTMLElement | null = null;
+  /** Plate URL whose scene-image request is queued for the next microtask. */
+  private queuedPlateUrl: string | null = null;
+  private readonly failedPlateUrls = new Set<string>();
 
   constructor(options: VnStageOptions) {
     this.state = options.initialState ?? createInitialVnStageState();
@@ -559,6 +573,11 @@ export class VnStage {
     this.fxOverlay = queryRequired(this.themeRoot, "[data-vn-fx]");
     this.ambientOverlay = queryRequired(this.themeRoot, "[data-vn-ambient]");
     this.setSceneImageFit(options.sceneImageFit ?? "cover");
+    this.spriteLayer = new SpriteLayer({
+      container: () => this.spriteContainer(),
+      loadImage: (url) => this.loadSpriteImage(url),
+      onStatusChange: () => { if (!this.destroyed) this.renderStatus(); },
+    });
     this.statusStack = queryRequired(this.themeRoot, "[data-vn-status-stack]");
     this.emptyState = queryRequired(this.themeRoot, "[data-vn-empty-state]");
     this.narrative = queryRequired(this.themeRoot, "[data-vn-narrative]");
@@ -791,12 +810,135 @@ export class VnStage {
     this.continueButton.setAttribute("aria-disabled", String(!canAdvance));
     this.previousButton.disabled = !view.canGoBack;
     this.continueButton.dataset.vnReady = String(isReady);
+    if (this.presentationMode === "sprites") this.spriteLayer.setTalking(this.isTyping);
   }
 
   setSceneImageFit(fit: VisualNovelSceneImageFit): void {
     for (const img of this.sceneImages) {
       img.dataset.vnSceneImageFit = fit;
     }
+  }
+
+  /**
+   * Presentation mode (config `presentationMode`). "sprites" shows the
+   * staged character layer and paints plates through the scene image layers;
+   * "scene" (the default) removes every sprite and any plate on screen, so a
+   * runtime switch never leaves stale layers.
+   */
+  setPresentationMode(mode: VisualNovelPresentationMode): void {
+    const next: VisualNovelPresentationMode = mode === "sprites" ? "sprites" : "scene";
+    if (next === this.presentationMode) return;
+    this.presentationMode = next;
+    this.root.dataset.vnPresentation = next;
+    if (next === "scene") {
+      this.spriteLayer.setEnabled(false);
+      this.queuedPlateUrl = null;
+      const isPlate = (image: VnSceneImage | null) => Boolean(image?.requestId.startsWith(PLATE_REQUEST_PREFIX));
+      if (isPlate(this.state.displayedImage) || isPlate(this.state.pendingImage)) {
+        this.dispatch({ type: "clear-image" });
+        return;
+      }
+    } else {
+      this.spriteLayer.setEnabled(true);
+    }
+    this.render(this.state.phase);
+  }
+
+  getPresentationMode(): VisualNovelPresentationMode {
+    return this.presentationMode;
+  }
+
+  /**
+   * The current turn's sprite view (`TurnView.sprites`), or null. Applied at
+   * the current paragraph; `loadTurn({ sprites })` sets it together with a
+   * new turn so the first paragraph never shows the previous turn's staging.
+   */
+  setSpriteTurn(view: SpriteTurnView | null): void {
+    this.spriteLayer.setTurn(view);
+    this.syncSprites();
+    this.renderStatus();
+  }
+
+  /** One sprite image changed state (`vn_sprite_update`). */
+  updateSpriteImage(setKey: string, image: SpriteImageView): void {
+    if (this.destroyed) return;
+    this.spriteLayer.updateImage(setKey, image);
+    this.syncSprites();
+  }
+
+  /** One plate changed state (`vn_plate_update`). */
+  updatePlate(plate: PlateView): void {
+    if (this.destroyed) return;
+    if (this.spriteLayer.updatePlate(plate)) {
+      if (plate.url) this.failedPlateUrls.delete(plate.url);
+      this.syncSprites();
+    }
+  }
+
+  /** What the sprite layer shows now (tests, diagnostics). */
+  getSpriteSnapshot(): SpriteLayerSnapshot & { mode: VisualNovelPresentationMode } {
+    return { mode: this.presentationMode, ...this.spriteLayer.snapshot() };
+  }
+
+  private spriteContainer(): HTMLElement {
+    if (this.spritesEl) return this.spritesEl;
+    let element = this.scene.querySelector<HTMLElement>("[data-vn-sprites]");
+    if (!element) {
+      element = document.createElement("div");
+      element.setAttribute("data-vn-sprites", "");
+      element.setAttribute("aria-hidden", "true");
+      this.scene.append(element);
+    }
+    this.spritesEl = element;
+    return element;
+  }
+
+  private loadSpriteImage(url: string): Promise<void> {
+    if (!this.createImage && typeof Image === "undefined") return Promise.resolve();
+    return preloadAndDecodeVnImage(url, this.createImage);
+  }
+
+  /** Apply the current paragraph's staging and plate (sprite mode only). */
+  private syncSprites(): void {
+    if (this.destroyed || this.presentationMode !== "sprites") return;
+    const view = selectVnStageView(this.state);
+    if (!view.paragraph) {
+      if (this.spriteLayer.currentIndex() !== -1) this.spriteLayer.clear();
+      return;
+    }
+    // The reader's own line is not part of the staging: keep the last stage.
+    if (this.state.isUserTurn) {
+      this.spriteLayer.setTalking(false);
+      return;
+    }
+    const index = this.state.currentParagraphIndex;
+    this.spriteLayer.show(index, {
+      animate: !this.isRewinding && !this.isSkipping && this.effectIntensity !== "off",
+      speaker: view.paragraph.speaker,
+    });
+    this.spriteLayer.setTalking(this.isTyping);
+    this.syncSpritePlate(index);
+  }
+
+  private syncSpritePlate(index: number): void {
+    if (!this.spriteLayer.getView()) return;
+    const plate = this.spriteLayer.plateFor(index);
+    if (!plate || plate.status !== "ready" || !plate.url) return;
+    const url = plate.url;
+    if (this.state.displayedImage?.url === url || this.state.pendingImage?.url === url) return;
+    if (this.failedPlateUrls.has(url) || this.queuedPlateUrl === url) return;
+    this.queuedPlateUrl = url;
+    // Never dispatch from inside render: request the plate right after it.
+    queueMicrotask(() => {
+      if (this.queuedPlateUrl !== url) return;
+      this.queuedPlateUrl = null;
+      if (this.destroyed || this.presentationMode !== "sprites") return;
+      if (this.state.displayedImage?.url === url || this.state.pendingImage?.url === url) return;
+      const label = [plate.location, plate.timeOfDay, plate.weather].filter(Boolean).join(", ");
+      void this.setSceneImage({ url, alt: label ? `Background: ${label}` : "", requestId: `${PLATE_REQUEST_PREFIX}${plate.plateKey}:${url}` }).then((loaded) => {
+        if (!loaded && this.state.imageError && this.state.displayedImage?.url !== url) this.failedPlateUrls.add(url);
+      });
+    });
   }
 
   /**
@@ -835,6 +977,10 @@ export class VnStage {
     this.errorDetails = null;
     this.hostImageError = null;
     this.lastSkipStop = null;
+    this.spriteLayer.setTurn(null);
+    this.spriteLayer.clear();
+    this.queuedPlateUrl = null;
+    this.failedPlateUrls.clear();
     this.updateControlButtons();
     this.updateContinueButton();
     this.dispatch({ type: "reset" });
@@ -846,6 +992,8 @@ export class VnStage {
     this.errorDetails = null;
     this.hostImageError = null;
     this.lastSkipStop = null;
+    // Sprite staging belongs to the turn: set it before the first paragraph renders.
+    this.spriteLayer.setTurn(turn.sprites ?? null);
     this.dispatch({ type: "load-turn", turn });
     this.focus();
   }
@@ -971,6 +1119,7 @@ export class VnStage {
     }
     if (this.destroyed) return;
     this.destroyed = true;
+    this.spriteLayer.destroy();
     this.host.remove();
   }
 
@@ -1690,6 +1839,7 @@ export class VnStage {
       : "";
     if (this.progress.textContent !== progress) this.progress.textContent = progress;
     this.updateContinueButton();
+    this.syncSprites();
 
     this.renderStatus();
     this.renderInteraction(view.showChoices, view.showStandardInput, view.isBusy);
@@ -2064,6 +2214,14 @@ export class VnStage {
 
     if (this.state.noValidOutput) {
       badges.push({ kind: "warning", label: "This reply had no story text to show.", icon: "alert" });
+    }
+
+    if (this.presentationMode === "sprites" && selectVnStageView(this.state).paragraph) {
+      for (const badge of this.spriteLayer.badges()) {
+        badges.push(badge.kind === "warning"
+          ? { kind: "warning", label: badge.label, icon: "alert" }
+          : { kind: "image", label: badge.label, icon: "spinner" });
+      }
     }
 
     const canReroll = Boolean(this.callbacks.onReroll || this.callbacks.onSwipe);

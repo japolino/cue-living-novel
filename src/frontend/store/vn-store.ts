@@ -1,3 +1,5 @@
+import type { SpriteTurnView } from "../../shared/sprites.js";
+
 export type VnMode = "cyoa" | "standard";
 
 export type VnPhase =
@@ -115,6 +117,8 @@ export interface VnTurnInput {
   inputPlaceholder?: string;
   preserveImage?: boolean;
   ambient?: AmbientEffect | null;
+  /** Sprite mode staging for this turn (`TurnView.sprites`); the stage keeps it, the store ignores it. */
+  sprites?: SpriteTurnView | null;
 }
 
 export type VnStageAction =
@@ -137,6 +141,8 @@ export type VnStageAction =
   | { type: "image-failed"; requestId: string; error: string }
   | { type: "present-user-paragraph"; paragraph: VnParagraph }
   | { type: "set-ambient"; ambient: AmbientEffect | null }
+  /** Drop the displayed and pending scene image (sprite plate removed on a mode switch). */
+  | { type: "clear-image" }
   | { type: "reset" };
 
 export interface VnStageView {
@@ -399,6 +405,9 @@ export const reduceVnStage = (
         ...state,
         ambient: action.ambient,
       };
+
+    case "clear-image":
+      return { ...state, displayedImage: null, pendingImage: null, imageError: null };
 
     case "reset":
       return createInitialVnStageState();
