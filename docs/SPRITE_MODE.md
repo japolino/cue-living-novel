@@ -266,9 +266,10 @@ Stage:
 
 ## Not in v1
 
-Mouth/blink variants (lip flap), face-only repaint for expression variants, parallax, front
-ambient layer, persona sprite, a per-image face box / natural orientation,
-calibrated classifier thresholds. Known gaps: with anchoring on, expressions
-wait for `idle` even on providers that cannot anchor; after switching back to
-scene mode, a sprite-planned turn is replanned only on the next reply, swipe
-or refresh; on 390×844 a third actor is mostly hidden.
+Mouth/blink variants (lip flap), face-only repaint for expression variants,
+persona sprite, a per-image face box / natural orientation, calibrated
+classifier thresholds. Known gap: after switching back to scene mode, a
+sprite-planned turn is replanned only on the next reply, swipe or refresh.
+(Wave 2 added key-moment illustrations with two-character interactions, the
+front ambient layer, parallax, grounding and rim light, the narrow 3-actor
+layout, and removed the anchoring wait on providers that cannot anchor.)
