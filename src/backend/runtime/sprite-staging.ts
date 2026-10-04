@@ -723,7 +723,8 @@ export function stageParagraphs(
     return { actors, plateKey: scene ? scenePlateKey.get(scene.index) ?? null : null, light };
   });
   // Key moments (config keyIllustrations): a few paragraphs become full illustrations.
-  const staged = applyKeyMoments(paragraphs, context.input.plan, keyIllustrationCap(context.input.config), extra.keyMoments ?? null);
+  const names = new Map([...pool.members.values()].map((member) => [member.characterKey, member.name] as const));
+  const staged = applyKeyMoments(paragraphs, context.input.plan, keyIllustrationCap(context.input.config), extra.keyMoments ?? null, names);
 
   const cast: SpriteCastMember[] = [];
   for (const key of pool.members.keys()) {
@@ -765,7 +766,15 @@ export function enforceSpriteStagingInvariants(staging: SpriteStaging): SpriteSt
         focus,
       };
     });
-    return { ...paragraph, actors, plateKey: paragraph.plateKey && plateKeys.has(paragraph.plateKey) ? paragraph.plateKey : null };
+    const moment = paragraph.moment
+      ? { ...paragraph.moment, characters: paragraph.moment.characters.filter((key, index, all) => castKeys.has(key) && all.indexOf(key) === index).slice(0, 2) }
+      : undefined;
+    return {
+      ...paragraph,
+      actors,
+      plateKey: paragraph.plateKey && plateKeys.has(paragraph.plateKey) ? paragraph.plateKey : null,
+      ...(moment ? { moment } : {}),
+    };
   });
   return { ...staging, cast, plates, paragraphs };
 }

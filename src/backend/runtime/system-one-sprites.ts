@@ -11,6 +11,9 @@ import {
   type SpriteLight,
   type SpriteMotion,
   type SpritePlateRef,
+  isSpriteInteraction,
+  SPRITE_INTERACTION_TAGS,
+  SPRITE_INTERACTIONS,
 } from "../../shared/sprites.js";
 import { SYSTEM_ONE_KEY, systemOneEndpoint } from "./system-one.js";
 import { KEY_MOMENT_THRESHOLDS, type KeyMomentAnswer } from "./sprites/key-moments.js";
@@ -250,7 +253,7 @@ type Question =
 /** What a question key means, for parsing. */
 type QuestionMeta =
   | { kind: "present" | "expression" | "motion" | "emote" | "intensity"; paragraph: number; key: string }
-  | { kind: "moment" | "standing"; paragraph: number }
+  | { kind: "moment" | "standing" | "interaction"; paragraph: number }
   | { kind: "light"; scene: number }
   | { kind: "place"; scene: number; options: Map<string, SpritePlateRef> };
 
@@ -354,6 +357,11 @@ function keyMomentQuestions(index: number): Array<[string, Question, QuestionMet
       instructions: `Can a single standing character cut-out (facing the viewer, with a facial expression) over an empty background show what happens in paragraph ${ref} well? Answer no when it needs a body pose (sitting, lying, kneeling, running, falling), contact between people (a kiss, a hug, a fight), an action with an object, or a view of the scene itself.`,
       criteria: { true: "A standing sprite with an expression shows it well", false: "It needs a full illustration" },
     }, { kind: "standing", paragraph: index }],
+    [`p${index}_interaction`, {
+      type: "choice",
+      instructions: `If paragraph ${ref} were shown as one picture, which pose or contact from these options would it show? Choose none unless the narration clearly describes it happening now (not in speech, not wished for, not negated).`,
+      criteria: Object.fromEntries(SPRITE_INTERACTIONS.map((interaction) => [interaction, SPRITE_INTERACTION_TAGS[interaction].guide])),
+    }, { kind: "interaction", paragraph: index }],
   ];
 }
 
@@ -530,6 +538,13 @@ export function applySpriteAnswers(
       if (answer.type === "choice" && answer.confidence >= t.place && answer.choice !== "new_place") {
         const plate = info.options.get(answer.choice);
         if (plate) overrides.scenePlate.set(info.scene, plate);
+      }
+      continue;
+    }
+    if (info.kind === "interaction") {
+      if (answer.type === "choice" && answer.choice !== "none" && isSpriteInteraction(answer.choice) && answer.confidence >= KEY_MOMENT_THRESHOLDS.interactionConfidence) {
+        const moments = overrides.keyMoments ?? (overrides.keyMoments = new Map());
+        moments.set(info.paragraph, { ...(moments.get(info.paragraph) ?? {}), interaction: answer.choice });
       }
       continue;
     }

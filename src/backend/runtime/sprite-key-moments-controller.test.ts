@@ -43,6 +43,7 @@ function fixture(config: Record<string, unknown> = {}, options: { gated?: boolea
   const sent: Array<Record<string, unknown>> = [];
   const messages: Array<Record<string, unknown>> = [];
   const prompts: string[] = [];
+  const inputs: Array<{ prompt: string; negativePrompt?: string; parameters?: Record<string, unknown> }> = [];
   const deleted: string[] = [];
   let plannerCalls = 0;
   let seq = 0;
@@ -78,8 +79,9 @@ function fixture(config: Record<string, unknown> = {}, options: { gated?: boolea
     imageGen: {
       getConnection: async () => ({ provider: "comfyui" }),
       listConnections: async () => [{ provider: "comfyui", is_default: true }],
-      generate: async (input: { prompt: string }) => {
+      generate: async (input: { prompt: string; negativePrompt?: string; parameters?: Record<string, unknown> }) => {
         prompts.push(input.prompt);
+        inputs.push(input);
         if (isScenePrompt(input.prompt) && options.failScenes?.()) throw new Error("provider down");
         seq += 1;
         const result = { imageId: `img-${seq}`, imageUrl: `/api/v1/images/img-${seq}` };
@@ -115,7 +117,16 @@ function fixture(config: Record<string, unknown> = {}, options: { gated?: boolea
   const of = (type: string) => sent.filter((message) => message.type === type);
   const turns = () => of("vn_turn").map((message) => message.turn as TurnView);
   registerVisualNovelBackend(spindle);
-  return { spindle, data, sent, prompts, deleted, gates, fire, reply, addReply, request, record, library, of, turns, plannerCalls: () => plannerCalls };
+  const assets = (paragraphIndex: number) => of("vn_asset")
+    .map((message) => message.asset as { paragraphIndex: number; status: string; imageUrl?: string | null; jobId: string })
+    .filter((asset) => asset.paragraphIndex === paragraphIndex);
+  const stateTurn = async (chatId: string, userId: string): Promise<TurnView | undefined> => {
+    const before = of("vn_state").length;
+    request({ type: "vn_get_state", chatId }, userId);
+    await waitFor(() => of("vn_state").length > before);
+    return (of("vn_state").at(-1) as { turn?: TurnView }).turn;
+  };
+  return { spindle, data, sent, prompts, inputs, assets, stateTurn, deleted, gates, fire, reply, addReply, request, record, library, of, turns, plannerCalls: () => plannerCalls };
 }
 
 
@@ -123,25 +134,33 @@ function fixture(config: Record<string, unknown> = {}, options: { gated?: boolea
 const illustrations = (turn: TurnView | undefined) => turn?.sprites?.illustrations ?? [];
 
 describe("controller: key illustrations in sprite mode", () => {
-  test("few: one scene-image job for the flagged paragraph; the sprite view gets the finished picture", async () => {
+  test("few: one key-moment job for the flagged paragraph; vn_asset carries the picture (no turn re-send)", async () => {
     const f = fixture({ presentationMode: "sprites", keyIllustrations: "few" });
     f.request({ type: "vn_view", chatId: "km-1", open: true }, "k1");
     f.reply("km-1", "m1", "k1");
     await waitFor(() => f.turns().length > 0);
     const stored = f.record("km-1", "m1")!;
     expect(stored.plan.spriteStaging!.paragraphs.map((stage) => stage.illustrate === true)).toEqual([false, true]);
+    // "Mira kisses Kai": Kai is not in the cast, so a first-person kiss with Mira.
+    expect(stored.plan.spriteStaging!.paragraphs[1]!.moment).toMatchObject({ interaction: "kiss", partner: true });
     expect(stored.jobs.map((job) => job.paragraphIndex)).toEqual([1]);
     expect(stored.settingsSnapshot?.presentationMode).toBe("sprites");
     expect(illustrations(f.turns()[0]).map((view) => [view.paragraphIndex, view.status])).toEqual([[1, "pending"]]);
-    await waitFor(() => illustrations(f.turns().at(-1)).some((view) => view.status === "ready"));
-    const ready = illustrations(f.turns().at(-1))[0]!;
-    expect(ready).toMatchObject({ paragraphIndex: 1, status: "ready" });
-    expect(ready.url).toMatch(/^\/api\/v1\/images\/img-\d+$/);
-    // Exactly one scene prompt reached the provider; the rest are sprites and plates.
-    expect(f.prompts.filter(isScenePrompt)).toHaveLength(1);
-    expect(f.of("vn_asset").map((message) => (message.asset as { paragraphIndex: number }).paragraphIndex)).toContain(1);
-    // The same picture is in TurnView.assets (the existing scene-image channel).
-    expect(f.turns().at(-1)!.assets.find((asset) => asset.paragraphIndex === 1)?.imageUrl).toBe(ready.url);
+    await waitFor(() => f.assets(1).some((asset) => asset.status === "generated"));
+    const generated = f.assets(1).find((asset) => asset.status === "generated")!;
+    expect(generated.imageUrl).toMatch(/^\/api\/v1\/images\/img-\d+$/);
+    // The host maps vn_asset onto sprites.illustrations: the turn is sent once.
+    expect(f.turns()).toHaveLength(1);
+    // Exactly one key-moment prompt reached the provider; the rest are sprites and plates.
+    const scene = f.inputs.filter((input) => isScenePrompt(input.prompt));
+    expect(scene).toHaveLength(1);
+    expect(scene[0]!.prompt).toContain("incoming kiss");
+    expect(scene[0]!.prompt).toContain("silver hair");
+    expect(scene[0]!.parameters).toMatchObject({ width: 1216, height: 832 });
+    // A fresh view of the turn carries the finished picture in both channels.
+    const view = await f.stateTurn("km-1", "k1");
+    expect(illustrations(view)[0]).toMatchObject({ paragraphIndex: 1, status: "ready", url: generated.imageUrl! });
+    expect(view!.assets.find((asset) => asset.paragraphIndex === 1)?.imageUrl).toBe(generated.imageUrl!);
     await spriteService(f.spindle).settle("k1");
   });
 
@@ -158,19 +177,20 @@ describe("controller: key illustrations in sprite mode", () => {
     expect(f.turns().every((turn) => turn.sprites?.illustrations === undefined)).toBe(true);
   });
 
-  test("a failed illustration is reported in the view; Retry regenerates it without replanning", async () => {
+  test("a failed illustration is reported by vn_asset; Retry regenerates it without replanning", async () => {
     let fail = true;
     const f = fixture({ presentationMode: "sprites", keyIllustrations: "few" }, { failScenes: () => fail });
     f.request({ type: "vn_view", chatId: "km-3", open: true }, "k3");
     f.reply("km-3", "m1", "k3");
-    await waitFor(() => illustrations(f.turns().at(-1)).some((view) => view.status === "failed"));
+    await waitFor(() => f.assets(1).some((asset) => asset.status === "failed"));
     expect(f.record("km-3", "m1")!.jobs[0]!.status).toBe("failed");
+    expect(illustrations(await f.stateTurn("km-3", "k3"))[0]).toMatchObject({ paragraphIndex: 1, status: "failed" });
     const planner = f.plannerCalls();
     fail = false;
     f.request({ type: "vn_retry_turn", chatId: "km-3", messageId: "m1" }, "k3");
-    await waitFor(() => illustrations(f.turns().at(-1)).some((view) => view.status === "ready"));
+    await waitFor(() => f.assets(1).some((asset) => asset.status === "generated"));
     expect(f.plannerCalls()).toBe(planner);
-    expect(f.record("km-3", "m1")!.jobs.map((job) => job.status)).toEqual(["generated"]);
+    await waitFor(() => f.record("km-3", "m1")!.jobs[0]!.status === "generated");
     expect(f.prompts.filter(isScenePrompt)).toHaveLength(2);
     await spriteService(f.spindle).settle("k3");
   });
@@ -188,7 +208,13 @@ describe("controller: key illustrations in sprite mode", () => {
     const scenePrompts = f.prompts.filter(isScenePrompt).length;
     // The same reply is processed again (an edit/swipe reconcile): reused, not replanned.
     f.fire("GENERATION_ENDED", { chatId: "km-4", messageId: "m1", content: CONTENT }, "k4");
-    await waitFor(() => f.prompts.filter(isScenePrompt).length > scenePrompts, 2000);
+    // Key moments share the sprite scheduler (imageConcurrency 1 here): release sprite renders as they come.
+    let opened = 0;
+    await waitFor(() => {
+      for (const gate of f.gates.slice(opened)) gate();
+      opened = f.gates.length;
+      return f.prompts.filter(isScenePrompt).length > scenePrompts;
+    }, 4000);
     expect(f.plannerCalls()).toBe(planner);
     expect(["queued", "generating"]).toContain(f.record("km-4", "m1")!.jobs[0]!.status);
     let released = 0;
