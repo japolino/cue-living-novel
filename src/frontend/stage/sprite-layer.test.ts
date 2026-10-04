@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { FakeNode, installFakeDocument } from "./stage-test-dom";
 import {
   effectivePlateKey,
+  illustrationFor,
   layoutSpriteActors,
   resolveSpriteImage,
   spriteEmoteMarkup,
@@ -351,5 +352,60 @@ describe("SpriteLayer DOM", () => {
     layer.setTurn(null);
     layer.show(0, { animate: false });
     expect(sprites()).toHaveLength(0);
+  });
+});
+
+describe("key illustrations", () => {
+  const view = (illustrate: boolean, status: "pending" | "ready" | "failed", url?: string): SpriteTurnView => ({
+    staging: {
+      version: 1, source: "planner",
+      cast: [{ characterKey: "mira", name: "Mira", identity: "", attire: null }],
+      plates: [],
+      paragraphs: [
+        { actors: [actor("mira")], plateKey: null, light: "neutral" },
+        { actors: [actor("mira")], plateKey: null, light: "neutral", ...(illustrate ? { illustrate: true } : {}) },
+      ],
+    },
+    sets: { mira: set("set_mira", "Mira", [ready("idle")]) },
+    plates: {},
+    illustrations: [{ paragraphIndex: 1, jobId: "job-1", status, ...(url ? { url } : {}) }],
+  });
+
+  test("illustrationFor needs the flag and a ready picture; indexes outside the staging have none", () => {
+    expect(illustrationFor(view(true, "ready", "/scene/1.png"), 1)?.url).toBe("/scene/1.png");
+    expect(illustrationFor(view(true, "ready", "/scene/1.png"), 0)).toBeNull();
+    expect(illustrationFor(view(true, "ready", "/scene/1.png"), 2)).toBeNull();
+    expect(illustrationFor(view(false, "ready", "/scene/1.png"), 1)).toBeNull();
+    expect(illustrationFor(view(true, "pending"), 1)).toBeNull();
+    expect(illustrationFor(view(true, "failed"), 1)).toBeNull();
+    expect(illustrationFor(null, 1)).toBeNull();
+  });
+
+  test("a ready illustration ahead is preloaded", () => {
+    expect(spritePreloadUrls(view(true, "ready", "/scene/1.png"), 0)).toContain("/scene/1.png");
+  });
+
+  test("setIllustrated hides the layer, drops badges and is reported in the snapshot; clear resets it", () => {
+    const restore = installFakeDocument();
+    try {
+      const container = new FakeNode("div");
+      const layer = new SpriteLayer({ container: () => container as unknown as HTMLElement });
+      layer.setEnabled(true);
+      layer.setTurn({ ...view(true, "ready", "/scene/1.png"), sets: {} });
+      layer.show(1, { animate: false });
+      expect(layer.badges().length).toBe(1);
+      layer.setIllustrated("/scene/1.png", false);
+      expect(layer.snapshot().illustration).toBe("/scene/1.png");
+      expect(container.dataset.vnSpriteIllustrated).toBe("true");
+      expect(layer.badges()).toEqual([]);
+      layer.setIllustrated(null, false);
+      expect(container.dataset.vnSpriteIllustrated).toBeUndefined();
+      layer.setIllustrated("/scene/1.png", false);
+      layer.clear();
+      expect(layer.snapshot().illustration).toBeNull();
+      expect(container.dataset.vnSpriteIllustrated).toBeUndefined();
+    } finally {
+      restore();
+    }
   });
 });

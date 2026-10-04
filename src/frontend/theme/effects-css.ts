@@ -1558,7 +1558,10 @@ export const VN_EFFECTS_CSS = `
   animation: var(--vn-plate-drift);
 }
 
-[data-vn-root][data-vn-presentation="sprites"][data-vn-effect-intensity="off"] [data-vn-scene-image] {
+[data-vn-root][data-vn-presentation="sprites"][data-vn-effect-intensity="off"] [data-vn-scene-image],
+[data-vn-root][data-vn-presentation="sprites"] [data-vn-scene]:has(> [data-vn-sprites][data-vn-sprite-illustrated]) [data-vn-scene-image] {
+  /* A key-moment illustration is one flat picture: no drift (camera effects
+     move it like a scene-mode image). */
   --vn-plate-drift: none;
 }
 

@@ -9,6 +9,8 @@ import {
   THEME_PRESET_IDS,
   PRESENTATION_MODES,
   SPRITE_CUTOUT_QUALITIES,
+  KEY_ILLUSTRATION_MODES,
+  type VisualNovelKeyIllustrations,
   type VisualNovelPresentationMode,
   type VisualNovelSpriteCutout,
   type VisualNovelConfig,
@@ -673,6 +675,17 @@ export function normalizeSpriteCutout(value: string): VisualNovelSpriteCutout {
   return (SPRITE_CUTOUT_QUALITIES as readonly string[]).includes(value)
     ? value as VisualNovelSpriteCutout
     : DEFAULT_CONFIG.spriteCutout;
+}
+
+export const KEY_ILLUSTRATION_OPTIONS: ReadonlyArray<{ value: VisualNovelKeyIllustrations; label: string; help: string }> = [
+  { value: "off", label: "Sprites only", help: "Every paragraph is shown with sprites. No scene pictures are painted." },
+  { value: "few", label: "Picture for a key moment", help: "Up to 1 full scene picture per reply, for a moment sprites cannot show (a kiss, a fight, someone sitting or running). Uses your image connection." },
+];
+
+export function normalizeKeyIllustrations(value: string): VisualNovelKeyIllustrations {
+  return (KEY_ILLUSTRATION_MODES as readonly string[]).includes(value)
+    ? value as VisualNovelKeyIllustrations
+    : DEFAULT_CONFIG.keyIllustrations;
 }
 
 /** "12.3 MB" style sizes for the model download. */

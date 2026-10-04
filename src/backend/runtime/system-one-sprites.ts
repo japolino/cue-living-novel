@@ -13,6 +13,7 @@ import {
   type SpritePlateRef,
 } from "../../shared/sprites.js";
 import { SYSTEM_ONE_KEY, systemOneEndpoint } from "./system-one.js";
+import { KEY_MOMENT_THRESHOLDS, type KeyMomentAnswer } from "./sprites/key-moments.js";
 
 /**
  * System One (Jev) questions for sprite staging. Jev answers typed questions
@@ -164,6 +165,15 @@ const LIGHT_GUIDE: Readonly<Record<SpriteLight, string>> = {
   dark: "very dark, barely lit",
 };
 
+/** Key-moment score levels, lowest (the safe default) first. */
+export const KEY_MOMENT_LEVELS = [
+  "ordinary: talk, small gestures, nothing special to picture",
+  "minor: a small action or reaction",
+  "notable: a clear event worth seeing",
+  "major: a dramatic, emotional or physical turning point",
+  "defining: the one picture this reply would be remembered by",
+];
+
 const INTENSITY_LEVELS = [
   "barely visible, subtle",
   "mild",
@@ -193,6 +203,12 @@ export type SpriteClassifierInput = {
   knownPlates: SpritePlateRef[];
   previousPlateKey: string | null;
   cast: Array<{ key: string; name: string; attire: string | null }>;
+  /**
+   * Additive (optional): paragraphs that could become a key illustration
+   * (config keyIllustrations "few" and a paintable cue). Each gets a key-moment
+   * score and a "can a standing sprite show this" question.
+   */
+  keyMomentParagraphs?: number[];
   config: VisualNovelConfig;
   userId?: string;
   signal?: AbortSignal;
@@ -213,6 +229,8 @@ export type SpriteStagingOverrides = {
   sceneLight: Map<number, SpriteLight>;
   /** By scene index: a known plate the scene revisits. */
   scenePlate: Map<number, SpritePlateRef>;
+  /** Additive (optional): key-moment answers by paragraph index. */
+  keyMoments?: Map<number, KeyMomentAnswer>;
 };
 
 export type SpriteClassifierStats = {
@@ -232,6 +250,7 @@ type Question =
 /** What a question key means, for parsing. */
 type QuestionMeta =
   | { kind: "present" | "expression" | "motion" | "emote" | "intensity"; paragraph: number; key: string }
+  | { kind: "moment" | "standing"; paragraph: number }
   | { kind: "light"; scene: number }
   | { kind: "place"; scene: number; options: Map<string, SpritePlateRef> };
 
@@ -321,6 +340,23 @@ function paragraphQuestions(
   return out;
 }
 
+/** Key-moment questions for one paragraph: importance (score) and "a standing sprite can show it" (yes/no). */
+function keyMomentQuestions(index: number): Array<[string, Question, QuestionMeta]> {
+  const ref = `\`paragraphs.p${index}\``;
+  return [
+    [`p${index}_moment`, {
+      type: "score",
+      instructions: `How important and how visual is the moment in paragraph ${ref} for this reply? Most paragraphs are ordinary; keep the top levels for the one moment a reader would want to see as a full picture.`,
+      criteria: KEY_MOMENT_LEVELS,
+    }, { kind: "moment", paragraph: index }],
+    [`p${index}_standing`, {
+      type: "noul",
+      instructions: `Can a single standing character cut-out (facing the viewer, with a facial expression) over an empty background show what happens in paragraph ${ref} well? Answer no when it needs a body pose (sitting, lying, kneeling, running, falling), contact between people (a kiss, a hug, a fight), an action with an object, or a view of the scene itself.`,
+      criteria: { true: "A standing sprite with an expression shows it well", false: "It needs a full illustration" },
+    }, { kind: "standing", paragraph: index }],
+  ];
+}
+
 function sceneQuestions(
   scene: SpriteClassifierInput["scenes"][number],
   input: Pick<SpriteClassifierInput, "knownPlates" | "previousPlateKey">,
@@ -359,6 +395,7 @@ export function buildSpriteRequests(input: Omit<SpriteClassifierInput, "config" 
   const scenesByIndex = new Map(input.scenes.map((scene) => [scene.index, scene] as const));
   const sceneStartsAt = new Map(input.scenes.map((scene) => [scene.startParagraph, scene] as const));
   const paragraphs = input.paragraphs.slice(0, MAX_CLASSIFIED_PARAGRAPHS);
+  const keyMoments = new Set(input.keyMomentParagraphs ?? []);
   const encoder = new TextEncoder();
 
   const assemble = (indexes: number[]): SpriteRequestBatch => {
@@ -376,6 +413,12 @@ export function buildSpriteRequests(input: Omit<SpriteClassifierInput, "config" 
       for (const [key, question, info] of paragraphQuestions(paragraph, castIndex)) {
         questions[key] = question;
         meta.set(key, info);
+      }
+      if (keyMoments.has(index)) {
+        for (const [key, question, info] of keyMomentQuestions(index)) {
+          questions[key] = question;
+          meta.set(key, info);
+        }
       }
       const startingScene = sceneStartsAt.get(index);
       if (startingScene) {
@@ -426,7 +469,7 @@ export function buildSpriteRequests(input: Omit<SpriteClassifierInput, "config" 
   let current: number[] = [];
   let currentBatch: SpriteRequestBatch | null = null;
   for (const paragraph of paragraphs) {
-    const hasQuestions = paragraph.candidates.length > 0 || sceneStartsAt.has(paragraph.index);
+    const hasQuestions = paragraph.candidates.length > 0 || sceneStartsAt.has(paragraph.index) || keyMoments.has(paragraph.index);
     if (!hasQuestions) continue;
     const tryIndexes = [...current, paragraph.index];
     const attempt = assemble(tryIndexes);
@@ -487,6 +530,16 @@ export function applySpriteAnswers(
       if (answer.type === "choice" && answer.confidence >= t.place && answer.choice !== "new_place") {
         const plate = info.options.get(answer.choice);
         if (plate) overrides.scenePlate.set(info.scene, plate);
+      }
+      continue;
+    }
+    if (info.kind === "moment" || info.kind === "standing") {
+      const moments = overrides.keyMoments ?? (overrides.keyMoments = new Map());
+      const current = moments.get(info.paragraph) ?? {};
+      if (info.kind === "moment" && answer.type === "score" && answer.confidence >= KEY_MOMENT_THRESHOLDS.momentConfidence && Number.isFinite(answer.score)) {
+        moments.set(info.paragraph, { ...current, moment: Math.max(0, Math.min(KEY_MOMENT_LEVELS.length - 1, Math.round(answer.score))) });
+      } else if (info.kind === "standing" && answer.type === "noul") {
+        moments.set(info.paragraph, { ...current, standing: answer.noul });
       }
       continue;
     }

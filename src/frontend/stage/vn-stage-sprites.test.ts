@@ -212,3 +212,97 @@ describe("VnStage sprite mode", () => {
     expect(mira().dataset.vnSpriteTalking).toBe("false");
   });
 });
+
+describe("VnStage sprite mode: key illustrations", () => {
+  let restore: () => void;
+  let mount: FakeNode;
+  let stage: VnStage;
+  const root = () => (stage as unknown as { root: FakeNode }).root;
+  const layerEl = () => root().querySelector("[data-vn-sprites]")!;
+  const badges = () => root().querySelectorAll("[data-vn-badge]").map((b) => b.textContent.trim());
+  const flush = async () => { for (let i = 0; i < 8; i += 1) await new Promise((r) => setTimeout(r, 0)); };
+  const advance = () => (stage as unknown as { advance(): void }).advance();
+  const illustrated: SpriteTurnView = {
+    ...sprites,
+    staging: { ...sprites.staging, paragraphs: sprites.staging.paragraphs.map((p, i) => (i === 1 ? { ...p, illustrate: true } : p)) },
+    illustrations: [{ paragraphIndex: 1, jobId: "job-1", status: "ready", url: "/scene/kiss.png" }],
+  };
+
+  beforeEach(() => {
+    restore = installFakeDocument();
+    mount = new FakeNode("div");
+    stage = new VnStage({
+      mount: mount as unknown as HTMLElement,
+      textSpeed: 0,
+      createImage: () => ({ complete: true, naturalWidth: 100, decode: async () => {}, src: "", addEventListener() {}, removeEventListener() {} }),
+    });
+    stage.setPresentationMode("sprites");
+  });
+  afterEach(() => { stage.destroy(); restore(); });
+
+  test("a ready illustration replaces the sprites for its paragraph and the plate comes back after it", async () => {
+    stage.loadTurn({ mode: "standard", paragraphs, sprites: illustrated });
+    await flush();
+    expect(stage.getState().displayedImage?.url).toBe("/plates/a.png");
+    expect(stage.getSpriteSnapshot().illustration).toBeNull();
+    advance();
+    await flush();
+    expect(stage.getState().displayedImage?.url).toBe("/scene/kiss.png");
+    expect(stage.getState().displayedImage?.requestId.startsWith("illustration:")).toBe(true);
+    expect(stage.getState().displayedImage?.alt).toBe("Illustration for paragraph 2");
+    expect(stage.getSpriteSnapshot().illustration).toBe("/scene/kiss.png");
+    expect(layerEl().dataset.vnSpriteIllustrated).toBe("true");
+    // The staging still applies underneath (Previous/next stay consistent).
+    expect(stage.getSpriteSnapshot().actors.map((a) => a.characterKey)).toEqual(["mira", "ren"]);
+    // Previous: back to the plate and the sprites.
+    stage.previous();
+    await flush();
+    expect(stage.getState().displayedImage?.url).toBe("/plates/a.png");
+    expect(stage.getSpriteSnapshot().illustration).toBeNull();
+    expect(layerEl().dataset.vnSpriteIllustrated).toBeUndefined();
+    advance();
+    await flush();
+    expect(stage.getSpriteSnapshot().illustration).toBe("/scene/kiss.png");
+    // Next paragraph without the flag: sprites again; plate_b is not ready, so the illustration is cleared.
+    advance();
+    await flush();
+    expect(stage.getSpriteSnapshot().illustration).toBeNull();
+    expect(stage.getState().displayedImage).toBeNull();
+    expect(badges()).toContain("Preparing Aoi 0/12");
+  });
+
+  test("not ready yet: the sprite stage stays; it switches once the picture arrives", async () => {
+    const pending: SpriteTurnView = { ...illustrated, illustrations: [{ paragraphIndex: 1, jobId: "job-1", status: "pending" }] };
+    stage.loadTurn({ mode: "standard", paragraphs, sprites: pending });
+    await flush();
+    advance();
+    await flush();
+    expect(stage.getSpriteSnapshot().illustration).toBeNull();
+    expect(stage.getState().displayedImage?.url).toBe("/plates/a.png");
+    stage.setSpriteTurn(illustrated);
+    await flush();
+    expect(stage.getSpriteSnapshot().illustration).toBe("/scene/kiss.png");
+    expect(stage.getState().displayedImage?.url).toBe("/scene/kiss.png");
+  });
+
+  test("a flag without a picture, or a picture without the flag, changes nothing", async () => {
+    const noFlag: SpriteTurnView = { ...sprites, illustrations: illustrated.illustrations! };
+    stage.loadTurn({ mode: "standard", paragraphs, sprites: noFlag });
+    await flush();
+    advance();
+    await flush();
+    expect(stage.getSpriteSnapshot().illustration).toBeNull();
+    expect(stage.getState().displayedImage?.url).toBe("/plates/a.png");
+  });
+
+  test("switching to scene mode clears an illustration like a plate", async () => {
+    stage.loadTurn({ mode: "standard", paragraphs, sprites: illustrated });
+    await flush();
+    advance();
+    await flush();
+    expect(stage.getState().displayedImage?.url).toBe("/scene/kiss.png");
+    stage.setPresentationMode("scene");
+    await flush();
+    expect(stage.getState().displayedImage).toBeNull();
+  });
+});

@@ -9,7 +9,8 @@ import { SPRITE_EMOTES, SPRITE_LIGHTS, SPRITE_MOTIONS } from "../src/shared/spri
  * actors (desktop and 390x844), focus, every light preset, every emote,
  * motion mid-frames, expression crossfade, enter/exit, a set with nothing
  * ready (badge), every theme preset, effect intensity, reduced motion, the
- * talking bob, mode switching, and no console errors.
+ * talking bob, mode switching, key-moment illustrations (switch, Previous,
+ * not ready, skip, auto), and no console errors.
  * Screenshots: .cache/sprite-stage/. Run: bun run ./scripts/test-sprite-stage-browser.ts
  */
 const OUT = ".cache/sprite-stage";
@@ -33,7 +34,7 @@ const server = Bun.serve({
 const url = (query: Record<string, string> = {}) => `http://127.0.0.1:${server.port}/?${new URLSearchParams(query)}`;
 await mkdir(OUT, { recursive: true });
 
-type P = { text?: string; speaker?: string; actors: Array<Record<string, unknown> & { characterKey: string }>; plateKey?: string | null; light?: string };
+type P = { text?: string; speaker?: string; actors: Array<Record<string, unknown> & { characterKey: string }>; plateKey?: string | null; light?: string; illustrate?: boolean; illustration?: "pending" | "ready" | "failed" };
 
 const errors: string[] = [];
 function watch(page: Page): void {
@@ -270,6 +271,130 @@ try {
     await page.waitForTimeout(600);
     assert.equal((await geometry(page)).figures.length, 1, "sprite mode restores the stage");
     await page.close();
+  }
+
+  // ---- Key illustrations (keyIllustrations "few") ------------------------------
+  {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+    watch(page);
+    await open(page);
+    const ILLUSTRATION = "/sprites/illustration_moment.webp";
+    const displayed = () => page.evaluate(() => (window as any).fx.stage.getState().displayedImage);
+    const layerState = () => page.evaluate(() => {
+      const theme = document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!;
+      const layer = theme.querySelector<HTMLElement>("[data-vn-sprites]")!;
+      return { opacity: Number(getComputedStyle(layer).opacity), illustrated: layer.dataset.vnSpriteIllustrated ?? null, sprites: layer.querySelectorAll("[data-vn-sprite]").length };
+    });
+    const MOMENT: P[] = [
+      { speaker: "Mira", text: "Mira looks up at Ren under the neon signs.", actors: [{ characterKey: "mira", slot: "left", focus: true, facing: "right" }, { characterKey: "ren", slot: "right", facing: "left" }], plateKey: "plate_street", light: "night" },
+      { text: "She rises on her toes and kisses him.", actors: [{ characterKey: "mira", slot: "left", focus: true }, { characterKey: "ren", slot: "right" }], illustrate: true, light: "night" } as P,
+      { speaker: "Ren", text: "\"...That was unfair.\"", actors: [{ characterKey: "mira", slot: "left", expression: "embarrassed" }, { characterKey: "ren", slot: "right", focus: true }], light: "night" },
+    ];
+    await load(page, MOMENT);
+    assert.equal((await displayed()).url, "/sprites/plate_street.webp", "p0: the plate");
+    assert.equal((await snap(page)).illustration, null);
+    await shot(page, "keymoment-0-sprites");
+    // Into the key moment: the illustration crossfades in over the plate, the sprites fade out.
+    await go(page, 1);
+    await page.waitForFunction((url) => (window as any).fx.stage.getState().displayedImage?.url === url, ILLUSTRATION);
+    await page.waitForTimeout(120);
+    const mid = await layerState();
+    await shot(page, "keymoment-1-crossfade-midframe");
+    assert.equal(mid.illustrated, "true");
+    assert.ok(mid.opacity > 0.02 && mid.opacity < 0.98, `sprites mid-fade (${mid.opacity})`);
+    await waitImages(page);
+    await page.waitForTimeout(600);
+    const on = await layerState();
+    assert.equal(on.opacity, 0, "sprites hidden under the illustration");
+    assert.equal(on.sprites, 2, "the staging still applies underneath");
+    const image = await displayed();
+    assert.equal(image.url, ILLUSTRATION);
+    assert.ok(image.requestId.startsWith("illustration:"), "illustration request id");
+    assert.equal(image.alt, "Illustration for paragraph 2");
+    assert.equal((await snap(page)).illustration, ILLUSTRATION);
+    await shot(page, "keymoment-1-illustration");
+    // Next paragraph without the flag: plate and sprites come back.
+    await go(page, 2);
+    await page.waitForTimeout(700);
+    assert.equal((await displayed()).url, "/sprites/plate_street.webp", "p2: the plate again");
+    const back = await layerState();
+    assert.equal(back.opacity, 1, "sprites visible again");
+    assert.equal(back.illustrated, null);
+    await shot(page, "keymoment-2-back-to-sprites");
+    // Previous re-shows the illustration; Previous again returns to the sprites.
+    await go(page, 1);
+    await page.waitForTimeout(700);
+    assert.equal((await displayed()).url, ILLUSTRATION, "Previous: illustration again");
+    assert.equal((await layerState()).opacity, 0);
+    await go(page, 0);
+    await page.waitForTimeout(700);
+    assert.equal((await displayed()).url, "/sprites/plate_street.webp", "Previous: plate");
+    assert.equal((await layerState()).opacity, 1);
+
+    // Not ready yet: the sprite stage stays (no waiting); it switches when the picture arrives.
+    await load(page, [MOMENT[0]!, { ...MOMENT[1]!, illustration: "pending" } as P, MOMENT[2]!]);
+    await go(page, 1);
+    await page.waitForTimeout(600);
+    assert.equal((await displayed()).url, "/sprites/plate_street.webp", "pending: plate stays");
+    assert.equal((await layerState()).opacity, 1, "pending: sprites stay");
+    await shot(page, "keymoment-pending-keeps-sprites");
+    await page.evaluate(() => (window as any).fx.illustrate(1, "ready"));
+    await page.waitForFunction((url) => (window as any).fx.stage.getState().displayedImage?.url === url, ILLUSTRATION);
+    await page.waitForTimeout(600);
+    assert.equal((await layerState()).opacity, 0, "ready: switched");
+    // A failed picture never switches.
+    await load(page, [MOMENT[0]!, { ...MOMENT[1]!, illustration: "failed" } as P]);
+    await go(page, 1);
+    await page.waitForTimeout(600);
+    assert.equal((await displayed()).url, "/sprites/plate_street.webp", "failed: plate stays");
+
+    // Skip through the moment ends on the plate; skip that ends on the moment shows it.
+    await page.evaluate(() => { const st = (window as any).fx.stage; st.setSkipMode("all"); });
+    await load(page, MOMENT, 300);
+    await page.evaluate(() => (window as any).fx.stage.toggleSkip(true));
+    await page.waitForFunction(() => (window as any).fx.stage.getState().currentParagraphIndex === 2 && !(window as any).fx.stage.getState().isSkipping);
+    await page.waitForTimeout(800);
+    assert.equal((await displayed()).url, "/sprites/plate_street.webp", "skip past the moment: plate");
+    assert.equal((await layerState()).opacity, 1, "skip past the moment: sprites");
+    await load(page, MOMENT.slice(0, 2), 300);
+    await page.evaluate(() => (window as any).fx.stage.toggleSkip(true));
+    await page.waitForFunction(() => (window as any).fx.stage.getState().currentParagraphIndex === 1);
+    await page.waitForTimeout(900);
+    assert.equal((await displayed()).url, ILLUSTRATION, "skip ending on the moment: illustration");
+    assert.equal((await layerState()).opacity, 0);
+
+    // Auto-play passes through the moment and back.
+    await page.evaluate(() => { const st = (window as any).fx.stage; st.toggleSkip(false); st.setAutoPlayDelay(700); });
+    await load(page, MOMENT, 300);
+    await page.evaluate(() => (window as any).fx.stage.toggleAutoPlay(true));
+    await page.waitForFunction((url) => (window as any).fx.stage.getState().displayedImage?.url === url, ILLUSTRATION, { timeout: 8000 });
+    await page.waitForFunction(() => (window as any).fx.stage.getState().currentParagraphIndex === 2, undefined, { timeout: 8000 });
+    await page.waitForTimeout(700);
+    assert.equal((await displayed()).url, "/sprites/plate_street.webp", "auto: plate after the moment");
+    assert.equal((await layerState()).opacity, 1);
+    await page.evaluate(() => (window as any).fx.stage.toggleAutoPlay(false));
+    await page.close();
+  }
+
+  // ---- Key illustration on 390x844 and with reduced motion ----------------------
+  {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: "reduce", hasTouch: true, isMobile: true });
+    const page = await context.newPage();
+    watch(page);
+    await open(page);
+    await load(page, [
+      { speaker: "Mira", actors: [{ characterKey: "mira", focus: true }], plateKey: "plate_street", light: "night" },
+      { text: "She kisses him.", actors: [{ characterKey: "mira", focus: true }], illustrate: true } as P,
+    ]);
+    await go(page, 1);
+    await page.waitForTimeout(60);
+    const opacity = await page.evaluate(() => Number(getComputedStyle(document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!.querySelector("[data-vn-sprites]")!).opacity));
+    assert.ok(opacity === 0 || opacity === 1, `reduced motion: no sprite fade (${opacity})`);
+    await waitImages(page);
+    await page.waitForTimeout(700);
+    assert.equal((await page.evaluate(() => (window as any).fx.stage.getState().displayedImage)).url, "/sprites/illustration_moment.webp");
+    await shot(page, "keymoment-mobile-reduced-motion");
+    await context.close();
   }
 
   // ---- Lights ---------------------------------------------------------------

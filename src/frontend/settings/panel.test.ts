@@ -82,6 +82,18 @@ describe("settings panel markup", () => {
     expect(pictures).toContain("sceneOnly: true");
   });
 
+  test("key moments: one everyday control under \"How the story is shown\", only in sprite mode", () => {
+    expect(source.match(/optionList\("keyIllustrations"/g)).toHaveLength(1);
+    expect(source).toContain('case "keyIllustrations": return { keyIllustrations: normalizeKeyIllustrations(target.value) };');
+    expect(advancedKeys).not.toContain("keyIllustrations");
+    const presentation = source.slice(source.indexOf('${group("How the story is shown"'), source.indexOf('{ id: "presentation"'));
+    expect(presentation).toContain('optionList("keyIllustrations", KEY_ILLUSTRATION_OPTIONS)');
+    expect(presentation.indexOf("<div data-key-moments hidden>")).toBeLessThan(presentation.indexOf("keyIllustrations"));
+    expect(presentation.indexOf("presentationMode")).toBeLessThan(presentation.indexOf("keyIllustrations"));
+    // The block follows the presentation mode like the other sprite controls.
+    expect(source).toContain('this.root.querySelector<HTMLElement>("[data-key-moments]")!.hidden = !sprites;');
+  });
+
   test("there are no network assets in the panel styles", () => {
     expect(source).not.toMatch(/url\(\s*["']?https?:/i);
     expect(source).not.toMatch(/@import/i);
