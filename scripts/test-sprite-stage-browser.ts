@@ -115,7 +115,13 @@ function assertLayout(geo: Geo, label: string, count: number, options: { sidesMa
     // Narrow portrait trio: non-speakers may stand partly off-screen (assertFacesVisible checks them).
     const cropOk = options.sidesMayCrop && f.focus !== "true";
     if (!cropOk) assert.ok(f.left >= -1 && f.right <= geo.stage.w + 1, `${label}: ${f.key} inside the stage horizontally (${f.left.toFixed(0)}..${f.right.toFixed(0)} of ${geo.stage.w})`);
-    assert.ok(Math.abs(f.bottom - geo.stage.h) <= 2, `${label}: ${f.key} stands on the stage bottom (${f.bottom.toFixed(1)} vs ${geo.stage.h})`);
+    if (geo.stage.h > geo.stage.w) {
+      // Portrait: figures stand on a floor just under the top of the dialogue
+      // chrome, so the face stays above the box and the legs go behind it.
+      assert.ok(f.bottom > geo.controls.top && f.bottom <= geo.stage.h + 2, `${label}: ${f.key} stands behind the dialogue box (${f.bottom.toFixed(1)} in ${geo.controls.top.toFixed(0)}..${geo.stage.h})`);
+    } else {
+      assert.ok(Math.abs(f.bottom - geo.stage.h) <= 2, `${label}: ${f.key} stands on the stage bottom (${f.bottom.toFixed(1)} vs ${geo.stage.h})`);
+    }
     assert.ok(f.top >= geo.exit.bottom, `${label}: ${f.key} head stays below Back to chat (${f.top.toFixed(0)} >= ${geo.exit.bottom.toFixed(0)})`);
     assert.ok(f.top < geo.controls.top, `${label}: ${f.key} head is above the reading toolbar (${f.top.toFixed(0)} < ${geo.controls.top.toFixed(0)})`);
   }

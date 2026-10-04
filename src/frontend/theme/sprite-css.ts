@@ -58,11 +58,29 @@ export const VN_SPRITE_CSS = `
   --vn-sprite-slot-w: 32cqw;
 }
 
-/* Tall phone screens: slots are narrow, so let figures overlap a little more. */
+/* Tall phone screens: slots are narrow, so let figures overlap a little more.
+   The dialogue box covers much of a phone screen, so figures stand on a
+   floor just below its top edge (--vn-dialogue-top, measured by the stage)
+   and fit the space above it: the face stays visible, the legs go behind
+   the box. */
 @media (orientation: portrait) {
-  [data-vn-sprites] { --vn-sprite-figure-h: 80cqh; --vn-sprite-slot-w: 100cqw; }
-  [data-vn-sprites][data-vn-sprite-count="2"] { --vn-sprite-figure-h: 76cqh; --vn-sprite-slot-w: 72cqw; }
-  [data-vn-sprites][data-vn-sprite-count="3"] { --vn-sprite-figure-h: 74cqh; --vn-sprite-slot-w: 64cqw; }
+  [data-vn-sprites] {
+    --vn-sprite-figure-max: 80cqh;
+    --vn-sprite-slot-w: 100cqw;
+    --vn-sprite-figure-h: min(var(--vn-sprite-figure-max), calc((100cqh - var(--vn-dialogue-top, 0px)) * 1.18));
+    --vn-sprite-floor: max(0px, calc(var(--vn-dialogue-top, 0px) - var(--vn-sprite-figure-h) * 0.18));
+  }
+  [data-vn-sprites][data-vn-sprite-count="2"] { --vn-sprite-figure-max: 76cqh; --vn-sprite-slot-w: 72cqw; }
+  [data-vn-sprites][data-vn-sprite-count="3"] { --vn-sprite-figure-max: 74cqh; --vn-sprite-slot-w: 64cqw; }
+  [data-vn-sprites][data-vn-sprite-count="2"],
+  [data-vn-sprites][data-vn-sprite-count="3"] {
+    --vn-sprite-figure-h: min(var(--vn-sprite-figure-max), calc((100cqh - var(--vn-dialogue-top, 0px)) * 1.18));
+  }
+  [data-vn-sprites] [data-vn-sprite] { bottom: var(--vn-sprite-floor, 0px); }
+  /* A raised figure must not end in a straight cut above the box. */
+  [data-vn-sprites] [data-vn-sprite-image] {
+    --vn-sprite-feather-bottom: 16%;
+  }
   /* Three actors cannot stand side by side: the speaker stands near the
      centre at full size and in front; the others step outward (partly
      off-screen) and back (smaller), in the same left-to-right order
@@ -113,6 +131,7 @@ export const VN_SPRITE_CSS = `
   --vn-sprite-dir: 0;
   transition:
     left var(--vn-sprite-move-ms) cubic-bezier(0.33, 1, 0.68, 1),
+    bottom var(--vn-sprite-move-ms) cubic-bezier(0.33, 1, 0.68, 1),
     filter 320ms ease,
     opacity 320ms ease;
 }
@@ -152,6 +171,19 @@ export const VN_SPRITE_CSS = `
   isolation: isolate;
   opacity: 0;
   z-index: 0;
+  /* Big hair, wings, tails or spider legs drawn up to the image edge would
+     end in a straight cut: fade the outer few percent of the left, right and
+     top edges (and the bottom on portrait). Transparent pixels are unaffected. */
+  --vn-sprite-feather: 6%;
+  --vn-sprite-feather-top: 4%;
+  -webkit-mask-image:
+    linear-gradient(to right, transparent, #000 var(--vn-sprite-feather), #000 calc(100% - var(--vn-sprite-feather)), transparent),
+    linear-gradient(to bottom, transparent, #000 var(--vn-sprite-feather-top), #000 calc(100% - var(--vn-sprite-feather-bottom, 0%)), transparent);
+  -webkit-mask-composite: source-in;
+  mask-image:
+    linear-gradient(to right, transparent, #000 var(--vn-sprite-feather), #000 calc(100% - var(--vn-sprite-feather)), transparent),
+    linear-gradient(to bottom, transparent, #000 var(--vn-sprite-feather-top), #000 calc(100% - var(--vn-sprite-feather-bottom, 0%)), transparent);
+  mask-composite: intersect;
 }
 
 /* Expression crossfade: the new layer fades in on top, the old one leaves a

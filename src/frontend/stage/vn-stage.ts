@@ -499,6 +499,15 @@ export class VnStage {
   /** Sprite mode (config `presentationMode`); "scene" keeps the classic stage untouched. */
   private presentationMode: VisualNovelPresentationMode = "scene";
   private readonly spriteLayer: SpriteLayer;
+  /**
+   * Height (px) from the stage bottom to the top of the dialogue chrome
+   * (nameplate, toolbar, box). Portrait sprite layouts stand above it. It
+   * only grows while the stage size stays the same, so sprites do not bob
+   * with every paragraph's length.
+   */
+  private dialogueClearance = 0;
+  private dialogueClearanceSize = "";
+  private dialogueObserver: ResizeObserver | null = null;
   private spritesEl: HTMLElement | null = null;
   /** Plate URL whose scene-image request is queued for the next microtask. */
   private queuedPlateUrl: string | null = null;
@@ -615,6 +624,12 @@ export class VnStage {
     this.backlogModal = queryRequired(this.themeRoot, "[data-vn-backlog]");
     this.backlogClose = queryRequired(this.themeRoot, "[data-vn-backlog-close]");
     this.backlogContent = queryRequired(this.themeRoot, "[data-vn-backlog-content]");
+
+    if (typeof ResizeObserver === "function") {
+      this.dialogueObserver = new ResizeObserver(() => this.measureDialogueClearance());
+      this.dialogueObserver.observe(this.root);
+      this.dialogueObserver.observe(this.narrative);
+    }
 
     if (typeof options.textSpeed === "number") this.setTextSpeed(options.textSpeed);
     if (typeof options.autoPlayDelay === "number") this.setAutoPlayDelay(options.autoPlayDelay);
@@ -911,6 +926,34 @@ export class VnStage {
   /** What the sprite layer shows now (tests, diagnostics). */
   getSpriteSnapshot(): SpriteLayerSnapshot & { mode: VisualNovelPresentationMode } {
     return { mode: this.presentationMode, ...this.spriteLayer.snapshot() };
+  }
+
+  /**
+   * Publish `--vn-dialogue-top` on the root: how far the dialogue chrome
+   * reaches up from the stage bottom (rounded to 8 px). Portrait sprite
+   * layouts use it to keep faces above the box (sprite-css.ts).
+   */
+  private measureDialogueClearance(): void {
+    if (this.destroyed || typeof this.root.getBoundingClientRect !== "function") return;
+    const stage = this.root.getBoundingClientRect();
+    if (!stage.height || !stage.width) return;
+    const size = `${Math.round(stage.width)}x${Math.round(stage.height)}`;
+    if (size !== this.dialogueClearanceSize) {
+      this.dialogueClearanceSize = size;
+      this.dialogueClearance = 0;
+    }
+    if (this.narrative.hidden) return;
+    let top = Number.POSITIVE_INFINITY;
+    for (const element of [this.narrative, this.speaker, this.themeRoot.querySelector<HTMLElement>("[data-vn-controls]")]) {
+      if (!element) continue;
+      const rect = element.getBoundingClientRect();
+      if (rect.height > 0 && rect.width > 0) top = Math.min(top, rect.top);
+    }
+    if (!Number.isFinite(top)) return;
+    const clearance = Math.max(0, Math.ceil((stage.bottom - top) / 8) * 8);
+    if (clearance <= this.dialogueClearance) return;
+    this.dialogueClearance = clearance;
+    this.root.style.setProperty("--vn-dialogue-top", `${clearance}px`);
   }
 
   private spriteContainer(): HTMLElement {
@@ -1312,6 +1355,8 @@ export class VnStage {
     }
     if (this.destroyed) return;
     this.destroyed = true;
+    this.dialogueObserver?.disconnect();
+    this.dialogueObserver = null;
     this.spriteLayer.destroy();
     this.host.remove();
   }

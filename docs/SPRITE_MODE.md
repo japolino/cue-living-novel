@@ -333,8 +333,25 @@ Cut-out runtime:
 - Fallbacks: download failure → basic (retry after 60 s); no WebAssembly or
   session failure → "unsupported", basic until the user prepares again.
 
+Queue order: within a priority, work starts in the latest turn's reading
+order (the first paragraph that needs it; a plate before a sprite needed at
+the same paragraph), so the background and the first speaker come first and a
+later character's first sprite does not wait behind every expression of an
+earlier one.
+
+Cut-out background colour: the median of the border pixels the model calls
+background (without a model: light, near-neutral border pixels). Sprites that
+fill the frame (big hair, wings, spider legs touching the edges) used to make
+the plain border median the character's colour, and the cut-out kept the
+white background.
+
 Stage:
 
+- Edges: the outer 6% of a sprite's left and right edges and 4% of its top fade
+  out, so a figure drawn up to the image edge does not end in a straight cut.
+- Portrait: figures stand on a floor just under the top of the dialogue chrome
+  (`--vn-dialogue-top`, measured by the stage and only growing while the stage
+  size stays the same) and fit the space above it; the lower 16% fades out.
 - Facing rule: sprites are assumed to face the viewer or screen left
   (`SPRITE_NATURAL_FACING = "left"`); "right" mirrors around the bbox centre.
 - Head position is estimated from the bbox top (emotes, blush).
