@@ -13,9 +13,10 @@ import type { VisualNovelThemePreset } from "../../config.js";
  * Colour is inherited: the layer sets `color: var(--vn-accent)` and each shape
  * uses `stroke="currentColor"` / `fill="currentColor"`, so ornament colour
  * follows the preset token automatically. Geometry lives in a 1600x900
- * viewBox that maps to the stage with `xMidYMid slice`; positions are
- * approximate ("intent, not pixel-contract"), aligned to a 16:9 stage and the
- * dialogue plate's approximate bounds.
+ * viewBox that maps to the stage with `xMidYMid slice`. Ornaments anchor to
+ * the frame (corners, edges, open sky) only: the dialogue plate moves with
+ * text length and viewport, so plate-hugging decoration lives in each
+ * preset's CSS pseudo-elements on [data-vn-dialogue] instead.
  *
  * Every group opening tag is a single well-formed element: attributes are
  * closed, then comment lines and child shapes follow, and the group is closed
@@ -28,7 +29,7 @@ const SPARKLE_PATH = "M 0 -12 L 2.6 -2.6 L 12 0 L 2.6 2.6 L 0 12 L -2.6 2.6 L -1
 const DIAMOND_PATH = "M 0 -8 L 8 0 L 0 8 L -8 0 Z";
 
 /**
- * The five ornament groups, keyed by the canonical preset id. The map is the
+ * The seven ornament groups, keyed by the canonical preset id. The map is the
  * single source of truth for the ornament payload so a test can assert that
  * every preset id has exactly one non-empty, well-formed group.
  *
@@ -38,32 +39,30 @@ const DIAMOND_PATH = "M 0 -8 L 8 0 L 0 8 L -8 0 Z";
  * `data-vn-anim-delay` lets CSS stagger the twinkle.
  */
 export const VN_ORNAMENT_GROUPS: Record<VisualNovelThemePreset, string> = {
-  /* ------------------------------------------------------------------ */
-  /* golden-hour — ambient sparkles, plate-corner diamonds, filigree     */
-  /* ------------------------------------------------------------------ */
   "golden-hour": `<g data-vn-ornament-group="" data-vn-preset="golden-hour" aria-hidden="true" focusable="false" vector-effect="non-scaling-stroke" fill="none" stroke="currentColor">
-    <!-- ambient twinkle sparkles drifting in the warm haze above the plate -->
+    <!-- ambient twinkle sparkles drifting in the warm haze, upper scene only -->
     <g transform="translate(430 168) scale(1.1)" fill="currentColor" stroke="none" opacity="0.85"><g data-vn-anim="sparkle" data-vn-anim-delay="0s"><path d="M 0 -12 L 2.6 -2.6 L 12 0 L 2.6 2.6 L 0 12 L -2.6 2.6 L -12 0 L -2.6 -2.6 Z"/></g></g>
     <g transform="translate(1190 128) scale(0.85)" fill="currentColor" stroke="none" opacity="0.55"><g data-vn-anim="sparkle" data-vn-anim-delay="0.6s"><path d="M 0 -12 L 2.6 -2.6 L 12 0 L 2.6 2.6 L 0 12 L -2.6 2.6 L -12 0 L -2.6 -2.6 Z"/></g></g>
     <g transform="translate(660 306) scale(0.6)" fill="currentColor" stroke="none" opacity="0.42"><g data-vn-anim="sparkle" data-vn-anim-delay="1.2s"><path d="M 0 -12 L 2.6 -2.6 L 12 0 L 2.6 2.6 L 0 12 L -2.6 2.6 L -12 0 L -2.6 -2.6 Z"/></g></g>
     <g transform="translate(1010 236) scale(0.5)" fill="currentColor" stroke="none" opacity="0.34"><g data-vn-anim="sparkle" data-vn-anim-delay="1.8s"><path d="M 0 -12 L 2.6 -2.6 L 12 0 L 2.6 2.6 L 0 12 L -2.6 2.6 L -12 0 L -2.6 -2.6 Z"/></g></g>
-    <!-- plate-corner diamonds planted at the lower margin, just below the plate -->
-    <g transform="translate(70 884) scale(1.05)" fill="currentColor" stroke="none" opacity="0.92"><path d="M 0 -8 L 8 0 L 0 8 L -8 0 Z"/></g>
-    <g transform="translate(1530 884) scale(1.05)" fill="currentColor" stroke="none" opacity="0.92"><path d="M 0 -8 L 8 0 L 0 8 L -8 0 Z"/></g>
-    <!-- top-right sparkle near the plate's top-right shoulder -->
-    <g transform="translate(1506 556) scale(1.0)" fill="currentColor" stroke="none" opacity="0.92"><g data-vn-anim="sparkle" data-vn-anim-delay="0.3s"><path d="M 0 -12 L 2.6 -2.6 L 12 0 L 2.6 2.6 L 0 12 L -2.6 2.6 L -12 0 L -2.6 -2.6 Z"/></g></g>
-    <!-- filigree rule with a centre diamond beneath the capsule (right-aligned accent) -->
-    <g stroke="currentColor" opacity="0.8">
-      <line x1="1130" y1="612" x2="1490" y2="612" stroke-width="1.5"/>
-      <path transform="translate(1310 612)" fill="currentColor" stroke="none" d="M 0 -8 L 8 0 L 0 8 L -8 0 Z"/>
-      <circle cx="1160" cy="612" r="2.4" fill="currentColor" stroke="none"/>
-      <circle cx="1460" cy="612" r="2.4" fill="currentColor" stroke="none"/>
+    <g transform="translate(250 330) scale(0.55)" fill="currentColor" stroke="none" opacity="0.4"><g data-vn-anim="sparkle" data-vn-anim-delay="0.3s"><path d="M 0 -12 L 2.6 -2.6 L 12 0 L 2.6 2.6 L 0 12 L -2.6 2.6 L -12 0 L -2.6 -2.6 Z"/></g></g>
+    <!-- filigree frame corners (top): a scrolled gold line ending in a diamond -->
+    <g stroke-width="1.4" opacity="0.7">
+      <path d="M 40 170 L 40 70 Q 40 40 70 40 L 190 40"/>
+      <path d="M 52 150 L 52 82 Q 52 52 82 52 L 150 52" opacity="0.6"/>
+      <path d="M 1560 170 L 1560 70 Q 1560 40 1530 40 L 1410 40"/>
+      <path d="M 1548 150 L 1548 82 Q 1548 52 1518 52 L 1450 52" opacity="0.6"/>
     </g>
+    <g fill="currentColor" stroke="none" opacity="0.8">
+      <path transform="translate(198 40) scale(0.6)" d="M 0 -8 L 8 0 L 0 8 L -8 0 Z"/>
+      <path transform="translate(40 178) scale(0.6)" d="M 0 -8 L 8 0 L 0 8 L -8 0 Z"/>
+      <path transform="translate(1402 40) scale(0.6)" d="M 0 -8 L 8 0 L 0 8 L -8 0 Z"/>
+      <path transform="translate(1560 178) scale(0.6)" d="M 0 -8 L 8 0 L 0 8 L -8 0 Z"/>
+    </g>
+    <!-- lower frame-corner diamonds in the margin beside the plate -->
+    <g transform="translate(26 884) scale(0.8)" fill="currentColor" stroke="none" opacity="0.7"><path d="M 0 -8 L 8 0 L 0 8 L -8 0 Z"/></g>
+    <g transform="translate(1574 884) scale(0.8)" fill="currentColor" stroke="none" opacity="0.7"><path d="M 0 -8 L 8 0 L 0 8 L -8 0 Z"/></g>
   </g>`,
-
-  /* ------------------------------------------------------------------ */
-  /* boxed-console — HUD brackets, reticle, LEDs, grid, ready status     */
-  /* ------------------------------------------------------------------ */
   "boxed-console": `<g data-vn-ornament-group="" data-vn-preset="boxed-console" aria-hidden="true" focusable="false" vector-effect="non-scaling-stroke" fill="none" stroke="currentColor">
     <!-- full-frame HUD corner brackets -->
     <g stroke-width="3" opacity="0.92">
@@ -79,67 +78,44 @@ export const VN_ORNAMENT_GROUPS: Record<VisualNovelThemePreset, string> = {
       <path d="M 1536 836 L 1556 836 M 1536 836 L 1536 856"/>
       <path d="M 44 836 L 64 836 M 64 836 L 64 856"/>
     </g>
-    <!-- targeting reticle near the speaker (top-left of plate) -->
-    <g stroke-width="1.6" opacity="0.9">
-      <circle cx="118" cy="640" r="16"/>
-      <path d="M 118 612 L 118 628 M 118 652 L 118 668 M 90 640 L 106 640 M 130 640 L 146 640"/>
+    <!-- edge rulers: tick scales down both sides of the frame -->
+    <g stroke-width="1.2" opacity="0.45">
+      <path d="M 28 180 L 28 480"/>
+      <path d="M 28 200 L 40 200 M 28 240 L 36 240 M 28 280 L 40 280 M 28 320 L 36 320 M 28 360 L 40 360 M 28 400 L 36 400 M 28 440 L 40 440"/>
+      <path d="M 1572 180 L 1572 480"/>
+      <path d="M 1572 200 L 1560 200 M 1572 240 L 1564 240 M 1572 280 L 1560 280 M 1572 320 L 1564 320 M 1572 360 L 1560 360 M 1572 400 L 1564 400 M 1572 440 L 1560 440"/>
     </g>
-    <!-- status LEDs row (top edge of plate) -->
+    <!-- status LEDs stacked on the left ruler (geometric only; never text) -->
     <g fill="currentColor" stroke="none" opacity="0.95">
-      <circle cx="94" cy="568" r="4.5" data-vn-anim="led"/>
-      <circle cx="114" cy="568" r="4.5" opacity="0.35"/>
-      <circle cx="134" cy="568" r="4.5" opacity="0.18"/>
-    </g>
-    <!-- READY status mark (geometric bar + blinking block; never text) -->
-    <g opacity="0.9">
-      <rect x="90" y="544" width="42" height="4" fill="currentColor" stroke="none"/>
-      <rect x="136" y="542" width="6" height="8" fill="currentColor" stroke="none" data-vn-anim="led" opacity="0.85"/>
-    </g>
-    <!-- faint grid reticle lines over the plate -->
-    <g stroke-width="1" opacity="0.28">
-      <path d="M 120 696 L 1480 696"/>
-      <path d="M 120 816 L 1480 816"/>
-      <path d="M 420 580 L 420 872"/>
+      <circle cx="52" cy="520" r="4.5" data-vn-anim="led"/>
+      <circle cx="52" cy="540" r="4.5" opacity="0.35"/>
+      <circle cx="52" cy="560" r="4.5" opacity="0.18"/>
+      <rect x="46" y="150" width="4" height="22" opacity="0.8"/>
+      <rect x="54" y="158" width="4" height="14" opacity="0.5"/>
+      <rect x="62" y="164" width="4" height="8" opacity="0.3" data-vn-anim="led"/>
     </g>
   </g>`,
-
-  /* ------------------------------------------------------------------ */
-  /* paper-novel — running-head rules, ink flourish, wax seal            */
-  /* ------------------------------------------------------------------ */
   "paper-novel": `<g data-vn-ornament-group="" data-vn-preset="paper-novel" aria-hidden="true" focusable="false" vector-effect="non-scaling-stroke" fill="none" stroke="currentColor">
-    <!-- running-head double rule under the top of the page -->
-    <g stroke-width="1.1" opacity="0.72">
-      <line x1="96" y1="596" x2="1504" y2="596"/>
-      <line x1="140" y1="604" x2="1460" y2="604"/>
+    <!-- engraved frame corners: a double rule with a small fleuron diamond -->
+    <g stroke-width="1.2" opacity="0.55">
+      <path d="M 36 150 L 36 36 L 150 36"/>
+      <path d="M 46 120 L 46 46 L 120 46"/>
+      <path d="M 1564 150 L 1564 36 L 1450 36"/>
+      <path d="M 1554 120 L 1554 46 L 1480 46"/>
     </g>
-    <!-- ink flourish / fleuron under the speaker -->
-    <g stroke-width="1.4" opacity="0.8">
-      <path d="M 96 660 C 136 636 176 684 232 660"/>
-      <path d="M 232 660 C 288 636 328 684 368 660"/>
-      <circle cx="232" cy="660" r="6" fill="currentColor" stroke="none"/>
-      <circle cx="368" cy="660" r="3.4" fill="currentColor" stroke="none"/>
-      <circle cx="96" cy="660" r="3.4" fill="currentColor" stroke="none"/>
+    <g stroke-width="1.2" opacity="0.45">
+      <path d="M 60 60 C 80 64 92 76 96 96"/>
+      <path d="M 1540 60 C 1520 64 1508 76 1504 96"/>
     </g>
-    <!-- oxblood wax-seal motif near the lower-right of the page -->
-    <g opacity="0.92">
-      <circle cx="1474" cy="840" r="26" fill="#8a2f23" stroke="none"/>
-      <circle cx="1474" cy="840" r="19" fill="none" stroke="#5e1f16" stroke-width="1.4"/>
-      <path d="M 1462 832 L 1474 826 L 1486 832" fill="none" stroke="#f8f1e3" stroke-width="1.6" opacity="0.7"/>
-      <path d="M 1462 848 L 1474 854 L 1486 848" fill="none" stroke="#f8f1e3" stroke-width="1.6" opacity="0.7"/>
-      <path d="M 1500 818 L 1496 828 L 1506 832" fill="none" stroke="#5e1f16" stroke-width="1.4"/>
-    </g>
-    <!-- corner fleurons -->
-    <g transform="translate(96 596) scale(1.0)" fill="currentColor" stroke="none" opacity="0.55"><path d="M 0 -8 L 8 0 L 0 8 L -8 0 Z"/></g>
-    <g transform="translate(1504 596) scale(1.0)" fill="currentColor" stroke="none" opacity="0.55"><path d="M 0 -8 L 8 0 L 0 8 L -8 0 Z"/></g>
-    <!-- old-style double-rule footer marker (page counter lives on the real progress span) -->
-    <g stroke-width="1.1" opacity="0.6">
-      <line x1="700" y1="866" x2="900" y2="866"/>
+    <g fill="currentColor" stroke="none" opacity="0.6">
+      <path transform="translate(60 60) scale(0.55)" d="M 0 -8 L 8 0 L 0 8 L -8 0 Z"/>
+      <path transform="translate(1540 60) scale(0.55)" d="M 0 -8 L 8 0 L 0 8 L -8 0 Z"/>
+      <circle cx="158" cy="36" r="2.2"/>
+      <circle cx="36" cy="158" r="2.2"/>
+      <circle cx="1442" cy="36" r="2.2"/>
+      <circle cx="1564" cy="158" r="2.2"/>
     </g>
   </g>`,
-
-  /* ------------------------------------------------------------------ */
-  /* midnight-noir — letterbox bars, art-deco corners, sunburst          */
-  /* ------------------------------------------------------------------ */
   "midnight-noir": `<g data-vn-ornament-group="" data-vn-preset="midnight-noir" aria-hidden="true" focusable="false" vector-effect="non-scaling-stroke" fill="none" stroke="currentColor">
     <!-- letterbox bars -->
     <g fill="#02040a" stroke="none">
@@ -173,11 +149,7 @@ export const VN_ORNAMENT_GROUPS: Record<VisualNovelThemePreset, string> = {
     <g transform="translate(88 88) scale(1.0)" fill="currentColor" stroke="none" opacity="0.85"><path d="M 0 -8 L 8 0 L 0 8 L -8 0 Z"/></g>
     <g transform="translate(1512 812) scale(1.0)" fill="currentColor" stroke="none" opacity="0.85"><path d="M 0 -8 L 8 0 L 0 8 L -8 0 Z"/></g>
   </g>`,
-
-  /* ------------------------------------------------------------------ */
-  /* lumiverse — restrained host-toned corner ticks + one sparkle        */
-  /* ------------------------------------------------------------------ */
-  lumiverse: `<g data-vn-ornament-group="" data-vn-preset="lumiverse" aria-hidden="true" focusable="false" vector-effect="non-scaling-stroke" fill="none" stroke="currentColor">
+  "lumiverse": `<g data-vn-ornament-group="" data-vn-preset="lumiverse" aria-hidden="true" focusable="false" vector-effect="non-scaling-stroke" fill="none" stroke="currentColor">
     <!-- fine-line corner ticks -->
     <g stroke-width="1.5" opacity="0.6">
       <path d="M 52 96 L 52 52 L 96 52"/>
@@ -185,8 +157,8 @@ export const VN_ORNAMENT_GROUPS: Record<VisualNovelThemePreset, string> = {
       <path d="M 1548 804 L 1548 848 L 1504 848"/>
       <path d="M 96 848 L 52 848 L 52 804"/>
     </g>
-    <!-- one small 4-point sparkle, subtle -->
-    <g transform="translate(1504 552) scale(0.9)" fill="currentColor" stroke="none" opacity="0.5"><g data-vn-anim="sparkle"><path d="M 0 -12 L 2.6 -2.6 L 12 0 L 2.6 2.6 L 0 12 L -2.6 2.6 L -12 0 L -2.6 -2.6 Z"/></g></g>
+    <!-- one small 4-point sparkle, subtle, in the open sky -->
+    <g transform="translate(1500 170) scale(0.9)" fill="currentColor" stroke="none" opacity="0.5"><g data-vn-anim="sparkle"><path d="M 0 -12 L 2.6 -2.6 L 12 0 L 2.6 2.6 L 0 12 L -2.6 2.6 L -12 0 L -2.6 -2.6 Z"/></g></g>
   </g>`,
   "yamaku-classic": `<g data-vn-ornament-group="" data-vn-preset="yamaku-classic" aria-hidden="true" focusable="false" vector-effect="non-scaling-stroke" fill="none" stroke="currentColor">
     <!-- Warm classic corner framing brackets -->
@@ -196,20 +168,13 @@ export const VN_ORNAMENT_GROUPS: Record<VisualNovelThemePreset, string> = {
       <path d="M 1536 796 L 1536 836 L 1496 836"/>
       <path d="M 104 836 L 64 836 L 64 796"/>
     </g>
-    <!-- delicate warm diamond mark near dialogue plate -->
-    <g transform="translate(1506 564) scale(0.8)" fill="currentColor" stroke="none" opacity="0.4"><path d="M 0 -8 L 8 0 L 0 8 L -8 0 Z"/></g>
   </g>`,
   "literature-club": `<g data-vn-ornament-group="" data-vn-preset="literature-club" aria-hidden="true" focusable="false" vector-effect="non-scaling-stroke" fill="currentColor" stroke="none">
-    <!-- Sweet floating hearts -->
-    <g opacity="0.38" transform="translate(84 94) scale(1.1)">
-      <path d="M 0 -4 C -4 -12 -14 -8 -14 0 C -14 7 0 14 0 16 C 0 14 14 7 14 0 C 14 -8 4 -12 0 -4 Z"/>
-    </g>
-    <g opacity="0.32" transform="translate(1516 114) scale(0.85)">
-      <path d="M 0 -4 C -4 -12 -14 -8 -14 0 C -14 7 0 14 0 16 C 0 14 14 7 14 0 C 14 -8 4 -12 0 -4 Z"/>
-    </g>
-    <g opacity="0.28" transform="translate(1504 574) scale(0.95)">
-      <path d="M 0 -4 C -4 -12 -14 -8 -14 0 C -14 7 0 14 0 16 C 0 14 14 7 14 0 C 14 -8 4 -12 0 -4 Z"/>
-    </g>
+    <!-- Sweet floating hearts along the open sides of the scene -->
+    <g opacity="0.38" transform="translate(70 230) scale(1.1)"><path d="M 0 -4 C -4 -12 -14 -8 -14 0 C -14 7 0 14 0 16 C 0 14 14 7 14 0 C 14 -8 4 -12 0 -4 Z"/></g>
+    <g opacity="0.3" transform="translate(1536 210) scale(0.85)"><path d="M 0 -4 C -4 -12 -14 -8 -14 0 C -14 7 0 14 0 16 C 0 14 14 7 14 0 C 14 -8 4 -12 0 -4 Z"/></g>
+    <g opacity="0.24" transform="translate(1490 360) scale(0.6)"><path d="M 0 -4 C -4 -12 -14 -8 -14 0 C -14 7 0 14 0 16 C 0 14 14 7 14 0 C 14 -8 4 -12 0 -4 Z"/></g>
+    <g opacity="0.22" transform="translate(120 380) scale(0.55)"><path d="M 0 -4 C -4 -12 -14 -8 -14 0 C -14 7 0 14 0 16 C 0 14 14 7 14 0 C 14 -8 4 -12 0 -4 Z"/></g>
   </g>`,
 };
 

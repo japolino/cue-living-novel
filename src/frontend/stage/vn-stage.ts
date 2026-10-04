@@ -153,17 +153,20 @@ const THEME_MARKUP = `
 
     <div data-vn-status-stack aria-live="polite" aria-atomic="false"></div>
     <div data-vn-empty-state>
-      There is no reply to show yet. Go back to chat, send the first message, then open Visual novel again.
+      <div data-vn-empty-card>
+        <span data-vn-empty-icon aria-hidden="true"><svg viewBox="0 0 16 16" width="14" height="14" focusable="false" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4.2C6.6 3.2 4.6 2.8 2.5 3v9.4c2.1-.2 4.1.2 5.5 1.2 1.4-1 3.4-1.4 5.5-1.2V3c-2.1-.2-4.1.2-5.5 1.2z" /><path d="M8 4.2v9.4" /></svg></span>
+        <p data-vn-empty-text>There is no reply to show yet. Go back to chat, send the first message, then open Visual novel again.</p>
+      </div>
     </div>
 
     <section data-vn-narrative hidden aria-label="Dialogue">
       <div data-vn-dialogue>
         <nav data-vn-controls aria-label="Reading controls">
           <button data-vn-control="previous" type="button" aria-label="Previous paragraph" aria-keyshortcuts="ArrowLeft" title="Previous paragraph (Left Arrow)">
-            <span data-vn-control-icon aria-hidden="true">&#8249;</span><span data-vn-control-label>Previous</span>
+            <span data-vn-control-icon aria-hidden="true"><svg viewBox="0 0 16 16" width="14" height="14" focusable="false" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg></span><span data-vn-control-label>Previous</span>
           </button>
           <button data-vn-control="log" type="button" aria-label="Open history" aria-keyshortcuts="L" title="History (L)">
-            <span data-vn-control-label>History</span>
+            <span data-vn-control-icon aria-hidden="true"><svg viewBox="0 0 16 16" width="14" height="14" focusable="false" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h10" /><path d="M3 8h10" /><path d="M3 12h6" /></svg></span><span data-vn-control-label>History</span>
           </button>
           <button data-vn-control="auto" type="button" aria-label="Auto play" aria-pressed="false" aria-keyshortcuts="A" title="Auto play (A)">
             <span data-vn-auto-ring aria-hidden="true">
@@ -172,10 +175,10 @@ const THEME_MARKUP = `
                 <circle class="vn-auto-bar" cx="8" cy="8" r="6" fill="none" stroke-width="2" stroke-dasharray="37.7" stroke-dashoffset="37.7" />
               </svg>
             </span>
-            <span data-vn-control-label>Auto</span>
+            <span data-vn-control-icon aria-hidden="true"><svg viewBox="0 0 16 16" width="14" height="14" focusable="false" fill="currentColor" stroke="none" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3.2v9.6L12.6 8z" /></svg></span><span data-vn-control-label>Auto</span>
           </button>
           <button data-vn-control="skip" type="button" aria-label="Skip" aria-pressed="false" aria-describedby="vn-skip-description" aria-keyshortcuts="S" title="Skip (S)">
-            <span data-vn-control-label>Skip</span>
+            <span data-vn-control-icon aria-hidden="true"><svg viewBox="0 0 16 16" width="14" height="14" focusable="false" fill="currentColor" stroke="none" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3.5v9L7.6 8z" /><path d="M8.2 3.5v9L13.8 8z" /></svg></span><span data-vn-control-label>Skip</span>
           </button>
           <span id="vn-skip-description" data-vn-skip-description hidden></span>
         </nav>
@@ -204,14 +207,14 @@ const THEME_MARKUP = `
       <ol data-vn-choice-list hidden aria-label="Choose a reply"></ol>
       <form data-vn-input-form hidden>
         <textarea data-vn-input aria-label="Your reply"></textarea>
-        <button data-vn-submit type="submit">Send</button>
+        <button data-vn-submit type="submit"><span data-vn-submit-label>Send</span><span data-vn-submit-icon aria-hidden="true"><svg viewBox="0 0 16 16" width="16" height="16" focusable="false" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 8h10" /><path d="M8.5 4l4 4-4 4" /></svg></span></button>
       </form>
     </section>
 
     <div data-vn-backlog hidden aria-modal="true" role="dialog" aria-label="History">
       <div data-vn-backlog-header>
         <h3 data-vn-backlog-title>History</h3>
-        <button data-vn-backlog-close type="button" aria-label="Close history">&#x2715;</button>
+        <button data-vn-backlog-close type="button" aria-label="Close history"><svg viewBox="0 0 16 16" width="14" height="14" focusable="false" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4l8 8" /><path d="M12 4l-8 8" /></svg></button>
       </div>
       <div data-vn-backlog-content tabindex="0"></div>
     </div>
@@ -779,6 +782,9 @@ export class VnStage {
   private applyThemePreset(preset: VisualNovelThemePreset): void {
     this.presetStyle.textContent = THEME_PRESET_CSS[preset] ?? "";
     this.root.dataset.vnPreset = preset;
+    // Mirror the preset on the outer shell so framework chrome outside the
+    // theme root (Back to chat, Panels, speech dock) can match it.
+    this.panelMount.dataset.vnPreset = preset;
   }
 
   /** Moves from a game-engine extension, shown with the reply options whenever it's the player's turn. */
