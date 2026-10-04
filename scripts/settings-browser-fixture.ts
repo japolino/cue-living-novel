@@ -1,5 +1,7 @@
-import { VisualNovelSettingsPanel } from "../src/frontend/settings/panel.js";
+import { VisualNovelSettingsPanel, type SettingsPanelOptions } from "../src/frontend/settings/panel.js";
+import { SpeechSettingsSection } from "../src/frontend/speech/settings-ui.js";
 import { DEFAULT_CONFIG, type VisualNovelConfig } from "../src/config.js";
+import { normalizeSpeechSettings } from "../src/speech-config.js";
 
 // A tiny in-page host: applies patches like the real controller, records every
 // call, and acknowledges saves so the panel can show "Saved".
@@ -22,8 +24,13 @@ const fixture = {
   savedSystemOneKeys: [] as string[],
   clearedSystemOneKeys: 0,
   panel: null as VisualNovelSettingsPanel | null,
+  speechPatches: [] as unknown[],
+  speechListings: 0,
+  /** Destroys and rebuilds the panel on the same storage, like reopening the settings tab. */
+  remount: () => {},
+  storage: null as unknown,
 };
-const panel = new VisualNovelSettingsPanel({
+const panelOptions: SettingsPanelOptions = {
   mount,
   setupStorage: storage,
   onSave: (patch) => {
@@ -38,8 +45,31 @@ const panel = new VisualNovelSettingsPanel({
   onClearSystemOneKey: () => { fixture.clearedSystemOneKeys += 1; panel.setSystemOneKeyStatus(false); },
   onScanAudio: (directory) => { fixture.scans.push(directory); return { bgmCount: 3, sfxCount: 12 }; },
   onImportAudio: () => {},
-});
+};
+let panel = new VisualNovelSettingsPanel(panelOptions);
+// Mount the speech section inside the Voice section, like the controller does.
+let speech: SpeechSettingsSection | null = null;
+function mountSpeech(): void {
+  speech = new SpeechSettingsSection({
+    mount: panel.voiceMount(),
+    onSave: (next) => { fixture.speechPatches.push(next); speech?.setConfig(normalizeSpeechSettings(next)); },
+    listProfiles: async () => { fixture.speechListings += 1; return []; },
+    listVoices: async () => [],
+    getChatId: () => "chat-1",
+  });
+  speech.setConfig(normalizeSpeechSettings({}));
+}
+if (!query.has("noSpeech")) mountSpeech();
 fixture.panel = panel;
+fixture.storage = memory;
+fixture.remount = () => {
+  speech?.destroy();
+  panel.destroy();
+  panel = new VisualNovelSettingsPanel(panelOptions);
+  fixture.panel = panel;
+  if (!query.has("noSpeech")) mountSpeech();
+  panel.setConfig(fixture.config);
+};
 if (query.has("card")) fixture.config = { ...fixture.config, useNativeCardImages: true, themePreset: "midnight-noir" };
 panel.setConfig(fixture.config);
 if (!query.has("noCatalog")) {

@@ -8,6 +8,9 @@ import {
   BUDGET_PRESETS,
   EFFECT_INTENSITY_OPTIONS,
   IMAGE_SOURCE_OPTIONS,
+  SETTINGS_SECTIONS,
+  SETTINGS_SECTION_KEY,
+  TEXT_EFFECT_MODE_OPTIONS,
   REFERENCE_SOURCE_OPTIONS,
   SCENE_IMAGE_FIT_OPTIONS,
   SETUP_DONE_KEY,
@@ -31,7 +34,10 @@ import {
   normalizeEffectIntensity,
   normalizeReferenceSource,
   normalizeSceneImageFit,
+  normalizeSettingsSection,
+  normalizeTextEffects,
   normalizeThemePreset,
+  searchSettings,
   resetPatch,
   safeStorage,
   themePreviewTokens,
@@ -54,8 +60,15 @@ import {
   type ConnectionCatalogKind,
   type ConnectionCatalogState,
   type ImageSource,
+  type SettingsSearchEntry,
+  type SettingsSectionId,
   type SetupFlagStorage,
 } from "./model.js";
+import { SETTINGS_TOKENS_CSS } from "./controls-css.js";
+import { TEXT_EFFECT_AUTHOR_GUIDE, TEXT_EFFECT_CATALOGUE } from "../../shared/text-effects.js";
+import { formatDialogueText } from "../stage/rich-text.js";
+import { applyTextEffects } from "../stage/text-effects.js";
+import { VN_TEXT_EFFECTS_CSS } from "../theme/text-effects-css.js";
 
 export {
   THEME_PRESET_LABELS,
@@ -66,6 +79,7 @@ export {
   type ConnectionCatalogState,
   type ConnectionOption,
   type ConnectionSelectOption,
+  type SettingsSectionId,
 } from "./model.js";
 
 export type SaveStatus = { kind: "saved" } | { kind: "error"; error: string };
@@ -103,136 +117,205 @@ const SAMPLE_LINES: ReadonlyArray<{ speaker: string; text: string }> = [
 /** A local placeholder picture: a wide 16:9 dusk sky, so fit modes visibly differ in a short frame. */
 const SAMPLE_PICTURE = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360"><defs><linearGradient id="s" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#241b45"/><stop offset=".55" stop-color="#6a3d6a"/><stop offset="1" stop-color="#d7826f"/></linearGradient></defs><rect width="640" height="360" fill="url(#s)"/><g fill="#fff" opacity=".7"><circle cx="80" cy="70" r="1.6"/><circle cx="160" cy="120" r="1.2"/><circle cx="300" cy="60" r="1.4"/><circle cx="420" cy="110" r="1.1"/><circle cx="600" cy="50" r="1.5"/><circle cx="520" cy="90" r="1"/></g><circle cx="520" cy="168" r="34" fill="#ffe9a8" opacity=".9"/><path d="M0 250 Q120 200 250 245 T470 235 T640 225 V360 H0Z" fill="#141a2c" opacity=".9"/><path d="M0 290 Q150 250 320 290 T640 272 V360 H0Z" fill="#090d18"/></svg>`)}`;
 
-const PANEL_CSS = `
-:host { display: block; color: var(--lumiverse-text, #f5f5f7); font: 15px/1.5 var(--lumiverse-font-family, system-ui, sans-serif); }
-* { box-sizing: border-box; }
-[hidden] { display: none !important; }
-[data-shell] { display: grid; gap: .9rem; max-width: 54rem; padding: 1rem 1rem 0; }
-p, h2, h3 { margin: 0; }
-h2 { font-size: 1.05rem; font-weight: 650; }
-h3 { font-size: .95rem; font-weight: 650; }
-.muted { color: var(--lumiverse-text-muted, rgba(255,255,255,.68)); }
-small, .help { display: block; font-size: .85rem; font-weight: 400; color: var(--lumiverse-text-muted, rgba(255,255,255,.68)); }
-button, input, select, textarea { font: inherit; }
-button { min-height: 2.75rem; padding: .55rem 1.1rem; border: 1px solid var(--lumiverse-border, rgba(255,255,255,.24)); border-radius: 999px; background: var(--lumiverse-fill-medium, rgba(255,255,255,.1)); color: inherit; cursor: pointer; }
-button[data-primary] { border-color: var(--lumiverse-primary, #a986ff); background: var(--lumiverse-primary, #a986ff); color: var(--lumiverse-primary-contrast, #121018); font-weight: 650; }
-button[data-quiet] { background: transparent; }
-button:disabled { opacity: .55; cursor: default; }
-button[data-reset][data-confirming] { border-color: var(--lumiverse-danger, #ff8ca0); color: var(--lumiverse-danger, #ff8ca0); background: transparent; }
-:is(button, summary, select, input, textarea, [data-tile]):focus-visible, label:has(> input:focus-visible) { outline: 2px solid var(--lumiverse-primary, #a986ff); outline-offset: 3px; }
-input[type="text"], input[type="number"], select, textarea { width: 100%; min-height: 2.75rem; padding: .6rem .75rem; border: 1px solid var(--lumiverse-border, rgba(255,255,255,.2)); border-radius: .6rem; background: var(--lumiverse-bg-elevated, #171822); color: inherit; }
-textarea { min-height: 9rem; resize: vertical; font-family: var(--lumiverse-font-mono, ui-monospace, monospace); font-size: .82rem; }
-input[type="range"] { width: 100%; height: 2.75rem; margin: 0; accent-color: var(--lumiverse-primary, #a986ff); cursor: pointer; }
-input[type="checkbox"], input[type="radio"] { width: 1.25rem; height: 1.25rem; margin: 0; accent-color: var(--lumiverse-primary, #a986ff); }
+const PANEL_CSS = `${SETTINGS_TOKENS_CSS}
+[data-shell] { container-type: inline-size; display: grid; gap: .9rem; max-width: 66rem; padding: 1rem 1rem 0; }
+h2 { font-size: 1.22rem; font-weight: 680; letter-spacing: -.01em; line-height: 1.25; }
+h3 { font-size: .98rem; font-weight: 650; line-height: 1.3; }
+code { font-family: var(--lumiverse-font-mono, ui-monospace, "Cascadia Mono", Consolas, monospace); font-size: .82em; }
 
-[data-novelai-controls] { display: grid; gap: .9rem; margin-top: .75rem; padding: .85rem; border: 1px solid var(--lumiverse-border, rgba(255,255,255,.14)); border-radius: .7rem; background: var(--lumiverse-fill-subtle, rgba(255,255,255,.03)); }
-[data-novelai-controls] a { color: var(--lumiverse-primary, #a986ff); text-decoration: underline; text-underline-offset: 2px; }
+/* Top bar: find, save status, preview */
+[data-topbar] { display: flex; flex-wrap: wrap; align-items: center; gap: .55rem .75rem; }
+[data-search] { position: relative; flex: 1 1 10rem; min-width: 0; }
+[data-search] > svg { position: absolute; left: .8rem; top: 50%; width: 1rem; height: 1rem; transform: translateY(-50%); color: var(--set-muted); pointer-events: none; }
+[data-search] input { padding-left: 2.35rem; border-radius: 999px; }
+[data-search] input::-webkit-search-cancel-button { cursor: pointer; }
+[data-search-results] { position: absolute; z-index: 20; top: calc(100% + .35rem); left: 0; right: 0; display: grid; gap: .1rem; max-height: min(22rem, 60vh); overflow: auto; margin: 0; padding: .35rem; list-style: none; border: 1px solid var(--set-border); border-radius: var(--set-radius); background: var(--set-field); box-shadow: 0 18px 40px rgba(0,0,0,.35); }
+[data-search-results] button { display: grid; grid-template-columns: 1fr auto; gap: .1rem .75rem; align-items: center; width: 100%; min-height: 2.75rem; padding: .45rem .7rem; border: 0; border-radius: .55rem; background: transparent; text-align: left; font-weight: 550; }
+[data-search-results] button:is(:hover, :focus-visible, [data-active]) { background: color-mix(in srgb, var(--set-accent) 16%, transparent); }
+[data-search-results] button span:last-child { font-size: .78rem; font-weight: 600; color: var(--set-muted); }
+[data-search-results] button small { grid-column: 1 / -1; font-size: .78rem; }
+[data-search-empty] { padding: .6rem .7rem; font-size: .88rem; color: var(--set-muted); }
+[data-status] { flex: 0 1 auto; min-height: 1.4rem; font-size: .88rem; font-weight: 550; }
+[data-status][data-kind="saved"] { color: var(--set-success); }
+:is([data-status][data-kind="dirty"], [data-status][data-kind="saving"]) { color: var(--set-warning); }
+[data-status][data-kind="error"] { color: var(--set-danger); }
+[data-topbar] > [data-open-preview] { margin-left: auto; }
 
-/* Cards and sections */
-[data-card] { border: 1px solid var(--lumiverse-border, rgba(255,255,255,.16)); border-radius: .9rem; background: var(--lumiverse-card-bg, rgba(255,255,255,.035)); }
-details[data-section] > summary { list-style: none; display: flex; align-items: center; gap: .6rem; min-height: 3.25rem; padding: .7rem 1rem; cursor: pointer; user-select: none; border-radius: .9rem; }
-details[data-section] > summary::-webkit-details-marker { display: none; }
-details[data-section] > summary::before { content: ""; width: .45rem; height: .45rem; border-right: 2px solid var(--lumiverse-primary, #a986ff); border-bottom: 2px solid var(--lumiverse-primary, #a986ff); transform: rotate(-45deg); flex: none; }
-details[data-section][open] > summary::before { transform: rotate(45deg); }
-details[data-section] > summary:hover { background: var(--lumiverse-fill-medium, rgba(255,255,255,.06)); }
-details[data-section] > summary h2 { flex: 1; }
-details[data-section] > summary [data-summary] { font-size: .85rem; text-align: right; color: var(--lumiverse-text-muted, rgba(255,255,255,.68)); }
-[data-section-body] { display: grid; gap: 1rem; padding: .25rem 1rem 1.1rem; }
-[data-subsection] { border-color: var(--lumiverse-border, rgba(255,255,255,.1)); }
-[data-subsection] > summary { min-height: 2.75rem; }
-[data-subsection] > summary h3 { flex: 1; }
-[data-field] { display: grid; gap: .4rem; }
-[data-field] > span:first-child, legend { font-weight: 600; }
+/* Layout: rail + panes on wide containers, tab strip on narrow ones */
+[data-layout] { display: grid; grid-template-columns: minmax(0, 1fr); gap: .9rem; align-items: start; }
+[data-nav] { min-width: 0; }
+[data-nav] { position: sticky; top: 0; z-index: 8; margin: 0 -1rem; padding: .35rem 1rem; background: var(--set-field); border-bottom: 1px solid var(--set-border); }
+[data-tablist] { display: flex; gap: .25rem; overflow-x: auto; scrollbar-width: thin; overscroll-behavior-x: contain; }
+[data-tab] { position: relative; flex: none; display: inline-flex; align-items: center; gap: .45rem; min-height: var(--set-control); padding: .4rem .8rem; border: 1px solid transparent; border-radius: .6rem; background: transparent; color: var(--set-muted); font-weight: 600; text-align: left; white-space: nowrap; }
+[data-tab] svg { flex: none; width: 1.1rem; height: 1.1rem; }
+[data-tab]:focus-visible { outline: 2px solid var(--set-accent); outline-offset: -2px; }
+[data-tab]:hover { color: var(--set-text); background: var(--set-hover); border-color: transparent; }
+[data-tab][aria-selected="true"] { color: var(--set-text); background: color-mix(in srgb, var(--set-accent) 18%, transparent); }
+[data-tab][aria-selected="true"] svg { color: var(--set-accent); }
+[data-tab-text] { display: grid; min-width: 0; }
+[data-tab-summary] { display: none; }
+[data-tab-badge] { min-width: 1.35rem; height: 1.35rem; padding: 0 .35rem; border-radius: 999px; background: var(--set-warning); color: #1b1405; font-size: .72rem; font-weight: 750; line-height: 1.35rem; text-align: center; }
+[data-tab-dot] { width: .5rem; height: .5rem; border-radius: 50%; background: var(--set-muted); }
+[data-tab-dot][data-level="ready"] { background: var(--set-success); }
+[data-tab-dot][data-level="attention"] { background: var(--set-warning); }
+[data-tab-dot][data-level="blocked"] { background: var(--set-danger); }
+
+@container (min-width: 700px) {
+  [data-layout] { grid-template-columns: 12.5rem minmax(0, 1fr); gap: 1.25rem; }
+  [data-nav] { top: .75rem; margin: 0; padding: 0; background: transparent; border: 0; }
+  [data-tablist] { flex-direction: column; overflow: visible; }
+  [data-tab] { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; width: 100%; min-height: 3.3rem; padding: .5rem .7rem; white-space: normal; }
+  [data-tab][aria-selected="true"]::before { content: ""; position: absolute; left: -.2rem; top: .7rem; bottom: .7rem; width: 3px; border-radius: 3px; background: var(--set-accent); }
+  [data-tab-summary] { display: block; overflow: hidden; font-size: .76rem; font-weight: 500; color: var(--set-muted); white-space: nowrap; text-overflow: ellipsis; }
+}
+
+/* Panes, groups and fields */
+[data-panes] { display: grid; gap: .9rem; min-width: 0; }
+[data-pane] { display: grid; gap: .9rem; min-width: 0; padding-bottom: 1rem; }
+[data-pane]:focus-visible { outline-offset: 6px; border-radius: .4rem; }
+[data-pane-head] { display: grid; gap: .2rem; padding: .1rem .1rem .15rem; }
+[data-pane-head] p { color: var(--set-muted); font-size: .9rem; }
+[data-group] { display: grid; gap: .85rem; padding: 1rem 1.05rem 1.1rem; border: 1px solid var(--set-border); border-radius: var(--set-radius); background: var(--set-surface); scroll-margin: 4.5rem 0 6rem; }
+[data-group-head] { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .65rem; }
+[data-group-head] h3 { flex: 1 1 auto; }
+[data-group-head] > small { flex-basis: 100%; }
+[data-apply-chip] { display: inline-flex; align-items: center; gap: .3rem; padding: .05rem .55rem; border: 1px solid color-mix(in srgb, var(--set-warning) 55%, transparent); border-radius: 999px; color: var(--set-warning); font-size: .72rem; font-weight: 650; letter-spacing: .02em; white-space: nowrap; }
+[data-field] { display: grid; gap: .35rem; min-width: 0; }
+[data-field] > span:first-child, legend { font-weight: 600; font-size: .93rem; }
+[data-field] > span:first-child small { display: inline; }
 fieldset { margin: 0; padding: 0; border: 0; min-width: 0; display: grid; gap: .45rem; }
-legend { padding: 0; margin-bottom: .4rem; }
-label[data-check] { display: grid; grid-template-columns: auto 1fr; align-items: start; gap: .7rem; min-height: 2.75rem; padding: .55rem .25rem; font-weight: 500; }
-label[data-check] input { margin-top: .15rem; }
-[data-row] { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .9rem; }
-[data-actions] { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; }
+legend { padding: 0; margin-bottom: .45rem; }
+label[data-check] { display: grid; grid-template-columns: auto 1fr; align-items: start; gap: .7rem; min-height: var(--set-control); padding: .5rem .2rem; font-weight: 550; cursor: pointer; }
+label[data-check] input { margin-top: .17rem; }
+label[data-check] small { margin-top: .1rem; }
+[data-row] { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .9rem; align-items: start; }
+[data-actions] { display: flex; flex-wrap: wrap; gap: .55rem; align-items: center; }
+[data-actions] > small { flex: 1 1 12rem; }
+:is([data-field], label[data-check], fieldset)[data-dirty] { position: relative; }
+:is([data-field], label[data-check], fieldset)[data-dirty]::before { content: ""; position: absolute; left: -.6rem; top: .2rem; bottom: .2rem; width: 3px; border-radius: 3px; background: var(--set-warning); }
+[data-flash] { animation: set-flash 1.6s ease-out; }
+@keyframes set-flash { 0%, 35% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--set-accent) 70%, transparent); } 100% { box-shadow: 0 0 0 3px transparent; } }
 
-/* Segmented choices (named steps) */
-[data-segments] { display: flex; flex-wrap: wrap; gap: .4rem; }
-[data-segments] label { position: relative; display: inline-flex; align-items: center; min-height: 2.75rem; padding: .45rem 1rem; border: 1px solid var(--lumiverse-border, rgba(255,255,255,.2)); border-radius: 999px; cursor: pointer; background: var(--lumiverse-bg-elevated, #171822); }
-[data-segments] label:has(input:checked) { border-color: var(--lumiverse-primary, #a986ff); background: color-mix(in srgb, var(--lumiverse-primary, #a986ff) 22%, transparent); font-weight: 600; }
+/* Segmented choices */
+[data-segments] { display: flex; flex-wrap: wrap; gap: .35rem; }
+[data-segments] label { position: relative; display: inline-flex; align-items: center; min-height: var(--set-control); padding: .4rem 1rem; border: 1px solid var(--set-border); border-radius: 999px; cursor: pointer; background: var(--set-field); font-weight: 550; transition: background-color .15s, border-color .15s; }
+[data-segments] label:hover { border-color: color-mix(in srgb, var(--set-accent) 45%, var(--set-border)); }
+[data-segments] label:has(input:checked) { border-color: var(--set-accent); background: color-mix(in srgb, var(--set-accent) 22%, var(--set-field)); font-weight: 650; }
 [data-segments] input { position: absolute; opacity: 0; inset: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
-[data-segments] label:has(input:focus-visible) { outline: 2px solid var(--lumiverse-primary, #a986ff); outline-offset: 3px; }
+:is([data-segments], [data-tiles]) label:has(input:focus-visible) { outline: 2px solid var(--set-accent); outline-offset: 2px; }
 
-/* Option lists (image source, fit) */
-[data-options] { display: grid; gap: .45rem; }
-[data-options] label { display: grid; grid-template-columns: auto 1fr; gap: .75rem; align-items: start; min-height: 2.75rem; padding: .7rem .85rem; border: 1px solid var(--lumiverse-border, rgba(255,255,255,.14)); border-radius: .7rem; cursor: pointer; }
-[data-options] label:has(input:checked) { border-color: var(--lumiverse-primary, #a986ff); background: color-mix(in srgb, var(--lumiverse-primary, #a986ff) 12%, transparent); }
+/* Option lists */
+[data-options] { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 14rem), 1fr)); gap: .45rem; }
+[data-options] label { display: grid; grid-template-columns: auto 1fr; gap: .7rem; align-items: start; min-height: var(--set-control); padding: .65rem .8rem; border: 1px solid var(--set-border); border-radius: .65rem; cursor: pointer; background: var(--set-field); transition: background-color .15s, border-color .15s; }
+[data-options] label:hover { border-color: color-mix(in srgb, var(--set-accent) 45%, var(--set-border)); }
+[data-options] label:has(input:checked) { border-color: var(--set-accent); background: color-mix(in srgb, var(--set-accent) 13%, var(--set-field)); }
+[data-options] label:has(input:focus-visible) { outline: 2px solid var(--set-accent); outline-offset: 2px; }
 [data-options] label input { margin-top: .15rem; }
-[data-options] label b { display: block; font-weight: 600; }
+[data-options] label b { display: block; font-weight: 620; }
 
 /* Theme tiles */
-[data-tiles] { display: grid; grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr)); gap: .6rem; }
-[data-tiles] label { position: relative; display: grid; gap: .45rem; padding: .5rem; border: 1px solid var(--lumiverse-border, rgba(255,255,255,.14)); border-radius: .75rem; cursor: pointer; background: var(--lumiverse-bg-elevated, #171822); }
-[data-tiles] label:has(input:checked) { border-color: var(--lumiverse-primary, #a986ff); box-shadow: 0 0 0 1px var(--lumiverse-primary, #a986ff); }
-[data-tiles] label:has(input:focus-visible) { outline: 2px solid var(--lumiverse-primary, #a986ff); outline-offset: 3px; }
+[data-tiles] { display: grid; grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr)); gap: .55rem; }
+[data-tiles] label { position: relative; display: grid; gap: .4rem; padding: .45rem; border: 1px solid var(--set-border); border-radius: .75rem; cursor: pointer; background: var(--set-field); transition: border-color .15s, transform .15s; }
+[data-tiles] label:hover { border-color: color-mix(in srgb, var(--set-accent) 50%, var(--set-border)); }
+[data-tiles] label:has(input:checked) { border-color: var(--set-accent); box-shadow: 0 0 0 1px var(--set-accent); }
+[data-tiles] label:has(input:checked) > span:last-child::after { content: " ✓"; color: var(--set-accent); }
 [data-tiles] input { position: absolute; opacity: 0; inset: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
-[data-tiles] span { font-size: .85rem; font-weight: 600; text-align: center; }
-[data-swatch] { display: grid; align-content: end; height: 3.6rem; padding: .35rem .45rem; border-radius: .5rem; background: #08090d; overflow: hidden; }
-[data-swatch] i { display: block; height: 1.7rem; padding: .25rem .4rem; border-radius: .35rem; border: 1px solid var(--swatch-border); background: var(--swatch-bg); color: var(--swatch-text); font: 600 .62rem/1.2 var(--swatch-font); font-style: normal; white-space: nowrap; overflow: hidden; }
+[data-tiles] > label > span:last-child { font-size: .84rem; font-weight: 600; text-align: center; }
+[data-swatch] { display: grid; align-content: end; height: 3.6rem; padding: .35rem .45rem; border-radius: .5rem; background: linear-gradient(160deg, #2a2140, #0a0b10 70%); overflow: hidden; }
+[data-swatch] i { display: block; height: 1.75rem; padding: .22rem .4rem; border-radius: .35rem; border: 1px solid var(--swatch-border); background: var(--swatch-bg); color: var(--swatch-text); font: 600 .62rem/1.2 var(--swatch-font); font-style: normal; white-space: nowrap; overflow: hidden; }
 [data-swatch] i::before { content: "Mira"; display: block; color: var(--swatch-accent); font-size: .55rem; }
 
 /* Setup guide */
-[data-setup] { display: grid; gap: .9rem; padding: 1rem; border-color: color-mix(in srgb, var(--lumiverse-primary, #a986ff) 55%, transparent); }
-[data-setup] header { display: flex; flex-wrap: wrap; gap: .3rem .8rem; align-items: baseline; }
-[data-setup] ol { display: grid; gap: .9rem; margin: 0; padding: 0; list-style: none; counter-reset: step; }
-[data-setup] li { display: grid; grid-template-columns: 2rem 1fr; gap: .7rem; }
-[data-setup] li::before { counter-increment: step; content: counter(step); display: grid; place-items: center; width: 2rem; height: 2rem; border-radius: 50%; border: 1px solid var(--lumiverse-border, rgba(255,255,255,.24)); font-weight: 650; font-size: .9rem; }
-[data-setup] li > div { display: grid; gap: .5rem; }
-[data-setup] footer { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; }
+[data-setup] { display: grid; gap: 1rem; padding: 1.1rem 1.15rem 1.15rem; border: 1px solid color-mix(in srgb, var(--set-accent) 55%, var(--set-border)); border-radius: calc(var(--set-radius) + .1rem); background: linear-gradient(180deg, color-mix(in srgb, var(--set-accent) 10%, transparent), transparent 9rem), var(--set-surface); }
+[data-setup] header { display: grid; gap: .2rem; }
+[data-setup] ol { display: grid; gap: 1.1rem; margin: 0; padding: 0; list-style: none; counter-reset: step; }
+[data-setup] li { position: relative; display: grid; grid-template-columns: 2rem minmax(0, 1fr); gap: .8rem; }
+[data-setup] li::before { counter-increment: step; content: counter(step); display: grid; place-items: center; width: 2rem; height: 2rem; border-radius: 50%; background: color-mix(in srgb, var(--set-accent) 22%, var(--set-field)); color: var(--set-text); font-weight: 700; font-size: .9rem; }
+[data-setup] li:not(:last-child)::after { content: ""; position: absolute; left: calc(1rem - 1px); top: 2.4rem; bottom: -.75rem; width: 2px; background: var(--set-border); }
+[data-setup] li > div { display: grid; gap: .55rem; min-width: 0; }
+[data-setup] footer { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; padding-top: .2rem; }
 [data-setup] footer small { flex: 1 1 14rem; }
 
 /* Readiness rows */
-[data-readiness] { display: grid; grid-template-columns: auto 1fr; gap: .6rem; align-items: start; padding: .55rem .7rem; border-radius: .6rem; background: var(--lumiverse-fill-medium, rgba(255,255,255,.06)); }
-[data-readiness]::before { content: ""; width: .6rem; height: .6rem; margin-top: .45rem; border-radius: 50%; background: var(--lumiverse-text-muted, #999); }
-[data-readiness][data-level="ready"]::before { background: var(--lumiverse-success, #8ce8b0); }
-[data-readiness][data-level="attention"]::before { background: var(--lumiverse-warning, #ffd08a); }
-[data-readiness][data-level="blocked"]::before { background: var(--lumiverse-danger, #ff8ca0); }
+[data-readiness] { display: grid; grid-template-columns: auto 1fr; gap: .6rem; align-items: start; padding: .55rem .75rem; border-radius: .6rem; background: var(--set-hover); }
+[data-readiness]::before { content: ""; width: .6rem; height: .6rem; margin-top: .45rem; border-radius: 50%; background: var(--set-muted); }
+[data-readiness][data-level="ready"]::before { background: var(--set-success); }
+[data-readiness][data-level="attention"]::before { background: var(--set-warning); }
+[data-readiness][data-level="blocked"]::before { background: var(--set-danger); }
 [data-readiness] b { font-weight: 600; }
 [data-readiness] [data-actions] { margin-top: .3rem; }
 
 /* Live sample */
-[data-sample] { position: sticky; top: 0; z-index: 4; display: grid; gap: .4rem; padding: .6rem; background: var(--lumiverse-bg-elevated, #171822); }
-[data-sample-stage] { position: relative; height: 9.5rem; border-radius: .6rem; overflow: hidden; background: radial-gradient(circle at 50% 35%, rgba(73,58,91,.55), transparent 48%), #08090d; font-family: var(--sample-font); color: var(--sample-text); }
+[data-sample] { display: grid; gap: .35rem; }
+[data-sample-stage] { position: relative; height: 8.25rem; border-radius: .7rem; overflow: hidden; background: radial-gradient(circle at 50% 35%, rgba(73,58,91,.55), transparent 48%), #08090d; font-family: var(--sample-font); color: var(--sample-text); border: 1px solid var(--set-border); }
 [data-sample-picture] { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: var(--sample-fit, cover); }
-[data-sample-dialogue] { position: absolute; left: .6rem; right: .6rem; bottom: .6rem; min-height: 4.2rem; padding: .5rem .8rem .6rem; border: 1px solid var(--sample-border); border-radius: .55rem; background: var(--sample-bg); font-size: calc(.88rem * var(--sample-scale, 1)); line-height: 1.4; }
+[data-sample-dialogue] { position: absolute; left: .55rem; right: .55rem; bottom: .55rem; min-height: 3.9rem; padding: .45rem .8rem .55rem; border: 1px solid var(--sample-border); border-radius: .55rem; background: var(--sample-bg); font-size: calc(.86rem * var(--sample-scale, 1)); line-height: 1.4; }
 [data-sample-speaker] { display: block; color: var(--sample-accent); font-weight: 700; font-size: .8em; letter-spacing: .02em; }
 [data-sample-text] { margin: 0; min-height: 2.6em; }
 [data-sample-caret] { display: inline-block; width: .5em; height: 1em; margin-left: .15em; vertical-align: -.15em; background: var(--sample-accent); opacity: 0; }
 [data-sample-stage][data-typing] [data-sample-caret] { opacity: 1; }
-[data-sample-next] { position: absolute; right: .8rem; bottom: .4rem; font-size: .7rem; color: var(--sample-muted); }
-[data-sample-label] { display: flex; flex-wrap: wrap; gap: .4rem .8rem; align-items: center; font-size: .8rem; }
+[data-sample-next] { position: absolute; right: .8rem; bottom: .35rem; font-size: .7rem; color: var(--sample-muted); }
+[data-sample-label] { display: flex; flex-wrap: wrap; gap: .3rem .8rem; align-items: center; font-size: .8rem; }
 [data-sample-label] > .muted { flex: 1 1 12rem; }
-[data-sample-label] button { min-height: 2rem; padding: .2rem .8rem; font-size: .8rem; }
+[data-sample-label] button { min-height: 2rem; padding: .15rem .8rem; font-size: .8rem; }
 [data-sample][data-effects="off"] [data-sample-picture] { filter: saturate(.85); }
 [data-sample][data-effects="gentle"] [data-sample-picture] { filter: saturate(.95); }
 
-/* Footer */
-[data-actionbar] { position: sticky; bottom: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; margin: 0 -1rem; padding: .7rem 1rem; background: var(--lumiverse-bg-elevated, #171822); border-top: 1px solid var(--lumiverse-border, rgba(255,255,255,.16)); }
-[data-status] { flex: 1 1 12rem; min-height: 1.5rem; font-size: .9rem; }
-[data-status-echo] { margin-left: auto; font-size: .8rem; }
-:is([data-status], [data-status-echo])[data-kind="saved"] { color: var(--lumiverse-success, #8ce8b0); }
-:is([data-status], [data-status-echo])[data-kind="dirty"], :is([data-status], [data-status-echo])[data-kind="saving"] { color: var(--lumiverse-warning, #ffd08a); }
-:is([data-status], [data-status-echo])[data-kind="error"] { color: var(--lumiverse-danger, #ff8ca0); }
-/* Keep focused controls clear of the sticky sample and footer when the browser scrolls to them. */
-input, select, textarea, button, summary { scroll-margin-top: 12rem; scroll-margin-bottom: 5rem; }
+/* Text effects reference */
+[data-text-fx-list] { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 15.5rem), 1fr)); gap: .5rem; margin: 0; padding: 0; list-style: none; }
+[data-text-fx-item] { display: grid; gap: .4rem; align-content: start; padding: .65rem .7rem .7rem; border: 1px solid var(--set-border); border-radius: .65rem; background: var(--set-field); }
+[data-text-fx-item] header { display: flex; align-items: baseline; gap: .5rem; }
+[data-text-fx-item] header b { font-weight: 650; }
+[data-text-fx-item] header small { margin-left: auto; font-size: .72rem; }
+[data-text-fx-preview] { display: grid; align-items: center; min-height: 2.6rem; padding: .4rem .7rem; border: 1px solid var(--vn-dialogue-border, var(--set-border)); border-radius: .5rem; background: var(--vn-dialogue-bg, #10111a); color: var(--vn-text, #fff); font-family: var(--vn-font-family, inherit); font-size: 1rem; overflow: hidden; }
+[data-text-fx-code] { display: flex; align-items: center; gap: .4rem; }
+[data-text-fx-code] code { flex: 1; min-width: 0; padding: .2rem .45rem; border-radius: .4rem; background: var(--set-hover); overflow-wrap: anywhere; }
+[data-text-fx-code] button { min-height: 2.25rem; padding: .2rem .75rem; font-size: .8rem; }
+[data-copy-fallback] { display: grid; gap: .35rem; }
+[data-copy-fallback] textarea { min-height: 5.5rem; }
+
+/* Advanced jump list */
+[data-jump] { display: flex; flex-wrap: wrap; gap: .35rem; }
+[data-jump] button { min-height: 2.25rem; padding: .2rem .8rem; font-size: .82rem; font-weight: 550; background: transparent; }
+
+/* Unapplied changes bar */
+[data-draft-bar] { position: sticky; bottom: .75rem; z-index: 10; display: flex; flex-wrap: wrap; align-items: center; gap: .55rem .75rem; padding: .6rem .7rem .6rem 1rem; border: 1px solid color-mix(in srgb, var(--set-warning) 50%, var(--set-border)); border-radius: var(--set-radius); background: color-mix(in srgb, var(--set-warning) 9%, var(--set-field)); box-shadow: 0 12px 32px rgba(0,0,0,.35); }
+[data-draft-bar] > div:first-child { flex: 1 1 13rem; display: grid; }
+[data-draft-count] { font-weight: 650; }
+[data-draft-bar] small { font-size: .8rem; }
+[data-draft-bar] [data-actions] { flex: none; }
+
 [data-preset-row] { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto auto; gap: .5rem; align-items: center; }
 [data-preset-row] button { white-space: nowrap; }
-[data-sound-empty] { display: grid; gap: .6rem; padding: 1rem; border: 1px dashed var(--lumiverse-border, rgba(255,255,255,.24)); border-radius: .75rem; text-align: center; justify-items: center; }
-[data-sound-empty] p { font-weight: 600; }
+[data-sound-empty] { display: grid; gap: .6rem; padding: 1.1rem 1rem; border: 1px dashed var(--set-border); border-radius: .75rem; text-align: center; justify-items: center; }
+[data-sound-empty] svg { width: 1.8rem; height: 1.8rem; color: var(--set-accent); }
+[data-sound-empty] p, [data-sound-counts] { font-weight: 600; }
 [data-audio-status] { font-style: italic; }
+[data-novelai-controls] a { color: var(--set-accent); text-decoration: underline; text-underline-offset: 2px; }
+[data-voice-empty] { padding: 1rem; border: 1px dashed var(--set-border); border-radius: .75rem; }
+[data-reset][data-confirming] { border-color: var(--set-danger); color: var(--set-danger); background: transparent; }
+input, select, textarea, button { scroll-margin: 4.5rem 0 8.5rem; }
 
-@media (max-width: 620px) {
-  [data-shell] { padding: .65rem .65rem 0; }
-  [data-row], [data-preset-row] { grid-template-columns: 1fr; }
-  [data-actionbar] { margin: 0 -.65rem; padding: .6rem .65rem; }
-  [data-sample] { position: static; }
-  [data-sample-stage] { height: 8.5rem; }
-  details[data-section] > summary [data-summary] { display: none; }
+@media (pointer: coarse) {
+  :is([data-jump], [data-text-fx-code], [data-sample-label]) button { min-height: 2.75rem; }
 }
+@container (max-width: 520px) {
+  [data-row] { grid-template-columns: 1fr; }
+  [data-preset-row] { grid-template-columns: 1fr 1fr; }
+  [data-preset-row] > :is(select, input) { grid-column: 1 / -1; }
+  [data-group] { padding: .85rem .8rem .95rem; }
+  [data-topbar] > [data-open-preview] { margin-left: 0; }
+  [data-sample-stage] { height: 7.5rem; }
+}
+@media (max-width: 520px) {
+  [data-shell] { padding: .65rem .65rem 0; }
+  [data-nav] { margin: 0 -.65rem; padding: .35rem .65rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-flash] { animation: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--set-accent) 70%, transparent); }
+}
+
+[data-generated-only] { display: grid; gap: .9rem; }
 `;
 
 type StatusKind = "idle" | "saved" | "saving" | "dirty" | "error";
@@ -244,7 +327,7 @@ function esc(value: string): string {
 function segments(name: string, steps: ReadonlyArray<{ label: string; value: number | string }>, withCustom: boolean): string {
   const items = steps.map((step) => `<label><input type="radio" name="${name}" value="${step.value}" />${esc(step.label)}</label>`);
   if (withCustom) items.push(`<label><input type="radio" name="${name}" value="custom" />Custom</label>`);
-  return `<div data-segments role="radiogroup">${items.join("")}</div>`;
+  return `<div data-segments>${items.join("")}</div>`;
 }
 
 function imageSourceOptions(name: string): string {
@@ -253,12 +336,70 @@ function imageSourceOptions(name: string): string {
 }
 
 function themeTiles(name = "themePreset"): string {
-  return `<div data-tiles role="radiogroup">${THEME_PRESET_OPTIONS.map(({ value, label }) => {
+  return `<div data-tiles role="radiogroup" aria-label="Theme">${THEME_PRESET_OPTIONS.map(({ value, label }) => {
     const tokens = themePreviewTokens(value);
     const style = `--swatch-accent:${tokens.accent};--swatch-text:${tokens.text};--swatch-bg:${tokens.dialogueBg};--swatch-border:${tokens.dialogueBorder};--swatch-font:${tokens.fontFamily}`;
     return `<label><input type="radio" name="${name}" value="${value}" /><span data-swatch style="${esc(style)}"><i>The wind picks up…</i></span><span>${esc(label.replace(/ \(.*\)$/, ""))}</span></label>`;
   }).join("")}</div>`;
 }
+
+
+const ICONS: Record<SettingsSectionId, string> = {
+  reading: '<path d="M4 5.5C6.5 4.5 9.5 4.6 12 6.3c2.5-1.7 5.5-1.8 8-.8v13c-2.5-1-5.5-.9-8 .8-2.5-1.7-5.5-1.8-8-.8z"/><path d="M12 6.3v13"/>',
+  look: '<path d="M12 3.5a8.5 8.5 0 1 0 0 17c1.2 0 1.8-.9 1.4-1.9-.5-1.2.3-2.4 1.6-2.4h1.6a3.9 3.9 0 0 0 3.9-3.9C20.5 7.3 16.7 3.5 12 3.5z"/><circle cx="7.6" cy="11.2" r="1.1"/><circle cx="10.6" cy="7.5" r="1.1"/><circle cx="15" cy="8" r="1.1"/>',
+  pictures: '<rect x="3.5" y="5" width="17" height="14" rx="2.2"/><circle cx="9" cy="10" r="1.7"/><path d="m4 17 5-4.5 3.5 3 3-2.5L20 17"/>',
+  sound: '<path d="M9 17.5V6l10-2v11.5"/><circle cx="6.8" cy="17.5" r="2.3"/><circle cx="16.8" cy="15.5" r="2.3"/>',
+  voice: '<rect x="9" y="3.5" width="6" height="10.5" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V20.5"/>',
+  connections: '<path d="M9.5 14.5 14.5 9.5"/><path d="M11 6.5l1.4-1.4a4 4 0 0 1 5.6 5.6L16.6 12M13 17.5l-1.4 1.4a4 4 0 0 1-5.6-5.6L7.4 12"/>',
+  advanced: '<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/><path d="M4 12h5M13 12h7"/><circle cx="11" cy="12" r="2"/>',
+};
+
+function icon(paths: string): string {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+}
+
+/** Marks a searchable setting: the label shown in results plus extra words that also find it. */
+function find(label: string, keywords = ""): string {
+  return `data-find-label="${esc(label)}" data-find="${esc(keywords)}"`;
+}
+
+/** Long explanations sit behind a small disclosure so the default view stays scannable. */
+function more(html: string): string {
+  return `<details data-more><summary>More</summary><div>${html}</div></details>`;
+}
+
+function group(title: string, body: string, options: { id?: string; apply?: boolean; help?: string; find?: string } = {}): string {
+  const chip = options.apply ? `<span data-apply-chip title="Changes here wait for the Apply button">Applies with Apply</span>` : "";
+  const help = options.help ? `<small>${options.help}</small>` : "";
+  return `<section data-group${options.id ? ` data-group-id="${options.id}"` : ""}${options.apply ? " data-apply-group" : ""} ${options.find ?? find(title)}><header data-group-head><h3>${esc(title)}</h3>${chip}${help}</header>${body}</section>`;
+}
+
+function optionList(name: string, options: ReadonlyArray<{ value: string; label: string; help: string }>): string {
+  return `<div data-options>${options.map((option) =>
+    `<label><input type="radio" name="${name}" value="${option.value}" /><span><b>${esc(option.label)}</b><small>${esc(option.help)}</small></span></label>`).join("")}</div>`;
+}
+
+function readinessRow(kind: ConnectionCatalogKind): string {
+  return `<div data-readiness="${kind}" data-level="loading"><div><b data-readiness-title></b><small data-readiness-action></small><div data-actions hidden><button type="button" data-refresh-connections>Refresh</button></div></div></div>`;
+}
+
+function paneHead(id: SettingsSectionId): string {
+  const section = SETTINGS_SECTIONS.find((candidate) => candidate.id === id)!;
+  return `<header data-pane-head><h2 id="pane-${id}-title">${esc(section.label)}</h2><p>${esc(section.blurb)}</p></header>`;
+}
+
+function pane(id: SettingsSectionId, body: string, extra = ""): string {
+  return `<section role="tabpanel" id="pane-${id}" data-pane="${id}" aria-labelledby="pane-${id}-title" tabindex="-1" hidden${extra}>${paneHead(id)}${body}</section>`;
+}
+
+const VOICE_SEARCH_ENTRIES: ReadonlyArray<{ label: string; keywords: string }> = [
+  { label: "Read paragraphs aloud", keywords: "speech tts voice enable speak" },
+  { label: "TTS profiles", keywords: "speech load profiles voice connection" },
+  { label: "Narrator voice", keywords: "speech tts narration" },
+  { label: "Character voices", keywords: "speech tts per character override default voice" },
+  { label: "Delivery style", keywords: "speech gemini audio tags whisper emotion" },
+  { label: "Speech volume", keywords: "speech tts autoplay auto-play loudness" },
+];
 
 export class VisualNovelSettingsPanel {
   private readonly host: HTMLElement;
@@ -274,7 +415,12 @@ export class VisualNovelSettingsPanel {
   private resetTimer: ReturnType<typeof setTimeout> | null = null;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private sampleTimer: ReturnType<typeof setTimeout> | null = null;
+  private flashTimer: ReturnType<typeof setTimeout> | null = null;
+  private copyTimer: ReturnType<typeof setTimeout> | null = null;
   private sampleLine = 0;
+  private section: SettingsSectionId = "reading";
+  private voiceMounted = false;
+  private resizeObserver: ResizeObserver | null = null;
   private audioLibrary: { bgmCount: number; sfxCount: number } | null = null;
   private readonly connectionStates: Record<ConnectionCatalogKind, ConnectionCatalogState> = {
     planner: { status: "idle", options: [] },
@@ -295,8 +441,14 @@ export class VisualNovelSettingsPanel {
     options.mount.append(this.host);
     this.form = this.root.querySelector("form")!;
     this.status = this.root.querySelector("[data-status]")!;
+    // The live sample starts in Reading; openSection moves it to Look when needed.
+    this.root.querySelector('[data-pane="reading"] [data-sample-slot]')!.append(this.root.querySelector("[data-sample]")!);
+    this.renderTextEffectCards();
     this.wire();
+    this.wireNavigation();
+    this.wireSearch();
     this.renderSetupVisibility();
+    this.openSection(this.rememberedSection(), { remember: false });
     this.syncFromConfig(DEFAULT_CONFIG);
   }
 
@@ -305,9 +457,23 @@ export class VisualNovelSettingsPanel {
   /* ---------------------------------------------------------------------- */
 
   private template(): string {
+    const tabs = SETTINGS_SECTIONS.map(({ id, label }) => `
+          <button type="button" role="tab" id="tab-${id}" data-tab="${id}" aria-controls="pane-${id}" aria-selected="false" tabindex="-1" aria-labelledby="tab-${id}-label" aria-describedby="tab-${id}-summary">
+            ${icon(ICONS[id])}<span data-tab-text><span id="tab-${id}-label" data-tab-label>${esc(label)}</span><span id="tab-${id}-summary" data-tab-summary></span></span>${id === "connections" ? '<span data-tab-dot data-level="loading" aria-hidden="true"></span>' : ""}<span data-tab-badge hidden></span>
+          </button>`).join("");
     return `
     <div data-shell>
-      <section data-card data-setup aria-labelledby="setup-title" hidden>
+      <div data-topbar>
+        <div data-search role="search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
+          <input type="search" data-settings-search aria-label="Find a setting" placeholder="Find a setting…" autocomplete="off" spellcheck="false" aria-controls="settings-search-results" aria-expanded="false" />
+          <div id="settings-search-results" data-search-results hidden></div>
+        </div>
+        <span data-status role="status" aria-live="polite"></span>
+        <button type="button" data-open-preview>Open preview</button>
+      </div>
+
+      <section data-setup aria-labelledby="setup-title" hidden>
         <header>
           <h2 id="setup-title">Get started</h2>
           <small>Three choices. Nothing is generated until you send a message.</small>
@@ -316,20 +482,20 @@ export class VisualNovelSettingsPanel {
           <li><div>
             <h3>Story reader</h3>
             <small>Cue reads each reply to pick speakers, moods and scenes. This does not replace your chat model.</small>
-            <div data-readiness="planner" data-level="loading"><div><b data-readiness-title></b><small data-readiness-action></small><div data-actions hidden><button type="button" data-refresh-connections>Refresh</button></div></div></div>
+            ${readinessRow("planner")}
             <label data-field><span>Connection</span><select name="setupParserConnectionId" data-connection-select="planner"><option value="">Lumiverse default</option></select></label>
           </div></li>
           <li><div>
             <h3>Pictures</h3>
             ${imageSourceOptions("setupImageSource")}
             <div data-setup-image-connection hidden>
-              <div data-readiness="image" data-level="loading"><div><b data-readiness-title></b><small data-readiness-action></small><div data-actions hidden><button type="button" data-refresh-connections>Refresh</button></div></div></div>
+              ${readinessRow("image")}
               <label data-field><span>Image connection</span><select name="setupImageConnectionId" data-connection-select="image"><option value="">Lumiverse default</option></select></label>
             </div>
           </div></li>
           <li><div>
             <h3>Look</h3>
-            <small>The sample below updates as you choose. Text size, effects and picture fit are under Appearance.</small>
+            <small>Text size, text effects and picture fit are in the Look section.</small>
             ${themeTiles("setupThemePreset")}
           </div></li>
         </ol>
@@ -340,94 +506,95 @@ export class VisualNovelSettingsPanel {
         </footer>
       </section>
 
-      <section data-card data-sample aria-label="Story sample" data-effects="full">
-        <div data-sample-stage>
-          <img data-sample-picture alt="" src="${SAMPLE_PICTURE}" />
-          <div data-sample-dialogue><span data-sample-speaker>Mira</span><p data-sample-text><span data-sample-words></span><span data-sample-caret aria-hidden="true"></span></p><span data-sample-next aria-hidden="true"></span></div>
-        </div>
-        <div data-sample-label><span class="muted">Sample only. Rendered here, no connections used.</span><span data-status-echo aria-hidden="true"></span><button type="button" data-quiet data-sample-replay>Replay</button></div>
-      </section>
-
-      <form novalidate>
-        <details data-card data-section="reading" open>
-          <summary><h2>Reading</h2><span data-summary></span></summary>
-          <div data-section-body>
-            <fieldset data-live>
-              <legend>Text speed</legend>
-              ${segments("textSpeedStep", TEXT_SPEED_STEPS, true)}
-              <label data-field data-custom="textSpeed" hidden><span>Milliseconds per letter</span><input name="textSpeed" type="number" min="0" max="100" step="1" /><small>0 shows each line at once.</small></label>
-            </fieldset>
-            <fieldset data-live>
-              <legend>Pause before the next line (auto-play)</legend>
-              ${segments("autoPlayStep", AUTO_PLAY_STEPS, true)}
-              <label data-field data-custom="autoPlayDelay" hidden><span>Milliseconds</span><input name="autoPlayDelay" type="number" min="500" max="10000" step="250" /></label>
-            </fieldset>
-            <div data-row data-live>
-              <label data-field><span>How you reply</span><select name="mode"><option value="standard">Write your own reply</option><option value="cyoa">Choose from suggestions</option></select></label>
-              <label data-field><span>Fast forward</span><select name="skipMode"><option value="read">Skip only text you have read</option><option value="all">Skip everything</option></select></label>
-            </div>
-            <div data-live>
-              <label data-check><input name="generateChoices" type="checkbox" /><span>Suggest choices when the reply has none</span></label>
-              <label data-check><input name="autoEnter" type="checkbox" /><span>Open the novel view automatically when a chat opens</span></label>
-            </div>
+      <div data-layout>
+        <nav data-nav aria-label="Settings sections">
+          <div role="tablist" data-tablist aria-orientation="vertical">${tabs}
           </div>
-        </details>
+        </nav>
 
-        <details data-card data-section="appearance">
-          <summary><h2>Appearance</h2><span data-summary></span></summary>
-          <div data-section-body>
-            <fieldset data-live>
-              <legend>Theme</legend>
-              ${themeTiles()}
-            </fieldset>
-            <fieldset data-live>
-              <legend>Text size</legend>
-              ${segments("textScaleStep", TEXT_SCALE_STEPS, true)}
-              <label data-field data-custom="textScale" hidden><span>Scale (1 = normal)</span><input name="textScale" type="number" min="${TEXT_SCALE_MIN}" max="${TEXT_SCALE_MAX}" step="0.05" /></label>
-            </fieldset>
-            <fieldset data-live>
-              <legend>Scene effects</legend>
-              <div data-options>${EFFECT_INTENSITY_OPTIONS.map((option) =>
-                `<label><input type="radio" name="effectIntensity" value="${option.value}" /><span><b>${esc(option.label)}</b><small>${esc(option.help)}</small></span></label>`).join("")}</div>
-            </fieldset>
-            <fieldset data-live>
-              <legend>Picture fit</legend>
-              <div data-options>${SCENE_IMAGE_FIT_OPTIONS.map((option) =>
-                `<label><input type="radio" name="sceneImageFit" value="${option.value}" /><span><b>${esc(option.label)}</b><small>${esc(option.help)}</small></span></label>`).join("")}</div>
-            </fieldset>
-          </div>
-        </details>
+        <form novalidate data-panes>
+          ${pane("reading", `
+            <div data-sample-slot></div>
+            ${group("Pace", `
+              <fieldset ${find("Text speed", "typing typewriter letters milliseconds")}>
+                <legend>Text speed</legend>
+                ${segments("textSpeedStep", TEXT_SPEED_STEPS, true)}
+                <label data-field data-custom="textSpeed" hidden><span>Milliseconds per letter</span><input name="textSpeed" type="number" min="0" max="100" step="1" /><small>0 shows each line at once.</small></label>
+              </fieldset>
+              <fieldset ${find("Auto-play pause", "pause next line autoplay delay wait")}>
+                <legend>Pause before the next line (auto-play)</legend>
+                ${segments("autoPlayStep", AUTO_PLAY_STEPS, true)}
+                <label data-field data-custom="autoPlayDelay" hidden><span>Milliseconds</span><input name="autoPlayDelay" type="number" min="500" max="10000" step="250" /></label>
+              </fieldset>
+              <label data-field ${find("Fast forward", "skip read unread")}><span>Fast forward</span><select name="skipMode"><option value="read">Skip only text you have read</option><option value="all">Skip everything</option></select></label>
+            `, { find: find("Pace", "speed") })}
+            ${group("Your turn", `
+              <label data-field ${find("How you reply", "reply mode cyoa choose suggestions write standard")}><span>How you reply</span><select name="mode"><option value="standard">Write your own reply</option><option value="cyoa">Choose from suggestions</option></select></label>
+              <label data-check ${find("Suggest choices", "choices options cyoa generate")}><input name="generateChoices" type="checkbox" /><span>Suggest choices when the reply has none</span></label>
+            `)}
+            ${group("Starting", `
+              <label data-check ${find("Open automatically", "auto enter open novel view chat start")}><input name="autoEnter" type="checkbox" /><span>Open the novel view automatically when a chat opens</span></label>
+            `)}
+          `)}
 
-        <details data-card data-section="images">
-          <summary><h2>Images</h2><span data-summary></span></summary>
-          <div data-section-body>
-            <fieldset data-live>
-              <legend>Where pictures come from</legend>
-              ${imageSourceOptions("imageSource")}
-            </fieldset>
+          ${pane("look", `
+            <div data-sample-slot></div>
+            ${group("Theme", themeTiles(), { find: find("Theme", "preset style colours colors skin golden paper noir console yamaku literature") })}
+            ${group("Text", `
+              <fieldset ${find("Text size", "font scale bigger smaller large")}>
+                <legend>Text size</legend>
+                ${segments("textScaleStep", TEXT_SCALE_STEPS, true)}
+                <label data-field data-custom="textScale" hidden><span>Scale (1 = normal)</span><input name="textScale" type="number" min="${TEXT_SCALE_MIN}" max="${TEXT_SCALE_MAX}" step="0.05" /></label>
+              </fieldset>
+              <fieldset ${find("Text effects", "shake rainbow wave animated letters still")}>
+                <legend>Text effects</legend>
+                ${optionList("textEffects", TEXT_EFFECT_MODE_OPTIONS)}
+              </fieldset>
+            `)}
+            ${group("Scene", `
+              <fieldset ${find("Scene effects", "rain sparkles shake flash intensity gentle motion")}>
+                <legend>Scene effects</legend>
+                ${optionList("effectIntensity", EFFECT_INTENSITY_OPTIONS)}
+              </fieldset>
+              <fieldset ${find("Picture fit", "image fit cover contain stretch crop scale")}>
+                <legend>Picture fit</legend>
+                ${optionList("sceneImageFit", SCENE_IMAGE_FIT_OPTIONS)}
+              </fieldset>
+            `)}
+            ${group("Text effect tags", `
+              <div data-actions><button type="button" data-copy-guide>Copy guide for your chat model</button><small>Paste it into a character card, lorebook entry or preset so the model uses the tags.</small></div>
+              <div data-copy-fallback hidden><small data-copy-fallback-label>Copying is blocked here. The text is selected: press Ctrl+C (or ⌘C).</small><textarea readonly spellcheck="false" aria-label="Text to copy"></textarea></div>
+              <ul data-text-fx-list data-vn-text-effects="animated"></ul>
+            `, { id: "text-fx", help: "Wrap a few words of dialogue in a tag, for example &lt;shake&gt;No!&lt;/shake&gt;.", find: find("Text effect tags", "markup reference copy guide chat model shake rainbow wave glitch whisper shout") })}
+          `)}
+
+          ${pane("pictures", `
+            ${group("Where pictures come from", imageSourceOptions("imageSource"), { find: find("Picture source", "image source card generated illustrations text only") })}
             <div data-generated-only>
-              <fieldset data-live>
-                <legend>Pictures per reply</legend>
-                ${segments("budgetPreset", BUDGET_PRESETS.map((preset) => ({ label: preset.label, value: preset.id })), true)}
-                <small data-budget-help></small>
-                <label data-field data-custom="maxImagesPerTurn" hidden><span>Maximum pictures per reply</span><input name="maxImagesPerTurn" type="number" min="0" max="12" step="1" /><small>0 removes the limit. Long replies can then cost more than you expect.</small></label>
-              </fieldset>
-              <div data-live>
+              ${group("Pictures per reply", `
+                <fieldset aria-label="Pictures per reply">
+                  ${segments("budgetPreset", BUDGET_PRESETS.map((preset) => ({ label: preset.label, value: preset.id })), true)}
+                  <small data-budget-help></small>
+                  <label data-field data-custom="maxImagesPerTurn" hidden><span>Maximum pictures per reply</span><input name="maxImagesPerTurn" type="number" min="0" max="12" step="1" /><small>0 removes the limit. Long replies can then cost more than you expect.</small></label>
+                </fieldset>
+              `, { find: find("Pictures per reply", "budget limit images cost light balanced rich") })}
+              ${group("Consistent characters", `
                 <label data-check><input name="referenceAnchoring" type="checkbox" /><span>Keep each character looking the same between pictures<small>Reuses a character's first portrait as a reference for later ones.</small></span></label>
-              </div>
-              <fieldset data-live data-reference-source hidden>
-                <legend>Reference image source</legend>
-                <div data-options>${REFERENCE_SOURCE_OPTIONS.map((option) =>
-                  `<label><input type="radio" name="referenceSource" value="${option.value}" /><span><b>${esc(option.label)}</b><small>${esc(option.help)}</small></span></label>`).join("")}</div>
-              </fieldset>
-              <div data-field data-live>
-                <span>Image connection</span>
-                <div data-readiness="image" data-level="loading"><div><b data-readiness-title></b><small data-readiness-action></small><div data-actions hidden><button type="button" data-refresh-connections>Refresh</button></div></div></div>
-                <select name="imageConnectionId" data-connection-select="image" aria-label="Image connection"><option value="">Lumiverse default</option></select>
-              </div>
-              <div data-novelai-controls hidden>
-                <fieldset data-live>
-                  <legend>NovelAI image dimensions</legend>
+                <fieldset data-reference-source hidden>
+                  <legend>Reference image source</legend>
+                  ${optionList("referenceSource", REFERENCE_SOURCE_OPTIONS)}
+                </fieldset>
+              `, { find: find("Consistent characters", "reference anchoring portrait same look sprites") })}
+              ${group("Image connection", `
+                <div data-field>
+                  ${readinessRow("image")}
+                  <select name="imageConnectionId" data-connection-select="image" aria-label="Image connection"><option value="">Lumiverse default</option></select>
+                </div>
+              `, { find: find("Image connection", "image model provider stability comfyui novelai") })}
+              <section data-group data-novelai-controls hidden ${find("NovelAI", "novelai dimensions steps sampler seed guidance cfg anlas")}>
+                <header data-group-head><h3>NovelAI</h3><small>Shown because the image connection is NovelAI.</small></header>
+                <fieldset>
+                  <legend>Image dimensions</legend>
                   ${segments("novelAiResolutionPreset", [
                     { label: "Landscape (1216×832)", value: "landscape" },
                     { label: "Portrait (832×1216)", value: "portrait" },
@@ -439,142 +606,476 @@ export class VisualNovelSettingsPanel {
                   </div>
                   <small data-novelai-cost-notice>${esc(NOVELAI_NOTICE)} <a href="https://docs.novelai.net/en/subscription/" target="_blank" rel="noopener noreferrer">NovelAI subscription docs</a></small>
                 </fieldset>
-                <div data-row data-live>
+                <div data-row>
                   <label data-field><span>Sampling steps <small data-novelai-steps-help>(≤28 within Opus limit)</small></span><input name="novelAiSteps" type="number" min="${NOVELAI_STEPS_MIN}" max="${NOVELAI_STEPS_MAX}" step="1" /></label>
                   <label data-field><span>Prompt guidance (CFG scale)</span><input name="novelAiGuidance" type="number" min="${NOVELAI_GUIDANCE_MIN}" max="${NOVELAI_GUIDANCE_MAX}" step="0.5" /></label>
                 </div>
-                <div data-field data-live>
-                  <span>Sampler</span>
-                  <select name="novelAiSampler" aria-label="NovelAI sampler"></select>
-                </div>
-                <div data-row data-live>
-                  <label data-field><span>Seed <small>(leave empty for a random seed each image)</small></span><input name="novelAiSeed" type="number" inputmode="numeric" min="0" max="${NOVELAI_SEED_MAX}" step="1" placeholder="Random" /></label>
-                  <button type="button" data-novelai-random-seed>Random</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </details>
-
-        <details data-card data-section="sound">
-          <summary><h2>Sound</h2><span data-summary></span></summary>
-          <div data-section-body>
-            <div data-sound-empty>
-              <p>No music yet</p>
-              <small>Import a folder of .mp3, .ogg, .wav, .m4a or .flac files. Cue plays them as background music and sound effects when a scene calls for them.</small>
-              <div data-actions><button type="button" data-primary data-import-audio>Import music folder…</button><button type="button" data-scan-audio>Check library</button></div>
-            </div>
-            <div data-sound-ready hidden>
-              <p data-sound-counts></p>
-              <div data-actions><button type="button" data-import-audio>Import more…</button><button type="button" data-scan-audio>Check library</button></div>
-            </div>
-            <small data-audio-status role="status" aria-live="polite"></small>
-            <div data-row data-live>
-              <label data-field><span>Music volume <span data-bgm-val>70%</span></span><input name="bgmVolume" type="range" min="0" max="1" step="0.05" /></label>
-              <label data-field><span>Sound effects volume <span data-sfx-val>80%</span></span><input name="sfxVolume" type="range" min="0" max="1" step="0.05" /></label>
-            </div>
-          </div>
-        </details>
-
-        <details data-card data-section="advanced" data-advanced-settings>
-          <summary><h2>Advanced</h2><span data-summary>Applies when you choose Apply</span></summary>
-          <div data-section-body>
-            <p class="muted">Technical controls. Changes here wait until you choose <b>Apply advanced settings</b>. Everything above saves on its own.</p>
-
-            <details data-card data-section data-subsection>
-              <summary><h3>Connections and models</h3></summary>
-              <div data-section-body>
-                <div data-field>
-                  <span>Story reader connection</span>
-                  <div data-readiness="planner" data-level="loading"><div><b data-readiness-title></b><small data-readiness-action></small><div data-actions hidden><button type="button" data-refresh-connections>Refresh</button></div></div></div>
-                  <select name="parserConnectionId" data-connection-select="planner" aria-label="Story reader connection"><option value="">Lumiverse default</option></select>
-                  <small>Saves when changed. Reads the conversation to choose images and speakers.</small>
-                </div>
-                <label data-field><span>System One decisions</span><select name="systemOneMode"><option value="off">Off</option><option value="compare">Compare with story reader</option><option value="on">Use for presentation and familiar scenes</option></select><small>Jev makes bounded speaker, expression, audio, and scene decisions. Compare logs agreement without changing the turn.</small></label>
-                <label data-field><span>System One API URL</span><input name="systemOneApiUrl" type="url" placeholder="https://api.typesafe.ai" /><small>Cue sends requests to this endpoint through Lumiverse's HTTP proxy.</small></label>
-                <label data-field><span>System One model</span><input name="systemOneModel" type="text" placeholder="jev-latest" /></label>
-                <div data-field><span>System One API key</span><input name="systemOneApiKey" type="password" autocomplete="new-password" placeholder="Enter key" /><div data-actions><button type="button" data-save-system-one-key>Save key</button><button type="button" data-clear-system-one-key>Remove key</button></div><small data-system-one-key-status>Checking saved key…</small><small>Stored encrypted for this extension. The key is never included in Cue settings.</small></div>
-                <div data-actions><button type="button" data-refresh-connections>Refresh connection list</button><small>Refreshing is free. Connections are listed, not tested.</small></div>
-                <label data-field><span>Image model override</span><input name="imageModel" type="text" placeholder="Use the selected connection model" /><small data-image-model-hint>Leave blank to use the model configured on the selected image connection.</small></label>
-                <label data-field><span>Images generated at the same time</span><input name="imageConcurrency" type="number" min="1" max="6" step="1" /></label>
                 <div data-row>
-                  <label data-field><span>Story reader parameters (JSON)</span><textarea name="parserParameters" spellcheck="false"></textarea></label>
-                  <label data-field><span>Image parameters (JSON)</span><textarea name="imageParameters" spellcheck="false"></textarea></label>
-                </div>
-              </div>
-            </details>
-
-            <details data-card data-section data-subsection>
-              <summary><h3>What the story reader sees</h3></summary>
-              <div data-section-body>
-                <label data-field><span>Recent messages</span><input name="includeRecentMessages" type="number" min="0" max="30" step="1" /></label>
-                <label data-check><input name="includeCharacterContext" type="checkbox" /><span>Include character-card context</span></label>
-                <label data-check><input name="includePersonaContext" type="checkbox" /><span>Include active persona context</span></label>
-                <label data-check><input name="includeLorebookContext" type="checkbox" /><span>Include activated lorebook context</span></label>
-                <label data-check><input name="debugLogging" type="checkbox" /><span>Verbose debug logging<small>Writes host events, planning, assets and anchoring to the Lumiverse log and browser console. While on, story text, the raw planner response and resolved character, wardrobe and environment state are written to the log.</small></span></label>
-              </div>
-            </details>
-
-            <details data-card data-section data-subsection>
-              <summary><h3>Image prompts</h3></summary>
-              <div data-section-body>
-                <div data-field>
-                  <span>Preset</span>
-                  <div data-preset-row>
-                    <select name="promptPresetSelect" aria-label="Prompt preset"><option value="">Custom (no preset)</option></select>
-                    <input name="promptPresetName" type="text" placeholder="Preset name" aria-label="Preset name" />
-                    <button type="button" data-preset-save>Save preset</button>
-                    <button type="button" data-preset-delete>Delete</button>
+                  <div data-field>
+                    <span>Sampler</span>
+                    <select name="novelAiSampler" aria-label="NovelAI sampler"></select>
                   </div>
-                  <small>Choosing a preset fills the positive and negative fields. Save preset stores the current fields under the name, right away.</small>
+                  <div data-field>
+                    <span>Seed <small>(empty = random each image)</small></span>
+                    <div data-actions style="flex-wrap: nowrap"><input name="novelAiSeed" type="number" inputmode="numeric" min="0" max="${NOVELAI_SEED_MAX}" step="1" placeholder="Random" aria-label="Seed" /><button type="button" data-novelai-random-seed>Random</button></div>
+                  </div>
                 </div>
-                <label data-field><span>Positive prefix</span><input name="promptPrefix" type="text" /></label>
-                <label data-field><span>Positive suffix</span><input name="promptSuffix" type="text" /></label>
-                <label data-field><span>Negative prompt</span><input name="negativePrompt" type="text" /></label>
-                <div data-novelai-prompt-controls hidden>
-                  <label data-check><input name="novelAiQualityTags" type="checkbox" /><span>Add NovelAI model-specific quality tags</span></label>
-                  <small>Tags are included in the sent prompt. V4.5 Curated also adds rating:general and reduces feet emphasis. Turn off for full control.</small>
-                  <label data-check><input name="novelAiUseDefaultNegative" type="checkbox" /><span>Use NovelAI defaults for an unchanged negative prompt</span></label>
-                  <small>Your edited negative prompt is always preserved. An empty field stays empty. Native emphasis and separate character prompts are selected automatically for supported models.</small>
-                </div>
-                <label data-check><input name="originalReference" type="checkbox" /><span>Include character creation / series reference tag</span></label>
-                <label data-field><span>Creation / series name</span><input name="originalCreationName" type="text" placeholder="e.g. doki doki literature club" /><small>When enabled, NovelAI uses: Character, series name. Other profiles use: Character \\(Creation\\). Appearance tags follow as usual.</small></label>
-                <label data-field><span>Story reader instructions</span><textarea name="customPlannerInstructions"></textarea></label>
-              </div>
-            </details>
-
-            <details data-card data-section data-subsection>
-              <summary><h3>Text filtering and regex</h3></summary>
-              <div data-section-body>
-                <label data-field><span>Ignored tags</span><input name="ignoredTags" type="text" placeholder="status, stats, system, inventory" /><small>Comma-separated tag names, such as status, inventory, WORLD_VOICE. Removes the whole matching block from dialogue and image planning, including multiline blocks. Recognized status blocks stay available as plain-text cards in Panels. The chat message is not edited.</small></label>
-                <label data-field><span>Display regex rules</span><textarea name="displayRegexRules" spellcheck="false" placeholder="/§([^§]+)§/g => <em class=&quot;vn-transmission&quot;>$1</em>"></textarea><small>Dialogue formatting only. One rule per line: <code>/pattern/flags =&gt; replacement</code> or <code>pattern =&gt; replacement</code>. An empty replacement hides a match from dialogue, not from image planning. Only safe inline formatting renders here. For full HTML/SVG cards, open Panels in the novel view.</small></label>
-              </div>
-            </details>
-
-            <details data-card data-section data-subsection>
-              <summary><h3>Custom CSS and storage</h3></summary>
-              <div data-section-body>
-                <label data-field><span>Theme CSS</span><textarea name="customCss" spellcheck="false"></textarea><small>Selectors beginning with data-vn are stable. Remote imports and URL fetches are removed.</small></label>
-                <label data-field><span>Music storage folder</span><input name="audioDirectory" type="text" placeholder="audio" /><small>Folder inside the extension's scoped Lumiverse storage, scanned recursively for music and sound effects.</small></label>
-              </div>
-            </details>
-
-            <div data-actions>
-              <button type="submit" data-primary data-apply>Apply advanced settings</button>
-              <button type="button" data-reset>Reset defaults</button>
-              <button type="button" data-quiet data-show-setup>Show setup guide</button>
+              </section>
             </div>
-            <small>Reset returns every setting to its default. Your saved prompt presets and music folder are kept.</small>
-          </div>
-        </details>
+          `)}
 
-        <div data-actionbar>
-          <span data-status role="status" aria-live="polite"></span>
-          <button type="submit" data-primary data-apply-bar hidden>Apply advanced settings</button>
-          <button type="button" data-open-preview>Open preview</button>
+          ${pane("sound", `
+            ${group("Music library", `
+              <div data-sound-empty>
+                ${icon(ICONS.sound)}
+                <p>No music yet</p>
+                <small>Import a folder of .mp3, .ogg, .wav, .m4a or .flac files. Cue plays them as background music and sound effects when a scene calls for them.</small>
+                <div data-actions><button type="button" data-primary data-import-audio>Import music folder…</button><button type="button" data-scan-audio>Check library</button></div>
+              </div>
+              <div data-sound-ready hidden>
+                <p data-sound-counts></p>
+                <div data-actions><button type="button" data-import-audio>Import more…</button><button type="button" data-scan-audio>Check library</button></div>
+              </div>
+              <small data-audio-status role="status" aria-live="polite"></small>
+            `, { find: find("Music library", "import audio folder bgm sfx scan check") })}
+            ${group("Volume", `
+              <div data-row>
+                <label data-field ${find("Music volume", "bgm loudness audio")}><span>Music volume <span data-bgm-val>70%</span></span><input name="bgmVolume" type="range" min="0" max="1" step="0.05" /></label>
+                <label data-field ${find("Sound effects volume", "sfx loudness audio")}><span>Sound effects volume <span data-sfx-val>80%</span></span><input name="sfxVolume" type="range" min="0" max="1" step="0.05" /></label>
+              </div>
+            `, { find: "" })}
+          `)}
+
+          ${pane("voice", `
+            <div data-speech-mount></div>
+            <p data-voice-empty class="muted">Speech settings are not available in this host.</p>
+          `)}
+
+          ${pane("connections", `
+            <div data-actions><button type="button" data-refresh-connections>Refresh connection list</button><small>Refreshing is free. Connections are listed, not tested.</small></div>
+            ${group("Story reader", `
+              <div data-field>
+                ${readinessRow("planner")}
+                <select name="parserConnectionId" data-connection-select="planner" aria-label="Story reader connection"><option value="">Lumiverse default</option></select>
+                <small>Reads the conversation to choose pictures and speakers. Saves when changed.</small>
+              </div>
+            `, { find: find("Story reader connection", "planner parser model llm connection") })}
+            ${group("Image connection", `
+              <div data-actions><small>Chosen in Pictures, next to where pictures come from.</small><button type="button" data-goto="pictures" data-goto-target="imageConnectionId">Go to Pictures</button></div>
+            `, { find: "" })}
+            ${group("System One", `
+              <label data-field ${find("System One decisions", "jev typesafe mode compare")}><span>System One decisions</span><select name="systemOneMode"><option value="off">Off</option><option value="compare">Compare with story reader</option><option value="on">Use for presentation and familiar scenes</option></select>${more("Jev makes bounded speaker, expression, audio, and scene decisions. Compare logs agreement without changing the turn.")}</label>
+              <div data-row>
+                <label data-field ${find("System One API URL", "jev endpoint url")}><span>API URL</span><input name="systemOneApiUrl" type="url" placeholder="https://api.typesafe.ai" /><small>Requests go through Lumiverse's HTTP proxy.</small></label>
+                <label data-field ${find("System One model", "jev model")}><span>Model</span><input name="systemOneModel" type="text" placeholder="jev-latest" /></label>
+              </div>
+              <div data-field ${find("System One API key", "jev key secret password")}><span>API key</span><input name="systemOneApiKey" type="password" autocomplete="new-password" placeholder="Enter key" /><div data-actions><button type="button" data-save-system-one-key>Save key</button><button type="button" data-clear-system-one-key>Remove key</button><small data-system-one-key-status>Checking saved key…</small></div><small>The key saves at once, encrypted for this extension. It is never part of Cue settings.</small></div>
+            `, { apply: true, help: "Optional. Mode, URL and model wait for Apply; the key saves on its own.", find: find("System One", "jev") })}
+          `)}
+
+          ${pane("advanced", `
+            <p class="muted">Changes in this section wait until you choose <b>Apply</b>. Everything else saves on its own.</p>
+            <div data-jump aria-label="Jump to">
+              <button type="button" data-jump-to="prompts">Image prompts</button>
+              <button type="button" data-jump-to="context">Story reader</button>
+              <button type="button" data-jump-to="filtering">Text filtering</button>
+              <button type="button" data-jump-to="models">Models and parameters</button>
+              <button type="button" data-jump-to="css">Custom CSS</button>
+              <button type="button" data-jump-to="storage">Storage and logs</button>
+              <button type="button" data-jump-to="maintenance">Reset</button>
+            </div>
+            ${group("Image prompts", `
+              <div data-field ${find("Prompt presets", "preset save delete positive negative")}>
+                <span>Preset</span>
+                <div data-preset-row>
+                  <select name="promptPresetSelect" aria-label="Prompt preset"><option value="">Custom (no preset)</option></select>
+                  <input name="promptPresetName" type="text" placeholder="Preset name" aria-label="Preset name" />
+                  <button type="button" data-preset-save>Save preset</button>
+                  <button type="button" data-preset-delete>Delete</button>
+                </div>
+                <small>Choosing a preset fills the fields below. Save preset stores them under the name at once.</small>
+              </div>
+              <div data-row>
+                <label data-field ${find("Positive prefix", "prompt prefix tags")}><span>Positive prefix</span><input name="promptPrefix" type="text" /></label>
+                <label data-field ${find("Positive suffix", "prompt suffix tags")}><span>Positive suffix</span><input name="promptSuffix" type="text" /></label>
+              </div>
+              <label data-field ${find("Negative prompt", "negative tags")}><span>Negative prompt</span><input name="negativePrompt" type="text" /></label>
+              <div data-novelai-prompt-controls hidden>
+                <label data-check ${find("NovelAI quality tags", "novelai quality tags")}><input name="novelAiQualityTags" type="checkbox" /><span>Add NovelAI model-specific quality tags${more("Tags are included in the sent prompt. V4.5 Curated also adds rating:general and reduces feet emphasis. Turn off for full control.")}</span></label>
+                <label data-check ${find("NovelAI default negative", "novelai negative default")}><input name="novelAiUseDefaultNegative" type="checkbox" /><span>Use NovelAI defaults for an unchanged negative prompt${more("Your edited negative prompt is always preserved. An empty field stays empty. Native emphasis and separate character prompts are selected automatically for supported models.")}</span></label>
+              </div>
+              <label data-check ${find("Series reference tag", "creation series original reference")}><input name="originalReference" type="checkbox" /><span>Include character creation / series reference tag</span></label>
+              <label data-field ${find("Creation / series name", "series franchise original")}><span>Creation / series name</span><input name="originalCreationName" type="text" placeholder="e.g. doki doki literature club" />${more("When enabled, NovelAI uses: Character, series name. Other profiles use: Character \\(Creation\\). Appearance tags follow as usual.")}</label>
+            `, { id: "prompts", apply: true })}
+            ${group("What the story reader sees", `
+              <label data-field ${find("Recent messages", "context history messages story reader")}><span>Recent messages</span><input name="includeRecentMessages" type="number" min="0" max="30" step="1" /></label>
+              <label data-check ${find("Character-card context", "character card context")}><input name="includeCharacterContext" type="checkbox" /><span>Include character-card context</span></label>
+              <label data-check ${find("Persona context", "persona user context")}><input name="includePersonaContext" type="checkbox" /><span>Include active persona context</span></label>
+              <label data-check ${find("Lorebook context", "lorebook world info context")}><input name="includeLorebookContext" type="checkbox" /><span>Include activated lorebook context</span></label>
+              <label data-field ${find("Story reader instructions", "planner custom instructions prompt")}><span>Story reader instructions</span><textarea name="customPlannerInstructions"></textarea></label>
+            `, { id: "context", apply: true })}
+            ${group("Text filtering", `
+              <label data-field ${find("Ignored tags", "status inventory hide strip blocks filter")}><span>Ignored tags</span><input name="ignoredTags" type="text" placeholder="status, stats, system, inventory" /><small>Comma-separated tag names. Removes the whole matching block from dialogue and image planning.</small>${more("For example status, inventory, WORLD_VOICE. Multiline blocks are removed too. Recognized status blocks stay available as plain-text cards in Panels. The chat message is not edited.")}</label>
+              <label data-field ${find("Display regex rules", "regex replace formatting dialogue pattern")}><span>Display regex rules</span><textarea name="displayRegexRules" spellcheck="false" placeholder="/§([^§]+)§/g => <em class=&quot;vn-transmission&quot;>$1</em>"></textarea><small>One rule per line: <code>/pattern/flags =&gt; replacement</code>. Dialogue formatting only.</small>${more("<code>pattern =&gt; replacement</code> also works. An empty replacement hides a match from dialogue, not from image planning. Only safe inline formatting renders here. For full HTML/SVG cards, open Panels in the novel view.")}</label>
+            `, { id: "filtering", apply: true })}
+            ${group("Models and parameters", `
+              <div data-row>
+                <label data-field ${find("Image model override", "image model checkpoint")}><span>Image model override</span><input name="imageModel" type="text" placeholder="Use the selected connection model" /><small data-image-model-hint>Leave blank to use the model configured on the selected image connection.</small></label>
+                <label data-field ${find("Images at the same time", "concurrency parallel images")}><span>Images generated at the same time</span><input name="imageConcurrency" type="number" min="1" max="6" step="1" /></label>
+              </div>
+              <div data-row>
+                <label data-field ${find("Story reader parameters (JSON)", "planner parser json temperature parameters")}><span>Story reader parameters (JSON)</span><textarea name="parserParameters" spellcheck="false"></textarea></label>
+                <label data-field ${find("Image parameters (JSON)", "image json parameters steps")}><span>Image parameters (JSON)</span><textarea name="imageParameters" spellcheck="false"></textarea></label>
+              </div>
+            `, { id: "models", apply: true })}
+            ${group("Custom CSS", `
+              <label data-field ${find("Theme CSS", "custom css style stylesheet")}><span>Theme CSS</span><textarea name="customCss" spellcheck="false"></textarea><small>Selectors beginning with data-vn are stable. Remote imports and URL fetches are removed.</small></label>
+            `, { id: "css", apply: true, find: find("Custom CSS", "style stylesheet") })}
+            ${group("Storage and logs", `
+              <label data-field ${find("Music storage folder", "audio directory folder scoped storage")}><span>Music storage folder</span><input name="audioDirectory" type="text" placeholder="audio" /><small>Folder inside the extension's scoped Lumiverse storage, scanned for music and sound effects.</small></label>
+              <label data-check ${find("Verbose debug logging", "debug log console verbose")}><input name="debugLogging" type="checkbox" /><span>Verbose debug logging<small>Writes host events, planning, assets and anchoring to the Lumiverse log and browser console.</small>${more("While on, story text, the raw planner response and resolved character, wardrobe and environment state are written to the log.")}</span></label>
+            `, { id: "storage", apply: true, find: "" })}
+            ${group("Reset and setup", `
+              <div data-actions>
+                <button type="button" data-reset>Reset defaults</button>
+                <button type="button" data-quiet data-show-setup>Show setup guide</button>
+              </div>
+              <small>Reset returns every setting to its default and saves at once. Your saved prompt presets and music folder are kept.</small>
+            `, { id: "maintenance", find: find("Reset defaults", "reset defaults setup guide onboarding start over") })}
+          `, " data-advanced-settings")}
+
+          <div data-draft-bar hidden>
+            <div><span data-draft-count></span><small>Advanced changes are applied together.</small></div>
+            <div data-actions>
+              <button type="button" data-discard>Discard</button>
+              <button type="submit" data-primary data-apply data-apply-bar>Apply</button>
+            </div>
+          </div>
+        </form>
+      </div>
+
+      <section data-sample aria-label="Story sample" data-effects="full">
+        <div data-sample-stage>
+          <img data-sample-picture alt="" src="${SAMPLE_PICTURE}" />
+          <div data-sample-dialogue><span data-sample-speaker>Mira</span><p data-sample-text><span data-sample-words></span><span data-sample-caret aria-hidden="true"></span></p><span data-sample-next aria-hidden="true"></span></div>
         </div>
-      </form>
+        <div data-sample-label><span class="muted">Sample only. Rendered here, no connections used.</span><button type="button" data-quiet data-sample-replay>Replay</button></div>
+      </section>
     </div>`;
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* Navigation                                                              */
+  /* ---------------------------------------------------------------------- */
+
+  /** The section currently shown. */
+  getSection(): SettingsSectionId {
+    return this.section;
+  }
+
+  /**
+   * Shows one section (deep link). Remembers it for the next visit unless
+   * `remember: false`. `focus: true` moves keyboard focus to the section's tab.
+   */
+  openSection(id: SettingsSectionId | string, options: { focus?: boolean; remember?: boolean } = {}): void {
+    const next = normalizeSettingsSection(id);
+    this.section = next;
+    for (const tab of this.root.querySelectorAll<HTMLButtonElement>("[data-tab]")) {
+      const selected = tab.dataset.tab === next;
+      tab.setAttribute("aria-selected", String(selected));
+      tab.tabIndex = selected ? 0 : -1;
+      if (selected && options.focus) tab.focus({ preventScroll: true });
+      if (selected) {
+        // Keep the active tab in view on the narrow, horizontally scrolling strip.
+        const list = tab.parentElement!;
+        if (list.scrollWidth > list.clientWidth) {
+          const left = tab.offsetLeft - list.offsetLeft;
+          if (left < list.scrollLeft) list.scrollLeft = left - 8;
+          else if (left + tab.offsetWidth > list.scrollLeft + list.clientWidth) list.scrollLeft = left + tab.offsetWidth - list.clientWidth + 8;
+        }
+      }
+    }
+    for (const pane of this.root.querySelectorAll<HTMLElement>("[data-pane]")) pane.hidden = pane.dataset.pane !== next;
+    // One live sample, shown only where it helps: Reading and Look.
+    const slot = this.root.querySelector<HTMLElement>(`[data-pane="${next}"] [data-sample-slot]`);
+    const sample = this.root.querySelector<HTMLElement>("[data-sample]")!;
+    if (slot) {
+      if (sample.parentElement !== slot) slot.append(sample);
+      this.restartSample();
+    } else if (this.sampleTimer) {
+      clearTimeout(this.sampleTimer);
+      this.sampleTimer = null;
+    }
+    if (options.remember !== false) {
+      try { this.storage?.setItem(SETTINGS_SECTION_KEY, next); } catch { /* storage is optional */ }
+    }
+  }
+
+  /**
+   * Where the speech settings section mounts: inside the Voice section.
+   * Calling it marks the Voice section as provided by the host.
+   */
+  voiceMount(): HTMLElement {
+    this.voiceMounted = true;
+    this.root.querySelector<HTMLElement>("[data-voice-empty]")!.hidden = true;
+    return this.root.querySelector<HTMLElement>("[data-speech-mount]")!;
+  }
+
+  private rememberedSection(): SettingsSectionId {
+    try { return normalizeSettingsSection(this.storage?.getItem(SETTINGS_SECTION_KEY)); } catch { return "reading"; }
+  }
+
+  private wireNavigation(): void {
+    const tablist = this.root.querySelector<HTMLElement>("[data-tablist]")!;
+    const tabs = () => Array.from(this.root.querySelectorAll<HTMLButtonElement>("[data-tab]"));
+    tablist.addEventListener("click", (event) => {
+      const tab = (event.target as Element | null)?.closest<HTMLButtonElement>("[data-tab]");
+      if (tab) this.openSection(tab.dataset.tab!);
+    });
+    tablist.addEventListener("keydown", (event) => {
+      const list = tabs();
+      const index = list.findIndex((tab) => tab === this.root.activeElement);
+      if (index < 0) return;
+      let next = -1;
+      if (event.key === "ArrowDown" || event.key === "ArrowRight") next = (index + 1) % list.length;
+      else if (event.key === "ArrowUp" || event.key === "ArrowLeft") next = (index - 1 + list.length) % list.length;
+      else if (event.key === "Home") next = 0;
+      else if (event.key === "End") next = list.length - 1;
+      if (next < 0) return;
+      event.preventDefault();
+      this.openSection(list[next]!.dataset.tab!, { focus: true });
+    });
+    // The rail is vertical on wide containers and a horizontal strip on narrow ones.
+    if (typeof ResizeObserver === "function") {
+      this.resizeObserver = new ResizeObserver(() => {
+        const nav = this.root.querySelector<HTMLElement>("[data-nav]")!;
+        const vertical = getComputedStyle(this.root.querySelector<HTMLElement>("[data-tablist]")!).flexDirection === "column";
+        tablist.setAttribute("aria-orientation", vertical ? "vertical" : "horizontal");
+        nav.dataset.orientation = vertical ? "vertical" : "horizontal";
+      });
+      this.resizeObserver.observe(this.host);
+    }
+    for (const button of this.root.querySelectorAll<HTMLButtonElement>("[data-goto]")) {
+      button.addEventListener("click", () => {
+        const target = button.dataset.gotoTarget ? this.root.querySelector<HTMLElement>(`[name="${button.dataset.gotoTarget}"]`) : null;
+        if (target) this.reveal(target);
+        else this.openSection(button.dataset.goto!);
+      });
+    }
+    for (const button of this.root.querySelectorAll<HTMLButtonElement>("[data-jump-to]")) {
+      button.addEventListener("click", () => {
+        const group = this.root.querySelector<HTMLElement>(`[data-group-id="${button.dataset.jumpTo}"]`);
+        if (group) this.reveal(group);
+      });
+    }
+  }
+
+  /** Opens the section holding `element`, any closed disclosure around it, scrolls to it and focuses it. */
+  private reveal(element: HTMLElement, options: { flash?: boolean; focus?: boolean } = {}): void {
+    const pane = element.closest<HTMLElement>("[data-pane]");
+    if (pane) this.openSection(pane.dataset.pane!);
+    for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+      if (parent instanceof HTMLDetailsElement) parent.open = true;
+    }
+    // Conditionally hidden settings (e.g. NovelAI-only) fall back to their nearest shown ancestor.
+    let target: HTMLElement = element;
+    while (target.parentElement && target !== pane && target.closest("[hidden]") && target.closest("[hidden]") !== pane) {
+      target = target.parentElement;
+    }
+    target.scrollIntoView({ block: "center" });
+    if (options.flash !== false) {
+      const flashTarget = target.matches("[data-group], [data-field], fieldset, label") ? target : target.closest<HTMLElement>("[data-field], fieldset, label[data-check], [data-group]") ?? target;
+      flashTarget.removeAttribute("data-flash");
+      void flashTarget.offsetWidth;
+      flashTarget.setAttribute("data-flash", "");
+      if (this.flashTimer) clearTimeout(this.flashTimer);
+      this.flashTimer = setTimeout(() => flashTarget.removeAttribute("data-flash"), 1700);
+    }
+    if (options.focus !== false) {
+      const focusable = target.matches("input, select, textarea, button")
+        ? target
+        : target.querySelector<HTMLElement>("input:checked, input:not([type=hidden]), select, textarea, button");
+      focusable?.focus({ preventScroll: true });
+    }
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* Search                                                                  */
+  /* ---------------------------------------------------------------------- */
+
+  private searchTargets = new Map<string, HTMLElement>();
+
+  private searchEntries(): SettingsSearchEntry[] {
+    const entries: SettingsSearchEntry[] = [];
+    this.searchTargets.clear();
+    let index = 0;
+    for (const element of this.root.querySelectorAll<HTMLElement>("[data-pane] [data-find-label]")) {
+      const section = element.closest<HTMLElement>("[data-pane]")!.dataset.pane as SettingsSectionId;
+      const id = `s${index++}`;
+      this.searchTargets.set(id, element);
+      entries.push({ id, label: element.dataset.findLabel!, section, keywords: element.dataset.find ?? "" });
+    }
+    const voice = this.root.querySelector<HTMLElement>("[data-pane=\"voice\"]")!;
+    if (this.voiceMounted) {
+      for (const entry of VOICE_SEARCH_ENTRIES) {
+        const id = `s${index++}`;
+        this.searchTargets.set(id, voice);
+        entries.push({ id, label: entry.label, section: "voice", keywords: entry.keywords });
+      }
+    }
+    return entries;
+  }
+
+  private wireSearch(): void {
+    const input = this.root.querySelector<HTMLInputElement>("[data-settings-search]")!;
+    const results = this.root.querySelector<HTMLElement>("[data-search-results]")!;
+    const close = () => { results.hidden = true; input.setAttribute("aria-expanded", "false"); };
+    const jump = (id: string | undefined) => {
+      const target = id ? this.searchTargets.get(id) : undefined;
+      if (!target) return;
+      close();
+      if (target.matches("[data-pane]")) { this.openSection(target.dataset.pane!); target.focus({ preventScroll: true }); target.scrollIntoView({ block: "start" }); return; }
+      this.reveal(target);
+    };
+    const render = () => {
+      const query = input.value.trim();
+      if (!query) { results.replaceChildren(); close(); return; }
+      const matches = searchSettings(this.searchEntries(), query);
+      if (matches.length === 0) {
+        const empty = document.createElement("p");
+        empty.setAttribute("data-search-empty", "");
+        empty.textContent = `No setting matches “${query}”.`;
+        results.replaceChildren(empty);
+      } else {
+        results.replaceChildren(...matches.map((match) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.dataset.searchResult = match.id;
+          button.dataset.section = match.section;
+          const label = document.createElement("span");
+          label.textContent = match.label;
+          const where = document.createElement("span");
+          where.textContent = SETTINGS_SECTIONS.find((section) => section.id === match.section)!.label;
+          button.append(label, where);
+          const target = this.searchTargets.get(match.id);
+          const pane = target?.closest("[data-pane]");
+          const hiddenAncestor = target?.parentElement?.closest("[hidden]");
+          if (hiddenAncestor && hiddenAncestor !== pane) {
+            const note = document.createElement("small");
+            note.textContent = "Not shown with your current choices";
+            button.append(note);
+          }
+          button.addEventListener("click", () => jump(match.id));
+          return button;
+        }));
+      }
+      results.hidden = false;
+      input.setAttribute("aria-expanded", "true");
+    };
+    input.addEventListener("input", render);
+    input.addEventListener("focus", () => { if (input.value.trim()) render(); });
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        jump(results.querySelector<HTMLElement>("[data-search-result]")?.dataset.searchResult);
+      } else if (event.key === "Escape") {
+        if (input.value) { event.preventDefault(); input.value = ""; render(); }
+      } else if (event.key === "ArrowDown") {
+        const first = results.querySelector<HTMLElement>("[data-search-result]");
+        if (first) { event.preventDefault(); first.focus(); }
+      }
+    });
+    results.addEventListener("keydown", (event) => {
+      const items = Array.from(results.querySelectorAll<HTMLElement>("[data-search-result]"));
+      const index = items.indexOf(this.root.activeElement as HTMLElement);
+      if (event.key === "ArrowDown" && index >= 0) { event.preventDefault(); items[Math.min(items.length - 1, index + 1)]!.focus(); }
+      else if (event.key === "ArrowUp" && index >= 0) { event.preventDefault(); if (index === 0) input.focus(); else items[index - 1]!.focus(); }
+      else if (event.key === "Escape") { event.preventDefault(); close(); input.focus(); }
+    });
+    this.root.addEventListener("focusin", (event) => {
+      if (!(event.target instanceof Node) || !this.root.querySelector("[data-search]")!.contains(event.target)) close();
+    });
+    this.root.addEventListener("pointerdown", (event) => {
+      if (!(event.target instanceof Node) || !this.root.querySelector("[data-search]")!.contains(event.target)) close();
+    });
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* Text effects reference                                                  */
+  /* ---------------------------------------------------------------------- */
+
+  private renderTextEffectCards(): void {
+    // The stage's own effect styles, so previews match the novel view.
+    const fxStyle = document.createElement("style");
+    fxStyle.setAttribute("data-text-fx-css", "");
+    fxStyle.textContent = VN_TEXT_EFFECTS_CSS;
+    this.root.prepend(fxStyle);
+    const guide = this.root.querySelector<HTMLButtonElement>("[data-copy-guide]")!;
+    guide.addEventListener("click", () => void this.copyText(TEXT_EFFECT_AUTHOR_GUIDE, guide));
+    const list = this.root.querySelector<HTMLElement>("[data-text-fx-list]")!;
+    list.replaceChildren(...TEXT_EFFECT_CATALOGUE.map((effect) => {
+      const item = document.createElement("li");
+      item.dataset.textFxItem = effect.id;
+      const header = document.createElement("header");
+      const label = document.createElement("b");
+      label.textContent = effect.label;
+      const kind = document.createElement("small");
+      kind.textContent = effect.motion ? (effect.perLetter ? "Moves · per letter" : "Moves") : "Still";
+      header.append(label, kind);
+      const description = document.createElement("small");
+      description.textContent = effect.description;
+      const preview = document.createElement("div");
+      preview.dataset.textFxPreview = "";
+      preview.setAttribute("aria-hidden", "true");
+      preview.innerHTML = formatDialogueText(effect.example);
+      applyTextEffects(preview);
+      const codeRow = document.createElement("div");
+      codeRow.dataset.textFxCode = "";
+      const code = document.createElement("code");
+      code.textContent = effect.example;
+      const copy = document.createElement("button");
+      copy.type = "button";
+      copy.dataset.copyExample = effect.id;
+      copy.textContent = "Copy";
+      copy.setAttribute("aria-label", `Copy ${effect.label} example`);
+      copy.addEventListener("click", () => void this.copyText(effect.example, copy));
+      codeRow.append(code, copy);
+      item.append(header, description, preview, codeRow);
+      return item;
+    }));
+  }
+
+  private async copyText(text: string, button: HTMLButtonElement): Promise<void> {
+    const fallback = this.root.querySelector<HTMLElement>("[data-copy-fallback]")!;
+    const original = button.dataset.label ?? button.textContent ?? "";
+    button.dataset.label = original;
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
+      await navigator.clipboard.writeText(text);
+      fallback.hidden = true;
+      button.textContent = "Copied";
+      if (this.copyTimer) clearTimeout(this.copyTimer);
+      this.copyTimer = setTimeout(() => { button.textContent = original; }, 1500);
+    } catch {
+      // Hosts without clipboard permission: show the text selected for a manual copy.
+      const area = fallback.querySelector("textarea")!;
+      area.value = text;
+      fallback.hidden = false;
+      area.focus();
+      area.select();
+    }
+  }
+
+  private syncTextEffectMode(config: VisualNovelConfig): void {
+    const list = this.root.querySelector<HTMLElement>("[data-text-fx-list]")!;
+    list.setAttribute("data-vn-text-effects", config.textEffects);
+    const tokens = themePreviewTokens(config.themePreset);
+    list.style.setProperty("--vn-accent", tokens.accent);
+    list.style.setProperty("--vn-text", tokens.text);
+    list.style.setProperty("--vn-muted-text", tokens.mutedText);
+    list.style.setProperty("--vn-dialogue-bg", tokens.dialogueBg);
+    list.style.setProperty("--vn-dialogue-border", tokens.dialogueBorder);
+    list.style.setProperty("--vn-font-family", tokens.fontFamily);
   }
 
   /* ---------------------------------------------------------------------- */
@@ -598,26 +1099,22 @@ export class VisualNovelSettingsPanel {
     }
   }
 
-  private wire(): void {
-    const advanced = this.root.querySelector<HTMLDetailsElement>("[data-advanced-settings]")!;
+  private isAdvanced(name: string): name is AdvancedKey {
+    return (ADVANCED_KEYS as readonly string[]).includes(name);
+  }
 
-    // Everyday controls save the moment they change; Advanced controls become drafts.
+  private wire(): void {
+    // Everyday controls save the moment they change; Advanced keys become drafts until Apply.
     this.form.addEventListener("change", (event) => {
       const target = event.target;
       if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement)) return;
-      if (advanced.contains(target)) {
-        if ((ADVANCED_KEYS as readonly string[]).includes(target.name)) this.markDraft(target.name as AdvancedKey);
-        return;
-      }
+      if (this.isAdvanced(target.name)) { this.markDraft(target.name); return; }
       this.handleLiveChange(target);
     });
     this.form.addEventListener("input", (event) => {
       const target = event.target;
       if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) return;
-      if (advanced.contains(target)) {
-        if ((ADVANCED_KEYS as readonly string[]).includes(target.name)) this.markDraft(target.name as AdvancedKey);
-        return;
-      }
+      if (this.isAdvanced(target.name)) { this.markDraft(target.name); return; }
       // Sliders and number fields preview while dragging or typing; the save happens on change.
       if (target.name === "bgmVolume" || target.name === "sfxVolume") this.updateVolumeLabels();
       if (target.name === "textSpeed") this.restartSample();
@@ -728,6 +1225,7 @@ export class VisualNovelSettingsPanel {
       this.pendingEverydayFields = {};
       const patch = resetPatch(this.config);
       this.drafts.clear();
+      this.refreshStatus();
       this.save(patch, "Defaults restored.");
       this.syncFromConfig(patch);
     });
@@ -778,12 +1276,12 @@ export class VisualNovelSettingsPanel {
       this.save({ promptPresets: this.promptPresets.map((preset) => ({ ...preset })) }, `Preset “${selected.name}” deleted.`);
     });
 
-    // A failed validation inside a closed section must open that section.
+    // Discard puts every Advanced control back to the last value the host gave us.
+    this.root.querySelector("[data-discard]")?.addEventListener("click", () => this.discardAdvanced());
+
+    // A failed validation inside a hidden section must open that section.
     this.form.addEventListener("invalid", (event) => {
-      if (!(event.target instanceof HTMLElement)) return;
-      for (let parent = event.target.parentElement; parent; parent = parent.parentElement) {
-        if (parent instanceof HTMLDetailsElement) parent.open = true;
-      }
+      if (event.target instanceof HTMLElement) this.reveal(event.target, { flash: false, focus: false });
     }, true);
   }
 
@@ -815,6 +1313,7 @@ export class VisualNovelSettingsPanel {
         return { themePreset: normalizeThemePreset(target.value) };
       case "sceneImageFit": return { sceneImageFit: normalizeSceneImageFit(target.value) };
       case "effectIntensity": return { effectIntensity: normalizeEffectIntensity(target.value) };
+      case "textEffects": return { textEffects: normalizeTextEffects(target.value) };
       case "textScaleStep": {
         if (target.value === "custom") { this.showCustom("textScale", true); return null; }
         return { textScale: Number(target.value) };
@@ -1058,22 +1557,47 @@ export class VisualNovelSettingsPanel {
 
   private refreshStatus(): void {
     const dirty = this.drafts.size > 0;
-    this.root.querySelector<HTMLElement>("[data-apply-bar]")!.hidden = !dirty;
-    this.root.querySelector<HTMLElement>("[data-advanced-settings] [data-summary]")!.textContent = dirty
-      ? `${this.drafts.size} unapplied change${this.drafts.size === 1 ? "" : "s"}`
-      : "Applies when you choose Apply";
+    const bar = this.root.querySelector<HTMLElement>("[data-draft-bar]")!;
+    bar.hidden = !dirty;
+    this.root.querySelector<HTMLElement>("[data-draft-count]")!.textContent =
+      `${this.drafts.size} change${this.drafts.size === 1 ? "" : "s"} not applied yet`;
+    // Mark each changed field, and count changes per section for the nav badges.
+    const perSection = new Map<string, number>();
+    for (const name of ADVANCED_KEYS) {
+      const element = this.root.querySelector<HTMLElement>(`[name="${name}"]`);
+      const field = element?.closest<HTMLElement>("[data-field], label[data-check], fieldset") ?? null;
+      const changed = this.drafts.has(name);
+      field?.toggleAttribute("data-dirty", changed);
+      if (changed && element) {
+        const section = element.closest<HTMLElement>("[data-pane]")?.dataset.pane ?? "advanced";
+        perSection.set(section, (perSection.get(section) ?? 0) + 1);
+      }
+    }
+    for (const tab of this.root.querySelectorAll<HTMLElement>("[data-tab]")) {
+      const badge = tab.querySelector<HTMLElement>("[data-tab-badge]")!;
+      const count = perSection.get(tab.dataset.tab!) ?? 0;
+      badge.hidden = count === 0;
+      badge.textContent = String(count);
+      badge.setAttribute("aria-label", `${count} unapplied`);
+    }
     if (dirty) this.setStatus("Advanced changes are not applied yet.", "dirty");
     else if (this.status.dataset.kind === "dirty") this.setStatus("", "idle");
   }
 
   private applyAdvanced(): void {
+    if (this.drafts.size === 0) {
+      this.setStatus("Nothing to apply. Everyday settings save on their own.", "saved", 3000);
+      return;
+    }
     let patch: Partial<VisualNovelConfig>;
     try {
       patch = this.readAdvanced();
     } catch (error) {
-      const advanced = this.root.querySelector<HTMLDetailsElement>("[data-advanced-settings]")!;
-      advanced.open = true;
-      for (const section of advanced.querySelectorAll("details")) section.open = true;
+      // Show the field that failed, wherever the user is.
+      for (const [name, label] of [["parserParameters", "Story reader parameters"], ["imageParameters", "Image parameters"]] as const) {
+        try { jsonObject(this.control<HTMLTextAreaElement>(name).value, label); }
+        catch { this.reveal(this.control<HTMLTextAreaElement>(name)); break; }
+      }
       this.setStatus(error instanceof Error ? error.message : String(error), "error");
       return;
     }
@@ -1082,6 +1606,14 @@ export class VisualNovelSettingsPanel {
     this.drafts.clear();
     this.refreshStatus();
     this.save(patch, "Advanced settings applied.");
+  }
+
+  private discardAdvanced(): void {
+    const count = this.drafts.size;
+    this.drafts.clear();
+    this.syncFromConfig(this.config);
+    this.refreshStatus();
+    if (count > 0) this.setStatus(`Discarded ${count} change${count === 1 ? "" : "s"}.`, "saved", 3000);
   }
 
   private readAdvanced(): Partial<VisualNovelConfig> {
@@ -1198,6 +1730,8 @@ export class VisualNovelSettingsPanel {
     this.setRadio("setupThemePreset", config.themePreset);
     this.setRadio("sceneImageFit", config.sceneImageFit);
     this.setRadio("effectIntensity", config.effectIntensity);
+    this.setRadio("textEffects", config.textEffects);
+    this.syncTextEffectMode(config);
     const scaleStep = namedStepFor(TEXT_SCALE_STEPS, config.textScale);
     this.setRadio("textScaleStep", scaleStep ? String(scaleStep.value) : "custom");
     this.control<HTMLInputElement>("textScale").value = String(config.textScale);
@@ -1241,20 +1775,21 @@ export class VisualNovelSettingsPanel {
   }
 
   private updateSummaries(config: VisualNovelConfig): void {
-    const summary = (section: string, text: string) => {
-      const element = this.root.querySelector<HTMLElement>(`details[data-section="${section}"] > summary [data-summary]`);
+    const summary = (section: SettingsSectionId, text: string) => {
+      const element = this.root.querySelector<HTMLElement>(`[data-tab="${section}"] [data-tab-summary]`);
       if (element) element.textContent = text;
     };
-    summary("reading", `${describeTextSpeed(config.textSpeed)} · ${config.mode === "cyoa" ? "Choose from suggestions" : "Write your own reply"}`);
-    const fit = SCENE_IMAGE_FIT_OPTIONS.find((option) => option.value === config.sceneImageFit)?.label ?? config.sceneImageFit;
-    summary("appearance", `${THEME_PRESET_LABELS[config.themePreset].replace(/ \(.*\)$/, "")} · ${describeTextScale(config.textScale)} text · ${fit}`);
+    summary("reading", `${describeTextSpeed(config.textSpeed)} · ${config.mode === "cyoa" ? "Choices" : "Write your own"}`);
+    summary("look", `${THEME_PRESET_LABELS[config.themePreset].replace(/ \(.*\)$/, "")} · ${describeTextScale(config.textScale)} text`);
     const source = imageSourceFromConfig(config);
     const sourceLabel = IMAGE_SOURCE_OPTIONS.find((option) => option.value === source)?.label ?? source;
     const budget = budgetPresetFor(config.maxImagesPerTurn);
     const budgetLabel = budget === "custom" ? (config.maxImagesPerTurn === 0 ? "No limit" : `${config.maxImagesPerTurn} per reply`) : BUDGET_PRESETS.find((preset) => preset.id === budget)!.label;
-    summary("images", source === "generated" ? `${sourceLabel} · ${budgetLabel}` : sourceLabel);
+    summary("pictures", source === "generated" ? `Generated · ${budgetLabel}` : sourceLabel);
     const library = this.audioLibrary ? `${this.audioLibrary.bgmCount} track${this.audioLibrary.bgmCount === 1 ? "" : "s"}` : "No music yet";
     summary("sound", `${library} · ${Math.round(config.bgmVolume * 100)}%`);
+    summary("voice", config.speech?.enabled ? "On" : "Off");
+    summary("advanced", "Applies with Apply");
   }
 
   /* ---------------------------------------------------------------------- */
@@ -1288,7 +1823,9 @@ export class VisualNovelSettingsPanel {
     const line = SAMPLE_LINES[this.sampleLine % SAMPLE_LINES.length]!;
     speaker.textContent = line.speaker;
     next.textContent = "";
-    const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    // No typing loop while the sample sits in a hidden section.
+    const visible = Boolean(this.root.querySelector(`[data-pane="${this.section}"] [data-sample]`));
+    const reduced = !visible || (typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches);
     const perChar = reduced ? 0 : clamp(Number(this.control<HTMLInputElement>("textSpeed").value), 0, 100, this.config.textSpeed);
     const pause = clamp(Number(this.control<HTMLInputElement>("autoPlayDelay").value), 500, 10000, this.config.autoPlayDelay);
     let shown = perChar === 0 ? line.text.length : 0;
@@ -1352,6 +1889,12 @@ export class VisualNovelSettingsPanel {
       action.textContent = readiness.action ?? "";
       action.hidden = !readiness.action;
       row.querySelector<HTMLElement>("[data-actions]")!.hidden = readiness.fix !== "refresh";
+    }
+    if (kind === "planner") {
+      const dot = this.root.querySelector<HTMLElement>('[data-tab="connections"] [data-tab-dot]');
+      if (dot) dot.dataset.level = readiness.level;
+      const summary = this.root.querySelector<HTMLElement>('[data-tab="connections"] [data-tab-summary]');
+      if (summary) summary.textContent = { ready: "Story reader ready", loading: "Checking…", attention: "Needs a look", blocked: "Needs attention" }[readiness.level];
     }
   }
 
@@ -1423,12 +1966,6 @@ export class VisualNovelSettingsPanel {
     if (this.statusTimer) { clearTimeout(this.statusTimer); this.statusTimer = null; }
     this.status.textContent = text;
     this.status.dataset.kind = kind;
-    const echo = this.root.querySelector<HTMLElement>("[data-status-echo]");
-    if (echo) {
-      // Long messages belong to the footer; the sample row only echoes short states.
-      echo.textContent = text.length <= 40 ? text : "";
-      echo.dataset.kind = kind;
-    }
     if (clearAfterMs) {
       this.statusTimer = setTimeout(() => {
         if (this.status.dataset.kind !== kind) return;
@@ -1454,7 +1991,8 @@ export class VisualNovelSettingsPanel {
   }
 
   destroy(): void {
-    for (const timer of [this.statusTimer, this.resetTimer, this.saveTimer, this.sampleTimer]) if (timer) clearTimeout(timer);
+    for (const timer of [this.statusTimer, this.resetTimer, this.saveTimer, this.sampleTimer, this.flashTimer, this.copyTimer]) if (timer) clearTimeout(timer);
+    this.resizeObserver?.disconnect();
     this.host.remove();
   }
 }

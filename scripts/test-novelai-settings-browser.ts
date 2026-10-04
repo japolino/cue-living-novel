@@ -62,7 +62,7 @@ try {
   await mkdir(".cache/novelai-controls", { recursive: true });
 
   // Open the Images section
-  await settings.getByRole("heading", { name: "Images", exact: true }).click();
+  await settings.getByRole("tab", { name: "Pictures" }).click();
   const naiControls = settings.locator("[data-novelai-controls]");
 
   // --- Test 1: Stability connection active, NovelAI not selected -> Hidden ---
@@ -299,9 +299,9 @@ try {
   );
 
   // --- Test 10: Advanced JSON draft safety: valid draft seed remains unapplied; invalid draft retained ---
-  const advanced = settings.locator("[data-advanced-settings] > summary");
-  await advanced.click();
-  await settings.getByRole("heading", { name: "Connections and models", exact: true }).click();
+  // The JSON editor lives in Advanced and the NovelAI controls in Pictures: the
+  // draft must survive switching between the two sections.
+  await settings.getByRole("tab", { name: "Advanced" }).click();
   const jsonTextarea = settings.locator('[name="imageParameters"]');
 
   // Subtest 10A: Valid draft with seed change must NOT be silently saved by everyday NovelAI controls
@@ -310,6 +310,7 @@ try {
   assert.equal(await settings.locator("[data-apply-bar]").isVisible(), true);
 
   // User changes everyday control: novelAiSteps to 22
+  await settings.getByRole("tab", { name: "Pictures" }).click();
   await stepsInput.fill("22");
   await stepsInput.press("Tab");
   patch = await lastPatch(page);
@@ -319,6 +320,7 @@ try {
   assert.equal("seed" in (patch?.imageParameters as any), false, "unapplied seed draft MUST NOT be submitted by everyday controls");
 
   // In the Advanced editor, draft is rebased (steps: 22) and seed is retained, still marked dirty
+  await settings.getByRole("tab", { name: "Advanced" }).click();
   const rebasedEditorDraft = JSON.parse(await jsonTextarea.inputValue());
   assert.equal(rebasedEditorDraft.seed, 777888, "unapplied seed preserved in editor draft");
   assert.equal(rebasedEditorDraft.steps, 22, "steps rebased in editor draft");
@@ -326,6 +328,7 @@ try {
 
   // Subtest 10B: Invalid draft is retained completely untouched in editor
   await jsonTextarea.fill('{"seed": 777888, INVALID_JSON');
+  await settings.getByRole("tab", { name: "Pictures" }).click();
   await stepsInput.fill("20");
   await stepsInput.press("Tab");
   patch = await lastPatch(page);
@@ -335,6 +338,7 @@ try {
   assert.equal("seed" in (patch?.imageParameters as any), false);
 
   // Invalid draft in editor is retained untouched
+  await settings.getByRole("tab", { name: "Advanced" }).click();
   assert.equal(
     await jsonTextarea.inputValue(),
     '{"seed": 777888, INVALID_JSON',
@@ -346,6 +350,7 @@ try {
   await jsonTextarea.fill('{"steps": 20, "guidance": 5, "sampler": "k_euler_ancestral", "resolution": "1216x832"}');
   await settings.locator("[data-apply]").click();
   assert.equal(await settings.locator("[data-status]").innerText(), "Advanced settings applied.");
+  await settings.getByRole("tab", { name: "Pictures" }).click();
 
   // --- Test 11: Switch imageSource to "text" -> NovelAI controls hidden ---
   await settings.locator('input[name="imageSource"][value="text"]').check();

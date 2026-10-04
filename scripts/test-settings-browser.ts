@@ -1,6 +1,7 @@
 import { chromium, type Browser, type Page } from "playwright";
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
+import { TEXT_EFFECT_CATALOGUE } from "../src/shared/text-effects.js";
 
 const build = await Bun.build({ entrypoints: ["scripts/settings-browser-fixture.ts"], target: "browser" });
 if (!build.success) throw new Error(String(build.logs));
@@ -19,13 +20,26 @@ const lastPatch = async (page: Page) => (await fixture(page)).patches.at(-1);
 let browser: Browser | undefined;
 try {
   browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage({ viewport: { width: 1000, height: 900 } });
+  const context = await browser.newContext({ viewport: { width: 1000, height: 900 } });
+  await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: `http://127.0.0.1:${server.port}` });
+  const page = await context.newPage();
   const external: string[] = [];
   page.on("request", (request) => { if (/^https?:/.test(request.url()) && !request.url().startsWith(`http://127.0.0.1:${server.port}`)) external.push(request.url()); });
   await page.goto(`http://127.0.0.1:${server.port}/`);
   const settings = page.locator("[data-vn-settings]");
   await settings.waitFor();
   await mkdir(".cache/ux-redesign", { recursive: true });
+  const tab = (name: string) => settings.getByRole("tab", { name, exact: true });
+  const openTab = (name: string) => tab(name).click();
+
+  // Navigation: one tablist, seven sections, one visible pane, Reading first.
+  const tabs = settings.getByRole("tab");
+  assert.equal(await tabs.count(), 7, "seven sections");
+  assert.deepEqual(await tabs.evaluateAll((items) => items.map((item) => item.querySelector("[data-tab-label]")!.textContent)), ["Reading", "Look", "Pictures", "Sound", "Voice", "Connections", "Advanced"]);
+  assert.equal(await tab("Reading").getAttribute("aria-selected"), "true");
+  assert.equal(await settings.getByRole("tabpanel").count(), 1, "exactly one section is shown");
+  assert.equal(await settings.locator('[data-pane="reading"]').isVisible(), true);
+  assert.equal(await settings.locator('[name="mode"]').isVisible(), true, "everyday reading controls show first");
 
   // First use: the guide is visible, uses listed connections, and saves choices immediately.
   const setup = settings.locator("[data-setup]");
@@ -52,7 +66,8 @@ try {
   await settings.locator('input[name="textSpeedStep"][value="0"]').check();
   assert.deepEqual(await lastPatch(page), { textSpeed: 0 });
   assert.equal(await settings.locator("[data-status]").innerText(), "Saved");
-  await settings.getByRole("heading", { name: "Appearance", exact: true }).click();
+  await openTab("Look");
+  assert.equal(await settings.locator('[data-pane="look"] [data-sample]').isVisible(), true, "the live sample moves to Look");
   await settings.locator('input[name="themePreset"][value="paper-novel"]').check();
   assert.deepEqual(await lastPatch(page), { themePreset: "paper-novel" });
   const accent = await settings.locator("[data-sample-stage]").evaluate((element) => getComputedStyle(element).getPropertyValue("--sample-accent").trim());
@@ -64,13 +79,30 @@ try {
   assert.deepEqual(await lastPatch(page), { textScale: 1.2 });
   await settings.locator('input[name="effectIntensity"][value="gentle"]').check();
   assert.deepEqual(await lastPatch(page), { effectIntensity: "gentle" });
-  assert.equal((await fixture(page)).patches.length, patchesBefore + 5, "one patch per everyday change");
+  await settings.locator('input[name="textEffects"][value="static"]').check();
+  assert.deepEqual(await lastPatch(page), { textEffects: "static" }, "text effects mode is an everyday patch");
+  assert.equal(await settings.locator("[data-text-fx-list]").getAttribute("data-vn-text-effects"), "static", "previews follow the text effects mode");
+  assert.equal((await fixture(page)).patches.length, patchesBefore + 6, "one patch per everyday change");
+
+  // Text effects reference: every catalogue entry, a copy button each, and the chat-model guide.
+  const items = settings.locator("[data-text-fx-item]");
+  assert.deepEqual(await items.evaluateAll((list) => list.map((item) => (item as HTMLElement).dataset.textFxItem)), TEXT_EFFECT_CATALOGUE.map((effect) => effect.id), "every catalogue entry has a reference card, in order");
+  assert.equal(await settings.locator("[data-copy-example]").count(), TEXT_EFFECT_CATALOGUE.length);
+  await items.filter({ hasText: "Rainbow" }).getByRole("button", { name: "Copy Rainbow example" }).click();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), "<rainbow>Magic!</rainbow>", "copy puts the example markup on the clipboard");
+  await settings.locator("[data-copy-guide]").click();
+  assert.match(await page.evaluate(() => navigator.clipboard.readText()), /<shake> .*<fade>/s, "copy guide puts the author guide on the clipboard");
+  await page.evaluate(() => { Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true }); });
+  await settings.locator("[data-copy-guide]").click();
+  const copyFallback = settings.locator("[data-copy-fallback] textarea");
+  assert.equal(await copyFallback.isVisible(), true, "without clipboard access the text is shown for a manual copy");
+  assert.match(await copyFallback.inputValue(), /Use them rarely/);
   for (const patch of (await fixture(page)).patches) {
     assert.equal("customCss" in patch || "imageParameters" in patch, false, "everyday saves never carry advanced keys");
   }
 
   // Budget: presets map to numbers; unlimited is only reachable through Custom.
-  await settings.getByRole("heading", { name: "Images", exact: true }).click();
+  await openTab("Pictures");
   assert.equal(await settings.locator('input[name="budgetPreset"][value="balanced"]').isChecked(), true);
   await settings.locator('input[name="budgetPreset"][value="light"]').check();
   assert.deepEqual(await lastPatch(page), { maxImagesPerTurn: 1 });
@@ -103,7 +135,7 @@ try {
   assert.deepEqual(await lastPatch(page), { referenceSource: "captured" });
 
   // Sound: empty state until the library reports files.
-  await settings.getByRole("heading", { name: "Sound", exact: true }).click();
+  await openTab("Sound");
   assert.equal(await settings.locator("[data-sound-empty]").isVisible(), true, "empty state before any scan");
   await settings.locator("[data-sound-empty] [data-scan-audio]").click();
   assert.equal(await settings.locator("[data-sound-ready]").isVisible(), true);
@@ -111,24 +143,32 @@ try {
   await page.evaluate(() => (window as any).settingsFixture.panel.setAudioStatus("Scanned 0 BGM, 0 SFX."));
   assert.equal(await settings.locator("[data-sound-empty]").isVisible(), true, "text-only host reports still drive the empty state");
 
-  // Advanced: hidden by default, drafts survive host updates, Apply sends them, invalid JSON is revealed.
+  // Advanced: hidden by default, drafts survive host updates and tab switches, Apply sends them, invalid JSON is revealed.
   for (const name of ["parserParameters", "imageParameters", "customCss", "ignoredTags", "debugLogging", "imageModel"]) {
     assert.equal(await settings.locator(`[name="${name}"]`).isVisible(), false, name + " should be advanced");
   }
-  const advanced = settings.locator("[data-advanced-settings] > summary");
-  await advanced.focus(); await advanced.press("Enter");
-  await settings.getByRole("heading", { name: "Connections and models", exact: true }).click();
+  assert.equal(await settings.locator("[data-draft-bar]").isVisible(), false, "no unapplied-changes bar without drafts");
+  await openTab("Connections");
+  assert.equal(await settings.locator('[data-pane="connections"] [data-readiness]').count(), 1, "one readiness widget in Connections");
   await settings.locator('[name="systemOneMode"]').selectOption("compare");
   await settings.locator('[name="systemOneModel"]').fill("jev-latest");
   await settings.locator('[name="systemOneApiKey"]').fill("test-key-123");
   await settings.locator('[data-save-system-one-key]').click();
   assert.deepEqual((await fixture(page)).savedSystemOneKeys, ["test-key-123"]);
   assert.equal(await settings.locator('[name="systemOneApiKey"]').inputValue(), "");
+  assert.equal(await tab("Connections").locator("[data-tab-badge]").innerText(), "1", "the nav counts unapplied changes per section");
+  await tab("Advanced").focus(); await page.keyboard.press("Enter");
   await settings.locator('[name="imageParameters"]').fill('{"steps":32}');
   assert.match(await settings.locator("[data-status]").innerText(), /not applied/);
+  assert.equal(await settings.locator("[data-draft-bar]").isVisible(), true, "the bar appears with unapplied changes");
+  assert.match(await settings.locator("[data-draft-count]").innerText(), /^2 changes not applied/);
+  assert.equal(await settings.locator('[name="imageParameters"]').locator("xpath=..").getAttribute("data-dirty"), "", "changed fields are marked");
+  await openTab("Reading");
   await settings.locator('input[name="textSpeedStep"][value="10"]').check();
   assert.deepEqual(await lastPatch(page), { textSpeed: 10 });
-  assert.equal(await settings.locator('[name="imageParameters"]').inputValue(), '{"steps":32}', "everyday save must not wipe an advanced draft");
+  assert.equal(await settings.locator("[data-draft-bar]").isVisible(), true, "the bar follows the user to other sections");
+  await openTab("Advanced");
+  assert.equal(await settings.locator('[name="imageParameters"]').inputValue(), '{"steps":32}', "everyday save and a tab switch must not wipe an advanced draft");
   await page.evaluate(() => { const f = (window as any).settingsFixture; f.panel.setConfig({ ...f.config, customCss: "/* host */" }); });
   assert.equal(await settings.locator('[name="imageParameters"]').inputValue(), '{"steps":32}', "host echo keeps the draft");
   assert.equal(await settings.locator('[name="customCss"]').inputValue(), "/* host */", "host echo updates untouched advanced fields");
@@ -142,10 +182,23 @@ try {
   assert.equal(applied?.ignoredTags, "status, inventory", "hidden untouched values are preserved");
   assert.equal("themePreset" in applied!, false, "apply never touches everyday keys");
   assert.equal(await settings.locator("[data-status]").innerText(), "Advanced settings applied.");
+  assert.equal(await settings.locator("[data-draft-bar]").isVisible(), false, "the bar leaves once applied");
+  // Discard restores the last host values and sends nothing.
+  const beforeDiscard = (await fixture(page)).patches.length;
+  await settings.locator('[name="customCss"]').fill("/* draft */");
+  await settings.locator('[name="debugLogging"]').check();
+  assert.match(await settings.locator("[data-draft-count]").innerText(), /^2 changes/);
+  await settings.locator("[data-discard]").click();
+  assert.equal(await settings.locator('[name="customCss"]').inputValue(), "/* host */", "Discard restores text fields");
+  assert.equal(await settings.locator('[name="debugLogging"]').isChecked(), false, "Discard restores checkboxes");
+  assert.equal(await settings.locator("[data-draft-bar]").isVisible(), false);
+  assert.equal((await fixture(page)).patches.length, beforeDiscard, "Discard sends nothing");
+  // Invalid JSON: Apply from another section opens the field that failed.
   await settings.locator('[name="imageParameters"]').fill("invalid JSON");
-  await advanced.click();
+  await openTab("Look");
   await settings.locator("[data-apply-bar]").click();
   assert.equal(await settings.locator('[name="imageParameters"]').isVisible(), true, "invalid hidden fields must be revealed");
+  assert.equal(await tab("Advanced").getAttribute("aria-selected"), "true");
   assert.match(await settings.locator("[data-status]").innerText(), /Image parameters/);
   await settings.locator('[name="imageParameters"]').fill('{"steps":32}');
   await page.keyboard.press("Control+s");
@@ -160,14 +213,19 @@ try {
   assert.equal(reset?.themePreset, "lumiverse");
   assert.deepEqual(reset?.promptPresets, [{ id: "p1", name: "Soft", positive: "soft", negative: "" }]);
   assert.equal(reset?.audioDirectory, "packs");
-  assert.equal(await settings.locator("[data-show-setup]").isVisible(), true);
+  assert.equal(await settings.locator("[data-show-setup]").isVisible(), true, "Show setup guide lives in Advanced");
   await settings.locator("[data-show-setup]").click();
   assert.equal(await setup.isVisible(), true, "the guide can be reopened");
 
   // Connection states: missing and error are actionable.
   await page.evaluate(() => { const f = (window as any).settingsFixture; f.config = { ...f.config, imageConnectionId: "gone" }; f.panel.setConfig(f.config); });
-  assert.match(await settings.locator('[data-section="images"] [data-readiness="image"] [data-readiness-title]').innerText(), /missing/i);
-  assert.match(await settings.locator('[data-section="images"] [data-readiness="image"] [data-readiness-action]').innerText(), /Pick another/);
+  await openTab("Pictures");
+  assert.match(await settings.locator('[data-pane="pictures"] [data-readiness="image"] [data-readiness-title]').innerText(), /missing/i);
+  assert.match(await settings.locator('[data-pane="pictures"] [data-readiness="image"] [data-readiness-action]').innerText(), /Pick another/);
+  await openTab("Connections");
+  await settings.locator('[data-goto="pictures"]').click();
+  assert.equal(await tab("Pictures").getAttribute("aria-selected"), "true", "Connections links to the image connection in Pictures");
+  assert.equal(await settings.locator('select[name="imageConnectionId"]').evaluate((element) => element === (element.getRootNode() as ShadowRoot).activeElement), true);
   await page.evaluate(() => (window as any).settingsFixture.panel.setConnectionCatalog("planner", { status: "error", options: [], error: "Host offline." }));
   const plannerRow = settings.locator('[data-setup] [data-readiness="planner"]');
   assert.match(await plannerRow.locator("[data-readiness-title]").innerText(), /Could not load/);
@@ -176,11 +234,68 @@ try {
   assert.match(await plannerRow.locator("[data-readiness-title]").innerText(), /Checking/);
 
   // Open preview is wired everywhere.
-  await settings.locator("[data-actionbar] [data-open-preview]").click();
+  await settings.locator("[data-topbar] [data-open-preview]").click();
   assert.equal((await fixture(page)).previews, 1);
 
   await page.screenshot({ path: ".cache/ux-redesign/settings-desktop.png" });
   assert.match(await settings.locator('select[name="imageConnectionId"] option[data-missing]').innerText(), /no longer exists \(gone\)/);
+
+  // Keyboard: arrow keys move between tabs (roving tabindex), Home/End jump.
+  await tab("Reading").click();
+  await tab("Reading").focus();
+  await page.keyboard.press("ArrowDown");
+  assert.equal(await tab("Look").getAttribute("aria-selected"), "true", "ArrowDown selects the next section");
+  assert.equal(await tab("Look").evaluate((element) => element === (element.getRootNode() as ShadowRoot).activeElement), true, "focus follows the selection");
+  await page.keyboard.press("ArrowRight");
+  assert.equal(await tab("Pictures").getAttribute("aria-selected"), "true");
+  await page.keyboard.press("End");
+  assert.equal(await tab("Advanced").getAttribute("aria-selected"), "true");
+  await page.keyboard.press("ArrowDown");
+  assert.equal(await tab("Reading").getAttribute("aria-selected"), "true", "arrows wrap around");
+  await page.keyboard.press("ArrowUp");
+  assert.equal(await tab("Advanced").getAttribute("aria-selected"), "true");
+  await page.keyboard.press("Home");
+  assert.equal(await tab("Reading").getAttribute("aria-selected"), "true");
+  assert.deepEqual(await tabs.evaluateAll((items) => items.map((item) => (item as HTMLElement).tabIndex)), [0, -1, -1, -1, -1, -1, -1], "only the selected tab is in the tab order");
+  assert.equal(await settings.getByRole("tabpanel").getAttribute("aria-labelledby"), "pane-reading-title");
+
+  // Search: typing lists matching settings; Enter jumps to the first and focuses it.
+  const search = settings.locator("[data-settings-search]");
+  await search.fill("music vol");
+  const results = settings.locator("[data-search-result]");
+  assert.equal(await results.first().innerText().then((text) => text.split("\n")[0]), "Music volume");
+  await search.press("Enter");
+  assert.equal(await tab("Sound").getAttribute("aria-selected"), "true", "search opens the section of the result");
+  assert.equal(await settings.locator('[name="bgmVolume"]').evaluate((element) => element === (element.getRootNode() as ShadowRoot).activeElement), true, "search focuses the setting");
+  assert.equal(await settings.locator("[data-search-results]").isVisible(), false, "results close after a jump");
+  await search.fill("css");
+  await results.filter({ hasText: "Theme CSS" }).click();
+  assert.equal(await settings.locator('[name="customCss"]').isVisible(), true, "results open Advanced settings too");
+  await search.fill("narrator");
+  assert.match(await results.first().innerText(), /Narrator voice/);
+  await search.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  assert.equal(await tab("Voice").getAttribute("aria-selected"), "true", "voice settings are searchable");
+  await search.fill("zzzz-nothing");
+  assert.match(await settings.locator("[data-search-empty]").innerText(), /No setting matches/);
+  await search.press("Escape");
+  assert.equal(await search.inputValue(), "", "Escape clears the search");
+
+  // Voice: the speech section renders inside the Voice section.
+  await openTab("Voice");
+  assert.equal(await settings.locator('[data-pane="voice"] .vn-speech-settings').count(), 1, "speech settings mount inside Voice");
+  assert.equal(await settings.locator("[data-voice-empty]").isVisible(), false);
+  assert.equal(await page.locator(".vn-speech-settings").getByRole("button", { name: "Load profiles" }).isVisible(), true);
+
+  // The last open section is remembered across a remount (same storage).
+  await openTab("Connections");
+  await page.evaluate(() => (window as any).settingsFixture.remount());
+  assert.equal(await tab("Connections").getAttribute("aria-selected"), "true", "the panel reopens on the last section");
+  assert.equal(await page.evaluate(() => (window as any).settingsFixture.storage.get("cue.visual-novel.settings-section")), "connections");
+  await page.evaluate(() => { const f = (window as any).settingsFixture; f.storage.set("cue.visual-novel.settings-section", "nonsense"); f.remount(); });
+  assert.equal(await tab("Reading").getAttribute("aria-selected"), "true", "an unknown remembered section falls back to Reading");
+  await page.evaluate(() => (window as any).settingsFixture.panel.openSection("look"));
+  assert.equal(await tab("Look").getAttribute("aria-selected"), "true", "openSection deep-links a section");
 
   // The guide mirrors the saved config instead of preselecting a default.
   await page.goto(`http://127.0.0.1:${server.port}/?card`);
@@ -189,31 +304,40 @@ try {
   assert.equal(await setup.locator('input[name="setupThemePreset"][value="midnight-noir"]').isChecked(), true, "guide reflects saved theme");
   await setup.locator('input[name="setupThemePreset"][value="golden-hour"]').check();
   assert.deepEqual(await lastPatch(page), { themePreset: "golden-hour" });
-  assert.equal(await settings.locator('input[name="themePreset"][value="golden-hour"]').isChecked(), true, "Appearance mirrors the guide");
+  assert.equal(await settings.locator('input[name="themePreset"][value="golden-hour"]').isChecked(), true, "Look mirrors the guide");
   await page.goto(`http://127.0.0.1:${server.port}/?setupDone`);
   await settings.waitFor();
-  await page.setViewportSize({ width: 360, height: 640 });
-  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, "settings fit 360px");
-  await settings.getByRole("heading", { name: "Appearance", exact: true }).click();
+  for (const width of [390, 360]) {
+    await page.setViewportSize({ width, height: 760 });
+    for (const name of ["Reading", "Look", "Pictures", "Sound", "Voice", "Connections", "Advanced"]) {
+      await openTab(name);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, `${name} fits ${width}px without horizontal scrolling`);
+    }
+  }
+  assert.equal(await settings.locator("[data-tablist]").getAttribute("aria-orientation"), "horizontal", "narrow containers use a horizontal tab strip");
+  const advancedBox = await tab("Advanced").boundingBox();
+  assert.ok(advancedBox && advancedBox.x >= 0 && advancedBox.x + advancedBox.width <= 361, "the active tab is scrolled into view on the strip");
+  await openTab("Look");
   const tile = settings.locator('input[name="themePreset"][value="paper-novel"]').locator("..");
   const box = await tile.boundingBox();
   assert.ok(box && box.height >= 44 && box.width >= 44, "theme tiles are large targets");
-  const chevrons = await page.evaluate(() => {
-    const root = document.querySelector("[data-vn-settings]")!.shadowRoot!;
-    return Array.from(root.querySelectorAll<HTMLDetailsElement>("details[data-section]")).map((details) => ({ open: details.open, transform: getComputedStyle(details.querySelector("summary")!, "::before").transform }));
-  });
-  for (const { open, transform } of chevrons) {
-    // rotate(45deg) => matrix(0.707, 0.707, -0.707, 0.707, 0, 0); rotate(-45deg) flips the second value.
-    assert.equal(transform.startsWith(open ? "matrix(0.707107, 0.707107" : "matrix(0.707107, -0.707107"), true, `chevron reflects open=${open}: ${transform}`);
-  }
+  const tabBox = await tab("Look").boundingBox();
+  assert.ok(tabBox && tabBox.height >= 44, "tabs are large targets");
   await page.screenshot({ path: ".cache/ux-redesign/settings-mobile.png" });
-  await settings.getByRole("heading", { name: "Sound", exact: true }).click();
+  await openTab("Advanced");
+  await settings.locator('[name="customCss"]').fill("/* mobile draft */");
+  await openTab("Sound");
   const lastControl = await settings.locator('input[name="sfxVolume"]').evaluate((element) => { element.scrollIntoView({ block: "end" }); return element.getBoundingClientRect().bottom; });
-  const footer = await settings.locator("[data-actionbar]").boundingBox();
-  assert.ok(footer && lastControl <= footer.y + 1, `controls scrolled into view sit above the footer (${lastControl} vs ${footer?.y})`);
+  const draftBar = await settings.locator("[data-draft-bar]").boundingBox();
+  assert.ok(draftBar && lastControl <= draftBar.y + 1, `controls scrolled into view sit above the unapplied-changes bar (${lastControl} vs ${draftBar?.y})`);
+  await settings.locator("[data-discard]").click();
+  await page.setViewportSize({ width: 1000, height: 900 });
+  await page.waitForTimeout(100);
+  assert.equal(await settings.locator("[data-tablist]").getAttribute("aria-orientation"), "vertical", "wide containers use a vertical rail");
 
   // Reduced motion: sample shows the whole line at once.
   await page.emulateMedia({ reducedMotion: "reduce" });
+  await openTab("Reading");
   await settings.locator("[data-sample-replay]").click();
   assert.equal(await settings.locator("[data-sample-stage]").getAttribute("data-typing"), null);
 
@@ -223,10 +347,8 @@ try {
     f.panel.setConnectionCatalog("image", { status: "ready", options: [{ id: "nai", name: "NovelAI", provider: "novelai", model: "nai-diffusion-4-5-full", isDefault: true }] });
     f.config = { ...f.config, imageConnectionId: "nai", generateImages: true, useNativeCardImages: false };
     f.panel.setConfig(f.config);
-    const root = document.querySelector("[data-vn-settings]")!.shadowRoot!;
-    let node: Element | null = root.querySelector("[data-novelai-prompt-controls]");
-    while (node) { if (node instanceof HTMLDetailsElement) node.open = true; node = node.parentElement; }
   });
+  await openTab("Advanced");
   const quality = settings.locator('[name="novelAiQualityTags"]');
   assert.equal(await quality.isVisible(), true);
   await quality.uncheck();

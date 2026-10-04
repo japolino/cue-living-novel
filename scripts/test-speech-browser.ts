@@ -44,7 +44,8 @@ try {
 
   const dock = page.locator(".vn-speech-dock");
   const card = page.locator(".vn-speech-settings");
-  await card.locator("summary").click();
+  // The section is flat now (it renders inside the settings Voice section): no disclosure to open.
+  assert.equal(await card.getByRole("button", { name: "Load profiles" }).isVisible(), true, "speech settings are visible without expanding anything");
 
   // 1) Default-disabled: dock hidden; cursor storms + activation trigger ZERO requests.
   assert.equal(await dock.isVisible(), false, "dock hidden while speech is off");

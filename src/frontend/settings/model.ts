@@ -5,11 +5,13 @@ import {
   SCENE_IMAGE_FITS,
   TEXT_SCALE_MAX,
   TEXT_SCALE_MIN,
+  TEXT_EFFECT_MODES,
   THEME_PRESET_IDS,
   type VisualNovelConfig,
   type VisualNovelEffectIntensity,
   type VisualNovelReferenceSource,
   type VisualNovelSceneImageFit,
+  type VisualNovelTextEffectMode,
   type VisualNovelThemePreset,
 } from "../../config.js";
 import { THEME_PRESET_CSS } from "../theme/presets.js";
@@ -147,6 +149,22 @@ export function normalizeEffectIntensity(value: string): VisualNovelEffectIntens
 }
 
 export { TEXT_SCALE_MIN, TEXT_SCALE_MAX };
+
+/* ------------------------------------------------------------------------ */
+/* Inline text effects (<shake>, <rainbow>, ...).                            */
+/* ------------------------------------------------------------------------ */
+
+export const TEXT_EFFECT_MODE_OPTIONS: ReadonlyArray<{ value: VisualNovelTextEffectMode; label: string; help: string }> = [
+  { value: "animated", label: "Animated", help: "Tagged words move: shake, wave, rainbow and more." },
+  { value: "static", label: "Still", help: "Keeps the colour and style of each effect, without movement." },
+  { value: "off", label: "Off", help: "Tagged words look like normal dialogue." },
+];
+
+export function normalizeTextEffects(value: string): VisualNovelTextEffectMode {
+  return (TEXT_EFFECT_MODES as readonly string[]).includes(value)
+    ? value as VisualNovelTextEffectMode
+    : DEFAULT_CONFIG.textEffects;
+}
 
 /* ------------------------------------------------------------------------ */
 /* Picture fit in plain words.                                               */
@@ -363,6 +381,68 @@ export function resetPatch(current: Pick<VisualNovelConfig, "promptPresets" | "a
     promptPresets: current.promptPresets.map((preset) => ({ ...preset })),
     audioDirectory: current.audioDirectory,
   };
+}
+
+/* ------------------------------------------------------------------------ */
+/* Settings navigation and search.                                           */
+/* ------------------------------------------------------------------------ */
+
+export type SettingsSectionId = "reading" | "look" | "pictures" | "sound" | "voice" | "connections" | "advanced";
+
+export const SETTINGS_SECTIONS: ReadonlyArray<{ id: SettingsSectionId; label: string; blurb: string }> = [
+  { id: "reading", label: "Reading", blurb: "How the story plays and how you answer." },
+  { id: "look", label: "Look", blurb: "Theme, text and scene effects." },
+  { id: "pictures", label: "Pictures", blurb: "Where pictures come from and how many." },
+  { id: "sound", label: "Sound", blurb: "Music, sound effects and volume." },
+  { id: "voice", label: "Voice", blurb: "Read paragraphs aloud with your Lumiverse TTS profiles." },
+  { id: "connections", label: "Connections", blurb: "The models Cue uses to read the story." },
+  { id: "advanced", label: "Advanced", blurb: "Prompts, filters, CSS and technical controls." },
+];
+
+/** Where the last open settings section is remembered (same storage as the setup flag). */
+export const SETTINGS_SECTION_KEY = "cue.visual-novel.settings-section";
+
+export function normalizeSettingsSection(value: unknown): SettingsSectionId {
+  return SETTINGS_SECTIONS.some((section) => section.id === value) ? value as SettingsSectionId : "reading";
+}
+
+export type SettingsSearchEntry = {
+  /** Opaque id the panel uses to find the target element. */
+  id: string;
+  label: string;
+  section: SettingsSectionId;
+  /** Extra words that should also find this setting. */
+  keywords?: string;
+};
+
+function searchWords(value: string): string[] {
+  return value.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+}
+
+/**
+ * Settings matching every word of the query (prefix match per word), best first:
+ * label starts with the query, then label words, then keywords and section name.
+ */
+export function searchSettings(entries: readonly SettingsSearchEntry[], query: string, limit = 8): SettingsSearchEntry[] {
+  const terms = searchWords(query);
+  if (terms.length === 0) return [];
+  const phrase = terms.join(" ");
+  const scored: Array<{ entry: SettingsSearchEntry; score: number; order: number }> = [];
+  entries.forEach((entry, order) => {
+    const labelWords = searchWords(entry.label);
+    const sectionLabel = SETTINGS_SECTIONS.find((section) => section.id === entry.section)?.label ?? entry.section;
+    const otherWords = [...searchWords(entry.keywords ?? ""), ...searchWords(sectionLabel)];
+    let score = 0;
+    for (const term of terms) {
+      if (labelWords.some((word) => word.startsWith(term))) score += 3;
+      else if (otherWords.some((word) => word.startsWith(term))) score += 1;
+      else return;
+    }
+    if (labelWords.join(" ").startsWith(phrase)) score += 5;
+    scored.push({ entry, score, order });
+  });
+  scored.sort((left, right) => right.score - left.score || left.order - right.order);
+  return scored.slice(0, limit).map(({ entry }) => entry);
 }
 
 /* ------------------------------------------------------------------------ */
