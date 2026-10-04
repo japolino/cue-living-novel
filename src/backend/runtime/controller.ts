@@ -16,6 +16,7 @@ import { SpriteCastMemberSchema, SpriteStagingSchema, type SpriteCastMember, typ
 import { characterAppearanceKey } from "../../shared/identity.js";
 import { buildSpriteStaging, deterministicSpriteStaging } from "./sprite-staging.js";
 import { SpriteService, spriteStyleKey } from "./sprites/index.js";
+import { isSpritePlannedRecord, keyIllustrationCap, keyIllustrationCues, keyIllustrationPlan, keyIllustrationViews } from "./sprites/key-moments.js";
 import { resolvePanelTemplate } from "./panel-templates.js";
 import { ViewRegistry } from "./view-registry.js";
 import { isFrontendRequest } from "../../protocol.js";
@@ -537,7 +538,10 @@ async function buildTurnView(
     const service = spriteService(spindle);
     const staging = await stagingForRecord(spindle, record, effective, userId);
     await service.ensureForStaging(userId, staging, effective);
-    return { ...view, sprites: await service.turnView(userId, staging, effective) };
+    const sprites = await service.turnView(userId, staging, effective);
+    // Key moments: the scene-image jobs of `illustrate` paragraphs (off: sprites only).
+    const illustrations = keyIllustrationCap(effective) > 0 ? keyIllustrationViews(staging, record.jobs) : [];
+    return { ...view, sprites: illustrations.length ? { ...sprites, illustrations } : sprites };
   } catch (error) {
     spindle.log.warn(`Sprite view could not be built; sending the turn without sprites: ${errorText(error)}`);
     return view;
@@ -873,11 +877,13 @@ async function startAssets(
   const scope = sceneImageScope(userId, record.plan.key.chatId);
   const admission = sceneCache.admission(scope);
   let current = record;
+  // Sprite mode: the jobs are key illustrations; the pipeline sees only their cues.
+  const spritePlanned = isSpritePlannedRecord(record);
 
   try {
     const finalJobs = await generateAssets(
       spindle,
-      record.plan,
+      spritePlanned ? keyIllustrationPlan(record.plan, record.jobs) : record.plan,
       record.jobs,
       config,
       controller.signal,
@@ -893,6 +899,11 @@ async function startAssets(
           messageId: record.plan.key.assistantMessageId,
           asset: assetView(current, changed)
         }, userId);
+        // The sprite stage reads key illustrations from `sprites.illustrations`:
+        // re-send the (same) turn once one is finished or failed.
+        if (spritePlanned && (changed.status === "generated" || changed.status === "failed")) {
+          spindle.sendToFrontend({ type: "vn_turn", turn: await buildTurnView(spindle, current, userId) }, userId);
+        }
       },
       userId,
       { sceneCache, admission, ...(options.bypassJobIds ? { bypassJobIds: options.bypassJobIds } : {}), ...sourceTextOption(record) }
@@ -905,6 +916,59 @@ async function startAssets(
   } finally {
     if (assetControllers.get(key) === controller) assetControllers.delete(key);
   }
+}
+
+/**
+ * Sprite mode: put a sprite-planned turn's unfinished key illustrations
+ * (queued, generating, cancelled or failed) back in the queue. Finished
+ * pictures are kept. Returns null when there is nothing to resume, the
+ * feature is off, or a batch for the chat is still running.
+ */
+async function requeueKeyIllustrations(
+  spindle: SpindleAPI,
+  record: StoredTurnRecord,
+  path: string,
+  userId: string | undefined,
+  options: { bypassCache: boolean }
+): Promise<{ record: StoredTurnRecord; bypassJobIds: Set<string> } | null> {
+  if (!isSpritePlannedRecord(record) || record.jobs.length === 0) return null;
+  const config = await loadConfig(spindle, userId);
+  if (keyIllustrationCap(config) === 0 || config.presentationMode !== "sprites") return null;
+  const running = assetControllers.get(runtimeKey(userId, record.plan.key.chatId));
+  if (running && !running.signal.aborted) return null;
+  const nowTime = new Date().toISOString();
+  const bypassJobIds = new Set<string>();
+  let requeued = 0;
+  const jobs = record.jobs.map((job) => {
+    if (job.status === "generated" || job.status === "browser_ready") return job;
+    requeued += 1;
+    if (options.bypassCache) bypassJobIds.add(job.jobId);
+    return AssetJobSchema.parse({
+      ...job, status: "queued", imageId: null, imageUrl: null, error: null,
+      queuedAt: nowTime, startedAt: null, generatedAt: null, readyAt: null, finishedAt: null
+    });
+  });
+  if (requeued === 0) return null;
+  const next = { ...record, jobs, updatedAt: nowTime };
+  await saveTurnRecord(spindle, path, next, userId);
+  dbg(spindle, userId, `key illustrations re-queued ${requeued} job(s) chat=${record.plan.key.chatId} message=${record.plan.key.assistantMessageId}`);
+  return { record: next, bypassJobIds };
+}
+
+function startKeyIllustrations(
+  spindle: SpindleAPI,
+  record: StoredTurnRecord,
+  path: string,
+  userId: string | undefined,
+  bypassJobIds: Set<string>,
+  operation: "generate_assets" | "retry_turn"
+): void {
+  void startAssets(spindle, record, path, userId, bypassJobIds.size ? { bypassJobIds } : {}).catch((error) => {
+    if (!isAbortError(error)) {
+      spindle.log.error(`Key illustration pipeline failed: ${errorText(error)}`);
+      spindle.sendToFrontend({ type: "vn_error", chatId: record.plan.key.chatId, operation, error: errorText(error) }, userId);
+    }
+  });
 }
 
 async function processAssistantMessage(
@@ -962,13 +1026,16 @@ async function processAssistantMessage(
       ? false
       : existing.jobs.some(
         (job) => job.status === "failed" || job.status === "cancelled" || job.status === "queued" || job.status === "generating"
-      ) || (existing.plan.spriteStaging !== undefined && existing.jobs.length === 0);
+      ) || (existing.plan.spriteStaging !== undefined && (existing.jobs.length === 0 || isSpritePlannedRecord(existing)));
     if (!hasIncompleteJobs) {
       dbg(spindle, userId, `turn reused from storage chat=${chatId} message=${message.id} fingerprint=${fingerprint}`);
       const key = runtimeKey(userId, chatId);
       activeTurnKeys.set(key, existing.plan.key);
       await persistActiveTurn(spindle, existing, path, userId);
-      spindle.sendToFrontend({ type: "vn_turn", turn: await buildTurnView(spindle, existing, userId) }, userId);
+      // Sprite mode: unfinished key illustrations resume instead of replanning.
+      const resumed = spriteMode ? await requeueKeyIllustrations(spindle, existing, path, userId, { bypassCache: false }) : null;
+      spindle.sendToFrontend({ type: "vn_turn", turn: await buildTurnView(spindle, resumed?.record ?? existing, userId) }, userId);
+      if (resumed) startKeyIllustrations(spindle, resumed.record, path, userId, resumed.bypassJobIds, "generate_assets");
       return;
     }
   }
@@ -1049,7 +1116,7 @@ async function processAssistantMessage(
     // Sprite mode: the plan still feeds staging, but no scene image runs.
     const spriteMode = config.presentationMode === "sprites";
     if (spriteMode) {
-      dbg(spindle, userId, `sprite mode: no scene-image jobs for chat=${chatId} message=${message.id}`);
+      dbg(spindle, userId, `sprite mode: scene-image jobs only for key illustrations chat=${chatId} message=${message.id}`);
     } else if (config.useNativeCardImages) {
       try {
         jobs = await resolveNativeCardJobs({
@@ -1110,7 +1177,12 @@ async function processAssistantMessage(
         signal: operation.controller.signal
       }, userId);
       plan = { ...plan, spriteStaging: staging };
-      dbg(spindle, userId, `sprite staging source=${staging.source} cast=[${staging.cast.map((member) => member.name).join(", ")}] plates=${staging.plates.length} paragraphs=${staging.paragraphs.length}`);
+      // Key moments: the existing scene-image job for each `illustrate` paragraph's cue, within the cap.
+      const keyCues = keyIllustrationCues(plan, keyIllustrationCap(config));
+      if (keyCues.length) {
+        jobs = createAssetJobs({ ...plan, visualCues: keyCues, cacheCues: undefined, classifierVisuals: undefined }, config, characterAppearance);
+      }
+      dbg(spindle, userId, `sprite staging source=${staging.source} cast=[${staging.cast.map((member) => member.name).join(", ")}] plates=${staging.plates.length} paragraphs=${staging.paragraphs.length} keyIllustrations=[${keyCues.map((cue) => `p${cue.paragraphIndex}`).join(", ")}]`);
     }
 
     const settingsSnapshot: Record<string, unknown> = {
@@ -1119,7 +1191,9 @@ async function processAssistantMessage(
       negativePrompt: config.negativePrompt,
       imageConnectionId: config.imageConnectionId,
       imageModel: config.imageModel,
-      imageConcurrency: config.imageConcurrency
+      imageConcurrency: config.imageConcurrency,
+      // Marks a sprite-planned turn: its jobs are key illustrations only.
+      ...(spriteMode ? { presentationMode: "sprites" } : {})
     };
     const nowTime = new Date().toISOString();
     const record: StoredTurnRecord = {
@@ -1152,7 +1226,7 @@ async function processAssistantMessage(
     await persistActiveTurn(spindle, record, path, userId);
     if (operation.controller.signal.aborted) return;
     spindle.sendToFrontend({ type: "vn_turn", turn: await buildTurnView(spindle, record, userId, config) }, userId);
-    if (!spriteMode && !config.useNativeCardImages && config.generateImages) {
+    if ((!spriteMode || jobs.length > 0) && !config.useNativeCardImages && config.generateImages) {
       void startAssets(spindle, record, path, userId).catch((error) => {
         if (!isAbortError(error)) {
           spindle.log.error(`Visual novel asset pipeline failed: ${errorText(error)}`);
@@ -1302,8 +1376,12 @@ async function retryTurn(
     const staging = await stagingForRecord(spindle, existing, config, userId);
     const requeued = await spriteService(spindle).retryFailed(userId, staging, config);
     dbg(spindle, userId, `sprite retry re-queued ${requeued} image(s) chat=${chatId} message=${message.id}`);
-    const current = await loadTurnRecord(spindle, path, userId) ?? existing;
+    const stored = await loadTurnRecord(spindle, path, userId) ?? existing;
+    // Key illustrations: finished pictures are kept, the rest regenerate (as in scene mode).
+    const resumed = await requeueKeyIllustrations(spindle, stored, path, userId, { bypassCache: true });
+    const current = resumed?.record ?? stored;
     spindle.sendToFrontend({ type: "vn_turn", turn: await buildTurnView(spindle, current, userId, config) }, userId);
+    if (resumed) startKeyIllustrations(spindle, current, path, userId, resumed.bypassJobIds, "retry_turn");
     return;
   }
 

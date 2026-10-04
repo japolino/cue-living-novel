@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
-import { DEFAULT_CONFIG, PRESENTATION_MODES, SPRITE_CUTOUT_QUALITIES } from "../../config.js";
+import { DEFAULT_CONFIG, KEY_ILLUSTRATION_MODES, PRESENTATION_MODES, SPRITE_CUTOUT_QUALITIES } from "../../config.js";
 import { DEFAULT_SPRITE_MODEL_URL, SPRITE_HOT_SET, type PlateView, type SpriteSetView } from "../../shared/sprites.js";
 import {
+  KEY_ILLUSTRATION_OPTIONS,
+  normalizeKeyIllustrations,
   PRESENTATION_MODE_OPTIONS,
   SPRITE_CUTOUT_OPTIONS,
   SPRITE_STATUS_LABELS,
@@ -50,6 +52,16 @@ describe("sprite mode options", () => {
     expect(SPRITE_CUTOUT_OPTIONS[1]!.label).toBe("Basic (no download)");
     expect(normalizeSpriteCutout("basic")).toBe("basic");
     expect(normalizeSpriteCutout("")).toBe("best");
+  });
+});
+
+describe("key moments option", () => {
+  test("sprites only first (the default), then one picture per reply; short help", () => {
+    expect(KEY_ILLUSTRATION_OPTIONS.map((option) => option.value)).toEqual([...KEY_ILLUSTRATION_MODES]);
+    expect(KEY_ILLUSTRATION_OPTIONS[0]!.value).toBe(DEFAULT_CONFIG.keyIllustrations);
+    for (const option of KEY_ILLUSTRATION_OPTIONS) expect(option.help.split(". ").length).toBeLessThanOrEqual(2);
+    expect(normalizeKeyIllustrations("few")).toBe("few");
+    expect(normalizeKeyIllustrations("many")).toBe("off");
   });
 });
 

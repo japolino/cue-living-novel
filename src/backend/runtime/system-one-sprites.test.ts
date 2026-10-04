@@ -334,3 +334,87 @@ test("a rate-limited request is retried once", async () => {
   assert.equal(staging.source, "classifier");
   assert.equal(staging.paragraphs[0]!.actors[0]!.expression, "smug");
 });
+
+/* ---- key moments (config keyIllustrations) ---- */
+
+const few = { keyIllustrations: "few" as const, generateImages: true };
+
+/** Mira on a date: p1 kisses (deterministic 3), p2 sits (2), p0/p3 ordinary; every paragraph has a cue. */
+function datePlan() {
+  const paragraphs = ["\"Hi,\" Mira says.", "Mira kisses Kai on the cheek.", "Mira sits on the bench.", "\"Shall we go?\" Mira asks."];
+  return makePlan({
+    paragraphs,
+    speakers: ["Mira", null, null, "Mira"],
+    cues: paragraphs.map((_, p) => ({ p, character: "Mira", pose: "smile", identity: "1girl, brown hair" })),
+  });
+}
+const flags = (staging: { paragraphs: Array<{ illustrate?: boolean | undefined }> }) => staging.paragraphs.map((stage) => stage.illustrate === true);
+
+test("key moments off: no flags and no key-moment questions", async () => {
+  const plan = datePlan();
+  assert.deepEqual(flags(deterministicSpriteStaging(stagingInput(plan))), [false, false, false, false]);
+  const mock = mockSpindle((body) => lowAnswers(body));
+  const staging = await buildSpriteStaging(mock.spindle, stagingInput(plan, { config: on }));
+  assert.deepEqual(flags(staging), [false, false, false, false]);
+  assert.ok(Object.keys(mock.bodies[0]!.questions).every((key) => !key.endsWith("_moment") && !key.endsWith("_standing")));
+});
+
+test("key moments few, deterministic: the strongest moment with a cue, at most one per reply", () => {
+  const staging = deterministicSpriteStaging(stagingInput(datePlan(), { config: few }));
+  assertStagingInvariants(staging, 4);
+  assert.deepEqual(flags(staging), [false, true, false, false]);
+  // Without generated images there is nothing to paint.
+  assert.deepEqual(flags(deterministicSpriteStaging(stagingInput(datePlan(), { config: { ...few, generateImages: false } }))), [false, false, false, false]);
+});
+
+test("key moments few, classifier: one score and one yes/no per cue paragraph; the top confident moment wins", async () => {
+  const plan = datePlan();
+  const mock = mockSpindle((body) => {
+    const answers = lowAnswers(body);
+    answers.p2_moment = score(3, 0.8);
+    answers.p2_standing = noul(0.1);
+    answers.p3_moment = score(4, 0.9);
+    answers.p3_standing = noul(0.2);
+    answers.p0_moment = score(4, 0.3); // too uncertain to count
+    return answers;
+  });
+  const staging = await buildSpriteStaging(mock.spindle, stagingInput(plan, { config: { ...on, ...few } }));
+  assertStagingInvariants(staging, 4);
+  const questions = mock.bodies[0]!.questions;
+  for (const p of [0, 1, 2, 3]) {
+    assert.equal(questions[`p${p}_moment`]?.type, "score");
+    assert.equal((questions[`p${p}_moment`]!.criteria as string[]).length, 5);
+    assert.ok((questions[`p${p}_moment`]!.criteria as string[])[0]!.startsWith("ordinary"), "the safe level first");
+    assert.equal(questions[`p${p}_standing`]?.type, "noul");
+  }
+  assert.equal(staging.source, "classifier");
+  assert.deepEqual(flags(staging), [false, false, false, true]);
+});
+
+test("key moments few, classifier: nothing important enough means no illustration; no answers fall back to the rule", async () => {
+  const plan = datePlan();
+  const calm = mockSpindle((body) => {
+    const answers = lowAnswers(body);
+    for (const p of [0, 1, 2, 3]) answers[`p${p}_moment`] = score(1, 0.9);
+    answers.p1_standing = noul(0.05);
+    return answers;
+  });
+  assert.deepEqual(flags(await buildSpriteStaging(calm.spindle, stagingInput(plan, { config: { ...on, ...few } }))), [false, false, false, false]);
+  const unsure = mockSpindle((body) => lowAnswers(body));
+  assert.deepEqual(flags(await buildSpriteStaging(unsure.spindle, stagingInput(plan, { config: { ...on, ...few } }))), [false, true, false, false]);
+});
+
+test("key moments: a paragraph with only a key-moment question is still classified", async () => {
+  // Nobody is cast (narration, no speaker, persona-only cue): the key-moment questions alone make the request.
+  const plan = makePlan({
+    paragraphs: ["The storm breaks over the harbour.", "Lightning splits the mast."],
+    scenes: [{ start: 0, location: "Harbour", character: null, cast: [] }],
+    cues: [{ p: 1, character: "You", pose: "scared", identity: "1boy, black coat" }],
+  });
+  const mock = mockSpindle((body) => ({ ...lowAnswers(body), p1_moment: score(4, 0.9), p1_standing: noul(0.1) }));
+  const staging = await buildSpriteStaging(mock.spindle, stagingInput(plan, { config: { ...on, ...few } }));
+  const body = mock.bodies.find((candidate) => candidate.questions.p1_moment)!;
+  assert.deepEqual(Object.keys(body.questions).filter((key) => key.startsWith("p1_")).sort(), ["p1_moment", "p1_standing"]);
+  assert.equal(staging.paragraphs[1]!.actors.length, 0);
+  assert.equal(flags(staging)[1], true);
+});

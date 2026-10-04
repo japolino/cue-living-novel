@@ -272,6 +272,13 @@ export const SpriteParagraphStageSchema = z.object({
   /** The background plate, or null to keep the previous one. */
   plateKey: z.string().trim().min(1).max(200).nullable(),
   light: z.enum(SPRITE_LIGHTS).default("neutral"),
+  /**
+   * Additive (optional): a key moment shown as a full scene illustration
+   * (the scene-image job of this paragraph's cue) instead of the sprites,
+   * once that picture is ready. Absent on older records and when the
+   * `keyIllustrations` setting is "off".
+   */
+  illustrate: z.boolean().optional(),
 }).strict();
 export type SpriteParagraphStage = z.infer<typeof SpriteParagraphStageSchema>;
 
@@ -365,12 +372,27 @@ export type PlateView = {
   error?: string;
 };
 
+/**
+ * A key-moment illustration (sprite mode, `keyIllustrations` "few"): the
+ * scene-image job of an `illustrate` paragraph, mirrored from
+ * `TurnView.assets` so the stage can switch without the scene-image sync.
+ */
+export type SpriteIllustrationView = {
+  paragraphIndex: number;
+  jobId: string;
+  status: "pending" | "ready" | "failed";
+  /** Present when status is "ready". */
+  url?: string;
+};
+
 export type SpriteTurnView = {
   staging: SpriteStaging;
   /** Keyed by SpriteCastMember.characterKey. */
   sets: Record<string, SpriteSetView>;
   /** Keyed by plateKey. */
   plates: Record<string, PlateView>;
+  /** Additive (optional): key-moment illustrations of this turn, by paragraph. */
+  illustrations?: SpriteIllustrationView[];
 };
 
 /* ------------------------------------------------------------------------ */

@@ -89,6 +89,7 @@ const baseConfig: VisualNovelConfig = {
   textEffects: "animated",
   presentationMode: "scene",
   spriteCutout: "best",
+  keyIllustrations: "off",
   spriteModelUrl: DEFAULT_CONFIG.spriteModelUrl,
   textScale: 1,
   audioDirectory: "",

@@ -246,6 +246,8 @@ const THEME_MARKUP = `
 
 /** Scene-image request ids of sprite-mode plates start with this. */
 const PLATE_REQUEST_PREFIX = "plate:";
+/** Scene-image request ids of sprite-mode key illustrations start with this. */
+const ILLUSTRATION_REQUEST_PREFIX = "illustration:";
 
 const queryRequired = <T extends Element>(
   root: ParentNode,
@@ -499,6 +501,8 @@ export class VnStage {
   private spritesEl: HTMLElement | null = null;
   /** Plate URL whose scene-image request is queued for the next microtask. */
   private queuedPlateUrl: string | null = null;
+  /** Key illustration requested for the next microtask (sprite mode). */
+  private queuedIllustrationUrl: string | null = null;
   private readonly failedPlateUrls = new Set<string>();
 
   constructor(options: VnStageOptions) {
@@ -833,7 +837,8 @@ export class VnStage {
     if (next === "scene") {
       this.spriteLayer.setEnabled(false);
       this.queuedPlateUrl = null;
-      const isPlate = (image: VnSceneImage | null) => Boolean(image?.requestId.startsWith(PLATE_REQUEST_PREFIX));
+      this.queuedIllustrationUrl = null;
+      const isPlate = (image: VnSceneImage | null) => Boolean(image?.requestId.startsWith(PLATE_REQUEST_PREFIX) || image?.requestId.startsWith(ILLUSTRATION_REQUEST_PREFIX));
       if (isPlate(this.state.displayedImage) || isPlate(this.state.pendingImage)) {
         this.dispatch({ type: "clear-image" });
         return;
@@ -912,20 +917,74 @@ export class VnStage {
       return;
     }
     const index = this.state.currentParagraphIndex;
+    const animate = !this.isRewinding && !this.isSkipping && this.effectIntensity !== "off";
     this.spriteLayer.show(index, {
-      animate: !this.isRewinding && !this.isSkipping && this.effectIntensity !== "off",
+      animate,
       speaker: view.paragraph.speaker,
     });
     this.spriteLayer.setTalking(this.isTyping);
+    // Key moment: a ready illustration replaces the sprites for this paragraph.
+    const illustration = this.spriteLayer.illustrationFor(index);
+    if (illustration && !this.failedPlateUrls.has(illustration.url)) {
+      this.syncSpriteIllustration(index, illustration.url, animate);
+      return;
+    }
+    this.queuedIllustrationUrl = null;
+    this.spriteLayer.setIllustrated(null, animate);
     this.syncSpritePlate(index);
+  }
+
+  /**
+   * Paint a key illustration through the scene layers (the plate crossfades
+   * out under it) and hide the sprites once it is on screen. Never waits:
+   * until the picture is decoded the sprite stage stays as it is.
+   */
+  private syncSpriteIllustration(index: number, url: string, animate: boolean): void {
+    if (this.state.displayedImage?.url === url) {
+      this.spriteLayer.setIllustrated(url, animate);
+      return;
+    }
+    this.queuedPlateUrl = null;
+    if (this.state.pendingImage?.url === url || this.queuedIllustrationUrl === url) return;
+    this.queuedIllustrationUrl = url;
+    // Never dispatch from inside render: request the picture right after it.
+    queueMicrotask(() => {
+      if (this.queuedIllustrationUrl !== url) return;
+      this.queuedIllustrationUrl = null;
+      if (this.destroyed || this.presentationMode !== "sprites") return;
+      if (this.state.displayedImage?.url === url || this.state.pendingImage?.url === url) return;
+      void this.setSceneImage({ url, alt: `Illustration for paragraph ${index + 1}`, requestId: `${ILLUSTRATION_REQUEST_PREFIX}${index}:${url}` }).then((loaded) => {
+        if (this.destroyed || this.presentationMode !== "sprites") return;
+        if (loaded) {
+          if (this.state.currentParagraphIndex === index && this.spriteLayer.illustrationFor(index)?.url === url && this.state.displayedImage?.url === url) {
+            this.spriteLayer.setIllustrated(url, !this.isRewinding && !this.isSkipping && this.effectIntensity !== "off");
+          }
+          return;
+        }
+        // A broken picture: keep the sprites (they were never hidden).
+        if (this.state.imageError && this.state.displayedImage?.url !== url) this.failedPlateUrls.add(url);
+      });
+    });
   }
 
   private syncSpritePlate(index: number): void {
     if (!this.spriteLayer.getView()) return;
     const plate = this.spriteLayer.plateFor(index);
-    if (!plate || plate.status !== "ready" || !plate.url) return;
+    const isIllustration = (image: VnSceneImage | null) => Boolean(image?.requestId.startsWith(ILLUSTRATION_REQUEST_PREFIX));
+    if (!plate || plate.status !== "ready" || !plate.url) {
+      // Leaving a key illustration with no plate to go back to: clear it.
+      if (isIllustration(this.state.displayedImage) || isIllustration(this.state.pendingImage)) {
+        queueMicrotask(() => {
+          if (this.destroyed || this.presentationMode !== "sprites" || this.spriteLayer.illustrationFor(this.state.currentParagraphIndex)) return;
+          if (isIllustration(this.state.displayedImage) || isIllustration(this.state.pendingImage)) this.dispatch({ type: "clear-image" });
+        });
+      }
+      return;
+    }
     const url = plate.url;
-    if (this.state.displayedImage?.url === url || this.state.pendingImage?.url === url) return;
+    // A pending key illustration must not land after we moved on: re-request the plate.
+    if (this.state.pendingImage?.url === url) return;
+    if (this.state.displayedImage?.url === url && !isIllustration(this.state.pendingImage)) return;
     if (this.failedPlateUrls.has(url) || this.queuedPlateUrl === url) return;
     this.queuedPlateUrl = url;
     // Never dispatch from inside render: request the plate right after it.
@@ -933,7 +992,8 @@ export class VnStage {
       if (this.queuedPlateUrl !== url) return;
       this.queuedPlateUrl = null;
       if (this.destroyed || this.presentationMode !== "sprites") return;
-      if (this.state.displayedImage?.url === url || this.state.pendingImage?.url === url) return;
+      if (this.state.pendingImage?.url === url) return;
+      if (this.state.displayedImage?.url === url && !isIllustration(this.state.pendingImage)) return;
       const label = [plate.location, plate.timeOfDay, plate.weather].filter(Boolean).join(", ");
       void this.setSceneImage({ url, alt: label ? `Background: ${label}` : "", requestId: `${PLATE_REQUEST_PREFIX}${plate.plateKey}:${url}` }).then((loaded) => {
         if (!loaded && this.state.imageError && this.state.displayedImage?.url !== url) this.failedPlateUrls.add(url);
@@ -980,6 +1040,7 @@ export class VnStage {
     this.spriteLayer.setTurn(null);
     this.spriteLayer.clear();
     this.queuedPlateUrl = null;
+    this.queuedIllustrationUrl = null;
     this.failedPlateUrls.clear();
     this.updateControlButtons();
     this.updateContinueButton();

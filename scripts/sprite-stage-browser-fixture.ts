@@ -3,6 +3,7 @@ import {
   SPRITE_HOT_SET,
   type PlateView,
   type SpriteActorStage,
+  type SpriteIllustrationView,
   type SpriteImageView,
   type SpriteParagraphStage,
   type SpriteSetView,
@@ -15,7 +16,10 @@ import {
  * downscaled copies of the sprite bake-off assets in scripts/fixtures/sprites/.
  *
  * Query: ?preset, ?intensity (full|gentle|off), ?speed (typewriter ms), ?mode (sprites|scene).
- * window.fx: { stage, load(paragraphs, options), go(index), ready(...), view() }.
+ * window.fx: { stage, load(paragraphs, options), go(index), illustrate(index, status), ready(...), view() }.
+ * Key moments: a paragraph with `illustrate: true` gets the fixture
+ * illustration (`/sprites/illustration_moment.webp`, a composited close-up
+ * standing in for a generated scene picture) unless `illustration` says otherwise.
  */
 const q = new URL(location.href).searchParams;
 
@@ -77,7 +81,16 @@ export type FixtureParagraph = {
   actors: Array<Partial<SpriteActorStage> & { characterKey: string }>;
   plateKey?: string | null;
   light?: SpriteParagraphStage["light"];
+  /** Key moment: show the full illustration instead of the sprites. */
+  illustrate?: boolean;
+  /** Status of that illustration (default "ready"). */
+  illustration?: SpriteIllustrationView["status"];
 };
+
+const ILLUSTRATION_URL = "/sprites/illustration_moment.webp";
+const illustrationView = (paragraphIndex: number, status: SpriteIllustrationView["status"]): SpriteIllustrationView => ({
+  paragraphIndex, jobId: `job-${paragraphIndex}`, status, ...(status === "ready" ? { url: ILLUSTRATION_URL } : {}),
+});
 
 const mount = document.createElement("div");
 Object.assign(mount.style, { position: "fixed", inset: "0", background: "#08090d" });
@@ -107,8 +120,10 @@ function load(paragraphs: FixtureParagraph[], options: { sets?: Partial<SpriteTu
         actors: p.actors.map((a) => ({ expression: "idle", slot: "center", facing: "viewer", focus: false, motion: "none", emote: "none", intensity: 3, ...a })),
         plateKey: p.plateKey === undefined ? (index === 0 ? "plate_classroom" : null) : p.plateKey,
         light: p.light ?? "neutral",
+        ...(p.illustrate ? { illustrate: true } : {}),
       })) as SpriteParagraphStage[],
     },
+    illustrations: paragraphs.flatMap((p, index) => (p.illustrate ? [illustrationView(index, p.illustration ?? "ready")] : [])),
     sets: { ...base.sets, ...options.sets } as SpriteTurnView["sets"],
     plates: { ...base.plates, ...options.plates } as SpriteTurnView["plates"],
   };
@@ -126,6 +141,14 @@ function load(paragraphs: FixtureParagraph[], options: { sets?: Partial<SpriteTu
   });
 }
 
+/** A key illustration changes state (the backend re-sends the turn's sprite view). */
+function illustrate(index: number, status: SpriteIllustrationView["status"]): void {
+  if (!current) return;
+  const others = (current.illustrations ?? []).filter((item) => item.paragraphIndex !== index);
+  current = { ...current, illustrations: [...others, illustrationView(index, status)] };
+  stage.setSpriteTurn(current);
+}
+
 function go(index: number): void {
   const internals = stage as unknown as { advance(): void };
   let guard = 50;
@@ -138,6 +161,7 @@ Object.assign(window, {
     stage,
     load,
     go,
+    illustrate,
     spriteImage,
     view: () => current,
   },

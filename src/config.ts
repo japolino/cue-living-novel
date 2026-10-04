@@ -33,6 +33,16 @@ export type VisualNovelPresentationMode = (typeof PRESENTATION_MODES)[number];
 /** Sprite cut-out quality: "best" downloads and runs the segmentation model, "basic" never downloads anything. */
 export const SPRITE_CUTOUT_QUALITIES = ["best", "basic"] as const;
 export type VisualNovelSpriteCutout = (typeof SPRITE_CUTOUT_QUALITIES)[number];
+/**
+ * Sprite mode only: full scene illustrations for key moments (sitting,
+ * running, kissing, fighting, a reveal) that a standing sprite cannot show.
+ * "off" never paints one; "few" paints at most KEY_ILLUSTRATION_CAP.few per
+ * reply through the scene-image pipeline.
+ */
+export const KEY_ILLUSTRATION_MODES = ["off", "few"] as const;
+export type VisualNovelKeyIllustrations = (typeof KEY_ILLUSTRATION_MODES)[number];
+/** Key illustrations per reply for each mode. */
+export const KEY_ILLUSTRATION_CAP: Readonly<Record<VisualNovelKeyIllustrations, number>> = { off: 0, few: 1 };
 export type VisualNovelTextEffectMode = (typeof TEXT_EFFECT_MODES)[number];
 
 /**
@@ -129,6 +139,8 @@ export type VisualNovelConfig = {
   presentationMode: VisualNovelPresentationMode;
   /** Sprite cut-out quality. */
   spriteCutout: VisualNovelSpriteCutout;
+  /** Sprite mode: full illustrations for a few key moments per reply. */
+  keyIllustrations: VisualNovelKeyIllustrations;
   /** Where the sprite cut-out model is downloaded from (once, then cached in the browser). */
   spriteModelUrl: string;
   /** Dialogue text size multiplier, 1 = the theme's own size. */
@@ -185,6 +197,7 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   textEffects: "animated",
   presentationMode: "scene",
   spriteCutout: "best",
+  keyIllustrations: "off",
   spriteModelUrl: DEFAULT_SPRITE_MODEL_URL,
   textScale: 1,
   audioDirectory: "",
@@ -279,6 +292,12 @@ function spriteCutout(value: unknown): VisualNovelSpriteCutout {
     : DEFAULT_CONFIG.spriteCutout;
 }
 
+function keyIllustrations(value: unknown): VisualNovelKeyIllustrations {
+  return typeof value === "string" && (KEY_ILLUSTRATION_MODES as readonly string[]).includes(value)
+    ? value as VisualNovelKeyIllustrations
+    : DEFAULT_CONFIG.keyIllustrations;
+}
+
 function spriteModelUrl(value: unknown): string {
   if (typeof value !== "string") return DEFAULT_CONFIG.spriteModelUrl;
   const trimmed = value.trim();
@@ -366,6 +385,7 @@ export function normalizeConfig(value: unknown): VisualNovelConfig {
     textEffects: textEffectMode(input.textEffects),
     presentationMode: presentationMode(input.presentationMode),
     spriteCutout: spriteCutout(input.spriteCutout),
+    keyIllustrations: keyIllustrations(input.keyIllustrations),
     spriteModelUrl: spriteModelUrl(input.spriteModelUrl),
     textScale: textScale(input.textScale),
     audioDirectory: stringValue(input.audioDirectory, DEFAULT_CONFIG.audioDirectory).trim(),
