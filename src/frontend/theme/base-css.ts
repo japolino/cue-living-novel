@@ -1343,6 +1343,11 @@ button[data-vn-badge]:active {
     animation: vn-led-blink 1.6s steps(1) infinite;
   }
 
+  /* Effect intensity "off" also stills the decorative ornament twinkle. */
+  [data-vn-root][data-vn-effect-intensity="off"] [data-vn-ornaments] [data-vn-anim] {
+    animation: none;
+  }
+
   [data-vn-anim-delay="0s"] { animation-delay: 0s; }
   [data-vn-anim-delay="0.6s"] { animation-delay: 0.6s; }
   [data-vn-anim-delay="1.2s"] { animation-delay: 1.2s; }
