@@ -325,3 +325,12 @@ test("malformed single answers are ignored, the rest still apply", async () => {
   const mira = staging.paragraphs[0]!.actors[0]!;
   assert.deepEqual([mira.expression, mira.motion, mira.emote], ["idle", "none", "heart"]);
 });
+
+test("a rate-limited request is retried once", async () => {
+  const plan = duoPlan();
+  const mock = mockSpindle((body, call) => (call === 0 ? { status: 429, body: "{}" } : { ...lowAnswers(body), p0_c0_expression: choice("smug", 0.9) }));
+  const staging = await buildSpriteStaging(mock.spindle, stagingInput(plan, { config: on }));
+  assert.equal(mock.bodies.length, 2);
+  assert.equal(staging.source, "classifier");
+  assert.equal(staging.paragraphs[0]!.actors[0]!.expression, "smug");
+});

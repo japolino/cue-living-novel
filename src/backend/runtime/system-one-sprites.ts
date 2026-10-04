@@ -42,6 +42,8 @@ export const SPRITE_REQUEST_BYTE_LIMIT = 60_000;
 export const MAX_CLASSIFIED_PARAGRAPHS = 105;
 /** Per-request deadline; Jev answers in 70-500 ms, the rest is network. */
 export const SPRITE_CLASSIFIER_TIMEOUT_MS = 8_000;
+/** Base delay before the single retry of a 429/529 answer. */
+export const SPRITE_RETRY_DELAY_MS = 250;
 /** Paragraph text sent per paragraph. */
 export const SPRITE_PARAGRAPH_TEXT_LIMIT = 2_000;
 /** Known places offered for reuse per scene. */
@@ -586,12 +588,19 @@ export async function classifySpriteStaging(
   if (!batches.length) return null;
   const started = Date.now();
   const timeoutMs = options.timeoutMs ?? SPRITE_CLASSIFIER_TIMEOUT_MS;
+  const send = async (body: string) => withDeadline(Promise.resolve(spindle.cors(endpoint, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body,
+  })), timeoutMs, input.signal) as Promise<{ status: number; body: string } | null | undefined>;
   const results = await Promise.allSettled(batches.map(async (batch) => {
-    const response = await withDeadline(Promise.resolve(spindle.cors(endpoint, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify(batch.body),
-    })), timeoutMs, input.signal) as { status: number; body: string };
+    const body = JSON.stringify(batch.body);
+    let response = await send(body);
+    // Rate limited or overloaded: one short, jittered retry (the API asks for backoff).
+    if (response && (response.status === 429 || response.status === 529)) {
+      await withDeadline(new Promise((resolve) => setTimeout(resolve, SPRITE_RETRY_DELAY_MS + Math.floor(Math.random() * SPRITE_RETRY_DELAY_MS))), timeoutMs, input.signal);
+      response = await send(body);
+    }
     if (!response || response.status < 200 || response.status >= 300) throw new Error(`System One request failed (${response?.status ?? "no response"})`);
     return ResponseSchema.parse(JSON.parse(response.body));
   }));
