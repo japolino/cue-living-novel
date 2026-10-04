@@ -62,6 +62,9 @@ import {
   SPRITE_CUTOUT_OPTIONS,
   SPRITE_IMAGE_SIZE_HELP,
   SPRITE_IMAGE_SIZE_OPTIONS,
+  SPRITE_EXPRESSION_COUNT_HELP,
+  SPRITE_EXPRESSION_COUNT_OPTIONS,
+  normalizeSpriteExpressionCount,
   KEY_ILLUSTRATION_OPTIONS,
   normalizeKeyIllustrations,
   describeCutoutModel,
@@ -634,6 +637,11 @@ export class VisualNovelSettingsPanel {
                     ${optionList("spriteImageSize", SPRITE_IMAGE_SIZE_OPTIONS)}
                   </fieldset>
                 `, { id: "sprite-size", help: esc(SPRITE_IMAGE_SIZE_HELP), find: find("Image size", "sprites sprite size resolution standard upscaled vram gpu memory faster sharper comfyui swarmui novelai") })}
+                ${group("Expressions per character", `
+                  <fieldset aria-label="Expressions per character">
+                    ${optionList("spriteExpressionCount", SPRITE_EXPRESSION_COUNT_OPTIONS)}
+                  </fieldset>
+                `, { id: "sprite-expressions", help: esc(SPRITE_EXPRESSION_COUNT_HELP), find: find("Expressions per character", "sprites expressions per character set size faces 4 8 12 fastest all faster fewer pictures") })}
                 ${group("Sprite cut-out", `
                   <fieldset aria-label="Cut-out quality" ${find("Cut-out quality", "sprites cutout cut-out background removal transparent model download isnet quality basic best")}>
                     ${optionList("spriteCutout", SPRITE_CUTOUT_OPTIONS)}
@@ -1400,6 +1408,7 @@ export class VisualNovelSettingsPanel {
       case "presentationMode": return { presentationMode: normalizePresentationMode(target.value) };
       case "spriteCutout": return { spriteCutout: normalizeSpriteCutout(target.value) };
       case "spriteImageSize": return { spriteImageSize: normalizeSpriteImageSize(target.value) };
+      case "spriteExpressionCount": return { spriteExpressionCount: normalizeSpriteExpressionCount(target.value) };
       case "keyIllustrations": return { keyIllustrations: normalizeKeyIllustrations(target.value) };
       case "textScaleStep": {
         if (target.value === "custom") { this.showCustom("textScale", true); return null; }
@@ -1865,6 +1874,8 @@ export class VisualNovelSettingsPanel {
     this.setRadio("presentationMode", config.presentationMode);
     this.setRadio("spriteCutout", config.spriteCutout);
     this.setRadio("spriteImageSize", config.spriteImageSize);
+    this.setRadio("spriteExpressionCount", String(config.spriteExpressionCount));
+    this.spriteLibrary.setExpressionCount(config.spriteExpressionCount);
     this.setRadio("keyIllustrations", config.keyIllustrations);
     const sprites = config.presentationMode === "sprites";
     this.root.querySelector<HTMLElement>("[data-sprites-only]")!.hidden = !sprites;

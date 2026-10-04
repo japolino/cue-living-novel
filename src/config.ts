@@ -1,5 +1,5 @@
 import { DEFAULT_SPEECH_SETTINGS, normalizeSpeechSettings, type SpeechSettings } from "./speech-config.js";
-import { DEFAULT_SPRITE_MODEL_URL } from "./shared/sprites.js";
+import { DEFAULT_SPRITE_EXPRESSION_COUNT, DEFAULT_SPRITE_MODEL_URL, SPRITE_EXPRESSION_COUNTS, normalizeSpriteExpressionCount, type SpriteExpressionCount } from "./shared/sprites.js";
 
 export type VisualNovelMode = "standard" | "cyoa";
 
@@ -50,6 +50,14 @@ export type VisualNovelKeyIllustrations = (typeof KEY_ILLUSTRATION_MODES)[number
  */
 export const SPRITE_IMAGE_SIZES = ["standard", "upscaled"] as const;
 export type VisualNovelSpriteImageSize = (typeof SPRITE_IMAGE_SIZES)[number];
+/**
+ * Sprite mode only: expressions Cue makes per character, 4 (the default,
+ * fastest), 8 or 12 (the whole hot set). Other expressions show the nearest
+ * one of the set (src/shared/sprites.ts, spriteSetExpressionFor). Not part
+ * of the set key: changing it keeps every image.
+ */
+export const SPRITE_EXPRESSION_COUNT_VALUES = SPRITE_EXPRESSION_COUNTS;
+export type VisualNovelSpriteExpressionCount = SpriteExpressionCount;
 /** Key illustrations per reply for each mode. */
 export const KEY_ILLUSTRATION_CAP: Readonly<Record<VisualNovelKeyIllustrations, number>> = { off: 0, few: 1 };
 export type VisualNovelTextEffectMode = (typeof TEXT_EFFECT_MODES)[number];
@@ -152,6 +160,8 @@ export type VisualNovelConfig = {
   keyIllustrations: VisualNovelKeyIllustrations;
   /** Sprite mode: image size on ComfyUI / SwarmUI (NovelAI ignores it). */
   spriteImageSize: VisualNovelSpriteImageSize;
+  /** Sprite mode: expressions per character (4, 8 or 12). */
+  spriteExpressionCount: VisualNovelSpriteExpressionCount;
   /** Where the sprite cut-out model is downloaded from (once, then cached in the browser). */
   spriteModelUrl: string;
   /** Dialogue text size multiplier, 1 = the theme's own size. */
@@ -210,6 +220,7 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   spriteCutout: "best",
   keyIllustrations: "off",
   spriteImageSize: "standard",
+  spriteExpressionCount: DEFAULT_SPRITE_EXPRESSION_COUNT,
   spriteModelUrl: DEFAULT_SPRITE_MODEL_URL,
   textScale: 1,
   audioDirectory: "",
@@ -405,6 +416,7 @@ export function normalizeConfig(value: unknown): VisualNovelConfig {
     spriteCutout: spriteCutout(input.spriteCutout),
     keyIllustrations: keyIllustrations(input.keyIllustrations),
     spriteImageSize: spriteImageSize(input.spriteImageSize),
+    spriteExpressionCount: normalizeSpriteExpressionCount(input.spriteExpressionCount),
     spriteModelUrl: spriteModelUrl(input.spriteModelUrl),
     textScale: textScale(input.textScale),
     audioDirectory: stringValue(input.audioDirectory, DEFAULT_CONFIG.audioDirectory).trim(),

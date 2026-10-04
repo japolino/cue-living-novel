@@ -142,6 +142,22 @@ describe("sprite layout and choice helpers", () => {
     expect(spriteStatusBadges({ ...view, sets: { mira: view.sets.mira! } }, 0)[0]!.label).toBe("Preparing Aoi 0/12");
   });
 
+  test("badges follow the set size (expressionCount): 0/4, 0/8, 0/12", () => {
+    // As the backend sends it: the active set, nothing made yet.
+    const view = turnView([{ actors: [actor("aoi")], plateKey: null, light: "neutral" }], { aoi: { ...set("set_aoi", "Aoi", []), expressions: {}, readyCount: 0 } });
+    expect(spriteStatusBadges({ ...view, expressionCount: 4 }, 0)[0]!.label).toBe("Preparing Aoi 0/4");
+    expect(spriteStatusBadges({ ...view, expressionCount: 8 }, 0)[0]!.label).toBe("Preparing Aoi 0/8");
+    expect(spriteStatusBadges({ ...view, expressionCount: 12 }, 0)[0]!.label).toBe("Preparing Aoi 0/12");
+    // No set yet, 4 mode.
+    expect(spriteStatusBadges({ ...view, sets: {}, expressionCount: 4 }, 0)[0]!.label).toBe("Preparing Aoi 0/4");
+    // A ready image outside the 4 set: shown, and counted.
+    const shocked = { ...view, expressionCount: 4 as const, sets: { aoi: set("set_aoi", "Aoi", [ready("surprised")]) } };
+    expect(spriteStatusBadges(shocked, 0)).toEqual([]);
+    expect(resolveSpriteImage(shocked.sets.aoi, "shocked")?.expression).toBe("surprised");
+    const { view: next } = withSpriteImage({ ...view, expressionCount: 4 }, "set_aoi", { expression: "idle", status: "ready", url: "/idle.png" });
+    expect(next.sets.aoi!.readyCount).toBe(1);
+  });
+
   test("updates: a sprite update recounts ready hot-set sprites; plates only for known keys", () => {
     const view = turnView([{ actors: [actor("mira")], plateKey: "plate_a", light: "neutral" }]);
     const { view: next, changed } = withSpriteImage(view, "set_mira", ready("sad", "/mira/sad.png"));

@@ -139,7 +139,12 @@ describe("key moments on the sprite scheduler", () => {
 describe("sprite jobs: the anchoring wait needs a provider that can anchor", () => {
   test("anchoring on with a provider that cannot anchor: other expressions start without waiting for idle", async () => {
     const f = setup({ provider: "pollinations", gated: true, config: { referenceAnchoring: true, imageConcurrency: 4 } });
-    await f.service.prepareCast("u1", [MIRA], f.config);
+    // Four expressions the turn needs (turn work runs side by side; the rest of the set waits for it).
+    const actor = (expression: string) => ({ characterKey: "mira", expression, slot: "center" as const, facing: "viewer" as const, focus: true, motion: "none" as const, emote: "none" as const, intensity: 3 });
+    await f.service.ensureForStaging("u1", {
+      version: 1, source: "planner", cast: [MIRA], plates: [],
+      paragraphs: ["idle", "smile", "sad", "angry"].map((expression) => ({ actors: [actor(expression)], plateKey: null, light: "neutral" as const })),
+    }, f.config);
     await waitFor(() => f.gates.length === 4);
     expect(f.calls.every((call) => !call.includeDataUrl)).toBe(true);
     expect(new Set(f.calls.map((call) => call.prompt)).size).toBe(4);

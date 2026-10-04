@@ -3,8 +3,10 @@ import { z } from "zod";
 import type { VisualNovelConfig } from "../../config.js";
 import {
   SPRITE_EMOTES,
-  SPRITE_EXPRESSION_FALLBACK,
-  SPRITE_HOT_SET,
+  inSpriteExpressionSet,
+  normalizeSpriteExpressionCount,
+  spriteSetExpressionFor,
+  type SpriteExpressionCount,
   SPRITE_LIGHTS,
   SPRITE_MOTIONS,
   type SpriteEmote,
@@ -71,7 +73,7 @@ export const SPRITE_THRESHOLDS = {
   keep: 0.2,
   /** A hot-set expression is used at or above this confidence. */
   hotExpression: 0.15,
-  /** A rare expression costs a generation: it needs a little more confidence, else its hot-set fallback is used. */
+  /** An expression outside the active set (a rare one costs a generation in 12 mode): it needs a little more confidence, else the set's stand-in is used. */
   rareExpression: 0.2,
   motion: 0.8,
   emote: 0.75,
@@ -196,7 +198,6 @@ const INTENSITY_LEVELS = [
   "extreme, explosive",
 ];
 
-const HOT: ReadonlySet<string> = new Set(SPRITE_HOT_SET);
 const EXPRESSION_IDS: ReadonlySet<string> = new Set(Object.keys(SPRITE_EXPRESSION_GUIDE));
 const MOTION_IDS: ReadonlySet<string> = new Set(SPRITE_MOTIONS);
 const EMOTE_IDS: ReadonlySet<string> = new Set(SPRITE_EMOTES);
@@ -530,13 +531,20 @@ function emptyParagraphOverride(): SpriteParagraphOverride {
   return { presence: new Map(), expression: new Map(), motion: new Map(), emote: new Map(), intensity: new Map() };
 }
 
-/** Apply one batch's answers to the overrides, honouring the confidence thresholds. */
+/**
+ * Apply one batch's answers to the overrides, honouring the confidence
+ * thresholds. `expressionCount` (config spriteExpressionCount, default 12)
+ * says which expressions are cheap (made ahead): an answer outside the
+ * active set needs the rare-expression confidence, else the expression of
+ * the set that stands in for it is used.
+ */
 export function applySpriteAnswers(
   overrides: SpriteStagingOverrides,
   meta: ReadonlyMap<string, QuestionMeta>,
   answers: Record<string, unknown>,
   thresholds: SpriteThresholds = SPRITE_THRESHOLDS,
   keyThresholds: { readonly interactionConfidence: number; readonly momentConfidence: number } = KEY_MOMENT_THRESHOLDS,
+  expressionCount: SpriteExpressionCount = 12,
 ): void {
   const t = thresholds;
   for (const [questionKey, info] of meta) {
@@ -589,8 +597,8 @@ export function applySpriteAnswers(
           break;
         }
         if (!EXPRESSION_IDS.has(answer.choice) || answer.confidence < t.hotExpression) break;
-        if (HOT.has(answer.choice) || answer.confidence >= t.rareExpression) paragraph.expression.set(info.key, answer.choice);
-        else paragraph.expression.set(info.key, SPRITE_EXPRESSION_FALLBACK[answer.choice] ?? "idle");
+        if (inSpriteExpressionSet(answer.choice, expressionCount) || answer.confidence >= t.rareExpression) paragraph.expression.set(info.key, answer.choice);
+        else paragraph.expression.set(info.key, spriteSetExpressionFor(answer.choice, expressionCount));
         break;
       }
       case "motion":
@@ -697,7 +705,7 @@ export async function classifySpriteStaging(
       lastError = result.reason;
       continue;
     }
-    applySpriteAnswers(overrides, batches[index]!.meta, result.value.answers);
+    applySpriteAnswers(overrides, batches[index]!.meta, result.value.answers, SPRITE_THRESHOLDS, KEY_MOMENT_THRESHOLDS, normalizeSpriteExpressionCount(input.config.spriteExpressionCount));
     inputTokens += result.value.usage?.input_tokens ?? 0;
     classifiedParagraphs += batches[index]!.paragraphs.length;
   }

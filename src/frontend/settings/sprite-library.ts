@@ -22,7 +22,7 @@ import {
   spriteStatusBusy,
   summarizeSpriteLibrary,
 } from "./model.js";
-import { SPRITE_HOT_SET } from "../../shared/sprites.js";
+import { spriteExpressionSet, spriteSetReadyCount, type SpriteExpressionCount } from "../../shared/sprites.js";
 
 /** A library action as the panel reports it; the host adds `type` (and the chat id for "prepare_chat"). */
 export type SpriteLibraryAction = {
@@ -197,11 +197,20 @@ function setImage(box: HTMLElement, image: SpriteImageView | null, alt: string, 
   }
 }
 
+/** Inspector line for an expression that is not made yet, at a set size. */
+export function missingHint(expression: string, count: SpriteExpressionCount): string {
+  if ((spriteExpressionSet(count) as readonly string[]).includes(expression)) return "Cue makes it soon after the set is first used";
+  if (count === 12) return "Until it exists, the nearest expression stands in";
+  return `It is not in the ${count} set, so the nearest expression in the set stands in`;
+}
+
 export class SpriteLibraryView {
   readonly element: HTMLElement;
   private readonly options: SpriteLibraryOptions;
   private sets = new Map<string, SpriteSetView>();
   private plates: PlateView[] = [];
+  /** Expressions per character (config spriteExpressionCount): what the lists and counts show. */
+  private count: SpriteExpressionCount = 12;
   private loaded = false;
   private readonly selected = new Map<string, string>();
   private readonly confirmTimers = new Map<HTMLButtonElement, ReturnType<typeof setTimeout>>();
@@ -224,7 +233,7 @@ export class SpriteLibraryView {
         </div>
       </div>
       <small data-library-note role="status" aria-live="polite"></small>
-      <h4 data-library-sub id="sprite-sets-title">Characters <small>12 expressions each, made once and reused in every chat</small></h4>
+      <h4 data-library-sub id="sprite-sets-title">Characters <small data-sets-note>12 expressions each, made once and reused in every chat</small></h4>
       <p data-library-empty data-sets-empty>No characters yet. Cue makes a set the first time a character appears in sprite mode, or when you choose Prepare sprites for this chat.</p>
       <div data-sprite-sets aria-labelledby="sprite-sets-title"></div>
       <h4 data-library-sub id="sprite-plates-title">Backgrounds <small>one per place, time of day and weather</small></h4>
@@ -265,16 +274,28 @@ export class SpriteLibraryView {
   setLibrary(sets: readonly SpriteSetView[], plates: readonly PlateView[]): void {
     this.loaded = true;
     this.element.dataset.state = "ready";
-    this.sets = new Map(sortSpriteSets(sets).map((set) => [set.setKey, { ...set, readyCount: countReady(set) }]));
+    this.sets = new Map(sortSpriteSets(sets).map((set) => [set.setKey, { ...set, readyCount: countReady(set, this.count) }]));
     this.plates = plates.slice();
     this.render();
+  }
+
+  /** The set size changed (config spriteExpressionCount): lists, counts and hints follow it. */
+  setExpressionCount(count: SpriteExpressionCount): void {
+    if (count === this.count) return;
+    this.count = count;
+    for (const [key, set] of this.sets) this.sets.set(key, { ...set, readyCount: countReady(set, count) });
+    this.render();
+  }
+
+  expressionCount(): SpriteExpressionCount {
+    return this.count;
   }
 
   /** Returns false when the set is unknown (the caller may ask for the whole library). */
   applySpriteUpdate(setKey: string, image: SpriteImageView): boolean {
     const set = this.sets.get(setKey);
     if (!set) return false;
-    const next = mergeSpriteImage(set, image);
+    const next = mergeSpriteImage(set, image, this.count);
     this.sets.set(setKey, next);
     const element = this.setElement(setKey);
     if (element) this.updateSet(element, next);
@@ -331,6 +352,7 @@ export class SpriteLibraryView {
   }
 
   private render(): void {
+    this.element.querySelector("[data-sets-note]")!.textContent = `${this.count} expressions each, made once and reused in every chat`;
     this.renderSummary();
     this.renderSets();
     this.renderPlates();
@@ -343,7 +365,7 @@ export class SpriteLibraryView {
       this.platesEmpty.hidden = true;
       return;
     }
-    this.summary.textContent = describeSpriteLibrary(summarizeSpriteLibrary([...this.sets.values()], this.plates));
+    this.summary.textContent = describeSpriteLibrary(summarizeSpriteLibrary([...this.sets.values()], this.plates, this.count));
     this.setsEmpty.hidden = this.sets.size > 0;
     this.platesEmpty.hidden = this.plates.length > 0;
   }
@@ -432,7 +454,7 @@ export class SpriteLibraryView {
     body.append(grid, inspector, foot);
     details.append(body);
     if (!this.selected.has(set.setKey)) {
-      const images = orderedExpressions(set);
+      const images = orderedExpressions(set, this.count);
       const pick = images.find((image) => image.status === "failed") ?? images.find((image) => image.status === "ready") ?? images[0]!;
       this.selected.set(set.setKey, pick.expression);
     }
@@ -442,11 +464,11 @@ export class SpriteLibraryView {
     const summary = details.querySelector("summary")!;
     summary.querySelector("[data-set-text] b")!.textContent = set.name;
     summary.querySelector("[data-set-text] small")!.textContent = set.attire?.trim() || "Usual outfit";
-    const images = orderedExpressions(set);
-    const hotTotal = SPRITE_HOT_SET.length;
-    const hotReady = SPRITE_HOT_SET.filter((id) => set.expressions[id]?.status === "ready").length;
-    summary.querySelector("[data-set-count]")!.textContent = `${hotReady}/${hotTotal} ready`;
-    (summary.querySelector("[data-meter] > i") as HTMLElement).style.width = `${Math.round((hotReady / hotTotal) * 100)}%`;
+    const images = orderedExpressions(set, this.count);
+    // Progress of the active set; other images are listed but not counted.
+    const { ready: setReady, total: setTotal } = spriteSetReadyCount(set.expressions, this.count);
+    summary.querySelector("[data-set-count]")!.textContent = `${setReady}/${setTotal} ready`;
+    (summary.querySelector("[data-meter] > i") as HTMLElement).style.width = `${Math.round((setReady / setTotal) * 100)}%`;
     const failed = images.filter((image) => image.status === "failed").length;
     const busy = images.filter((image) => spriteStatusBusy(image.status)).length;
     const flags = summary.querySelector<HTMLElement>("[data-set-flags]")!;
@@ -454,12 +476,17 @@ export class SpriteLibraryView {
       ...(busy ? [chip("generating", `${busy} in progress`)] : []),
       ...(failed ? [chip("failed", `${failed} failed`)] : []),
     ]);
-    summary.setAttribute("aria-label", `${set.name}, ${set.attire?.trim() || "usual outfit"}: ${hotReady} of ${hotTotal} expressions ready${busy ? `, ${busy} in progress` : ""}${failed ? `, ${failed} failed` : ""}`);
+    summary.setAttribute("aria-label", `${set.name}, ${set.attire?.trim() || "usual outfit"}: ${setReady} of ${setTotal} expressions ready${busy ? `, ${busy} in progress` : ""}${failed ? `, ${failed} failed` : ""}`);
     setImage(summary.querySelector<HTMLElement>("[data-set-cover]")!, setCoverImage(set), "", 1);
-    details.dataset.spriteStatus = failed ? "failed" : busy ? "busy" : hotReady === hotTotal ? "ready" : "partial";
+    details.dataset.spriteStatus = failed ? "failed" : busy ? "busy" : setReady === setTotal ? "ready" : "partial";
 
     const grid = details.querySelector<HTMLElement>("[data-expressions]");
     if (!grid) return;
+    // A tile no longer listed (smaller set size) leaves the grid.
+    for (const tile of Array.from(grid.querySelectorAll<HTMLButtonElement>("[data-expression]"))) {
+      if (!images.some((image) => image.expression === tile.dataset.expression)) tile.remove();
+    }
+    if (!images.some((image) => image.expression === this.selected.get(set.setKey))) this.selected.set(set.setKey, images[0]!.expression);
     const selected = this.selected.get(set.setKey) ?? images[0]!.expression;
     const tiles = new Map<string, HTMLButtonElement>();
     for (const tile of Array.from(grid.querySelectorAll<HTMLButtonElement>("[data-expression]"))) tiles.set(tile.dataset.expression!, tile);
@@ -496,7 +523,7 @@ export class SpriteLibraryView {
     meta.textContent = image.status === "ready"
       ? `${image.width && image.height ? `${image.width}×${image.height} cut-out` : "Cut-out ready"}. Shown whenever ${set.name} feels this way.${image.twoFigures ? " It may show two figures: Regenerate draws a new one." : ""}`
       : image.status === "missing"
-        ? `Not made yet. ${(SPRITE_HOT_SET as readonly string[]).includes(expression) ? "Cue makes it soon after the set starts" : "Until it exists, the nearest expression stands in"}.`
+        ? `Not made yet. ${missingHint(expression, this.count)}.`
         : image.status === "failed"
           ? "Regenerate draws it again. Re-cut redoes only the cut-out."
           : "Cue is working on it. It appears here when it is ready.";

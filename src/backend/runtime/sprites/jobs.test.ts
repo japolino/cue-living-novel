@@ -53,7 +53,7 @@ function setup(options: MockSpindleOptions & { config?: Partial<VisualNovelConfi
 const label = (setKey: string, expression: string) => `${setKey}/${expression}`;
 
 describe("sprite jobs: ensure, priorities, dedupe", () => {
-  test("requested expressions and the first plate go first in reading order, then rare/next, then the hot set", async () => {
+  test("the turn's plates and needed expressions go first in reading order, then the rare expression, then the fill-in", async () => {
     const f = setup({ gated: true });
     const staging = sampleStaging(f.styleKey);
     const setKey = spriteSetKeyFor(MIRA, f.styleKey);
@@ -66,10 +66,11 @@ describe("sprite jobs: ensure, priorities, dedupe", () => {
     await f.service.settle("u1");
     const [observatory, garden] = staging.plates.map((plate) => plate.plateKey);
     const order = f.started();
-    // Paragraph 0 needs the observatory plate and the smile; paragraph 1 the crying fallback.
-    expect(order.slice(0, 3)).toEqual([observatory!, label(setKey, "smile"), label(setKey, "crying_with_eyes_open")]);
-    // "next": both needed at paragraph 1; the plate (it fills the screen) first.
-    expect(order.slice(3, 5)).toEqual([garden!, label(setKey, "happy_tears")]);
+    // Paragraph 0 needs the observatory plate and the smile; paragraph 1 the
+    // garden plate (a plate before the sprites of its paragraph) and the crying fallback.
+    expect(order.slice(0, 4)).toEqual([observatory!, label(setKey, "smile"), garden!, label(setKey, "crying_with_eyes_open")]);
+    // Then the rare expression (made on demand in 12 mode), then the fill-in.
+    expect(order[4]).toBe(label(setKey, "happy_tears"));
     expect(order.slice(5)).toEqual(SPRITE_HOT_SET.filter((expression) => expression !== "smile" && expression !== "crying_with_eyes_open").map((expression) => label(setKey, expression)));
     expect(f.calls).toHaveLength(SPRITE_HOT_SET.length + 3);
     const lib = await f.library();
@@ -117,7 +118,8 @@ describe("sprite jobs: ensure, priorities, dedupe", () => {
     await f.service.ensureForStaging("u1", staging, spriteConfig({ imageConcurrency: 2 }));
     await f.service.ensureForStaging("u1", staging, spriteConfig({ imageConcurrency: 2 }));
     await waitFor(() => f.gates.length === 2);
-    expect(f.service.inflightKeys("u1")).toHaveLength(SPRITE_HOT_SET.length + 3);
+    // Work goes to the provider only when a slot is free (2 at a time).
+    expect(f.service.inflightKeys("u1")).toHaveLength(2);
     let released = 0;
     while (released < SPRITE_HOT_SET.length + 3) {
       await waitFor(() => f.gates.length > released);

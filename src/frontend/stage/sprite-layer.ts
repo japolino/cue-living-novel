@@ -22,7 +22,7 @@
  */
 import {
   bestAvailableExpression,
-  SPRITE_HOT_SET,
+  spriteSetReadyCount,
   type PlateView,
   type SpriteActorStage,
   type SpriteEmote,
@@ -150,8 +150,8 @@ export function readySpriteExpressions(set: SpriteSetView | undefined | null): S
 
 /**
  * The image to show for a requested expression: the requested sprite when it
- * is ready, else `bestAvailableExpression` (hot-set fallback, idle, any
- * ready). Null when nothing of the set is ready.
+ * is ready, else `bestAvailableExpression` (12-set fallback, 8-set and 4-set
+ * stand-ins, idle, any ready). Null when nothing of the set is ready.
  */
 export function resolveSpriteImage(
   set: SpriteSetView | undefined | null,
@@ -259,8 +259,9 @@ const castName = (view: SpriteTurnView, key: string): string =>
 
 /**
  * Badges for actors of a paragraph that cannot be shown yet: "Preparing Mira
- * 3/12" while the set has nothing ready, or a warning when every image of
- * the set failed. Sets with at least one ready sprite need no badge.
+ * 0/4" while the set has nothing ready (the total follows the set size,
+ * `expressionCount`), or a warning when every image of the set failed. Sets
+ * with at least one ready sprite need no badge.
  */
 export function spriteStatusBadges(view: SpriteTurnView | null, index: number): SpriteStatusBadge[] {
   const stage = stagedParagraph(view, index);
@@ -271,8 +272,7 @@ export function spriteStatusBadges(view: SpriteTurnView | null, index: number): 
     if (readySpriteExpressions(set).size > 0) continue;
     const name = castName(view, actor.characterKey);
     const images = Object.values(set?.expressions ?? {});
-    const total = Math.max(SPRITE_HOT_SET.length, images.length);
-    const ready = set ? Math.max(0, Math.min(total, set.readyCount)) : 0;
+    const { ready, total } = spriteSetReadyCount(set?.expressions ?? {}, view.expressionCount ?? 12);
     const allFailed = images.length > 0 && images.every((image) => image.status === "failed");
     badges.push(allFailed
       ? { kind: "warning", label: `Could not prepare ${name}`, characterKey: actor.characterKey }
@@ -297,7 +297,7 @@ export function spritePreloadUrls(view: SpriteTurnView | null, index: number, ah
   return urls;
 }
 
-/** Copy of a turn view with one sprite image replaced in every set with `setKey`. */
+/** Copy of a turn view with one sprite image replaced in every set with `setKey` (ready count at the view's set size). */
 export function withSpriteImage(view: SpriteTurnView, setKey: string, image: SpriteImageView): { view: SpriteTurnView; changed: string[] } {
   const changed: string[] = [];
   const sets: Record<string, SpriteSetView> = {};
@@ -307,7 +307,7 @@ export function withSpriteImage(view: SpriteTurnView, setKey: string, image: Spr
       continue;
     }
     const expressions = { ...set.expressions, [image.expression]: image };
-    const readyCount = SPRITE_HOT_SET.filter((id) => expressions[id]?.status === "ready" && expressions[id]?.url).length;
+    const readyCount = spriteSetReadyCount(expressions, view.expressionCount ?? 12).ready;
     sets[characterKey] = { ...set, expressions, readyCount };
     changed.push(characterKey);
   }

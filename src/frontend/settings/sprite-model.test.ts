@@ -2,15 +2,18 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
 import { DEFAULT_CONFIG, KEY_ILLUSTRATION_MODES, PRESENTATION_MODES, SPRITE_CUTOUT_QUALITIES, SPRITE_IMAGE_SIZES } from "../../config.js";
-import { DEFAULT_SPRITE_MODEL_URL, SPRITE_HOT_SET, type PlateView, type SpriteSetView } from "../../shared/sprites.js";
+import { DEFAULT_SPRITE_MODEL_URL, SPRITE_HOT_SET, SPRITE_SET_8, type PlateView, type SpriteSetView } from "../../shared/sprites.js";
 import {
   KEY_ILLUSTRATION_OPTIONS,
   normalizeKeyIllustrations,
   PRESENTATION_MODE_OPTIONS,
   SPRITE_CUTOUT_OPTIONS,
+  SPRITE_EXPRESSION_COUNT_HELP,
+  SPRITE_EXPRESSION_COUNT_OPTIONS,
   SPRITE_IMAGE_SIZE_HELP,
   SPRITE_IMAGE_SIZE_OPTIONS,
   SPRITE_STATUS_LABELS,
+  normalizeSpriteExpressionCount,
   countReady,
   describeCutoutModel,
   describeSpriteLibrary,
@@ -29,7 +32,7 @@ import {
   spriteStatusBusy,
   summarizeSpriteLibrary,
 } from "./model";
-import { SPRITE_LIBRARY_CSS, faceCrop } from "./sprite-library";
+import { SPRITE_LIBRARY_CSS, faceCrop, missingHint } from "./sprite-library";
 
 const MB = 1024 * 1024;
 
@@ -71,6 +74,17 @@ describe("image size option", () => {
     expect(normalizeSpriteImageSize("upscaled")).toBe("upscaled");
     expect(normalizeSpriteImageSize("huge")).toBe("standard");
     expect(normalizeSpriteImageSize("")).toBe("standard");
+  });
+
+  test("expressions per character: 4 (fastest, the default), 8, 12 (all), plain labels", () => {
+    expect(SPRITE_EXPRESSION_COUNT_OPTIONS.map((option) => option.value)).toEqual(["4", "8", "12"]);
+    expect(SPRITE_EXPRESSION_COUNT_OPTIONS.map((option) => option.label)).toEqual(["4 (fastest)", "8", "12 (all)"]);
+    expect(SPRITE_EXPRESSION_COUNT_OPTIONS[0]!.value).toBe(`${DEFAULT_CONFIG.spriteExpressionCount}`);
+    for (const option of SPRITE_EXPRESSION_COUNT_OPTIONS) expect(option.help.split(". ").length).toBeLessThanOrEqual(2);
+    expect(SPRITE_EXPRESSION_COUNT_HELP).toContain("kept");
+    expect(normalizeSpriteExpressionCount("8")).toBe(8);
+    expect(normalizeSpriteExpressionCount("12")).toBe(12);
+    expect(normalizeSpriteExpressionCount("nonsense")).toBe(DEFAULT_CONFIG.spriteExpressionCount);
   });
 });
 
@@ -155,6 +169,26 @@ describe("sprite library helpers", () => {
     expect(ordered.slice(0, SPRITE_HOT_SET.length).map((image) => image.expression)).toEqual([...SPRITE_HOT_SET]);
     expect(ordered[0]!.status).toBe("missing");
     expect(ordered.slice(SPRITE_HOT_SET.length).map((image) => image.expression)).toEqual(["acting_coy", "zz_rare"]);
+  });
+
+  test("expressions and counts follow the set size: the active set, then images that exist", () => {
+    const sample = set("a", "", { idle: "ready", surprised: "ready", worried: "missing", happy_tears: "failed" });
+    expect(orderedExpressions(sample, 4).map((image) => image.expression)).toEqual(["idle", "smile", "sad", "angry", "surprised", "happy_tears"]);
+    expect(orderedExpressions(sample, 8).map((image) => image.expression)).toEqual([...SPRITE_SET_8, "happy_tears"]);
+    expect(orderedExpressions(sample, 12)).toHaveLength(SPRITE_HOT_SET.length + 1);
+    expect(countReady(sample, 4)).toBe(1);
+    expect(countReady(sample, 12)).toBe(2);
+    expect(mergeSpriteImage(sample, { expression: "smile", status: "ready", url: "/s.png" }, 4).readyCount).toBe(2);
+    const empty = summarizeSpriteLibrary([set("b", "")], [], 4);
+    expect(describeSpriteLibrary(empty)).toBe("1 character (0/4 sprites ready) · 0 backgrounds");
+    expect(summarizeSpriteLibrary([set("b", "")], [], 8).totalSprites).toBe(8);
+  });
+
+  test("the not-made-yet hint says whether the set size makes the expression", () => {
+    expect(missingHint("smile", 4)).toBe("Cue makes it soon after the set is first used");
+    expect(missingHint("worried", 4)).toBe("It is not in the 4 set, so the nearest expression in the set stands in");
+    expect(missingHint("worried", 12)).toBe("Cue makes it soon after the set is first used");
+    expect(missingHint("happy_tears", 12)).toBe("Until it exists, the nearest expression stands in");
   });
 
   test("labels, statuses and plate details read as plain words", () => {

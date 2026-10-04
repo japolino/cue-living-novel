@@ -1,6 +1,9 @@
 import {
-  SPRITE_HOT_SET,
+  spriteExpressionSet,
+  spriteSetListing,
+  spriteSetReadyCount,
   spriteSetKeyFor,
+  type SpriteExpressionCount,
   type PlateView,
   type SpriteCastMember,
   type SpriteImageView,
@@ -31,24 +34,25 @@ function missingImageView(expression: string): SpriteImageView {
   return { expression, status: "missing" };
 }
 
-/** A stored set: the hot set is always listed (missing ones as "missing"), rare expressions once requested. */
-export function spriteSetView(set: StoredSpriteSet): SpriteSetView {
+/**
+ * A stored set at a set size (spriteSetListing): the active set is always
+ * listed (missing ones as "missing"), other expressions once they exist.
+ * `count` defaults to 12 (the whole hot set).
+ */
+export function spriteSetView(set: StoredSpriteSet, count: SpriteExpressionCount = 12): SpriteSetView {
   const expressions: Record<string, SpriteImageView> = {};
-  for (const expression of SPRITE_HOT_SET) {
+  for (const expression of spriteSetListing(set.images, count)) {
     const image = set.images[expression];
     expressions[expression] = image ? spriteImageView(image) : missingImageView(expression);
   }
-  for (const [expression, image] of Object.entries(set.images)) {
-    if (!expressions[expression]) expressions[expression] = spriteImageView(image);
-  }
-  const readyCount = Object.values(expressions).filter((view) => view.status === "ready").length;
+  const readyCount = spriteSetReadyCount(expressions, count).ready;
   return { setKey: set.setKey, name: set.name, attire: set.attire, expressions, readyCount, updatedAt: set.updatedAt };
 }
 
-/** A set the library does not know (yet): every hot-set expression "missing". */
-export function missingSetView(member: Pick<SpriteCastMember, "name" | "attire">, setKey: string): SpriteSetView {
+/** A set the library does not know (yet): every expression of the active set "missing". */
+export function missingSetView(member: Pick<SpriteCastMember, "name" | "attire">, setKey: string, count: SpriteExpressionCount = 12): SpriteSetView {
   const expressions: Record<string, SpriteImageView> = {};
-  for (const expression of SPRITE_HOT_SET) expressions[expression] = missingImageView(expression);
+  for (const expression of spriteExpressionSet(count)) expressions[expression] = missingImageView(expression);
   return { setKey, name: member.name, attire: member.attire, expressions, readyCount: 0, updatedAt: new Date(0).toISOString() };
 }
 
@@ -82,12 +86,12 @@ export function stagingPlateKeys(staging: SpriteStaging): string[] {
 }
 
 /** The sprite part of a `TurnView`: staging plus the sets (by cast characterKey) and plates (by plateKey) it uses. */
-export function spriteTurnView(staging: SpriteStaging, library: SpriteLibrary, styleKey: string): SpriteTurnView {
+export function spriteTurnView(staging: SpriteStaging, library: SpriteLibrary, styleKey: string, count: SpriteExpressionCount = 12): SpriteTurnView {
   const sets: Record<string, SpriteSetView> = {};
   for (const member of staging.cast) {
     const setKey = spriteSetKeyFor(member, styleKey);
     const stored = library.sets[setKey];
-    sets[member.characterKey] = stored ? spriteSetView(stored) : missingSetView(member, setKey);
+    sets[member.characterKey] = stored ? spriteSetView(stored, count) : missingSetView(member, setKey, count);
   }
   const plates: Record<string, PlateView> = {};
   for (const plateKey of stagingPlateKeys(staging)) {
@@ -97,14 +101,14 @@ export function spriteTurnView(staging: SpriteStaging, library: SpriteLibrary, s
     else if (ref) plates[plateKey] = missingPlateView(ref);
     else plates[plateKey] = { plateKey, location: "", timeOfDay: null, weather: null, status: "missing" };
   }
-  return { staging, sets, plates };
+  return { staging, sets, plates, expressionCount: count };
 }
 
 /** The whole library for settings: newest first. */
-export function spriteLibraryView(library: SpriteLibrary): { sets: SpriteSetView[]; plates: PlateView[] } {
+export function spriteLibraryView(library: SpriteLibrary, count: SpriteExpressionCount = 12): { sets: SpriteSetView[]; plates: PlateView[] } {
   const byUse = <T extends { usedAt: string }>(left: T, right: T): number => (Date.parse(right.usedAt) || 0) - (Date.parse(left.usedAt) || 0);
   return {
-    sets: Object.values(library.sets).sort(byUse).map(spriteSetView),
+    sets: Object.values(library.sets).sort(byUse).map((set) => spriteSetView(set, count)),
     plates: Object.values(library.plates).sort(byUse).map(plateView),
   };
 }

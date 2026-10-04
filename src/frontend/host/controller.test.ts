@@ -91,6 +91,7 @@ const baseConfig: VisualNovelConfig = {
   spriteCutout: "best",
   keyIllustrations: "off",
   spriteImageSize: "standard",
+  spriteExpressionCount: 4,
   spriteModelUrl: DEFAULT_CONFIG.spriteModelUrl,
   textScale: 1,
   audioDirectory: "",

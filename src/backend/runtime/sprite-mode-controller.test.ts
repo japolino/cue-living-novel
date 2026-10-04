@@ -136,8 +136,8 @@ describe("controller: sprite mode", () => {
     expect(turn.sprites?.sets[mira.characterKey]?.name).toBe("Mira");
     expect(Object.keys(turn.sprites?.sets[mira.characterKey]?.expressions ?? {})).toContain("idle");
     for (const plateKey of stored.plan.spriteStaging!.plates.map((plate) => plate.plateKey)) expect(turn.sprites?.plates[plateKey]).toBeDefined();
-    // Only sprite and plate prompts reach the provider.
-    await waitFor(() => f.prompts.length >= 12);
+    // Only sprite and plate prompts reach the provider: the default 4 set and the plate.
+    await waitFor(() => f.prompts.length >= 5);
     expect(f.prompts.every((prompt) => !isScenePrompt(prompt))).toBe(true);
     expect(f.prompts.some(isSpritePrompt)).toBe(true);
     expect(f.of("vn_asset")).toHaveLength(0);

@@ -188,6 +188,22 @@ test("confident expressions apply; low confidence and keep_current hold; rare on
   assert.ok(SPRITE_THRESHOLDS.rareExpression > SPRITE_THRESHOLDS.hotExpression);
 });
 
+test("the active set is cheap: an answer outside it needs the rare gate, else the set's stand-in (4 / 8 / 12)", async () => {
+  const plan = duoPlan(["\"Hi,\" Mira says.", "\"Hey,\" Kai says.", "Mira looks at Kai."]);
+  const answers = withAnswers((_body, set) => {
+    set(0, "Mira", "expression", choice("worried", 0.17)); // hot, outside 4 and 8
+    set(1, "Kai", "expression", choice("smirk", 0.17)); // rare
+    set(2, "Mira", "expression", choice("worried", 0.9)); // confident: kept as asked (the stage maps it)
+  });
+  const run = async (spriteExpressionCount: 4 | 8 | 12) => {
+    const staging = await buildSpriteStaging(mockSpindle(answers).spindle, stagingInput(plan, { config: { ...on, spriteExpressionCount } }));
+    return [0, 1, 2].map((index) => staging.paragraphs[index]!.actors.find((actor) => actor.characterKey === (index === 1 ? "kai" : "mira"))?.expression);
+  };
+  assert.deepEqual(await run(12), ["worried", "smug", "worried"]);
+  assert.deepEqual(await run(8), ["sad", "smug", "worried"]);
+  assert.deepEqual(await run(4), ["sad", "smile", "worried"]);
+});
+
 test("presence: confident no removes, confident yes adds, uncertain keeps", async () => {
   const plan = makePlan({
     paragraphs: ["\"Hi,\" Mira says.", "\"Bye,\" Kai says.", "Mira waves as Kai leaves. Ren watches from the door.", "Mira sits.", "Ren speaks up at last."],

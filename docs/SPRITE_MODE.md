@@ -10,9 +10,10 @@ Scene mode paints a full 16:9 picture per cue: 20–50 s per picture, so Cue
 rations pictures (at most `maxImagesPerTurn`). Sprite mode pays for pictures
 once and reuses them:
 
-- a **sprite set** per character + outfit + image style: the 12 hot-set
-  expressions (`SPRITE_HOT_SET`), generated on a plain white background and
-  cut out in the browser;
+- a **sprite set** per character + outfit + image style: 4, 8 or 12
+  expressions (`spriteExpressionCount`, default 4; 12 is the whole hot set
+  `SPRITE_HOT_SET`), generated on a plain white background and cut out in
+  the browser;
 - a **plate** per place + time of day + weather: an empty background
   ("scenery, no humans").
 
@@ -31,6 +32,7 @@ own expression and there is no picture cap.
 | `spriteModelUrl` | https URL | ISNet-anime on Hugging Face | Advanced (Apply) |
 | `keyIllustrations` | `"off"` \| `"few"` (≤ 1 per reply) | `"off"` | at once (everyday, sprite mode only) |
 | `spriteImageSize` | `"standard"` \| `"upscaled"` | `"standard"` | at once (everyday, sprite mode only) |
+| `spriteExpressionCount` | `4` \| `8` \| `12` | `4` | at once (everyday, sprite mode only) |
 
 ### Image size (`spriteImageSize`)
 
@@ -56,6 +58,63 @@ sets: images already made stay, and only new or regenerated images use the
 new size. A set can mix both sizes; both have the same aspect, and the stage
 sizes a sprite from its normalized bbox, never from its pixel size.
 
+### Expressions per character (`spriteExpressionCount`)
+
+How many expressions Cue makes ahead for each set. Settings: "Expressions
+per character", right after "Image size": 4 (fastest) / 8 / 12 (all). A
+missing or unknown value is 4.
+
+| Size | Set (generation order) |
+|---|---|
+| 4 (default) | idle, smile, sad, angry (`SPRITE_SET_4`) |
+| 8 | idle, smile, laughing, sad, angry, surprised, embarrassed, smug (`SPRITE_SET_8`) |
+| 12 | the hot set: the 8 + crying_with_eyes_open, worried, thinking, scared |
+
+Mapping: any catalogue id goes to its 12-set fallback
+(`SPRITE_EXPRESSION_FALLBACK`), then to the 8 or 4 set
+(`SPRITE_REDUCE_TO_8`, `SPRITE_REDUCE_TO_4`; `spriteSetExpressionFor`):
+
+| 12-set id | 8 | 4 |
+|---|---|---|
+| idle, smile, sad, angry | same | same |
+| laughing | laughing | smile |
+| crying_with_eyes_open | sad | sad |
+| surprised | surprised | idle |
+| embarrassed | embarrassed | smile |
+| worried | sad | sad |
+| thinking | idle | idle |
+| smug | smug | smile |
+| scared | surprised | sad |
+
+Why these choices: in 4, "surprised" goes to idle, not smile, because a
+smile reads as joy on a shocked or startled line. "Scared" goes to
+surprised in 8 (the face is close) and to sad in 4 (fear is closer to
+distress than to calm).
+
+Rules:
+
+- The planner and System One may still pick any expression; the mapping
+  handles it. System One's "cheap" expressions are the active set: an
+  answer outside it needs the rare-expression confidence, else the set's
+  stand-in is used.
+- Display (`bestAvailableExpression`, every size): the first ready image of
+  `spriteExpressionChain` (the id, its 12-set fallback, its 8-set and 4-set
+  stand-ins), else idle, else any ready image. So an image that exists is
+  always used (an old "surprised" shows in 4 mode).
+- Generation: for each actor, the first id of the chain that already
+  exists means nothing to make; else the first id in the active set is
+  made. Rare expressions are made on demand only in 12.
+- Changing the size deletes nothing. A smaller size puts queued work outside
+  the set back to "missing" (no image is lost). A bigger size makes the
+  missing ones as fill-in the next time the set is used.
+- The size is not part of the set key (`spriteSetKeyFor`).
+- Views: a set lists the active set (missing ones too), then other images
+  that exist (`spriteSetListing`). Ready counts ("2/4 ready", the badge
+  "Preparing Mira 0/4") count the active set (`spriteSetReadyCount`).
+  `SpriteTurnView.expressionCount` carries the size (absent: 12).
+- "Prepare sprites for this chat" queues the active set. "Regenerate set"
+  redoes the active set and the images that exist.
+
 Scene mode is unchanged. In sprite mode no scene-image jobs run, except one
 per reply for a key moment when `keyIllustrations` is `"few"` (see "Key
 moments"); the planner still plans scenes, environments, speakers and cues
@@ -69,10 +128,10 @@ assistant reply
   -> TurnPlan
   -> buildSpriteStaging(plan, ...)  => plan.spriteStaging      [backend: staging]
        classifier (Jev) when configured, else deterministic from the plan
-  -> ensureSpriteAssets(staging)                                [backend: sprites]
-       sets: requested expressions first ("visible"), then the rest of the
-       hot set ("background"); rare expressions on demand ("next")
-       plates: missing plates ("visible" for the first, then "next")
+  -> ensureForStaging(staging)                                  [backend: sprites]
+       turn work ("visible"): the turn's plates and needed expressions
+       then key moments, then rare expressions ("next", 12 only) and the
+       rest of the set ("background"); see "Order of work"
   -> turnView(record) adds `sprites: SpriteTurnView`           [backend: sprites]
   -> vn_turn                                                    [frontend: stage]
 
@@ -204,6 +263,44 @@ wanted: it keeps one pose across the expressions.
   a whole-set regenerate gives every expression the new seed. One other
   expression alone gets its own new seed, as before.
 
+## Order of work (backend, `sprites/jobs.ts`)
+
+One scheduler per user runs sprites, plates and key moments with the
+provider's concurrency. Work goes to the provider only when a slot is free,
+so the order is decided at each start:
+
+1. **Turn work**, in reading order of the latest turn (`state.need`: the
+   first paragraph that needs each item):
+   - the opening plate is the very first job; a later plate goes before the
+     sprites needed at its paragraph;
+   - then the expressions the reply uses, one at a time, by first
+     appearance; with reference anchoring a character's idle comes first.
+   While an item waits for its idle (or the idle's two-figure check), items
+   needed later wait too (one at a time). The wait is at most
+   `IDLE_CHECK_WAIT_MS` (25 s).
+2. **Key moments** (`runKeyMoments`): after the turn's plates and needed
+   sprites are generated (none queued, waiting or running). They are turn
+   content too, so they go before the fill-in.
+3. **Rare expressions** (12 only) and then the **fill-in** (the rest of the
+   set, the turn's characters in order of appearance): only when 1 and 2
+   have nothing queued, waiting or running. This includes the gap while an
+   idle's two-figure check is pending.
+
+A newer turn replaces the reading order, so its work goes ahead of every
+fill-in not started yet; an image already generating finishes. Work an
+older turn needed and did not start keeps its priority, after the new turn's
+work. A flagged idle re-queues the expressions made with the old seed as turn
+work when the latest turn needs them, else as "next".
+
+Lunch scene (3 characters, 29 paragraphs, one plate, anchoring, no key
+moment; `bun scripts/sprite-turn-order.ts <stage-data.json>`):
+
+| Size | Plate | Needed sprites | Rare | Fill-in | Total |
+|---|---|---|---|---|---|
+| 4 | 1 | 8 | 0 | 4 | 13 |
+| 8 | 1 | 11 | 0 | 13 | 25 |
+| 12 | 1 | 11 | 4 | 25 | 41 |
+
 ## Staging (backend)
 
 `SpriteStaging` (stored on `TurnPlan.spriteStaging`): `cast`, `plates`, and
@@ -283,14 +380,14 @@ layers, crossfaded) → ambient overlay (behind sprites) → `[data-vn-sprites]`
   the focused speaker's line types out.
 - Light: CSS filter presets per `SpriteLight`.
 - A set with nothing ready shows no sprite and a status badge
-  ("Preparing Mira 3/12"); an unready expression shows
-  `bestAvailableExpression`.
+  ("Preparing Mira 0/4"; the total is the set size); an unready expression
+  shows `bestAvailableExpression`.
 - Previous/History navigation re-applies the paragraph's stage.
 
 ## Settings (frontend)
 
 Presentation mode control; image size (Standard / Upscaled, sprite mode
-only); cut-out quality; model status (absent /
+only); expressions per character (4 / 8 / 12, sprite mode only); cut-out quality; model status (absent /
 downloading / ready / unsupported) with Download and Remove; a sprite library
 gallery (sets with their expressions on a checkerboard, plates) with Prepare
 for this chat, Regenerate, Re-cut, and Delete; the model URL under Advanced.
@@ -327,11 +424,13 @@ Code map:
 Classifier staging:
 
 - At most 4 cast candidates per paragraph. Expression options: `keep_current`, the
-  12 hot-set ids, then 42 curated rare catalogue ids.
+  12 hot-set ids, then 42 curated rare catalogue ids (the same at every set
+  size; the mapping handles the answer).
 - Thresholds (`SPRITE_THRESHOLDS`, calibrated, see "Calibration"): present ≥ 0.75
   adds and ≤ 0.4 removes; keep ≥ 0.2; hot-set expression ≥ 0.15; rare
   expression ≥ 0.2, else its hot-set fallback (a rare id costs one
-  generation); motion ≥ 0.8 and emote ≥ 0.75 (a confident `none` does not
+  generation; with 4 or 8, any id outside the set needs 0.2, else the
+  set's stand-in is used); motion ≥ 0.8 and emote ≥ 0.75 (a confident `none` does not
   erase an explicit text cue); intensity ≥ 0.7; light ≥ 0.35; place reuse
   ≥ 0.7 (at most 96 known plates offered). Key moments
   (`KEY_MOMENT_THRESHOLDS`): score confidence ≥ 0.5, level ≥ 3 with
@@ -453,11 +552,8 @@ Cut-out runtime:
   px per image, IoU ±0.0003). `bun run test:sprite-cutout` repeats the check
   on the folder in `CUE_SPRITE_STANDARD`.
 
-Queue order: within a priority, work starts in the latest turn's reading
-order (the first paragraph that needs it; a plate before a sprite needed at
-the same paragraph), so the background and the first speaker come first and a
-later character's first sprite does not wait behind every expression of an
-earlier one.
+Queue order: see "Order of work". Work is handed to the provider only when
+a slot is free.
 
 Cut-out background colour: the median of the border pixels the model calls
 background (without a model: light, near-neutral border pixels). Sprites that

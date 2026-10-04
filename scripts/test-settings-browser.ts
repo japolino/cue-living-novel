@@ -176,6 +176,17 @@ try {
   assert.equal(await library.locator("details[data-sprite-set][open]").count(), 0, "many sets start collapsed");
   assert.equal(await library.locator("[data-expression]").count(), 0, "expression tiles are built only when a set opens");
   assert.equal(await library.locator("img:not([loading=lazy])").count(), 0, "every thumbnail loads lazily");
+  // Expressions per character: 4 by default, next to Image size; lists and counts follow the size.
+  const countGroup = settings.locator('[data-group-id="sprite-expressions"]');
+  assert.equal(await countGroup.isVisible(), true, "the set size shows in sprite mode");
+  assert.match(await countGroup.innerText(), /Expressions per character[\s\S]*4 \(fastest\)[\s\S]*8[\s\S]*12 \(all\)/);
+  assert.equal(await settings.locator('input[name="spriteExpressionCount"][value="4"]').isChecked(), true, "4 is the default");
+  assert.match(await library.locator("[data-sets-note]").innerText(), /^4 expressions each/);
+  assert.match(await library.locator('details[data-sprite-set="set_ren"] summary').innerText(), /2\/4 ready/, "progress of the 4 set");
+  assert.match(await library.locator('details[data-sprite-set="set_elise"] summary').innerText(), /0\/4 ready/);
+  await settings.locator('input[name="spriteExpressionCount"][value="12"]').check();
+  assert.deepEqual(await lastPatch(page), { spriteExpressionCount: 12 }, "the set size is an everyday patch");
+  assert.match(await library.locator("[data-sets-note]").innerText(), /^12 expressions each/);
   const mira = library.locator('details[data-sprite-set="set_mira"]');
   assert.match(await mira.locator("summary").innerText(), /Mira[\s\S]*navy sailor uniform[\s\S]*8\/12 ready[\s\S]*3 in progress[\s\S]*1 failed/);
   assert.match(await library.locator('details[data-sprite-set="set_ren"] summary').innerText(), /Usual outfit[\s\S]*2\/12 ready/);

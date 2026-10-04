@@ -121,7 +121,8 @@ export function mockSpindle(options: MockSpindleOptions = {}) {
 }
 
 export function spriteConfig(patch: Partial<VisualNovelConfig> = {}): VisualNovelConfig {
-  return { ...DEFAULT_CONFIG, presentationMode: "sprites", referenceAnchoring: false, imageConcurrency: 1, ...patch };
+  // The whole 12 set unless a test asks for another size (the default is 4).
+  return { ...DEFAULT_CONFIG, presentationMode: "sprites", referenceAnchoring: false, imageConcurrency: 1, spriteExpressionCount: 12, ...patch };
 }
 
 export const MIRA: SpriteCastMember = { characterKey: "mira", name: "Mira", identity: "1girl, silver hair, green eyes", attire: "school uniform", subjectCategory: "female" };

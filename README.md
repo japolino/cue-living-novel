@@ -23,7 +23,7 @@ Under Advanced, NovelAI has toggles for model-specific quality tags and default 
 - view-gated generation: Cue only plans turns and generates images for chats whose Cue view is open; closing the view (or leaving the chat) aborts the in-flight image batch and marks it cancelled, opening the view plans the latest reply only when nothing current is stored, and cancelled images wait for a manual Retry instead of resuming on their own
 - per-user and per-chat persisted continuity
 - a settings tab, a user-selectable scene-image fit (Cover / Contain / Stretch / Original size / Scale down), seven built-in theme presets (Lumiverse, Golden hour, Boxed console, Paper novel, Midnight noir, Yamaku classic, Literature club), and a shadow-DOM custom CSS contract that is always the final styling layer
-- optional **sprite mode**: reusable character cut-outs (12 expressions each) over reusable backgrounds, staged per paragraph, with a sprite library in settings (see [Sprite mode](#sprite-mode))
+- optional **sprite mode**: reusable character cut-outs (4, 8 or 12 expressions each) over reusable backgrounds, staged per paragraph, with a sprite library in settings (see [Sprite mode](#sprite-mode))
 - an always-accessible **Back to chat** control that restores native Lumiverse
 
 It targets Lumiverse staging `1.1.6`, audited at commit `33dfa9ee62999fa3e2567066ed5cdadf61635323`, and `lumiverse-spindle-types` `0.6.23`.
@@ -52,13 +52,13 @@ RisuAI card greetings that pack several alternative scenes into one message are 
 
 Scene mode (the default) paints a full picture for each scene. That takes 20–50 s per picture, so Cue limits pictures per reply. **Sprite mode** pays for pictures once and then reuses them:
 
-- **Character sprites.** For each character, outfit and image style, Cue makes 12 expressions (idle, smile, laughing, sad, crying, angry, surprised, embarrassed, worried, thinking, smug, scared). Each is drawn on a white background with your image connection, then cut out in your browser.
+- **Character sprites.** For each character, outfit and image style, Cue makes a set of expressions. **Expressions per character** (under **Image size**) sets the size: **4 (fastest)**, the default (idle, smile, sad, angry); **8** (adds laughing, surprised, embarrassed, smug); or **12 (all)** (adds crying, worried, thinking, scared). A feeling outside the set shows the nearest expression in the set, for example worried shows sad. An image you already have is always used, whatever the size. Changing the size deletes nothing; a bigger size makes the missing ones the next time the character appears. Each sprite is drawn on a white background with your image connection, then cut out in your browser.
 - **Backgrounds.** One empty background ("plate") per place, time of day and weather.
 - **Staging.** For every paragraph, Cue chooses who stands where, with which expression, motion, emote and light. Every paragraph can change expression, and there is no picture limit per reply.
 
 **Turn it on.** Open the Cue settings tab, then **Pictures**. Keep **Generated illustrations**, and under **How the story is shown** choose **Character sprites**. It saves at once. **Pictures per reply** does not apply in sprite mode; Cue keeps your choice for scene mode.
 
-**First-run cost.** The first time a character appears, Cue makes their set: the expressions the reply needs first, then the rest of the 12. Each new place needs one background. These are normal requests to your image connection, so the first replies cost about as much as scene mode. After that, the same character, outfit and style reuse their set in every chat. Generation runs only while a Cue view is open.
+**First-run cost.** The first time a character appears, Cue makes their set. The order is: the reply's background first, then the expressions the reply uses, one at a time in the order they appear, then the reply's key moment (if any), and only then the rest of the set. A new reply goes ahead of that rest. Rare expressions (in 12 only) are made last, when a reply needs them. Each new place needs one background. These are normal requests to your image connection, so the first replies cost about as much as scene mode. After that, the same character, outfit and style reuse their set in every chat. Generation runs only while a Cue view is open.
 
 **Cut-out quality.** **Best** downloads a 176 MB segmentation model (ISNet-anime) once from Hugging Face. The browser keeps it, so later visits do not download it again. The download starts with the first cut-out, or at once with **Download model**. **Remove downloaded model** frees the space. **Basic** never downloads anything and removes the plain background without a model; edges can be rougher, mostly on white clothes and hair. A different model address goes under **Advanced → Models and parameters → Sprite cut-out model URL** (https only, saved with **Apply**).
 

@@ -8,6 +8,7 @@ import {
   TEXT_SCALE_MIN,
   normalizeConfig,
   SCENE_IMAGE_FITS,
+  SPRITE_EXPRESSION_COUNT_VALUES,
   SPRITE_IMAGE_SIZES,
   THEME_PRESET_IDS,
 } from "./config";
@@ -61,6 +62,22 @@ test("sprite image size defaults to standard (also for old configs) and keeps up
   assert.equal(normalizeConfig({ spriteImageSize: "standard" }).spriteImageSize, "standard");
   for (const value of ["UPSCALED", "large", 832, null, {}]) {
     assert.equal(normalizeConfig({ spriteImageSize: value }).spriteImageSize, "standard");
+  }
+});
+
+test("expressions per character default to 4 (also for old configs) and keep 8 and 12", () => {
+  assert.equal(DEFAULT_CONFIG.spriteExpressionCount, 4);
+  assert.deepEqual([...SPRITE_EXPRESSION_COUNT_VALUES], [4, 8, 12]);
+  // An old config saved before the field existed.
+  const old = { ...DEFAULT_CONFIG, presentationMode: "sprites" } as Record<string, unknown>;
+  delete old.spriteExpressionCount;
+  assert.equal(normalizeConfig(old).spriteExpressionCount, 4);
+  assert.equal(normalizeConfig({}).spriteExpressionCount, 4);
+  assert.equal(normalizeConfig({ spriteExpressionCount: 8 }).spriteExpressionCount, 8);
+  assert.equal(normalizeConfig({ spriteExpressionCount: 12 }).spriteExpressionCount, 12);
+  assert.equal(normalizeConfig({ spriteExpressionCount: "12" }).spriteExpressionCount, 12);
+  for (const value of [0, 6, 16, "all", null, {}]) {
+    assert.equal(normalizeConfig({ spriteExpressionCount: value }).spriteExpressionCount, 4);
   }
 });
 

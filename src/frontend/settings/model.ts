@@ -11,6 +11,7 @@ import {
   SPRITE_CUTOUT_QUALITIES,
   SPRITE_IMAGE_SIZES,
   KEY_ILLUSTRATION_MODES,
+  type VisualNovelSpriteExpressionCount,
   type VisualNovelKeyIllustrations,
   type VisualNovelPresentationMode,
   type VisualNovelSpriteCutout,
@@ -25,8 +26,12 @@ import {
 import { THEME_PRESET_CSS } from "../theme/presets.js";
 import {
   DEFAULT_SPRITE_MODEL_URL,
-  SPRITE_HOT_SET,
   bestAvailableExpression,
+  normalizeSpriteExpressionCount as normalizeExpressionCount,
+  spriteExpressionSet,
+  spriteSetListing,
+  spriteSetReadyCount,
+  type SpriteExpressionCount,
   type PlateView,
   type SpriteImageStatus,
   type SpriteImageView,
@@ -694,6 +699,20 @@ export function normalizeSpriteImageSize(value: string): VisualNovelSpriteImageS
     : DEFAULT_CONFIG.spriteImageSize;
 }
 
+/** Expressions per character (sprite mode). Values are strings for the radio inputs. */
+export const SPRITE_EXPRESSION_COUNT_OPTIONS: ReadonlyArray<{ value: `${VisualNovelSpriteExpressionCount}`; label: string; help: string }> = [
+  { value: "4", label: "4 (fastest)", help: "Idle, smile, sad and angry. Other feelings show the nearest of these." },
+  { value: "8", label: "8", help: "Adds laughing, surprised, embarrassed and smug." },
+  { value: "12", label: "12 (all)", help: "Adds crying, worried, thinking and scared. Rare expressions are also made when a reply needs them." },
+];
+
+/** Group hint under "Expressions per character". */
+export const SPRITE_EXPRESSION_COUNT_HELP = "Fewer expressions means fewer pictures to make for each new character. Pictures you already have are kept and still used.";
+
+export function normalizeSpriteExpressionCount(value: string): VisualNovelSpriteExpressionCount {
+  return normalizeExpressionCount(value);
+}
+
 export const KEY_ILLUSTRATION_OPTIONS: ReadonlyArray<{ value: VisualNovelKeyIllustrations; label: string; help: string }> = [
   { value: "off", label: "Sprites only", help: "Every paragraph is shown with sprites. No scene pictures are painted." },
   { value: "few", label: "Picture for a key moment", help: "Up to 1 full scene picture per reply, for a moment sprites cannot show (a kiss, a fight, someone sitting or running). Uses your image connection." },
@@ -808,16 +827,24 @@ export function expressionLabel(id: string): string {
   return words ? words[0]!.toUpperCase() + words.slice(1) : "Expression";
 }
 
-/** The hot set first, in its fixed order, then any rare expressions alphabetically. */
-export function orderedExpressions(set: Pick<SpriteSetView, "expressions">): SpriteImageView[] {
+/**
+ * The expressions a set shows at a set size (spriteSetListing): the active
+ * set first, in its fixed order (missing ones too), then other expressions
+ * that exist. `count` defaults to 12 (the whole hot set).
+ */
+export function orderedExpressions(set: Pick<SpriteSetView, "expressions">, count: SpriteExpressionCount = 12): SpriteImageView[] {
   const known = set.expressions;
-  const hot = SPRITE_HOT_SET.map((id) => known[id] ?? { expression: id, status: "missing" as const });
-  const rare = Object.keys(known).filter((id) => !(SPRITE_HOT_SET as readonly string[]).includes(id)).sort().map((id) => known[id]!);
-  return [...hot, ...rare];
+  return spriteSetListing(known, count).map((id) => known[id] ?? { expression: id, status: "missing" as const });
 }
 
-export function countReady(set: Pick<SpriteSetView, "expressions">): number {
-  return Object.values(set.expressions).filter((image) => image.status === "ready").length;
+/** Ready expressions of the active set (the set's progress; other ready images are listed but not counted). */
+export function countReady(set: Pick<SpriteSetView, "expressions">, count: SpriteExpressionCount = 12): number {
+  return spriteSetReadyCount(set.expressions, count).ready;
+}
+
+/** Whether Cue makes this expression ahead at the set size (the others show their nearest stand-in). */
+export function inExpressionSet(expression: string, count: SpriteExpressionCount = 12): boolean {
+  return (spriteExpressionSet(count) as readonly string[]).includes(expression);
 }
 
 /** The picture that represents a set: idle when ready, else the first ready hot-set sprite. */
@@ -828,9 +855,9 @@ export function setCoverImage(set: Pick<SpriteSetView, "expressions">): SpriteIm
 }
 
 /** Applies one live image update to a set; returns a new set with a fresh ready count. */
-export function mergeSpriteImage(set: SpriteSetView, image: SpriteImageView): SpriteSetView {
+export function mergeSpriteImage(set: SpriteSetView, image: SpriteImageView, count: SpriteExpressionCount = 12): SpriteSetView {
   const expressions = { ...set.expressions, [image.expression]: image };
-  return { ...set, expressions, readyCount: countReady({ expressions }), updatedAt: new Date().toISOString() };
+  return { ...set, expressions, readyCount: countReady({ expressions }, count), updatedAt: new Date().toISOString() };
 }
 
 /** Adds or replaces one plate (by key). */
@@ -861,10 +888,10 @@ export type SpriteLibrarySummary = {
   failed: number;
 };
 
-export function summarizeSpriteLibrary(sets: readonly SpriteSetView[], plates: readonly PlateView[]): SpriteLibrarySummary {
+export function summarizeSpriteLibrary(sets: readonly SpriteSetView[], plates: readonly PlateView[], count: SpriteExpressionCount = 12): SpriteLibrarySummary {
   let readySprites = 0, totalSprites = 0, busy = 0, failed = 0;
   for (const set of sets) {
-    for (const image of orderedExpressions(set)) {
+    for (const image of orderedExpressions(set, count)) {
       totalSprites += 1;
       if (image.status === "ready") readySprites += 1;
       else if (image.status === "failed") failed += 1;

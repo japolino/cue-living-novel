@@ -6,7 +6,9 @@ import { AssetJobSchema, type AssetJob, type AssetJobPriority } from "../../../s
 import { POSE_EXPRESSION_CATALOGUE } from "../../../shared/character.js";
 import {
   SPRITE_HOT_SET,
-  spriteFallbackExpression,
+  normalizeSpriteExpressionCount,
+  spriteExpressionChain,
+  spriteExpressionSet,
   spriteHash,
   spriteSetKeyFor,
   type SpriteCastMember,
@@ -116,6 +118,16 @@ type MomentWork = {
   /** The turn record's job id (what the controller and the frontend know). */
   jobId: string;
   onEvent: (job: Readonly<AssetJob>) => void;
+  /** The job as the scheduler gets it (unique scheduler id). */
+  scheduled: AssetJob;
+  executor: (job: Readonly<AssetJob>, signal: AbortSignal) => Promise<{ imageId: string; imageUrl: string }>;
+  /** False while it waits for the turn's plates and needed sprites; true once on the scheduler. */
+  started: boolean;
+  /** Start order (runKeyMoments call order). */
+  sequence: number;
+  /** Settles when the job is finished, failed or cancelled (also before it started). */
+  done: Promise<unknown>;
+  settle: () => void;
 };
 
 export type KeyMomentRunInput = {
@@ -148,8 +160,13 @@ type UserState = {
   explicit: Set<string>;
   pumping: Promise<void> | null;
   repump: boolean;
-  /** Key-moment jobs on this scheduler, by scheduler job id. */
+  /** Key-moment jobs (waiting for their turn, or on the scheduler), by scheduler job id. */
   moments: Map<string, MomentWork>;
+  /**
+   * Cast order of the latest staged turn (set key -> first paragraph): fill-in
+   * work of the turn's characters goes in that order.
+   */
+  castOrder: Map<string, number>;
   /** Whether the image connection can anchor to a reference (cached briefly). */
   anchorProvider: { connection: string; provider: string | null; until: number } | null;
   /** Re-pump when the first idle-check wait runs out. */
@@ -222,11 +239,12 @@ export class SpriteService {
   /* ------------------------------------------------------------------ */
 
   async turnView(userId: string | undefined, staging: SpriteStaging, config: VisualNovelConfig): Promise<SpriteTurnView> {
-    return spriteTurnView(staging, await this.library.get(userId), spriteStyleKey(config));
+    return spriteTurnView(staging, await this.library.get(userId), spriteStyleKey(config), normalizeSpriteExpressionCount(config.spriteExpressionCount));
   }
 
   async libraryView(userId: string | undefined): Promise<{ sets: ReturnType<typeof spriteLibraryView>["sets"]; plates: ReturnType<typeof spriteLibraryView>["plates"] }> {
-    return spriteLibraryView(await this.library.get(userId));
+    const config = await this.deps.loadConfig(userId);
+    return spriteLibraryView(await this.library.get(userId), normalizeSpriteExpressionCount(config.spriteExpressionCount));
   }
 
   async sendLibrary(userId: string | undefined): Promise<void> {
@@ -276,53 +294,88 @@ export class SpriteService {
 
   /**
    * Make sure every set and plate a staging uses exists in the library and
-   * its missing images are queued: requested expressions (and their hot-set
-   * fallbacks) "visible", rare requested expressions "next", the rest of the
-   * hot set "background"; the first plate "visible", other plates "next".
-   * Failed images are not retried here (regenerate does that).
+   * its missing images are queued. Order of work (pumpOnce):
+   *   1. the turn's work, "visible", in reading order: every plate of the
+   *      turn (the opening plate first; a later plate before the sprites
+   *      needed at its paragraph) and the expressions the turn shows, by
+   *      first appearance (the idle first where anchoring needs it). An
+   *      actor's expression is the first of `spriteExpressionChain` that
+   *      exists already (nothing to make) or belongs to the active set
+   *      (`spriteExpressionCount`);
+   *   2. the turn's key moments (runKeyMoments);
+   *   3. rare requested expressions, "next" (12 only: smaller sets never
+   *      make expressions outside the set);
+   *   4. the rest of the active set, "background" (fill-in).
+   * Steps 3 and 4 start only when steps 1 and 2 have nothing left to start
+   * or running. Failed images are not retried here (regenerate does that).
    */
   async ensureForStaging(userId: string | undefined, staging: SpriteStaging, config: VisualNovelConfig): Promise<void> {
     const styleKey = spriteStyleKey(config);
     const state = this.state(userId);
     const anchoring = referenceAnchoringEnabled(config);
+    const count = normalizeSpriteExpressionCount(config.spriteExpressionCount);
+    const active: readonly string[] = spriteExpressionSet(count);
     const changedImages: Array<[string, StoredSpriteImage]> = [];
     const changedPlates: StoredPlate[] = [];
     // Reading order of this turn: the first paragraph that needs each item.
     const need = new Map<string, number>();
+    const castOrder = new Map<string, number>();
     const needAt = (key: string, paragraph: number) => {
       if (!need.has(key) || need.get(key)! > paragraph) need.set(key, paragraph);
     };
     await this.library.update(userId, (library, now) => {
       for (const member of staging.cast) {
         const setKey = spriteSetKeyFor(member, styleKey);
+        const existing = library.sets[setKey];
+        // An image already made (or being cut) stands in: nothing to make for it.
+        const made = (expression: string) => {
+          const status = existing?.images[expression]?.status;
+          return status === "ready" || status === "cutting";
+        };
         let firstSeen = Number.POSITIVE_INFINITY;
+        const needed = new Set<string>();
+        const rare = new Set<string>();
         staging.paragraphs.forEach((paragraph, index) => {
           for (const actor of paragraph.actors) {
             if (actor.characterKey !== member.characterKey) continue;
             firstSeen = Math.min(firstSeen, index);
-            needAt(spriteWorkKey(setKey, actor.expression), index);
-            needAt(spriteWorkKey(setKey, spriteFallbackExpression(actor.expression)), index);
+            for (const expression of spriteExpressionChain(actor.expression)) {
+              if (made(expression)) break;
+              if (active.includes(expression)) {
+                needed.add(expression);
+                needAt(spriteWorkKey(setKey, expression), index);
+                break;
+              }
+              // 12 only: a rare expression is made on demand, after the turn's work.
+              if (count === 12 && expression === actor.expression && !HOT_INDEX.has(expression) && CATALOGUE_IDS.has(expression)) {
+                rare.add(expression);
+                needAt(spriteWorkKey(setKey, expression), index);
+              }
+            }
           }
         });
+        if (Number.isFinite(firstSeen)) castOrder.set(setKey, firstSeen);
         // With anchoring every expression waits for idle, so idle is needed when the character first appears.
         if (anchoring && Number.isFinite(firstSeen)) needAt(spriteWorkKey(setKey, "idle"), firstSeen);
-        const requested: string[] = [];
-        for (const paragraph of staging.paragraphs) {
-          for (const actor of paragraph.actors) {
-            if (actor.characterKey === member.characterKey && !requested.includes(actor.expression)) requested.push(actor.expression);
+        const priorities = new Map<string, AssetJobPriority>();
+        for (const expression of active) priorities.set(expression, needed.has(expression) ? "visible" : "background");
+        for (const expression of rare) priorities.set(expression, "next");
+        this.ensureSet(library, member, styleKey, now, priorities, anchoring, state, changedImages);
+      }
+      // A smaller set: queued work outside it (left from a bigger size) goes back to
+      // "missing". Nothing is deleted; a bigger size queues it again as fill-in.
+      if (count !== 12) {
+        for (const set of Object.values(library.sets)) {
+          for (const image of Object.values(set.images)) {
+            if (image.status !== "queued" && image.status !== "generating") continue;
+            const key = spriteWorkKey(set.setKey, image.expression);
+            if (active.includes(image.expression) || state.inflight.has(key) || state.explicit.has(key)) continue;
+            image.status = "missing";
+            image.updatedAt = now;
+            state.wanted.delete(key);
+            changedImages.push([set.setKey, image]);
           }
         }
-        const visible = new Set<string>();
-        for (const expression of requested) {
-          visible.add(expression);
-          visible.add(spriteFallbackExpression(expression));
-        }
-        const priorities = new Map<string, AssetJobPriority>();
-        for (const expression of SPRITE_HOT_SET) priorities.set(expression, visible.has(expression) ? "visible" : "background");
-        for (const expression of requested) {
-          if (!HOT_INDEX.has(expression) && CATALOGUE_IDS.has(expression)) priorities.set(expression, "next");
-        }
-        this.ensureSet(library, member, styleKey, now, priorities, anchoring, state, changedImages);
       }
       const plateKeys = stagingPlateKeys(staging);
       const firstPlate = staging.paragraphs.find((paragraph) => paragraph.plateKey)?.plateKey ?? plateKeys[0];
@@ -344,12 +397,14 @@ export class SpriteService {
           plate.updatedAt = now;
           changedPlates.push(plate);
         }
+        // Every plate of the turn is turn work (reading order puts the opening plate first).
         const key = plateWorkKey(plateKey);
-        state.wanted.set(key, higher(state.wanted.get(key), plateKey === firstPlate ? "visible" : "next"));
+        state.wanted.set(key, "visible");
       }
     });
     // The latest turn decides the reading order (an older turn's leftovers come after it).
     state.need = need;
+    state.castOrder = castOrder;
     for (const [setKey, image] of changedImages) this.broadcastImage(userId, setKey, image);
     for (const plate of changedPlates) this.broadcastPlate(userId, plate);
     await this.pump(userId);
@@ -357,19 +412,20 @@ export class SpriteService {
 
   /**
    * Explicit "Prepare for this chat": create the sets and queue every
-   * hot-set expression ("idle" first). Runs even outside sprite mode.
+   * expression of the active set ("idle" first). Runs even outside sprite mode.
    */
   async prepareCast(userId: string | undefined, cast: readonly SpriteCastMember[], config: VisualNovelConfig): Promise<number> {
     const styleKey = spriteStyleKey(config);
     const state = this.state(userId);
     const anchoring = referenceAnchoringEnabled(config);
+    const active = spriteExpressionSet(normalizeSpriteExpressionCount(config.spriteExpressionCount));
     const changedImages: Array<[string, StoredSpriteImage]> = [];
     await this.library.update(userId, (library, now) => {
       for (const member of cast) {
         const priorities = new Map<string, AssetJobPriority>();
-        for (const expression of SPRITE_HOT_SET) priorities.set(expression, expression === "idle" ? "visible" : "next");
+        for (const expression of active) priorities.set(expression, expression === "idle" ? "visible" : "next");
         const setKey = this.ensureSet(library, member, styleKey, now, priorities, anchoring, state, changedImages);
-        for (const expression of SPRITE_HOT_SET) state.explicit.add(spriteWorkKey(setKey, expression));
+        for (const expression of active) state.explicit.add(spriteWorkKey(setKey, expression));
       }
     });
     for (const [setKey, image] of changedImages) this.broadcastImage(userId, setKey, image);
@@ -432,6 +488,8 @@ export class SpriteService {
   async retryFailed(userId: string | undefined, staging: SpriteStaging, config: VisualNovelConfig): Promise<number> {
     const styleKey = spriteStyleKey(config);
     const state = this.state(userId);
+    const size = normalizeSpriteExpressionCount(config.spriteExpressionCount);
+    const active: readonly string[] = spriteExpressionSet(size);
     let count = 0;
     const changedImages: Array<[string, StoredSpriteImage]> = [];
     const changedPlates: StoredPlate[] = [];
@@ -441,6 +499,8 @@ export class SpriteService {
         if (!set) continue;
         for (const image of Object.values(set.images)) {
           if (image.status !== "failed") continue;
+          // A smaller set does not make expressions outside it (its nearest one stands in).
+          if (size !== 12 && !active.includes(image.expression)) continue;
           const next = image.rawImageId ? "cutting" : "queued";
           const previousCut = image.cutImageId;
           this.resetImage(image, next, now);
@@ -538,9 +598,22 @@ export class SpriteService {
    */
   pause(userId: string | undefined, reason = "The Cue view closed."): void {
     const state = this.users.get(userKey(userId));
-    if (!state?.scheduler) return;
+    if (!state) return;
+    for (const schedulerId of [...state.moments.keys()]) this.cancelMoment(state, schedulerId, reason);
+    if (!state.scheduler) return;
     for (const work of state.inflight.values()) state.scheduler.cancel(work.jobId, reason);
-    for (const schedulerId of state.moments.keys()) state.scheduler.cancel(schedulerId, reason);
+  }
+
+  /** Cancel a key moment: on the scheduler, or (not started yet) by settling it as it is ("queued" becomes "cancelled"). */
+  private cancelMoment(state: UserState, schedulerId: string, reason: string): void {
+    const moment = state.moments.get(schedulerId);
+    if (!moment) return;
+    if (moment.started) {
+      state.scheduler?.cancel(schedulerId, reason);
+      return;
+    }
+    state.moments.delete(schedulerId);
+    moment.settle();
   }
 
   /* ------------------------------------------------------------------ */
@@ -563,7 +636,8 @@ export class SpriteService {
     const config = await this.deps.loadConfig(userId);
     if (!config.generateImages || input.signal.aborted) return jobs;
     const state = this.state(userId);
-    const scheduler = this.schedulerFor(userId, state, config);
+    // Sets the provider key the jobs carry (they start later, in pumpOnce).
+    this.schedulerFor(userId, state, config);
     const ids: string[] = [];
     const promises: Promise<unknown>[] = [];
     const replace = (changed: AssetJob): void => {
@@ -595,7 +669,6 @@ export class SpriteService {
           this.spindle.log.warn(`Key moment update failed: ${errorText(error)}`);
         });
       };
-      state.moments.set(schedulerId, { jobId: original.jobId, onEvent });
       ids.push(schedulerId);
       const scheduled = AssetJobSchema.parse({
         ...original,
@@ -605,15 +678,28 @@ export class SpriteService {
         promptFingerprint: `${spriteHash(schedulerId)}${spriteHash(original.jobId)}`,
       });
       this.deps.log?.(`key moment ${original.jobId} p${original.paragraphIndex} ${scene.interaction} x${scene.characters.length}${scene.partner ? "+pov" : ""} -> queued`, userId);
-      const handle = scheduler.schedule(scheduled, (_job, signal) => this.generateKeyMoment(userId, scene, input.chatId, signal));
-      promises.push(handle.promise);
+      // It waits in `state.moments` until the turn's plates and needed sprites are done (pumpOnce).
+      let settle!: () => void;
+      const done = new Promise<void>((resolve) => { settle = resolve; });
+      state.moments.set(schedulerId, {
+        jobId: original.jobId,
+        onEvent,
+        scheduled,
+        executor: (_job, signal) => this.generateKeyMoment(userId, scene, input.chatId, signal),
+        started: false,
+        sequence: jobSequence,
+        done,
+        settle,
+      });
+      promises.push(done);
     }
     if (ids.length === 0) return jobs;
     const abort = (): void => {
       const reason = typeof input.signal.reason === "string" ? input.signal.reason : "Key moment cancelled.";
-      for (const id of ids) scheduler.cancel(id, reason);
+      for (const id of ids) this.cancelMoment(state, id, reason);
     };
     input.signal.addEventListener("abort", abort, { once: true });
+    void this.pump(userId);
     try {
       await Promise.allSettled(promises);
     } finally {
@@ -687,28 +773,63 @@ export class SpriteService {
     if (!this.deps.isViewOpen(userId)) return;
     const library = await this.library.get(userId);
     const spriteMode = config.presentationMode === "sprites";
+    const size = normalizeSpriteExpressionCount(config.spriteExpressionCount);
+    const active: readonly string[] = spriteExpressionSet(size);
     // Expressions wait for "idle" only when the provider can really anchor to it.
     const anchoring = referenceAnchoringEnabled(config) && await this.providerAnchors(userId, state, config);
     if (config.generateImages) {
       const scheduler = this.schedulerFor(userId, state, config);
-      const candidates: Array<{ item: WorkItem; priority: AssetJobPriority; order: number }> = [];
+      type Candidate = { item: WorkItem | { kind: "moment"; key: string }; tier: number; priority: AssetJobPriority; need: number; order: number };
+      const candidates: Candidate[] = [];
+      // Turn work ("visible") still to start, waiting (for an idle or its check) or running.
+      let turnWork = [...state.inflight.values()].some((work) => work.priority === "visible");
+      // Reading position of the first turn item that waits for its idle (or the idle's check).
+      let blockedNeed = Number.POSITIVE_INFINITY;
       let order = 0;
       let wakeAt = Number.POSITIVE_INFINITY;
+      const castRank = (setKey: string) => 1_000_000 + (state.castOrder.get(setKey) ?? 1_000);
       for (const set of Object.values(library.sets)) {
         const idle = set.images.idle;
         const checkUntil = idle ? this.idleCheckDeadline(idle) : null;
-        if (anchoring && checkUntil !== null) wakeAt = Math.min(wakeAt, checkUntil);
+        if (anchoring && checkUntil !== null) {
+          wakeAt = Math.min(wakeAt, checkUntil);
+          // An idle the turn needs is not done until its check: a flagged idle renders again first.
+          if (state.need.has(spriteWorkKey(set.setKey, "idle"))) turnWork = true;
+        }
         const idleBlocks = anchoring && idle !== undefined && ((!idle.rawImageId && (idle.status === "queued" || idle.status === "generating")) || checkUntil !== null);
+        // A queued idle that turn work waits for is turn work too (also after a cancel lost its priority).
+        let idleNeed = Number.POSITIVE_INFINITY;
+        if (idleBlocks) {
+          for (const expression of Object.keys(set.images)) {
+            const key = spriteWorkKey(set.setKey, expression);
+            if (expression !== "idle" && state.wanted.get(key) === "visible") idleNeed = Math.min(idleNeed, state.need.get(key) ?? castRank(set.setKey));
+          }
+        }
         for (const [expression, image] of Object.entries(set.images)) {
           order += 1;
           if (image.status !== "queued" && image.status !== "generating") continue;
           const key = spriteWorkKey(set.setKey, expression);
           if (state.inflight.has(key)) continue;
           if (!spriteMode && !state.explicit.has(key)) continue;
-          if (expression !== "idle" && idleBlocks) continue;
+          // A smaller set never makes expressions outside it (unless the user asked for one).
+          if (size !== 12 && !active.includes(expression) && !state.explicit.has(key)) continue;
+          let priority = state.wanted.get(key) ?? "background";
+          let need = state.need.get(key) ?? castRank(set.setKey);
+          if (expression === "idle" && Number.isFinite(idleNeed)) {
+            priority = "visible";
+            need = Math.min(need, idleNeed);
+          }
+          if (priority === "visible") turnWork = true;
+          if (expression !== "idle" && idleBlocks) {
+            // Turn work keeps reading order: what is needed later waits too.
+            if (priority === "visible") blockedNeed = Math.min(blockedNeed, need);
+            continue;
+          }
           candidates.push({
             item: { kind: "sprite", key, setKey: set.setKey, expression },
-            priority: state.wanted.get(key) ?? "background",
+            tier: priority === "visible" ? 0 : priority === "next" ? 2 : 3,
+            priority,
+            need,
             order: order * 100 + (HOT_INDEX.get(expression) ?? 50),
           });
         }
@@ -719,27 +840,66 @@ export class SpriteService {
         const key = plateWorkKey(plate.plateKey);
         if (state.inflight.has(key)) continue;
         if (!spriteMode && !state.explicit.has(key)) continue;
-        candidates.push({ item: { kind: "plate", key, plateKey: plate.plateKey }, priority: state.wanted.get(key) ?? "next", order: order * 100 });
+        const priority = state.wanted.get(key) ?? "next";
+        if (priority === "visible") turnWork = true;
+        candidates.push({
+          item: { kind: "plate", key, plateKey: plate.plateKey },
+          tier: priority === "visible" ? 0 : priority === "next" ? 2 : 3,
+          priority,
+          need: state.need.get(key) ?? Number.POSITIVE_INFINITY,
+          order: order * 100,
+        });
       }
-      // Within a priority: reading order of the latest turn (a plate before a
-      // sprite needed at the same paragraph), then library order.
-      const needOf = (candidate: { item: WorkItem }) => state.need.get(candidate.item.key) ?? Number.POSITIVE_INFINITY;
+      let momentWork = false;
+      let running = state.inflight.size;
+      for (const [schedulerId, moment] of state.moments) {
+        momentWork = true;
+        if (moment.started) {
+          running += 1;
+          continue;
+        }
+        candidates.push({ item: { kind: "moment", key: schedulerId }, tier: 1, priority: moment.scheduled.priority, need: moment.scheduled.paragraphIndex, order: moment.sequence });
+      }
+      // Tier, then reading order of the latest turn (a plate before a sprite
+      // needed at the same paragraph), then library order.
       candidates.sort((left, right) =>
-        PRIORITY_RANK[left.priority] - PRIORITY_RANK[right.priority]
-        || needOf(left) - needOf(right)
+        left.tier - right.tier
+        || left.need - right.need
         || (left.item.kind === "plate" ? 0 : 1) - (right.item.kind === "plate" ? 0 : 1)
         || left.order - right.order);
-      for (const candidate of candidates) this.start(userId, state, scheduler, candidate.item, candidate.priority);
-      if (Number.isFinite(wakeAt)) this.wakeAt(userId, state, wakeAt);
-      // Raise queued work a newer turn now needs sooner.
-      for (const work of state.inflight.values()) {
-        const wanted = state.wanted.get(work.key);
-        if (wanted && PRIORITY_RANK[wanted] < PRIORITY_RANK[work.priority]) {
-          if (scheduler.reprioritize(work.jobId, wanted)) work.priority = wanted;
-        }
+      // Work is handed to the scheduler only when a slot is free, so a newer
+      // turn's work goes ahead of everything not started yet.
+      let free = Math.max(1, Math.floor(config.imageConcurrency) || 1) - running;
+      for (const candidate of candidates) {
+        if (free <= 0) break;
+        // Turn work goes one item at a time in reading order: while an
+        // earlier item waits for its idle's check, later ones wait as well.
+        if (candidate.tier === 0 && candidate.need > blockedNeed) break;
+        // Key moments wait for the turn's plates and needed sprites; fill-in
+        // and rare expressions wait for those and for the key moments.
+        if (candidate.tier === 1 && turnWork) break;
+        if (candidate.tier >= 2 && (turnWork || momentWork)) break;
+        free -= 1;
+        if (candidate.item.kind === "moment") this.startMoment(userId, state, scheduler, candidate.item.key);
+        else this.start(userId, state, scheduler, candidate.item, candidate.priority);
       }
+      if (Number.isFinite(wakeAt)) this.wakeAt(userId, state, wakeAt);
     }
     this.sendPendingCuts(userId, library, state);
+  }
+
+  /** Put a waiting key moment on the scheduler. */
+  private startMoment(userId: string | undefined, state: UserState, scheduler: AssetScheduler, schedulerId: string): void {
+    const moment = state.moments.get(schedulerId);
+    if (!moment || moment.started) return;
+    moment.started = true;
+    const job = AssetJobSchema.parse({ ...moment.scheduled, provider: state.providerKey });
+    const handle = scheduler.schedule(job, moment.executor);
+    void handle.promise.catch(() => undefined).finally(() => {
+      if (state.moments.get(schedulerId) === moment) state.moments.delete(schedulerId);
+      moment.settle();
+      void this.pump(userId);
+    });
   }
 
   private sendPendingCuts(userId: string | undefined, library: SpriteLibrary, state: UserState): void {
@@ -816,6 +976,7 @@ export class SpriteService {
         pumping: null,
         repump: false,
         moments: new Map(),
+        castOrder: new Map(),
         anchorProvider: null,
         wake: null,
       };
@@ -1072,6 +1233,8 @@ export class SpriteService {
         return;
       }
       if (job?.status === "cancelled") {
+        // Still wanted: it keeps its place in the order when it resumes.
+        state.wanted.set(work.key, higher(state.wanted.get(work.key), work.priority));
         await this.library.update(userId, (library, now) => {
           if (work.kind === "sprite") {
             const image = library.sets[work.setKey]?.images[work.expression];
@@ -1319,7 +1482,8 @@ export class SpriteService {
           const rendered = other.seed === oldSeed && (other.status === "cutting" || other.status === "ready");
           if (!running && !rendered) continue;
           this.forget(userId, state, key, set.setKey, other.expression);
-          requeue(other, "next");
+          // Still turn work when the latest turn needs it; else after the turn's work.
+          requeue(other, state.need.has(key) ? "visible" : "next");
           other.ownSeed = false;
           requeued.push(other.expression);
         }
@@ -1376,9 +1540,11 @@ export class SpriteService {
         const library = await this.library.get(userId);
         const set = library.sets[setKey];
         if (!set) throw new Error("This sprite set is no longer in the library.");
+        // The whole set: the active set and every image that exists (a smaller set does not add the others).
+        const active: readonly string[] = spriteExpressionSet(normalizeSpriteExpressionCount(context.config.spriteExpressionCount));
         const expressions = typeof request.expression === "string" && request.expression
           ? [request.expression]
-          : Object.keys(set.images);
+          : Object.keys(set.images).filter((expression) => active.includes(expression) || set.images[expression]!.status !== "missing");
         if (request.action === "recut") {
           const recuttable = expressions.filter((expression) => set.images[expression]?.rawImageId);
           if (recuttable.length === 0) throw new Error("There is no generated image to cut yet. Regenerate it instead.");

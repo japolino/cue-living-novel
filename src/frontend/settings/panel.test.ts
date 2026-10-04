@@ -83,6 +83,18 @@ describe("settings panel markup", () => {
     expect(spritesOnly.indexOf("spriteImageSize")).toBeLessThan(spritesOnly.indexOf('optionList("spriteCutout"'));
   });
 
+  test("expressions per character: one everyday control right after Image size, in the sprite-only block", () => {
+    expect(source.match(/optionList\("spriteExpressionCount"/g)).toHaveLength(1);
+    expect(source).toContain('case "spriteExpressionCount": return { spriteExpressionCount: normalizeSpriteExpressionCount(target.value) };');
+    expect(source).toContain('this.setRadio("spriteExpressionCount", String(config.spriteExpressionCount));');
+    expect(source).toContain("this.spriteLibrary.setExpressionCount(config.spriteExpressionCount);");
+    expect(advancedKeys).not.toContain("spriteExpressionCount");
+    const spritesOnly = source.slice(source.indexOf("<div data-sprites-only hidden>"), source.indexOf('${group("Sprite library"'));
+    expect(spritesOnly).toContain('${group("Expressions per character"');
+    expect(spritesOnly.indexOf('optionList("spriteImageSize"')).toBeLessThan(spritesOnly.indexOf('optionList("spriteExpressionCount"'));
+    expect(spritesOnly.indexOf('optionList("spriteExpressionCount"')).toBeLessThan(spritesOnly.indexOf('optionList("spriteCutout"'));
+  });
+
   test("the sprite controls sit with the generated-picture settings in Pictures", () => {
     const pictures = source.slice(source.indexOf('${pane("pictures"'), source.indexOf('${pane("sound"'));
     expect(pictures).toContain("presentationMode");

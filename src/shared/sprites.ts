@@ -145,6 +145,133 @@ export const SPRITE_EXPRESSION_FALLBACK: Readonly<Record<string, SpriteHotExpres
 
 const HOT_SET: ReadonlySet<string> = new Set(SPRITE_HOT_SET);
 
+/* ------------------------------------------------------------------------ */
+/* Set size (config spriteExpressionCount)                                   */
+/* ------------------------------------------------------------------------ */
+
+/** How many expressions Cue makes per character: 4 (fastest), 8, or 12 (the whole hot set). */
+export const SPRITE_EXPRESSION_COUNTS = [4, 8, 12] as const;
+export type SpriteExpressionCount = (typeof SPRITE_EXPRESSION_COUNTS)[number];
+export const DEFAULT_SPRITE_EXPRESSION_COUNT: SpriteExpressionCount = 4;
+
+/** The 8 set: the 12 set without crying, worried, thinking and scared (they map to sad, sad, idle, surprised). */
+export const SPRITE_SET_8 = ["idle", "smile", "laughing", "sad", "angry", "surprised", "embarrassed", "smug"] as const satisfies readonly SpriteHotExpression[];
+/** The 4 set: one neutral, one happy, one sad, one angry face. */
+export const SPRITE_SET_4 = ["idle", "smile", "sad", "angry"] as const satisfies readonly SpriteHotExpression[];
+
+/** Nearest expression of the 8 set for every hot-set expression. */
+export const SPRITE_REDUCE_TO_8: Readonly<Record<SpriteHotExpression, (typeof SPRITE_SET_8)[number]>> = {
+  idle: "idle",
+  smile: "smile",
+  laughing: "laughing",
+  sad: "sad",
+  crying_with_eyes_open: "sad",
+  angry: "angry",
+  surprised: "surprised",
+  embarrassed: "embarrassed",
+  worried: "sad",
+  thinking: "idle",
+  smug: "smug",
+  scared: "surprised",
+};
+
+/**
+ * Nearest expression of the 4 set for every hot-set expression. Surprise
+ * becomes idle (a smile would read as joy on a shocked or startled line);
+ * scared becomes sad (fear is closer to distress than to calm).
+ */
+export const SPRITE_REDUCE_TO_4: Readonly<Record<SpriteHotExpression, (typeof SPRITE_SET_4)[number]>> = {
+  idle: "idle",
+  smile: "smile",
+  laughing: "smile",
+  sad: "sad",
+  crying_with_eyes_open: "sad",
+  angry: "angry",
+  surprised: "idle",
+  embarrassed: "smile",
+  worried: "sad",
+  thinking: "idle",
+  smug: "smile",
+  scared: "sad",
+};
+
+/** A config value as a set size; anything else is the default (4). */
+export function normalizeSpriteExpressionCount(value: unknown): SpriteExpressionCount {
+  const number = typeof value === "string" && value.trim() ? Number(value) : value;
+  return (SPRITE_EXPRESSION_COUNTS as readonly unknown[]).includes(number) ? number as SpriteExpressionCount : DEFAULT_SPRITE_EXPRESSION_COUNT;
+}
+
+/** The expressions Cue makes ahead for every set at this size, in generation order (idle first). */
+export function spriteExpressionSet(count: SpriteExpressionCount | null | undefined): readonly SpriteHotExpression[] {
+  return count === 4 ? SPRITE_SET_4 : count === 8 ? SPRITE_SET_8 : SPRITE_HOT_SET;
+}
+
+/** Whether an expression belongs to the set of this size. */
+export function inSpriteExpressionSet(expression: string, count: SpriteExpressionCount | null | undefined): boolean {
+  return (spriteExpressionSet(count) as readonly string[]).includes(expression);
+}
+
+/**
+ * The expression of the active set that stands in for any catalogue id:
+ * catalogue id -> 12-set fallback (SPRITE_EXPRESSION_FALLBACK) -> the 8 or
+ * 4 reduction. Unknown ids give "idle".
+ */
+export function spriteSetExpressionFor(expression: string | null | undefined, count: SpriteExpressionCount | null | undefined): SpriteHotExpression {
+  const hot = spriteFallbackExpression(expression);
+  return count === 4 ? SPRITE_REDUCE_TO_4[hot] : count === 8 ? SPRITE_REDUCE_TO_8[hot] : hot;
+}
+
+/**
+ * Nearest-first chain of stand-ins for a requested expression: the id
+ * itself, its 12-set fallback, the 8-set reduction, then the 4-set
+ * reduction (duplicates removed). The stage shows the first ready one; the
+ * backend makes the first one of the active set.
+ */
+export function spriteExpressionChain(expression: string | null | undefined): string[] {
+  const chain: string[] = [];
+  const add = (id: string) => { if (!chain.includes(id)) chain.push(id); };
+  if (expression) add(expression);
+  const hot = spriteFallbackExpression(expression);
+  add(hot);
+  add(SPRITE_REDUCE_TO_8[hot]);
+  add(SPRITE_REDUCE_TO_4[hot]);
+  return chain;
+}
+
+/**
+ * Expressions a set view lists, in order: the active set (always, also when
+ * missing), then other hot-set expressions that exist in any state, then
+ * other (rare) expressions that exist, by name. Missing images outside the
+ * active set are not listed.
+ */
+export function spriteSetListing(
+  expressions: Readonly<Record<string, { status: SpriteImageStatus } | undefined>>,
+  count: SpriteExpressionCount | null | undefined,
+): string[] {
+  const active = spriteExpressionSet(count);
+  const listed: string[] = [...active];
+  const known = (id: string) => {
+    const status = expressions[id]?.status;
+    return status !== undefined && status !== "missing";
+  };
+  for (const id of SPRITE_HOT_SET) if (!listed.includes(id) && known(id)) listed.push(id);
+  const rare = Object.keys(expressions).filter((id) => !HOT_SET.has(id) && known(id)).sort();
+  return [...listed, ...rare];
+}
+
+/**
+ * Progress of a set at a set size: ready expressions of the active set and
+ * its size ("2/4 ready"). Images outside the active set are listed and
+ * shown, but do not count.
+ */
+export function spriteSetReadyCount(
+  expressions: Readonly<Record<string, { status: SpriteImageStatus; url?: string } | undefined>>,
+  count: SpriteExpressionCount | null | undefined,
+): { ready: number; total: number } {
+  const active = spriteExpressionSet(count);
+  return { ready: active.filter((id) => expressions[id]?.status === "ready").length, total: active.length };
+}
+
 export function isSpriteHotExpression(value: unknown): value is SpriteHotExpression {
   return typeof value === "string" && HOT_SET.has(value);
 }
@@ -157,18 +284,18 @@ export function spriteFallbackExpression(expression: string | null | undefined):
 }
 
 /**
- * The expression to SHOW now, given which sprites of a set are ready:
- * the requested one, else its hot-set fallback, else "idle", else the first
+ * The expression to SHOW now, given which sprites of a set are ready: the
+ * first ready one of `spriteExpressionChain` (the requested id, its 12-set
+ * fallback, its 8-set and 4-set reductions), else "idle", else the first
  * ready hot-set expression, else any ready expression, else null (nothing
- * of this set can be shown yet).
+ * of this set can be shown yet). The same rule works for every set size:
+ * an image that exists is always used.
  */
 export function bestAvailableExpression(
   requested: string | null | undefined,
   ready: ReadonlySet<string>,
 ): string | null {
-  if (requested && ready.has(requested)) return requested;
-  const fallback = spriteFallbackExpression(requested);
-  if (ready.has(fallback)) return fallback;
+  for (const id of spriteExpressionChain(requested)) if (ready.has(id)) return id;
   if (ready.has("idle")) return "idle";
   for (const id of SPRITE_HOT_SET) if (ready.has(id)) return id;
   for (const id of ready) return id;
@@ -457,8 +584,9 @@ export type SpriteSetView = {
   setKey: string;
   name: string;
   attire: string | null;
-  /** Expressions known for this set (hot set always listed, rare ones once requested). */
+  /** Expressions of this set: the active set always (missing ones too), other expressions once they exist (see spriteSetListing). */
   expressions: Record<string, SpriteImageView>;
+  /** Ready expressions of the active set (spriteSetReadyCount). */
   readyCount: number;
   updatedAt: string;
 };
@@ -513,6 +641,8 @@ export type SpriteTurnView = {
   plates: Record<string, PlateView>;
   /** Additive (optional): key-moment illustrations of this turn, by paragraph. */
   illustrations?: SpriteIllustrationView[];
+  /** Additive (optional): expressions per character (config spriteExpressionCount). Absent: 12. */
+  expressionCount?: SpriteExpressionCount;
 };
 
 /* ------------------------------------------------------------------------ */
