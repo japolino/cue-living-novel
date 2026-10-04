@@ -762,7 +762,8 @@ async function resolveImageProviderId(
   return (await resolveImageProfile(spindle, config, userId)).provider;
 }
 
-async function resolveImageProfile(spindle: SpindleAPI, config: VisualNovelConfig, userId?: string): Promise<{ provider: string | null; model: string | null }> {
+/** The image connection's provider id (lower case) and model; nulls when unknown. */
+export async function resolveImageProfile(spindle: SpindleAPI, config: VisualNovelConfig, userId?: string): Promise<{ provider: string | null; model: string | null }> {
   try {
     const { connectionId } = splitConnectionSelection(config.imageConnectionId);
     if (connectionId) {
