@@ -608,6 +608,7 @@ export async function loadTurnRecord(
   return {
     schemaVersion: 1,
     speaker: raw.speaker,
+    ...(typeof raw.userSpeaker === "string" && raw.userSpeaker.trim() ? { userSpeaker: raw.userSpeaker.trim() } : {}),
     status,
     plan: TurnPlanSchema.parse(raw.plan),
     jobs: Array.isArray(raw.jobs) ? raw.jobs.map((job) => AssetJobSchema.parse(job)) : [],

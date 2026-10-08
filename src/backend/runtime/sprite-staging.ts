@@ -2,7 +2,15 @@ import type { SpindleAPI } from "lumiverse-spindle-types";
 import type { VisualNovelConfig } from "../../config.js";
 import type { SceneEnvironment, SceneState, TurnPlan, VisualCue } from "../../shared/contracts.js";
 import { POSE_EXPRESSION_CATALOGUE, selectPoseExpression } from "../../shared/character.js";
-import { characterAppearanceKey, characterIdFor, normalizeCharacterName } from "../../shared/identity.js";
+import {
+  characterAppearanceKey,
+  characterIdFor,
+  findRegistryEntryByName,
+  normalizeCharacterName,
+  resolveCharacterReference,
+  type CharacterRegistry,
+  type CharacterRegistryEntry,
+} from "../../shared/identity.js";
 import {
   MAX_SPRITE_ACTORS,
   SPRITE_EXPRESSION_FALLBACK,
@@ -61,6 +69,13 @@ export type SpriteStagingInput = {
    * member when the plan carries no resolved identity for them.
    */
   characterAppearance?: Readonly<Record<string, string>>;
+  /**
+   * Additive (optional): the chat's character registry. A name or id resolves
+   * through it first, so an alias ("Suzu") joins its canonical member ("Rat
+   * Musume"), aliases count as mentions, and an empty identity gets the
+   * entry's tags.
+   */
+  registry?: Readonly<CharacterRegistry>;
 };
 
 /* ------------------------------------------------------------------------ */
@@ -187,12 +202,15 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function namePatterns(name: string): RegExp[] {
-  const full = normalizeCharacterName(name);
-  if (!full) return [];
-  const variants = new Set([full]);
-  const first = full.split(" ")[0] ?? "";
-  if (first.length >= 3 && first !== full) variants.add(first);
+function namePatterns(name: string, aliases: readonly string[] = []): RegExp[] {
+  const variants = new Set<string>();
+  for (const raw of [name, ...aliases]) {
+    const full = normalizeCharacterName(raw);
+    if (!full) continue;
+    variants.add(full);
+    const first = full.split(" ")[0] ?? "";
+    if (first.length >= 3 && first !== full) variants.add(first);
+  }
   return [...variants].map((variant) => new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(variant)}(?![\\p{L}\\p{N}])`, "iu"));
 }
 
@@ -327,6 +345,17 @@ const NON_CHARACTER_NAMES: ReadonlySet<string> = new Set([
 ]);
 const PERSONA_NAMES: ReadonlySet<string> = new Set(["user", "{{user}}", "you", "player", "me", "persona"]);
 
+/** A generic persona name ("You", "{{user}}", "player", ...). */
+export function isPersonaName(name: string | null | undefined): boolean {
+  return PERSONA_NAMES.has(characterAppearanceKey(name ?? ""));
+}
+
+/** A generic persona/non-character name, or the active persona (an appearance key). */
+function isPersonaOrNonCharacter(name: string | null | undefined, personaKey: string): boolean {
+  const key = characterAppearanceKey(name ?? "");
+  return NON_CHARACTER_NAMES.has(key) || PERSONA_NAMES.has(key) || (Boolean(personaKey) && key === personaKey);
+}
+
 type MemberDraft = SpriteCastMember & { known: boolean };
 
 class CastPool {
@@ -334,19 +363,50 @@ class CastPool {
   private readonly byName = new Map<string, string>();
   private readonly persona: string;
 
-  constructor(personaName: string | undefined, private readonly appearance: Readonly<Record<string, string>>) {
+  constructor(
+    personaName: string | undefined,
+    private readonly appearance: Readonly<Record<string, string>>,
+    private readonly registry: Readonly<CharacterRegistry> = {},
+  ) {
     this.persona = characterAppearanceKey(personaName ?? "");
   }
 
   excluded(name: string | null | undefined): boolean {
-    const key = characterAppearanceKey(name ?? "");
-    return NON_CHARACTER_NAMES.has(key) || PERSONA_NAMES.has(key) || (Boolean(this.persona) && key === this.persona);
+    return isPersonaOrNonCharacter(name, this.persona);
+  }
+
+  /** The registry entry for a name/id (canonical name, alias, then id), if any. */
+  entryFor(name: string | null | undefined, characterId?: string | null): CharacterRegistryEntry | undefined {
+    if (!Object.keys(this.registry).length) return undefined;
+    return resolveCharacterReference(this.registry as CharacterRegistry, { name: name ?? null, characterId: characterId ?? null });
+  }
+
+  /** Registry aliases of a member name (empty without a registry). */
+  aliasesFor(name: string): string[] {
+    if (!Object.keys(this.registry).length) return [];
+    const entry = findRegistryEntryByName(this.registry as CharacterRegistry, name);
+    if (!entry) return [];
+    return [entry.name, ...entry.aliases].filter((alias) => characterAppearanceKey(alias) !== characterAppearanceKey(name));
   }
 
   /** The cast key for a name/id, creating a member on first sight. */
   resolve(name: string | null | undefined, characterId?: string | null): string | null {
-    const display = normalizeCharacterName(name ?? "");
-    if (display ? this.excluded(display) : !characterId) return null;
+    const raw = normalizeCharacterName(name ?? "");
+    if (raw ? this.excluded(raw) : !characterId) return null;
+    // A registry alias resolves to its canonical name, so one character is one member.
+    const entry = this.entryFor(raw, characterId);
+    const display = entry && raw ? entry.name : raw;
+    if (display && display !== raw && this.excluded(display)) return null;
+    const aliasKey = entry && raw && characterAppearanceKey(raw) !== characterAppearanceKey(display) ? characterAppearanceKey(raw) : "";
+    // An id that names a different registry entry than the label loses (resolveCharacterReference).
+    const idEntry = characterId ? this.registry[characterId.trim()] : undefined;
+    const id = entry && idEntry && idEntry.id !== entry.id ? null : characterId;
+    const key = this.resolveName(display, id);
+    if (key && aliasKey && !this.byName.has(aliasKey)) this.byName.set(aliasKey, key);
+    return key;
+  }
+
+  private resolveName(display: string, characterId: string | null | undefined): string | null {
     const nameKey = characterAppearanceKey(display);
     const id = (characterId ?? "").trim();
     if (id && this.members.has(id)) {
@@ -403,6 +463,11 @@ class CastPool {
       const target = characterAppearanceKey(member.name);
       const match = Object.entries(this.appearance).find(([name]) => characterAppearanceKey(name) === target);
       if (match && typeof match[1] === "string") member.identity = match[1].trim().slice(0, 4000);
+      // Then the registry: canonical name or alias.
+      if (!member.identity) {
+        const entry = this.entryFor(member.name, member.characterId ?? null);
+        if (entry?.tags.trim()) member.identity = entry.tags.trim().slice(0, 4000);
+      }
     }
   }
 
@@ -483,7 +548,7 @@ const SLOT_ORDER: Readonly<Record<SpriteSlot, number>> = { left: 0, center: 1, r
 export function spriteStagingContext(input: SpriteStagingInput): SpriteStagingContext {
   const plan = input.plan;
   const paragraphs = plan.paragraphs ?? [];
-  const pool = new CastPool(input.personaName, input.characterAppearance ?? {});
+  const pool = new CastPool(input.personaName, input.characterAppearance ?? {}, input.registry ?? {});
   for (const member of input.previousCast ?? []) pool.addPrevious(member);
   const resolve = (name: string | null | undefined, id?: string | null) => pool.resolve(name, pool.keyForId(id) ?? id ?? null);
 
@@ -549,7 +614,7 @@ export function spriteStagingContext(input: SpriteStagingInput): SpriteStagingCo
     }
   }
 
-  const actorNames: ActorNames = [...pool.members.values()].map((member) => ({ key: member.characterKey, patterns: namePatterns(member.name) }));
+  const actorNames: ActorNames = [...pool.members.values()].map((member) => ({ key: member.characterKey, patterns: namePatterns(member.name, pool.aliasesFor(member.name)) }));
 
   const signals: ParagraphSignals[] = paragraphs.map((paragraph, index) => {
     const sceneIndex = sceneIndexAt(scenes, index);
@@ -777,6 +842,106 @@ export function enforceSpriteStagingInvariants(staging: SpriteStaging): SpriteSt
     };
   });
   return { ...staging, cast, plates, paragraphs };
+}
+
+/**
+ * Repair a stored staging (turns staged before these fixes) without restaging:
+ *
+ * - The persona (its name, or a generic persona name like "You") leaves the
+ *   cast and every paragraph. A paragraph whose focus was the persona focuses
+ *   nobody, as a persona line does in normal staging; an unfocused paragraph
+ *   left with one actor focuses it, as a narration paragraph does.
+ * - A member whose name is a registry alias of another member's entry folds
+ *   into that member: actors are remapped; when both stand in one paragraph
+ *   the canonical actor stays (its position) and takes the focus.
+ *   The canonical member keeps its identity/attire; gaps come from the alias.
+ * - A member with an empty identity that a registry entry owns (name or
+ *   alias) gets the entry's tags.
+ *
+ * Pure. Returns the same object when nothing changes.
+ */
+export function sanitizeStoredStaging(
+  staging: SpriteStaging,
+  options: { personaName?: string | null | undefined; registry?: Readonly<CharacterRegistry> | null | undefined },
+): SpriteStaging {
+  const personaKey = characterAppearanceKey(options.personaName ?? "");
+  const registry = (options.registry ?? {}) as CharacterRegistry;
+  const hasRegistry = Object.keys(registry).length > 0;
+  const isPersona = (name: string) => {
+    const key = characterAppearanceKey(name);
+    return PERSONA_NAMES.has(key) || (Boolean(personaKey) && key === personaKey);
+  };
+  const dropped = new Set(staging.cast.filter((member) => isPersona(member.name)).map((member) => member.characterKey));
+  let cast = staging.cast.filter((member) => !dropped.has(member.characterKey)).map((member) => ({ ...member }));
+
+  // Fold registry aliases into their canonical member.
+  const remap = new Map<string, string>();
+  let changed = dropped.size > 0;
+  if (hasRegistry) {
+    const groups = new Map<string, { entry: CharacterRegistryEntry; members: SpriteCastMember[] }>();
+    for (const member of cast) {
+      const entry = resolveCharacterReference(registry, { name: member.name, characterId: member.characterId ?? null });
+      if (!entry) continue;
+      const group = groups.get(entry.id) ?? { entry, members: [] };
+      group.members.push(member);
+      groups.set(entry.id, group);
+    }
+    for (const { entry, members } of groups.values()) {
+      if (members.length < 2) continue;
+      const canonicalName = characterAppearanceKey(entry.name);
+      const canonical = members.find((member) => characterAppearanceKey(member.name) === canonicalName)
+        ?? members.find((member) => member.characterKey === entry.id || member.characterId === entry.id)
+        ?? members[0]!;
+      for (const alias of members) {
+        if (alias === canonical) continue;
+        remap.set(alias.characterKey, canonical.characterKey);
+        if (!canonical.identity.trim() && alias.identity.trim()) canonical.identity = alias.identity;
+        if (!canonical.attire?.trim() && alias.attire?.trim()) canonical.attire = alias.attire;
+        if (!canonical.subjectCategory && alias.subjectCategory) canonical.subjectCategory = alias.subjectCategory;
+      }
+    }
+    if (remap.size) {
+      cast = cast.filter((member) => !remap.has(member.characterKey));
+      changed = true;
+    }
+    for (const member of cast) {
+      if (member.identity.trim()) continue;
+      const entry = resolveCharacterReference(registry, { name: member.name, characterId: member.characterId ?? null });
+      if (entry?.tags.trim()) {
+        member.identity = entry.tags.trim().slice(0, 4000);
+        changed = true;
+      }
+    }
+  }
+  if (!changed) return staging;
+
+  const paragraphs = staging.paragraphs.map((paragraph) => {
+    const present = new Set(paragraph.actors.map((actor) => actor.characterKey));
+    const actors: SpriteActorStage[] = [];
+    for (const actor of paragraph.actors) {
+      if (dropped.has(actor.characterKey)) continue;
+      const target = remap.get(actor.characterKey);
+      if (!target) {
+        // A focused alias in the same paragraph lends the canonical actor its look and focus.
+        const alias = actor.focus ? undefined : paragraph.actors.find((candidate) => candidate.focus && remap.get(candidate.characterKey) === actor.characterKey);
+        actors.push(alias ? { ...alias, characterKey: actor.characterKey, slot: actor.slot } : { ...actor });
+      } else if (!present.has(target)) {
+        actors.push({ ...actor, characterKey: target });
+      }
+      // else: the canonical actor stands in this paragraph and keeps its place.
+    }
+    // Focus as normal staging sets it: a persona line focuses nobody; a
+    // narration paragraph left with one actor focuses that actor.
+    const personaFocused = paragraph.actors.some((actor) => actor.focus && dropped.has(actor.characterKey));
+    if (actors.length === 1 && actors.length < paragraph.actors.length && !personaFocused && !paragraph.actors.some((actor) => actor.focus)) {
+      actors[0]!.focus = true;
+    }
+    const moment = paragraph.moment
+      ? { ...paragraph.moment, characters: paragraph.moment.characters.filter((key) => !dropped.has(key)).map((key) => remap.get(key) ?? key) }
+      : undefined;
+    return { ...paragraph, actors, ...(moment ? { moment } : {}) };
+  });
+  return enforceSpriteStagingInvariants({ ...staging, cast, paragraphs });
 }
 
 function minimalStaging(input: SpriteStagingInput): SpriteStaging {

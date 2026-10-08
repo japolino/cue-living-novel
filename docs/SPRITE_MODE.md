@@ -348,6 +348,13 @@ intensity), the plate key, and the light preset.
   light (choice), and place reuse (choice among the user's known plates,
   `new_place` first) so a revisit reuses its plate even when worded
   differently. Low-confidence answers keep the previous value (no flicker).
+- **Cast**: the persona never joins the cast (the turn's `userSpeaker`, else
+  the active Lumiverse persona, plus generic names like "You"). Names resolve
+  through the chat's character registry first: an alias ("Suzu") is its
+  canonical member ("Rat Musume"), aliases count as mentions, and an empty
+  identity gets the entry's tags. Stored staging from older turns is cleaned
+  the same way when it is read (`sanitizeStoredStaging`: persona dropped,
+  alias members folded into the canonical member), without rewriting the file.
 
 ## Key moments (sprite mode, `keyIllustrations: "few"`)
 

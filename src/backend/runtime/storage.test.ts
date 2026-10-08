@@ -15,6 +15,8 @@ import {
   resetPortraits,
   savePortrait,
   loadPortraits,
+  loadTurnRecord,
+  saveTurnRecord,
   type StoredPortrait
 } from "./storage.js";
 import {
@@ -24,6 +26,7 @@ import {
 } from "../core/visual-state.js";
 import { SINGLE_CHARACTER_SCHEMA_VERSION } from "../../shared/character.js";
 import type { CharacterAppearanceMap } from "../../shared/identity.js";
+import { makePlan } from "./__fixtures__/sprite-staging-plans.js";
 
 function storageRuntime(initial: ReadonlyMap<string, unknown> = new Map()): {
   spindle: SpindleAPI;
@@ -439,5 +442,24 @@ describe("Finding #11: portrait storage validation and replacement/reset", () =>
     loaded = await loadPortraits(spindle, "chat-1");
     expect(loaded.mira?.imageId).toBe("img-replaced");
     expect(loaded.mira?.mimeType).toBe("image/webp");
+  });
+});
+
+describe("loadTurnRecord", () => {
+  const record = (extra: Record<string, unknown> = {}) => ({
+    schemaVersion: 1, speaker: "Rat Musume", status: "ready", plan: makePlan({ paragraphs: ["Hello."] }), jobs: [],
+    updatedAt: "2026-10-01T00:00:00.000Z", ...extra,
+  });
+
+  test("keeps userSpeaker (trimmed) through a save and load", async () => {
+    const { spindle } = storageRuntime();
+    await saveTurnRecord(spindle, "turns/a.json", record({ userSpeaker: "  Jay " }) as never);
+    expect((await loadTurnRecord(spindle, "turns/a.json"))?.userSpeaker).toBe("Jay");
+  });
+
+  test("a record without (or with a blank) userSpeaker loads without one", async () => {
+    const { spindle } = storageRuntime(new Map<string, unknown>([["turns/b.json", record()], ["turns/c.json", record({ userSpeaker: "  " })]]));
+    expect("userSpeaker" in (await loadTurnRecord(spindle, "turns/b.json"))!).toBe(false);
+    expect("userSpeaker" in (await loadTurnRecord(spindle, "turns/c.json"))!).toBe(false);
   });
 });

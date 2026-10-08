@@ -14,8 +14,8 @@ import {
 import type { FrontendRequest, AssetView, TurnView } from "../../protocol.js";
 import type { VisualNovelConfig } from "../../config.js";
 import { SpriteCastMemberSchema, SpriteStagingSchema, type SpriteCastMember, type SpriteParagraphStage, type SpriteStaging } from "../../shared/sprites.js";
-import { characterAppearanceKey } from "../../shared/identity.js";
-import { buildSpriteStaging, deterministicSpriteStaging } from "./sprite-staging.js";
+import { characterAppearanceKey, type CharacterRegistry } from "../../shared/identity.js";
+import { buildSpriteStaging, deterministicSpriteStaging, isPersonaName, sanitizeStoredStaging } from "./sprite-staging.js";
 import { SpriteService, spriteStyleKey } from "./sprites/index.js";
 import { isSpritePlannedRecord, keyIllustrationCap, keyIllustrationCues, keyIllustrationViews } from "./sprites/key-moments.js";
 import { keyMomentScenes } from "./sprites/moment-prompts.js";
@@ -550,6 +550,23 @@ async function buildTurnView(
   }
 }
 
+/** The active Lumiverse persona name, or "" (no persona, or the lookup failed). */
+async function activePersonaName(spindle: SpindleAPI, userId: string | undefined): Promise<string> {
+  try {
+    const persona = await spindle.personas?.getActive?.(userId);
+    return persona?.name?.trim() ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/** The persona of a stored turn: its userSpeaker, else the active persona ("" when none). */
+async function recordPersonaName(spindle: SpindleAPI, record: StoredTurnRecord, userId: string | undefined): Promise<string> {
+  const stored = record.userSpeaker?.trim();
+  if (stored && stored !== "You") return stored;
+  return activePersonaName(spindle, userId);
+}
+
 /** Valid staging for every paragraph of the plan, or null. */
 function usableStaging(staging: unknown, paragraphCount: number): SpriteStaging | null {
   const parsed = SpriteStagingSchema.safeParse(staging);
@@ -564,8 +581,12 @@ async function stagingForRecord(
   config: VisualNovelConfig,
   userId: string | undefined
 ): Promise<SpriteStaging> {
+  const chatId = record.plan.key.chatId;
+  const personaName = await recordPersonaName(spindle, record, userId);
+  const registry: CharacterRegistry = await loadCharacterRegistry(spindle, chatId, userId).catch(() => ({}));
   const stored = usableStaging(record.plan.spriteStaging, record.plan.paragraphs.length);
-  if (stored) return stored;
+  // Old stored staging may hold the persona or a registry alias as its own member.
+  if (stored) return sanitizeStoredStaging(stored, { personaName, registry });
   const styleKey = spriteStyleKey(config);
   const staging = deterministicSpriteStaging({
     plan: record.plan,
@@ -574,8 +595,9 @@ async function stagingForRecord(
     knownPlates: await spriteService(spindle).knownPlates(userId, config),
     previousCast: [],
     previousStage: null,
-    characterAppearance: await loadCharacterAppearance(spindle, userId, record.plan.key.chatId).catch(() => ({})),
-    ...(record.userSpeaker && record.userSpeaker !== "You" ? { personaName: record.userSpeaker } : {}),
+    characterAppearance: await loadCharacterAppearance(spindle, userId, chatId).catch(() => ({})),
+    registry,
+    ...(personaName ? { personaName } : {}),
   });
   const key = record.plan.key;
   try {
@@ -603,12 +625,17 @@ async function planSpriteStaging(
     previous: StoredTurnRecord | null;
     personaName: string;
     characterAppearance: Readonly<Record<string, string>>;
+    registry: Readonly<CharacterRegistry>;
     signal: AbortSignal;
   },
   userId: string | undefined
 ): Promise<SpriteStaging> {
-  const previousStaging = input.previous && input.previous.plan.key.assistantMessageId !== input.plan.key.assistantMessageId
+  const previousUsable = input.previous && input.previous.plan.key.assistantMessageId !== input.plan.key.assistantMessageId
     ? usableStaging(input.previous.plan.spriteStaging, input.previous.plan.paragraphs.length)
+    : null;
+  // The previous turn's cast feeds continuity: clean the persona and split aliases out first.
+  const previousStaging = previousUsable
+    ? sanitizeStoredStaging(previousUsable, { personaName: input.personaName, registry: input.registry })
     : null;
   const previousStage: SpriteParagraphStage | null = previousStaging?.paragraphs.at(-1) ?? null;
   const stagingInput = {
@@ -620,6 +647,7 @@ async function planSpriteStaging(
     previousStage,
     ...(previousStaging ? { previousSceneId: input.previous?.plan.scenes.at(-1)?.sceneId ?? null } : {}),
     characterAppearance: input.characterAppearance,
+    registry: input.registry,
     ...(input.personaName ? { personaName: input.personaName } : {}),
   };
   try {
@@ -641,23 +669,30 @@ async function planSpriteStaging(
 async function spriteCastForChat(spindle: SpindleAPI, chatId: string, userId: string | undefined): Promise<SpriteCastMember[]> {
   const cast: SpriteCastMember[] = [];
   const seen = new Set<string>();
+  const registry: CharacterRegistry = await loadCharacterRegistry(spindle, chatId, userId).catch(() => ({}));
+  // The persona never gets a sprite set: the turn's userSpeaker and the active persona are both left out.
+  const personaKeys = new Set<string>();
+  const active = await activePersonaName(spindle, userId);
+  if (active) personaKeys.add(characterAppearanceKey(active));
   try {
     const chatState = await loadChatState(spindle, chatId, userId);
     const record = await loadTurnRecord(spindle, chatState.activeTurnPath, userId);
-    const staging = record ? usableStaging(record.plan.spriteStaging, record.plan.paragraphs.length) : null;
+    const recordPersona = record?.userSpeaker && record.userSpeaker !== "You" ? record.userSpeaker : "";
+    if (recordPersona) personaKeys.add(characterAppearanceKey(recordPersona));
+    const usable = record ? usableStaging(record.plan.spriteStaging, record.plan.paragraphs.length) : null;
+    const staging = usable ? sanitizeStoredStaging(usable, { personaName: recordPersona || active, registry }) : null;
     for (const member of staging?.cast ?? []) {
       const key = characterAppearanceKey(member.name);
-      if (seen.has(key)) continue;
+      if (seen.has(key) || personaKeys.has(key) || isPersonaName(member.name)) continue;
       seen.add(key);
       cast.push(member);
     }
   } catch {
     // No stored turn: the registry alone decides.
   }
-  const registry = await loadCharacterRegistry(spindle, chatId, userId).catch(() => ({}));
   for (const entry of Object.values(registry)) {
     const key = characterAppearanceKey(entry.name);
-    if (!key || seen.has(key) || !entry.tags.trim()) continue;
+    if (!key || seen.has(key) || !entry.tags.trim() || personaKeys.has(key) || isPersonaName(entry.name)) continue;
     const parsed = SpriteCastMemberSchema.safeParse({
       characterKey: entry.id || key,
       name: entry.name.slice(0, 200),
@@ -1157,13 +1192,7 @@ async function processAssistantMessage(
         }
       }
     }
-    let userSpeaker = "You";
-    try {
-      const persona = await spindle.personas?.getActive?.(userId);
-      if (persona?.name?.trim()) {
-        userSpeaker = persona.name.trim();
-      }
-    } catch {}
+    let userSpeaker = (await activePersonaName(spindle, userId)) || "You";
     if (userSpeaker === "You") {
       try {
         const recent = (await spindle.chat.getMessages(chatId) as NormalizedChatMessage[]);
@@ -1184,6 +1213,7 @@ async function processAssistantMessage(
         previous,
         personaName: userSpeaker === "You" ? "" : userSpeaker,
         characterAppearance,
+        registry: result.characterRegistry,
         signal: operation.controller.signal
       }, userId);
       plan = { ...plan, spriteStaging: staging };

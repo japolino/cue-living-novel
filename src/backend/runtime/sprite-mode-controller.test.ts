@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { SpindleAPI } from "lumiverse-spindle-types";
 import { registerVisualNovelBackend, spriteService } from "./controller.js";
-import { turnPath, type StoredTurnRecord } from "./storage.js";
+import { characterRegistryPath, turnPath, type StoredTurnRecord } from "./storage.js";
 import { SPRITE_LIBRARY_PATH, type SpriteLibrary } from "./sprites/library.js";
 import { CUT_META, fakePng, toBase64, waitFor } from "./sprites/__fixtures__/sprite-fixtures.js";
 import type { TurnView } from "../../protocol.js";
@@ -33,7 +33,7 @@ function plannerPayload() {
 
 const settle = (ms = 40) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-function fixture(config: Record<string, unknown> = {}, options: { gated?: boolean } = {}) {
+function fixture(config: Record<string, unknown> = {}, options: { gated?: boolean; persona?: string; payload?: () => unknown } = {}) {
   const gates: Array<() => void> = [];
   const handlers = new Map<string, Array<(...args: unknown[]) => void>>();
   let frontend!: (payload: unknown, userId: string) => void;
@@ -70,7 +70,7 @@ function fixture(config: Record<string, unknown> = {}, options: { gated?: boolea
     generate: {
       raw: async () => {
         plannerCalls += 1;
-        return { content: JSON.stringify(plannerPayload()) };
+        return { content: JSON.stringify(options.payload ? options.payload() : plannerPayload()) };
       }
     },
     imageGen: {
@@ -90,7 +90,8 @@ function fixture(config: Record<string, unknown> = {}, options: { gated?: boolea
       get: async (id: string) => ({ id })
     },
     sendToFrontend: (message: Record<string, unknown>) => { sent.push(message); },
-    log: { warn() {}, error() {}, info() {} }
+    log: { warn() {}, error() {}, info() {} },
+    ...(options.persona !== undefined ? { personas: { getActive: async () => (options.persona ? { name: options.persona } : null) } } : {})
   } as unknown as SpindleAPI;
   const fire = (event: string, ...args: unknown[]) => {
     for (const handler of handlers.get(event) ?? []) handler(...args);
@@ -245,5 +246,99 @@ describe("controller: scene mode is unchanged", () => {
     expect(f.library()).toBeUndefined();
     expect(f.of("vn_sprite_update")).toHaveLength(0);
     expect(f.of("vn_sprite_cut")).toHaveLength(0);
+  });
+});
+
+describe("controller: sprite mode keeps the persona and registry aliases out of the cast", () => {
+  const castNames = (turn: TurnView) => (turn.sprites?.staging.cast ?? []).map((member) => member.name);
+
+  /** A scene-mode turn whose first line is the persona's (the c33 shape), then sprite mode is switched on. */
+  async function sceneTurnThenSprites(chatId: string, userId: string, options: { persona?: string; userSpeaker?: string; speakers: Array<string | null>; registry?: Record<string, unknown> }) {
+    const f = fixture({ presentationMode: "scene" }, options.persona !== undefined ? { persona: options.persona } : {});
+    f.request({ type: "vn_view", chatId, open: true }, userId);
+    f.reply(chatId, "m1", userId);
+    await waitFor(() => (f.record(chatId, "m1")?.jobs.length ?? 0) > 0);
+    await waitFor(() => f.record(chatId, "m1")!.jobs.every((job) => job.status === "generated"));
+    const stored = f.record(chatId, "m1")!;
+    const { userSpeaker: _userSpeaker, ...rest } = stored;
+    const edited = { ...rest, ...(options.userSpeaker ? { userSpeaker: options.userSpeaker } : {}), plan: { ...stored.plan, paragraphSpeakers: options.speakers } };
+    f.data.set(turnPath(chatId, "m1", 0), edited);
+    if (options.registry) f.data.set(characterRegistryPath(chatId), options.registry);
+    f.request({ type: "vn_set_config", patch: { presentationMode: "sprites" }, chatId }, userId);
+    await waitFor(() => f.turns().some((turn) => turn.sprites !== undefined));
+    return { f, turn: f.turns().at(-1)! };
+  }
+
+  test("a scene-mode record without userSpeaker: the active persona is left out", async () => {
+    const { f, turn } = await sceneTurnThenSprites("pp-1", "up1", { persona: "Jay", speakers: ["Jay", "Mira"] });
+    expect(castNames(turn)).toEqual(["Mira"]);
+    expect(f.record("pp-1", "m1")!.plan.spriteStaging!.cast.map((member) => member.name)).toEqual(["Mira"]);
+    await spriteService(f.spindle).settle("up1");
+  });
+
+  test("a scene-mode record with userSpeaker: that persona is left out (no active persona)", async () => {
+    const { f, turn } = await sceneTurnThenSprites("pp-2", "up2", { userSpeaker: "Jay", speakers: ["Jay", "Mira"] });
+    expect(castNames(turn)).toEqual(["Mira"]);
+    // userSpeaker now survives the reload, so the stored turn names the user.
+    expect(turn.userSpeaker).toBe("Jay");
+    await spriteService(f.spindle).settle("up2");
+  });
+
+  test("a scene-mode record: a registry alias speaker stages as the canonical member", async () => {
+    const registry = { schemaVersion: 1, characters: { mira: { id: "mira", name: "Mira", aliases: ["Suzu"], tags: "1girl, silver hair, green eyes", subjectCategory: "female" } }, updatedAt: "2026-10-01T00:00:00.000Z" };
+    const { f, turn } = await sceneTurnThenSprites("pp-3", "up3", { persona: "Jay", speakers: ["Suzu", "Mira"], registry });
+    expect(castNames(turn)).toEqual(["Mira"]);
+    expect(turn.sprites!.staging.cast[0]!.identity).not.toBe("");
+    await spriteService(f.spindle).settle("up3");
+  });
+
+  test("a stored staging with the persona: the view and Prepare for this chat drop it; the file is not rewritten", async () => {
+    const f = fixture({ presentationMode: "sprites" }, { persona: "Jay" });
+    f.request({ type: "vn_view", chatId: "pp-4", open: true }, "up4");
+    f.reply("pp-4", "m1", "up4");
+    await waitFor(() => f.turns().length > 0);
+    await spriteService(f.spindle).settle("up4");
+    const stored = f.record("pp-4", "m1")!;
+    const staging = stored.plan.spriteStaging!;
+    const jay = { characterKey: "jay", name: "Jay", identity: "", attire: null };
+    const withJay = {
+      ...staging,
+      cast: [...staging.cast, jay],
+      paragraphs: staging.paragraphs.map((paragraph) => ({
+        ...paragraph,
+        actors: [...paragraph.actors.map((actor) => ({ ...actor, slot: "left" as const, focus: false })), { ...paragraph.actors[0]!, characterKey: "jay", slot: "right" as const, focus: true }],
+      })),
+    };
+    f.data.set(turnPath("pp-4", "m1", 0), { ...stored, plan: { ...stored.plan, spriteStaging: withJay } });
+    // The registry also knows Jay (with tags): Prepare must still skip the persona.
+    f.data.set(characterRegistryPath("pp-4"), { schemaVersion: 1, characters: { jay: { id: "jay", name: "Jay", aliases: [], tags: "1boy, short black hair", subjectCategory: "male" } }, updatedAt: "2026-10-01T00:00:00.000Z" });
+    const before = f.of("vn_state").length;
+    f.request({ type: "vn_get_state", chatId: "pp-4", viewOpen: true }, "up4");
+    await waitFor(() => f.of("vn_state").length > before);
+    const state = f.of("vn_state").at(-1)!.turn as TurnView;
+    expect(castNames(state)).toEqual(["Mira"]);
+    expect(state.sprites!.staging.paragraphs.every((paragraph) => paragraph.actors.every((actor) => actor.characterKey !== "jay"))).toBe(true);
+    expect(f.record("pp-4", "m1")!.plan.spriteStaging!.cast.map((member) => member.name)).toEqual(["Mira", "Jay"]);
+    const libraries = f.of("vn_sprite_library").length;
+    f.request({ type: "vn_sprite_action", action: "prepare_chat", chatId: "pp-4" }, "up4");
+    await waitFor(() => f.of("vn_sprite_library").length > libraries);
+    const library = f.of("vn_sprite_library").at(-1) as { sets: Array<{ name: string }> };
+    expect(library.sets.map((set) => set.name)).toContain("Mira");
+    expect(library.sets.map((set) => set.name)).not.toContain("Jay");
+    await spriteService(f.spindle).settle("up4");
+  });
+
+  test("a fresh sprite turn: a registry alias speaker joins its canonical member", async () => {
+    // The planner names "Suzu" (already a registry alias of Mira) as the speaker.
+    const payload = () => ({ ...plannerPayload(), speakers: [{ paragraphIndex: 1, name: "Suzu" }] });
+    const f = fixture({ presentationMode: "sprites" }, { persona: "Jay", payload });
+    f.data.set(characterRegistryPath("pp-5"), { schemaVersion: 1, characters: { mira: { id: "mira", name: "Mira", aliases: ["Suzu"], tags: "1girl, silver hair, green eyes", subjectCategory: "female" } }, updatedAt: "2026-10-01T00:00:00.000Z" });
+    f.request({ type: "vn_view", chatId: "pp-5", open: true }, "up5");
+    f.reply("pp-5", "m1", "up5");
+    await waitFor(() => f.turns().length > 0);
+    expect(f.record("pp-5", "m1")!.plan.paragraphSpeakers).toEqual([null, "Suzu"]);
+    expect(f.record("pp-5", "m1")!.plan.spriteStaging!.cast.map((member) => member.name)).toEqual(["Mira"]);
+    expect(f.record("pp-5", "m1")!.userSpeaker).toBe("Jay");
+    await spriteService(f.spindle).settle("up5");
   });
 });
