@@ -12,7 +12,46 @@ import {
   type SpriteStaging,
   type SpriteTurnView,
 } from "../../../shared/sprites.js";
+import { sameOutfit } from "../../../shared/outfit.js";
 import type { SpriteLibrary, StoredPlate, StoredSpriteImage, StoredSpriteSet } from "./library.js";
+
+function keyText(value: string | null | undefined): string {
+  return (value ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+/**
+ * The library set a cast member uses (every set lookup goes through here).
+ * The exact key (spriteSetKeyFor) wins when it exists. Otherwise a set with
+ * the same style, name and identity whose outfit is the same (sameOutfit;
+ * two empty outfits also match) stands in, so a reworded outfit, another
+ * branch or another chat does not make a new set: the one with the most
+ * ready images, then the latest used. No match: the exact key (a new set).
+ */
+export function resolveSpriteSet(
+  library: SpriteLibrary,
+  member: Pick<SpriteCastMember, "name" | "identity" | "attire">,
+  styleKey: string,
+): { setKey: string; set: StoredSpriteSet | undefined; reusedFrom: string | null } {
+  const exact = spriteSetKeyFor(member, styleKey);
+  const found = library.sets[exact];
+  if (found) return { setKey: exact, set: found, reusedFrom: null };
+  const name = keyText(member.name);
+  const identity = keyText(member.identity);
+  const attire = keyText(member.attire);
+  let best: StoredSpriteSet | undefined;
+  let bestReady = -1;
+  for (const set of Object.values(library.sets)) {
+    if (set.styleKey !== styleKey || keyText(set.name) !== name || keyText(set.identity) !== identity) continue;
+    const other = keyText(set.attire);
+    if (attire || other ? !sameOutfit(set.attire, member.attire) : false) continue;
+    const ready = Object.values(set.images).filter((image) => image.status === "ready").length;
+    if (!best || ready > bestReady || (ready === bestReady && (Date.parse(set.usedAt) || 0) > (Date.parse(best.usedAt) || 0))) {
+      best = set;
+      bestReady = ready;
+    }
+  }
+  return best ? { setKey: best.setKey, set: best, reusedFrom: exact } : { setKey: exact, set: undefined, reusedFrom: null };
+}
 
 /** Frontend view of one stored sprite image. The URL is the cut-out and is only sent when ready. */
 export function spriteImageView(image: StoredSpriteImage): SpriteImageView {
@@ -89,8 +128,7 @@ export function stagingPlateKeys(staging: SpriteStaging): string[] {
 export function spriteTurnView(staging: SpriteStaging, library: SpriteLibrary, styleKey: string, count: SpriteExpressionCount = 12): SpriteTurnView {
   const sets: Record<string, SpriteSetView> = {};
   for (const member of staging.cast) {
-    const setKey = spriteSetKeyFor(member, styleKey);
-    const stored = library.sets[setKey];
+    const { setKey, set: stored } = resolveSpriteSet(library, member, styleKey);
     sets[member.characterKey] = stored ? spriteSetView(stored, count) : missingSetView(member, setKey, count);
   }
   const plates: Record<string, PlateView> = {};

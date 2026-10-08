@@ -25,7 +25,8 @@ import {
 } from "../../shared/contracts.js";
 import { normalizeActionProp, ActionPropSchema } from "../../shared/action-prop.js";
 import { reduceContinuity } from "../core/continuity.js";
-import { resolveCueTimeline } from "../core/cue-state.js";
+import { resolveCueTimeline, turnStartWardrobe, type WardrobeNote } from "../core/cue-state.js";
+import { decideScene, jevWardrobeSummary, type ChangeVerdict, type JevWardrobeAnswers } from "../core/change-decisions.js";
 import { prepareNarrative } from "../core/paragraphs.js";
 import { decideSceneBoundary } from "../core/scene-boundary.js";
 import { validateTurnPlan } from "../core/turn-plan.js";
@@ -55,7 +56,7 @@ import { resolvePlannerConnection, type ResolvedPlannerConnection } from "./conn
 import { normalizeStageEffect, normalizeAmbientEffect, deriveWeatherAmbient } from "./planner-effects.js";
 import { getAudioCatalog, getAudioCatalogPromptSummary } from "./audio-catalog.js";
 import { debugErrorSummary, debugJson, debugQuote, plannerDebugLogger, type PlannerDebugScope } from "./debug-trace.js";
-import { decidePresentation, type SystemOneDecisions } from "./system-one.js";
+import { decidePresentation, MAX_WARDROBE_QUESTIONS, type SystemOneDecisions, type WardrobeQuestion } from "./system-one.js";
 import { stripTextEffectTags } from "../../shared/text-effects.js";
 
 export const PlannerEnvironmentChangesSchema = z.object({
@@ -2092,6 +2093,7 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
   const promptParagraphs = narrative.paragraphs.map((paragraph) => ({ ...paragraph, text: stripTextEffectTags(paragraph.text) }));
   const paragraphText = promptParagraphs.map((paragraph) => `[${paragraph.index}] ${paragraph.text}`).join("\n\n");
   const debug = plannerDebugLogger(spindle, input.config, plannerDebugScope(input));
+  const wardrobeAsk = systemOneWardrobeQuestions(input, seedRegistry, isPersona);
   const systemOnePromise: Promise<SystemOneDecisions | null> = input.config.systemOneMode === "off"
     ? Promise.resolve(null)
     : decidePresentation(spindle, {
@@ -2099,6 +2101,7 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
         previousScene: input.previousScene,
         names: [...Object.values(seedRegistry).map((entry) => entry.name), ...Object.values(seedRegistry).flatMap((entry) => entry.aliases), ...(input.previousScene?.cast ?? []), input.message.name, input.singleCharacter.protagonist.name].filter((name): name is string => Boolean(name)),
         ...(personaName ? { personaName } : {}),
+        wardrobe: wardrobeAsk,
         config: input.config,
         ...(input.userId ? { userId: input.userId } : {}),
       }).catch((error: unknown) => {
@@ -2233,16 +2236,39 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
     const name = state.protagonist.name;
     if (isUsableIdentity(name, state.protagonist.tags) && !appearanceMapKeyFor(turnAppearances, name)) turnAppearances[name] = singleCharacterTagBlock(state);
   }
+  // System One wardrobe/scene answers apply in "on" mode only (compare mode logs them).
+  const applySystemOne = input.config.systemOneMode === "on" && systemOne !== null;
+  const jevWardrobe = new Map<string, JevWardrobeAnswers>();
+  if (applySystemOne) {
+    for (const entry of systemOne!.wardrobe) jevWardrobe.set(characterAppearanceKey(entry.name), entry);
+  }
+  const replyParagraphs = promptParagraphs.map((paragraph) => paragraph.text);
   const timeline = resolveCueTimeline({ paragraphs: narrative.paragraphs.length, proposals, cues: planner.cues,
     roster: planner.characters, appearances: turnAppearances, registry: turnRegistry,
     baseline: { name: protagonistName, identity: identityBlock },
     previousCharacter: input.previousScene?.character || input.singleCharacter.protagonist.name,
-    previousAttire: input.previousScene?.attire ?? null, continuity, isPersona, isReset: isAttireReset });
+    previousAttire: input.previousScene?.attire ?? null, continuity, isPersona, isReset: isAttireReset,
+    outfit: { jev: jevWardrobe, coveredThrough: applySystemOne ? systemOne!.coveredThrough : -1, paragraphs: replyParagraphs } });
+  const sceneVerdict: ChangeVerdict | null = input.previousScene && proposals[0]
+    ? decideScene({ previousEnvironment: input.previousScene.environment, plannerEnvironment: proposals[0].environment, paragraphs: replyParagraphs, jev: applySystemOne ? systemOne!.scene : null })
+    : null;
+  let sceneKeptBySystemOne = false;
+  let overruledLocation: string | null = null;
+  const normalizePlaceName = (value: string) => value.normalize("NFKC").trim().toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 
   for (const proposal of proposals) {
     const activeChar = timeline.snapshots[proposal.startParagraph]!.character;
 
-    const decision = decideSceneBoundary(previous, proposal.boundary);
+    // System One read the whole opening: "same" keeps the previous place, time
+    // and weather for the turn's first scene, whatever words the planner used.
+    const keepPlace = scenes.length === 0 && previous !== null && sceneVerdict?.decision === "same";
+    // A later proposal that repeats the overruled place name is the same place.
+    const boundaryProposal = overruledLocation !== null && previous && normalizePlaceName(proposal.boundary.location) === overruledLocation
+      ? { ...proposal.boundary, location: previous.environment.location }
+      : proposal.boundary;
+    const boundary = decideSceneBoundary(previous, boundaryProposal);
+    if (keepPlace && boundary.startsNewScene) overruledLocation = normalizePlaceName(proposal.boundary.location);
+    const decision = keepPlace && boundary.startsNewScene ? { ...boundary, startsNewScene: false } : boundary;
     if (scenes.length > 0 && !decision.startsNewScene) continue;
     const prevCharName = previous?.character || previous?.cast?.[0] || "";
     const sameChar = !previous || !prevCharName || !activeChar || characterAppearanceKey(prevCharName) === characterAppearanceKey(activeChar);
@@ -2254,8 +2280,18 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
     if (sceneCast.length === 0 && protagonistName) sceneCast.push(protagonistName);
 
     const baseEnv = previous !== null && !decision.startsNewScene ? previous.environment : null;
-    const mergedEnv = baseEnv
+    const plannedEnv = baseEnv
       ? mergeEnvironment(baseEnv, proposal.environment, proposal.environmentChanges)
+      : null;
+    if (keepPlace && previous) sceneKeptBySystemOne = true;
+    // When the planner saw a new place (its boundary was overruled), its
+    // description is of that place too: the previous environment stays whole.
+    const mergedEnv = plannedEnv
+      ? (keepPlace && previous
+        ? (boundary.startsNewScene
+          ? previous.environment
+          : SceneEnvironmentSchema.parse({ ...plannedEnv, location: previous.environment.location, timeOfDay: previous.environment.timeOfDay, weather: previous.environment.weather }))
+        : plannedEnv)
       : SceneEnvironmentSchema.parse({
           location: proposal.environment.location,
           timeOfDay: proposal.environment.timeOfDay,
@@ -2270,7 +2306,9 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
       : (previous?.revision ?? 0) + 1;
     const basePrompt = reusedScene
       ? (envChanged ? synthesizeBasePrompt(mergedEnv, proposal.basePrompt) : reusedScene.basePrompt)
-      : synthesizeBasePrompt(mergedEnv, proposal.basePrompt);
+      : keepPlace && previous && boundary.startsNewScene
+        ? previous.basePrompt
+        : synthesizeBasePrompt(mergedEnv, proposal.basePrompt);
     const sceneId = reusedScene ? reusedScene.sceneId : id("scene", `${key.sourceFingerprint}:${proposal.startParagraph}:${proposal.environment.location}`);
     const scene = SceneStateSchema.parse({
       sceneId,
@@ -2517,6 +2555,17 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
     environment: latestEnvironment || characterState.environment
   };
   if (debug.enabled) {
+    for (const line of wardrobeDebugLines(systemOne, input.config.systemOneMode === "on", timeline.wardrobeNotes)) debug.line(line);
+    if (sceneVerdict && (sceneVerdict.source !== "none" || systemOne?.scene)) {
+      const place = (env: SceneState["environment"]) => [env.location, env.timeOfDay].filter(Boolean).join(" / ");
+      const first = scenes[0];
+      const verdict = applySystemOne ? sceneVerdict.reason : `jev ${systemOne?.scene?.map((value) => value?.toFixed(2) ?? "?").join("/") ?? "none"}`;
+      debug.line(!applySystemOne
+        ? `scene: ${verdict} -> not applied (${input.config.systemOneMode})`
+        : sceneKeptBySystemOne && first
+          ? `scene: ${verdict} -> kept "${place(first.environment)}"`
+          : `scene: ${verdict} -> planner${first ? ` "${place(first.environment)}"` : ""}`);
+    }
     // Debug-only: resolved state after alias/registry, timeline, boundary and merge decisions.
     debug.line(`resolved status=${plan.planningStatus} fallback=${usedFallback ? "yes" : "no"} previousScene=${input.previousScene ? `${input.previousScene.sceneId} rev${input.previousScene.revision} "${input.previousScene.environment.location}" character=${debugQuote(input.previousScene.character ?? "")} attire=${debugQuote(input.previousScene.attire ?? "")}` : "none"}`);
     debug.line(`resolved protagonist=${debugQuote(singleCharacter.protagonist.name)} tags=${debugQuote(singleCharacter.protagonist.tags.join(", "), 600)} registry=[${Object.values(registry).map((entry) => `${entry.id}:${debugQuote(entry.name, 80)}${entry.aliases.length ? ` aliases=${debugQuote(entry.aliases.join("|"), 160)}` : ""} subject=${entry.subjectCategory}`).join("; ")}]${registryReport.rejectedAliases.length ? ` rejectedAliases=${registryReport.rejectedAliases.map((item) => `${debugQuote(item.alias, 60)}->${debugQuote(item.requestedFor, 60)} ownedBy=${debugQuote(item.ownedBy, 60)}`).join(", ")}` : ""}${registryReport.rejectedSubjects.length ? ` rejectedSubjects=${registryReport.rejectedSubjects.map((item) => `${debugQuote(item.name, 60)} requested=${item.requested} kept=${item.durable}`).join(", ")}` : ""}`);
@@ -2540,6 +2589,68 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
     rejectedAliases: registryReport.rejectedAliases,
     rejectedSubjects: registryReport.rejectedSubjects
   };
+}
+
+/**
+ * Known characters whose outfit System One checks this turn: continuity
+ * wardrobe (not the persona; a character with no outfit, the usual one, has
+ * nothing to compare), the most likely on stage first: the previous scene
+ * character, the previous cast, then registry order. At most 3.
+ */
+function systemOneWardrobeQuestions(
+  input: PlanTurnInput,
+  registry: CharacterRegistry,
+  isPersona: (name: string | null | undefined) => boolean,
+): WardrobeQuestion[] {
+  const canon = (name: string) => canonicalCharacterName(registry, { name }) || name.trim();
+  const start = turnStartWardrobe({
+    continuity: input.previousContinuity ?? ContinuityStateSchema.parse({ revision: 0, characters: {}, facts: {} }),
+    canon,
+    previousCharacter: input.previousScene?.character || input.singleCharacter.protagonist.name,
+    previousAttire: input.previousScene?.attire ?? null,
+  });
+  const order = [
+    input.previousScene?.character ?? "",
+    ...(input.previousScene?.cast ?? []),
+    ...Object.values(registry).map((entry) => entry.name),
+    ...[...start.values()].map((entry) => entry.name),
+  ];
+  const out: WardrobeQuestion[] = [];
+  const seen = new Set<string>();
+  for (const name of order) {
+    if (!name?.trim() || isPersona(name)) continue;
+    const key = characterAppearanceKey(canon(name));
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    const entry = start.get(key);
+    if (!entry?.attire?.trim() || isPersona(entry.name)) continue;
+    out.push({ name: entry.name, attire: entry.attire.trim() });
+    if (out.length >= MAX_WARDROBE_QUESTIONS) break;
+  }
+  return out;
+}
+
+/** Debug lines: one per System One wardrobe decision, then text-check outcomes of the others. */
+export function wardrobeDebugLines(
+  systemOne: Pick<SystemOneDecisions, "wardrobe"> | null,
+  applied: boolean,
+  notes: ReadonlyArray<WardrobeNote>,
+): string[] {
+  const lines: string[] = [];
+  const quote = (value: string | null) => value === null ? "usual outfit" : `"${value}"`;
+  const noteLine = (note: WardrobeNote) => `wardrobe ${note.character} p${note.paragraphIndex}: ${note.reason} -> ${note.kept ? `kept ${quote(note.attire)} (planner ${quote(note.proposed)})` : quote(note.attire)}`;
+  const decided = new Set<string>();
+  for (const entry of systemOne?.wardrobe ?? []) {
+    const key = characterAppearanceKey(entry.name);
+    decided.add(key);
+    const verdict = jevWardrobeSummary(entry).text;
+    const mine = notes.filter((note) => characterAppearanceKey(note.character) === key);
+    if (!applied) lines.push(`wardrobe ${entry.name}: ${verdict} -> not applied`, ...mine.map(noteLine));
+    else if (mine.length === 0) lines.push(`wardrobe ${entry.name}: ${verdict} -> kept ${quote(entry.attire)} (planner gave no new outfit)`);
+    else lines.push(...mine.map(noteLine));
+  }
+  for (const note of notes) if (!decided.has(characterAppearanceKey(note.character))) lines.push(noteLine(note));
+  return lines;
 }
 
 export function fingerprintForMessage(message: Pick<ChatMessageDTO, "id" | "swipe_id" | "content">): string {

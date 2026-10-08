@@ -168,7 +168,37 @@ Stored with `spindle.userStorage` (one JSON index, bounded: newest 64 sets,
 128 plates). Keys:
 
 - `spriteSetKeyFor({ name, identity, attire }, styleKey)` — same character,
-  outfit and style in another chat reuses the set.
+  outfit and style in another chat reuses the set. Every lookup goes through
+  `resolveSpriteSet` (`sprites/views.ts`): when the exact key is not in the
+  library, a set with the same style, name and identity and the same outfit
+  by `sameOutfit` (`src/shared/outfit.ts`; two usual outfits also match)
+  stands in (most ready images first, then the latest used), so a reworded
+  outfit, another branch or another chat does not make a new set.
+
+### Outfit and place continuity
+
+The planner describes the outfit again on most turns, often in new words.
+Before staging and image prompts, the cue timeline (`core/cue-state.ts`)
+asks `decideOutfit` (`core/change-decisions.ts`, the one swappable decision)
+whenever the planner's outfit differs from the current one:
+
+- System One on: Jev gets 3 yes/no questions per known character with an
+  outfit in continuity (not the persona; at most 3, the previous scene
+  character first): did the top, the bottoms, or the whole outfit change?
+  They go to every batch (the first 24 paragraphs). "same" (every answer
+  <= 0.2) keeps the current outfit; "changed" (any answer >= 0.6) takes the
+  planner's.
+- Unsure, no Jev, or a paragraph past Jev's 24: the `sameOutfit` text check
+  (garment categories and colours; fit, fabric and state words, legwear,
+  footwear and accessories are ignored) keeps a reworded outfit. A planner
+  outfit that repeats one overruled earlier in the turn stays overruled.
+
+A kept outfit is the same text everywhere (scene, cues, terminal state,
+continuity), so the sprite set key does not change. Jev's `scene_change`
+also goes to every batch: "same" for the turn's first scene keeps the
+previous location, time of day and weather (the plate key stays); a later
+scene in the turn is the planner's. Debug logging prints one `wardrobe` line
+per decision and one `scene:` line.
 - `plateKeyFor({ location, timeOfDay, weather }, styleKey)`.
 - `styleKey` = hash of the image connection, model override, prompt prefix,
   suffix, negative, NovelAI quality toggles, and a sprite prompt version.

@@ -4,6 +4,7 @@ import type { VisualNovelConfig } from "../../config.js";
 import type { SceneState } from "../../shared/contracts.js";
 import { POSE_EXPRESSION_CATALOGUE } from "../../shared/character.js";
 import { getAudioCatalog } from "./audio-catalog.js";
+import type { JevWardrobeAnswers } from "../core/change-decisions.js";
 
 export const SYSTEM_ONE_KEY = "system_one_api_key";
 
@@ -31,6 +32,28 @@ const Response = z.object({
 });
 type AnswerValue = z.infer<typeof Answer>;
 
+/** A known character's outfit at the start of the turn (asked about in every batch). */
+export type WardrobeQuestion = { name: string; attire: string };
+/** Raw Jev answers for one character, one value per batch (decided in core/change-decisions.ts). */
+export type WardrobeAnswers = WardrobeQuestion & JevWardrobeAnswers;
+export const MAX_WARDROBE_QUESTIONS = 3;
+/** Paragraphs Jev reads per turn (the rest of a long reply is not sent). */
+export const SYSTEM_ONE_MAX_PARAGRAPHS = 24;
+
+/** The scene question (every batch when a previous scene exists). */
+export const SCENE_CHANGE_QUESTION = { type: "noul", instructions: "Does the target response explicitly move to a different physical location, make a major time jump, or replace the visible environment? A speaker change alone is not a scene change." } as const;
+
+/** The wardrobe questions for one character (the whole question set lives here). */
+export function wardrobeQuestions(entry: WardrobeQuestion): { top: unknown; bottom: unknown; other: unknown } {
+  const outfit = entry.attire.trim().slice(0, 300);
+  const tail = `${entry.name}'s current outfit: ${outfit}. Rewording or a closer description of the same clothes is not a change. Answer no when ${entry.name} is not in these paragraphs.`;
+  return {
+    top: { type: "noul", instructions: `Does ${entry.name}'s top (shirt, blouse, sweater: the upper part of the outfit) change, come off, or get covered by something new in these paragraphs? ${tail}` },
+    bottom: { type: "noul", instructions: `Do ${entry.name}'s bottoms (skirt, pants, shorts, the lower part of the outfit) change or come off in these paragraphs? ${tail}` },
+    other: { type: "noul", instructions: `Does ${entry.name} change into a different outfit, put on or take off outerwear, a dress, an apron or swimwear, or undress in these paragraphs? ${tail}` },
+  };
+}
+
 export type SystemOneDecisions = {
   speakers: Map<number, string>;
   expressions: Map<number, string>;
@@ -38,6 +61,12 @@ export type SystemOneDecisions = {
   sfx: Map<number, string>;
   sceneChange: boolean;
   needsDescription: boolean;
+  /** Per known character with an outfit (input order); empty when none was asked. */
+  wardrobe: WardrobeAnswers[];
+  /** scene_change per batch; null without a previous scene. */
+  scene: Array<number | null> | null;
+  /** Last paragraph index Jev read; wardrobe and scene decisions cover paragraphs 0..this. */
+  coveredThrough: number;
   durationMs: number;
   inputTokens: number;
 };
@@ -49,7 +78,7 @@ function chosen(answer: AnswerValue | undefined, allowed: Set<string>, threshold
 
 export async function decidePresentation(
   spindle: SpindleAPI,
-  input: { paragraphs: Array<{ index: number; text: string }>; previousScene: SceneState | null; names: string[]; personaName?: string; config: VisualNovelConfig; userId?: string },
+  input: { paragraphs: Array<{ index: number; text: string }>; previousScene: SceneState | null; names: string[]; personaName?: string; wardrobe?: WardrobeQuestion[]; config: VisualNovelConfig; userId?: string },
 ): Promise<SystemOneDecisions | null> {
   if (input.config.systemOneMode === "off") return null;
   const key = await spindle.enclave.get(SYSTEM_ONE_KEY, input.userId);
@@ -67,11 +96,16 @@ export async function decidePresentation(
   const questions: Record<string, unknown> = {};
   // Reuse is safe only when the scene questions can see every paragraph in full.
   const completeSceneView = input.paragraphs.length <= 7 && input.paragraphs.every((paragraph) => paragraph.text.length <= 3000);
+  // scene_change goes to every batch (the scene decision); needs_description
+  // and the continuation rule still use only a complete (<= 7 paragraph) view.
+  const sceneQuestion = input.previousScene ? SCENE_CHANGE_QUESTION : null;
   if (input.previousScene && completeSceneView) {
-    questions.scene_change = { type: "noul", instructions: "Does the target response explicitly move to a different physical location, make a major time jump, or replace the visible environment? A speaker change alone is not a scene change." };
     questions.needs_description = { type: "noul", instructions: "Does the target response add a visible location, wardrobe, appearance, prop, or action not represented in the previous scene?" };
   }
-  for (const paragraph of input.paragraphs.slice(0, 24)) {
+  // Wardrobe: the known characters' current outfits, asked in every batch.
+  const wardrobe = (input.wardrobe ?? []).filter((entry) => entry.name.trim() && entry.attire.trim()).slice(0, MAX_WARDROBE_QUESTIONS);
+  const wardrobeAsked = wardrobe.map((entry) => wardrobeQuestions(entry));
+  for (const paragraph of input.paragraphs.slice(0, SYSTEM_ONE_MAX_PARAGRAPHS)) {
     const index = paragraph.index;
     questions[`speaker_${index}`] = { type: "choice", instructions: `Who speaks or owns paragraph ${index}? Choose Narrator for omniscient narration; choose unknown when the text does not identify a speaker.`, criteria: Object.fromEntries([...names, "unknown"].map((name) => [name, name === "unknown" ? "The speaker cannot be determined" : null])) };
     questions[`expression_${index}`] = { type: "choice", instructions: `Which expression should the on-screen companion show as a reaction to paragraph ${index}?`, criteria: Object.fromEntries(poses.map((pose) => [pose.id, pose.suffix])) };
@@ -79,12 +113,17 @@ export async function decidePresentation(
     if (sounds.length) questions[`sfx_${index}`] = { type: "choice", instructions: `Is a sound effect clearly called for at paragraph ${index}?`, criteria: { none: "No sound effect", ...Object.fromEntries(sounds.map((entry) => [entry.id, `${entry.name}; ${entry.tags.join(", ")}`])) } };
   }
   const started = Date.now();
-  const paragraphs = input.paragraphs.slice(0, 24);
+  const paragraphs = input.paragraphs.slice(0, SYSTEM_ONE_MAX_PARAGRAPHS);
   const batches = Array.from({ length: Math.ceil(paragraphs.length / 7) }, (_, i) => paragraphs.slice(i * 7, (i + 1) * 7));
   const parsedBatches = await Promise.all(batches.map(async (batch, batchIndex) => {
-    const batchQuestions: Record<string, unknown> = batchIndex === 0 && questions.scene_change
-      ? { scene_change: questions.scene_change, needs_description: questions.needs_description }
-      : {};
+    const batchQuestions: Record<string, unknown> = {};
+    if (sceneQuestion) batchQuestions.scene_change = sceneQuestion;
+    if (batchIndex === 0 && questions.needs_description) batchQuestions.needs_description = questions.needs_description;
+    wardrobeAsked.forEach((asked, index) => {
+      batchQuestions[`wardrobe_top_${index}`] = asked.top;
+      batchQuestions[`wardrobe_bottom_${index}`] = asked.bottom;
+      batchQuestions[`wardrobe_other_${index}`] = asked.other;
+    });
     for (const paragraph of batch) {
       for (const prefix of ["speaker", "expression", "bgm", "sfx"]) {
         const name = `${prefix}_${paragraph.index}`;
@@ -113,7 +152,7 @@ export async function decidePresentation(
   const expressions = new Map<number, string>();
   const bgm = new Map<number, string>();
   const sfx = new Map<number, string>();
-  for (const paragraph of input.paragraphs.slice(0, 24)) {
+  for (const paragraph of input.paragraphs.slice(0, SYSTEM_ONE_MAX_PARAGRAPHS)) {
     const speaker = chosen(answers[`speaker_${paragraph.index}`], new Set(names), 0.65);
     if (speaker) speakers.set(paragraph.index, speaker);
     const expression = chosen(answers[`expression_${paragraph.index}`], new Set(poseIds), 0.6);
@@ -123,12 +162,21 @@ export async function decidePresentation(
     const effect = chosen(answers[`sfx_${paragraph.index}`], new Set(["none", ...sounds.map((entry) => entry.id)]), 0.7);
     if (effect && effect !== "none") sfx.set(paragraph.index, effect);
   }
-  const scene = answers.scene_change;
+  const noul = (answer: AnswerValue | undefined): number | null => answer?.type === "noul" ? answer.noul : null;
+  // The continuation rule reads scene_change only from a complete one-batch view, as before.
+  const scene = completeSceneView ? parsedBatches[0]?.answers.scene_change : undefined;
   const description = answers.needs_description;
+  const wardrobeAnswers: WardrobeAnswers[] = wardrobe.map((entry, index) => {
+    const values = (part: string) => parsedBatches.map((batch) => noul(batch.answers[`wardrobe_${part}_${index}`]));
+    return { ...entry, top: values("top"), bottom: values("bottom"), other: values("other") };
+  });
   return {
     speakers, expressions, bgm, sfx,
     sceneChange: scene?.type !== "noul" || scene.noul > 0.2,
     needsDescription: description?.type !== "noul" || description.noul > 0.2,
+    wardrobe: wardrobeAnswers,
+    scene: sceneQuestion ? parsedBatches.map((batch) => noul(batch.answers.scene_change)) : null,
+    coveredThrough: paragraphs.at(-1)?.index ?? -1,
     durationMs: Date.now() - started,
     inputTokens: parsedBatches.reduce((total, batch) => total + (batch.usage?.input_tokens ?? 0), 0),
   };

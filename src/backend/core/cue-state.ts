@@ -11,6 +11,7 @@ import {
   type CharacterRegistry,
   type SubjectCategory
 } from "../../shared/identity.js";
+import { decideOutfit, type ChangeVerdict, type JevWardrobeAnswers, type OutfitDecisionInput } from "./change-decisions.js";
 
 type Reference = { character?: string | null | undefined; characterId?: string | null | undefined };
 type Proposal = Reference & { startParagraph: number; cast: string[]; attire?: string | null | undefined };
@@ -24,6 +25,49 @@ export type CueSnapshot = {
   identity: string;
   attire: string | null;
 };
+
+/** How the timeline treated a planner outfit that differs from the current one. */
+export type WardrobeNote = {
+  paragraphIndex: number;
+  character: string;
+  /** Who decided (decideOutfit): System One, the text check, or nobody. */
+  source: ChangeVerdict["source"];
+  decision: ChangeVerdict["decision"];
+  /** decideOutfit's reason, for the debug log. */
+  reason: string;
+  /** True when the current outfit was kept. */
+  kept: boolean;
+  /** The outfit the character has after this paragraph. */
+  attire: string | null;
+  /** The planner's outfit text. */
+  proposed: string | null;
+};
+
+/**
+ * Outfits at the start of the turn by appearance key: continuity wardrobe
+ * (folded onto canonical names; the first recorded outfit wins), then the
+ * previous scene character's attire when continuity has no entry.
+ */
+export function turnStartWardrobe(input: {
+  continuity: ContinuityState;
+  canon: (name: string) => string;
+  previousCharacter: string;
+  previousAttire: string | null;
+}): Map<string, { name: string; attire: string | null; fromContinuity: boolean }> {
+  const out = new Map<string, { name: string; attire: string | null; fromContinuity: boolean }>();
+  for (const [name, state] of Object.entries(input.continuity.characters)) {
+    const canonical = input.canon(name) || name;
+    const key = characterAppearanceKey(canonical);
+    const attire = state.wardrobe.attire ?? null;
+    const existing = out.get(key);
+    if (!existing) out.set(key, { name: canonical, attire, fromContinuity: true });
+    else if (existing.attire === null && attire !== null) existing.attire = attire;
+  }
+  const previousCharacter = input.canon(input.previousCharacter);
+  const previousKey = characterAppearanceKey(previousCharacter);
+  if (previousKey && !out.has(previousKey)) out.set(previousKey, { name: previousCharacter, attire: input.previousAttire, fromContinuity: false });
+  return out;
+}
 
 /**
  * Resolve subjects and wardrobe in reading order, independently of image limits and scene boundaries.
@@ -44,7 +88,19 @@ export function resolveCueTimeline(input: {
   continuity: ContinuityState;
   isPersona: (name: string | null | undefined) => boolean;
   isReset: (value: string) => boolean;
-}): { snapshots: CueSnapshot[]; deltas: IndexedContinuityDelta[] } {
+  /**
+   * Wardrobe decisions (core/change-decisions.ts decideOutfit). When the
+   * planner's outfit differs from the current one, a "same" verdict keeps the
+   * current outfit; anything else takes the planner's. Jev answers (by
+   * appearance key) count for paragraphs 0..coveredThrough only.
+   */
+  outfit?: {
+    jev?: ReadonlyMap<string, JevWardrobeAnswers>;
+    coveredThrough?: number;
+    paragraphs?: ReadonlyArray<string>;
+    decide?: (input: OutfitDecisionInput) => ChangeVerdict;
+  };
+}): { snapshots: CueSnapshot[]; deltas: IndexedContinuityDelta[]; wardrobeNotes: WardrobeNote[] } {
   const registry = input.registry ?? {};
   const canon = (reference: Reference | string | null | undefined): string => {
     if (reference === null || reference === undefined) return "";
@@ -55,18 +111,17 @@ export function resolveCueTimeline(input: {
   };
   const wardrobe = new Map<string, string | null>();
   const names = new Map<string, string>();
-  for (const [name, state] of Object.entries(input.continuity.characters)) {
-    // Fold wardrobe recorded under an alias into the canonical entry so a
-    // renamed reference keeps its outfit; the first recorded outfit wins.
-    const canonical = canon(name) || name;
-    const key = characterAppearanceKey(canonical);
-    if (!names.has(key)) names.set(key, canonical);
-    const attire = state.wardrobe.attire ?? null;
-    if (!wardrobe.has(key) || (wardrobe.get(key) === null && attire !== null)) wardrobe.set(key, attire);
+  // Fold wardrobe recorded under an alias into the canonical entry so a
+  // renamed reference keeps its outfit; the first recorded outfit wins.
+  const start = turnStartWardrobe({ continuity: input.continuity, canon: (name) => canon(name), previousCharacter: input.previousCharacter, previousAttire: input.previousAttire });
+  for (const [key, entry] of start) {
+    wardrobe.set(key, entry.attire);
+    if (entry.fromContinuity) names.set(key, entry.name);
   }
   const previousCharacter = canon(input.previousCharacter);
-  const previousKey = characterAppearanceKey(previousCharacter);
-  if (previousKey && !wardrobe.has(previousKey)) wardrobe.set(previousKey, input.previousAttire);
+  const wardrobeNotes: WardrobeNote[] = [];
+  const decide = input.outfit?.decide ?? decideOutfit;
+  const overruled = new Map<string, string[]>();
   const baselineName = canon(input.baseline.name);
   let character = previousCharacter || baselineName;
   const snapshots: CueSnapshot[] = [];
@@ -106,8 +161,24 @@ export function resolveCueTimeline(input: {
     const dress = (name: string, attire: string | null | undefined) => {
       if (!attire?.trim() || !name) return;
       const key = characterAppearanceKey(name);
-      const next = input.isReset(attire) ? null : attire.trim();
-      if ((wardrobe.get(key) ?? null) !== next) updates[names.get(key) ?? name] = { wardrobe: { attire: next } };
+      let next = input.isReset(attire) ? null : attire.trim();
+      const current = wardrobe.get(key) ?? null;
+      if (current !== null && current !== next) {
+        const covered = p <= (input.outfit?.coveredThrough ?? -1);
+        const proposed = next;
+        const verdict = decide({
+          character: names.get(key) ?? name,
+          previousOutfit: current,
+          plannerOutfit: next,
+          paragraphs: input.outfit?.paragraphs ?? [],
+          jev: covered ? input.outfit?.jev?.get(key) ?? null : null,
+          overruled: overruled.get(key) ?? [],
+        });
+        if (verdict.decision === "same" && next !== null) overruled.set(key, [...(overruled.get(key) ?? []), next]);
+        if (verdict.decision === "same") next = current;
+        wardrobeNotes.push({ paragraphIndex: p, character: names.get(key) ?? name, source: verdict.source, decision: verdict.decision, reason: verdict.reason, kept: next === current, attire: next, proposed });
+      }
+      if (current !== next) updates[names.get(key) ?? name] = { wardrobe: { attire: next } };
       wardrobe.set(key, next); names.set(key, names.get(key) ?? name);
     };
     for (const proposal of input.proposals.filter((s) => s.startParagraph === p)) {
@@ -126,5 +197,5 @@ export function resolveCueTimeline(input: {
     snapshots.push({ character, ...describe(character, identity), identity, attire: wardrobe.get(characterAppearanceKey(character)) ?? null });
     if (Object.keys(updates).length) deltas.push({ paragraphIndex: p, delta: { characterUpdates: updates, forgetCharacters: [], factUpdates: {} } });
   }
-  return { snapshots, deltas };
+  return { snapshots, deltas, wardrobeNotes };
 }

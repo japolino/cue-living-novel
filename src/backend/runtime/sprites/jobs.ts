@@ -10,7 +10,6 @@ import {
   spriteExpressionChain,
   spriteExpressionSet,
   spriteHash,
-  spriteSetKeyFor,
   type SpriteCastMember,
   type SpritePlateRef,
   type SpriteStaging,
@@ -47,7 +46,7 @@ import {
 import { compileKeyMomentRequest, type KeyMomentScene } from "./moment-prompts.js";
 import { compilePlateRequest, compileSpriteRequest } from "./prompts.js";
 import { spriteSeedFor, spriteSetSeedFor, spriteStyleKey } from "./style.js";
-import { plateView, spriteImageView, spriteLibraryView, spriteTurnView, stagingPlateKeys } from "./views.js";
+import { plateView, resolveSpriteSet, spriteImageView, spriteLibraryView, spriteTurnView, stagingPlateKeys } from "./views.js";
 
 /**
  * Sprite generation service (one per backend worker). The library is the
@@ -324,10 +323,13 @@ export class SpriteService {
     const needAt = (key: string, paragraph: number) => {
       if (!need.has(key) || need.get(key)! > paragraph) need.set(key, paragraph);
     };
+    const reuse: string[] = [];
     await this.library.update(userId, (library, now) => {
       for (const member of staging.cast) {
-        const setKey = spriteSetKeyFor(member, styleKey);
-        const existing = library.sets[setKey];
+        const resolved = resolveSpriteSet(library, member, styleKey);
+        const setKey = resolved.setKey;
+        const existing = resolved.set;
+        if (resolved.reusedFrom) reuse.push(`sprite set reuse: ${setKey} for ${member.name} (same outfit as ${resolved.reusedFrom}: "${existing?.attire ?? ""}" for "${member.attire ?? ""}")`);
         // An image already made (or being cut) stands in: nothing to make for it.
         const made = (expression: string) => {
           const status = existing?.images[expression]?.status;
@@ -403,6 +405,7 @@ export class SpriteService {
         state.wanted.set(key, "visible");
       }
     });
+    for (const line of reuse) this.deps.log?.(line, userId);
     // The latest turn decides the reading order (an older turn's leftovers come after it).
     state.need = need;
     state.castOrder = castOrder;
@@ -444,8 +447,9 @@ export class SpriteService {
     state: UserState,
     changed: Array<[string, StoredSpriteImage]>,
   ): string {
-    const setKey = spriteSetKeyFor(member, styleKey);
-    let set = library.sets[setKey];
+    const resolved = resolveSpriteSet(library, member, styleKey);
+    const setKey = resolved.setKey;
+    let set = resolved.set;
     if (!set) {
       set = newSpriteSet(member, setKey, styleKey, now);
       library.sets[setKey] = set;
@@ -496,7 +500,7 @@ export class SpriteService {
     const changedPlates: StoredPlate[] = [];
     await this.library.update(userId, (library, now) => {
       for (const member of staging.cast) {
-        const set = library.sets[spriteSetKeyFor(member, styleKey)];
+        const set = resolveSpriteSet(library, member, styleKey).set;
         if (!set) continue;
         for (const image of Object.values(set.images)) {
           if (image.status !== "failed") continue;
