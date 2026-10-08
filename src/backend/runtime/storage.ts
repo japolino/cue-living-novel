@@ -48,12 +48,23 @@ export type StoredTurnRecord = {
    */
   source?: { version: 2; rawFingerprint: string };
   settingsSnapshot?: Record<string, unknown>;
+  /**
+   * The chat state this turn was planned from (the state before its message).
+   * Another swipe or an edit of the same message plans from it again.
+   * Absent on records stored before baselines (see `recordBaseline`).
+   */
+  baseline?: TurnBaseline;
   attempts?: Array<{
     attemptNumber: number;
     timestamp: string;
     settings: Record<string, unknown>;
     error?: string | null;
   }>;
+};
+
+export type TurnBaseline = {
+  previousScene: SceneState | null;
+  previousContinuity: TurnPlan["terminalContinuity"] | null;
 };
 
 export type StoredChatState = {
@@ -593,6 +604,17 @@ export async function saveChatState(
   }));
 }
 
+/** A stored baseline, or nothing when it is missing or does not validate. */
+function parseTurnBaseline(raw: unknown): { baseline: TurnBaseline } | null {
+  if (!raw || typeof raw !== "object") return null;
+  const value = raw as Record<string, unknown>;
+  if (!("previousScene" in value) || !("previousContinuity" in value)) return null;
+  const scene = value.previousScene === null ? null : SceneStateSchema.safeParse(value.previousScene);
+  const continuity = value.previousContinuity === null ? null : TurnPlanSchema.shape.terminalContinuity.safeParse(value.previousContinuity);
+  if ((scene && !scene.success) || (continuity && !continuity.success)) return null;
+  return { baseline: { previousScene: scene ? scene.data : null, previousContinuity: continuity ? continuity.data : null } };
+}
+
 export async function loadTurnRecord(
   spindle: SpindleAPI,
   path: string | null,
@@ -618,6 +640,7 @@ export async function loadTurnRecord(
       ? { source: { version: 2 as const, rawFingerprint: raw.source.rawFingerprint } }
       : {}),
     ...(raw.settingsSnapshot && typeof raw.settingsSnapshot === "object" ? { settingsSnapshot: raw.settingsSnapshot as Record<string, unknown> } : {}),
+    ...(parseTurnBaseline(raw.baseline) ?? {}),
     ...(Array.isArray(raw.attempts) ? { attempts: raw.attempts as NonNullable<StoredTurnRecord["attempts"]> } : {}),
     updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : new Date(0).toISOString()
   };
