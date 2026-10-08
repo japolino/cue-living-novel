@@ -1,0 +1,314 @@
+{
+  "id": "anima29b",
+  "name": "Anima 2.9b (trimmed)",
+  "provider": "comfyui",
+  "metadata": {
+    "comfyui": {
+      "workflow_json": {
+        "625:747": {
+          "inputs": {
+            "value": ""
+          },
+          "class_type": "PrimitiveStringMultiline",
+          "_meta": {
+            "title": "API Positive Prompt"
+          }
+        },
+        "625:748": {
+          "inputs": {
+            "value": ""
+          },
+          "class_type": "PrimitiveStringMultiline",
+          "_meta": {
+            "title": "API Negative Prompt"
+          }
+        },
+        "660:652": {
+          "inputs": {
+            "value": 624
+          },
+          "class_type": "PrimitiveInt",
+          "_meta": {
+            "title": "Short side"
+          }
+        },
+        "660:651": {
+          "inputs": {
+            "value": 912
+          },
+          "class_type": "PrimitiveInt",
+          "_meta": {
+            "title": "Long side"
+          }
+        },
+        "650:757": {
+          "inputs": {
+            "switch": [
+              "611:667",
+              0
+            ],
+            "on_false": [
+              "650:265",
+              0
+            ],
+            "on_true": [
+              "650:756",
+              0
+            ]
+          },
+          "class_type": "ComfySwitchNode",
+          "_meta": {
+            "title": "Choose LoRA model"
+          }
+        },
+        "781": {
+          "inputs": {
+            "ip_adapter_name": "ip_adapter-Character_Reference-10_anima2.9b.safetensors",
+            "auto_download": true
+          },
+          "class_type": "AnimaIPAdapterLoader",
+          "_meta": {
+            "title": "IP-Adapter loader"
+          }
+        },
+        "782": {
+          "inputs": {
+            "image": "cue_hyp_raw_lr2_Ryoko_idle.png"
+          },
+          "class_type": "LoadImage",
+          "_meta": {
+            "title": "Reference image"
+          }
+        },
+        "783": {
+          "inputs": {
+            "strength": 0.5,
+            "ref_image_size": 512,
+            "siglip_layer": -1,
+            "ip_cfg_scale": 4,
+            "ip_cfg_separate": false,
+            "gray_null": false,
+            "use_lora": true,
+            "model": [
+              "650:757",
+              0
+            ],
+            "ip_adapter": [
+              "781",
+              0
+            ],
+            "ref_image": [
+              "782",
+              0
+            ]
+          },
+          "class_type": "AnimaIPAdapterApply",
+          "_meta": {
+            "title": "IP-Adapter strength and guidance"
+          }
+        },
+        "804": {
+          "inputs": {
+            "value": true
+          },
+          "class_type": "PrimitiveBoolean",
+          "_meta": {
+            "title": "Enable IP-Adapter"
+          }
+        },
+        "805": {
+          "inputs": {
+            "switch": [
+              "804",
+              0
+            ],
+            "on_false": [
+              "650:757",
+              0
+            ],
+            "on_true": [
+              "783",
+              0
+            ]
+          },
+          "class_type": "ComfySwitchNode",
+          "_meta": {
+            "title": "Reference model routing"
+          }
+        }
+      },
+      "workflow_api_json": {
+        "625:747": {
+          "inputs": {
+            "value": ""
+          },
+          "class_type": "PrimitiveStringMultiline",
+          "_meta": {
+            "title": "API Positive Prompt"
+          }
+        },
+        "625:748": {
+          "inputs": {
+            "value": ""
+          },
+          "class_type": "PrimitiveStringMultiline",
+          "_meta": {
+            "title": "API Negative Prompt"
+          }
+        },
+        "660:652": {
+          "inputs": {
+            "value": 624
+          },
+          "class_type": "PrimitiveInt",
+          "_meta": {
+            "title": "Short side"
+          }
+        },
+        "660:651": {
+          "inputs": {
+            "value": 912
+          },
+          "class_type": "PrimitiveInt",
+          "_meta": {
+            "title": "Long side"
+          }
+        },
+        "650:757": {
+          "inputs": {
+            "switch": [
+              "611:667",
+              0
+            ],
+            "on_false": [
+              "650:265",
+              0
+            ],
+            "on_true": [
+              "650:756",
+              0
+            ]
+          },
+          "class_type": "ComfySwitchNode",
+          "_meta": {
+            "title": "Choose LoRA model"
+          }
+        },
+        "781": {
+          "inputs": {
+            "ip_adapter_name": "ip_adapter-Character_Reference-10_anima2.9b.safetensors",
+            "auto_download": true
+          },
+          "class_type": "AnimaIPAdapterLoader",
+          "_meta": {
+            "title": "IP-Adapter loader"
+          }
+        },
+        "782": {
+          "inputs": {
+            "image": "cue_hyp_raw_lr2_Ryoko_idle.png"
+          },
+          "class_type": "LoadImage",
+          "_meta": {
+            "title": "Reference image"
+          }
+        },
+        "783": {
+          "inputs": {
+            "strength": 0.5,
+            "ref_image_size": 512,
+            "siglip_layer": -1,
+            "ip_cfg_scale": 4,
+            "ip_cfg_separate": false,
+            "gray_null": false,
+            "use_lora": true,
+            "model": [
+              "650:757",
+              0
+            ],
+            "ip_adapter": [
+              "781",
+              0
+            ],
+            "ref_image": [
+              "782",
+              0
+            ]
+          },
+          "class_type": "AnimaIPAdapterApply",
+          "_meta": {
+            "title": "IP-Adapter strength and guidance"
+          }
+        },
+        "804": {
+          "inputs": {
+            "value": true
+          },
+          "class_type": "PrimitiveBoolean",
+          "_meta": {
+            "title": "Enable IP-Adapter"
+          }
+        },
+        "805": {
+          "inputs": {
+            "switch": [
+              "804",
+              0
+            ],
+            "on_false": [
+              "650:757",
+              0
+            ],
+            "on_true": [
+              "783",
+              0
+            ]
+          },
+          "class_type": "ComfySwitchNode",
+          "_meta": {
+            "title": "Reference model routing"
+          }
+        }
+      },
+      "workflow_format": "api_prompt",
+      "field_mappings": [
+        {
+          "nodeId": "783",
+          "fieldName": "strength",
+          "mappedAs": "denoise"
+        },
+        {
+          "nodeId": "783",
+          "fieldName": "ref_image_size",
+          "mappedAs": "init_image"
+        },
+        {
+          "nodeId": "625:747",
+          "fieldName": "value",
+          "mappedAs": "positive_prompt"
+        },
+        {
+          "nodeId": "625:748",
+          "fieldName": "value",
+          "mappedAs": "negative_prompt"
+        },
+        {
+          "nodeId": "660:652",
+          "fieldName": "value",
+          "mappedAs": "width"
+        },
+        {
+          "nodeId": "660:651",
+          "fieldName": "value",
+          "mappedAs": "height"
+        },
+        {
+          "nodeId": "804",
+          "fieldName": "value",
+          "mappedAs": "custom"
+        }
+      ],
+      "imported_at": 1791423601858
+    }
+  }
+}

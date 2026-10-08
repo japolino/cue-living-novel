@@ -44,6 +44,8 @@ Every image shows exactly one centered protagonist composed from a stable identi
 
 **Image size.** Scene pictures are wide, so Cue asks for a landscape size. **Pictures → Image size** sets it for ComfyUI and SwarmUI in both modes: **Standard** 912×624 (the default) or **Upscaled** 1216×832. NovelAI always gets 1216×832, its largest size that costs no Anlas (unless you pick another size under NovelAI **Image dimensions**). A `width` and `height` in your **Image parameters (JSON)** win, so a workflow you sized yourself keeps its size. Other providers get no size from Cue.
 
+**ComfyUI reference switch.** Without a reference image (reference anchoring off, no portrait yet, an idle sprite, a background plate, a key moment), Cue used to send only `denoise: 0.0`. That sets the IP-Adapter strength to 0, but the IP-Adapter still loads and runs. Optional: add a Boolean node that turns the IP-Adapter on/off (for example a switch between the IP-Adapter model and the plain model), map its value as **Custom** in the Lumiverse workflow setup, and give it a title with "IP-Adapter" or "reference". Cue turns it on only when it sends a reference. Without a reference, Cue turns it off and sends no `denoise: 0.0`. Cue sends the value in `comfyui_custom_fields`, together with your own `comfyui_custom_fields` (or `custom`) from **Image parameters (JSON)**; a value you set there for the same field wins. Without such a field nothing changes.
+
 The pipeline never mutates canonical chat messages. It writes only extension-owned projections: per-turn records, per-chat state, and the single-character visual-state identity record.
 
 As with any generative system, image-provider speed and visual identity quality depend on the selected model, provider, and prompt settings. Cue does not promise a specific provider result.
@@ -147,7 +149,8 @@ compatibility, so images made under the other setting are not reused.
 
 **Limitations.** Exact match only. The captured portrait itself is not part
 of the match (only the toggle is), so once a portrait exists, renders anchored
-to it and the capture render of the same appearance count as compatible; your
+to it and the capture render of the same appearance count as compatible (the
+ComfyUI reference switch follows the reference and is not part of the match either); your
 own reference or source settings in image parameters do count. A swipe that re-enters a room
 starts a new episode. The cache does not survive a restart. Reuse means the
 same Lumiverse image id is shown in several turns; deleting it from the

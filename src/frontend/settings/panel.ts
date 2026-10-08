@@ -664,12 +664,12 @@ export class VisualNovelSettingsPanel {
                 </fieldset>
               `, { sceneOnly: true, find: find("Pictures per reply", "budget limit images cost light balanced rich") })}
               ${group("Consistent characters", `
-                <label data-check><input name="referenceAnchoring" type="checkbox" /><span>Keep each character looking the same between pictures<small>Reuses a character's first portrait as a reference for later ones.</small></span></label>
+                <label data-check><input name="referenceAnchoring" type="checkbox" /><span>Keep each character looking the same between pictures<small>Reuses a character's first portrait as a reference for later ones.</small>${more("ComfyUI: optionally add a Boolean node that turns the IP-Adapter on or off, map its value as Custom in the Lumiverse workflow setup, and give it a title with \"IP-Adapter\" or \"reference\". Cue turns it on only when it sends a reference.")}</span></label>
                 <fieldset data-reference-source hidden>
                   <legend>Reference image source</legend>
                   ${optionList("referenceSource", REFERENCE_SOURCE_OPTIONS)}
                 </fieldset>
-              `, { find: find("Consistent characters", "reference anchoring portrait same look sprites") })}
+              `, { find: find("Consistent characters", "reference anchoring portrait same look sprites ip-adapter comfyui switch") })}
               ${group("Image connection", `
                 <div data-field>
                   ${readinessRow("image")}

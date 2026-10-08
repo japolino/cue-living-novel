@@ -5,6 +5,7 @@ import { novelAiCapabilities, novelAiQualityTags, NOVELAI_NEGATIVE_DEFAULT, rend
 import { AssetJobSchema, type AssetJob, type SceneState, type TurnPlan, type VisualCue } from "../../shared/contracts.js";
 import { AssetScheduler } from "../core/asset-scheduler.js";
 import { sceneSizeParameters } from "./image-size.js";
+import { referenceSwitchParameters, resolveReferenceSwitch } from "./comfy-reference-switch.js";
 import {
   SceneImageCache,
   sceneEpisodeOf,
@@ -812,6 +813,8 @@ export async function generateAssets(
   if (provider === "novelai") config = { ...config, imageModel: config.imageModel || profile.model || "nai-diffusion-4-5-full" };
   const anchorable = referenceAnchoringEnabled(config) && provider !== null && REFERENCE_PROVIDERS.has(provider);
   const cardSource = anchorable && config.referenceSource === "card";
+  // Cached per selection; a failed lookup is null (today's behaviour).
+  const referenceSwitch = provider === "comfyui" ? await resolveReferenceSwitch(spindle, config, userId) : null;
 
   const [initialPortraits, characterAppearance] = await Promise.all([
     anchorable ? loadPortraits(spindle, plan.key.chatId, userId).catch(() => ({} as Record<string, StoredPortrait>)) : Promise.resolve({} as Record<string, StoredPortrait>),
@@ -1085,12 +1088,16 @@ export async function generateAssets(
           if (config.debugLogging && anchorable) {
             spindle.log.info(`[VN] cue p${cue.paragraphIndex}: ${portrait ? `anchored to portrait ${portrait.imageId} (${portrait.name})` : wantsCapture ? `no portrait for "${characterName}" yet — capturing this render` : `unanchored (character="${characterName}")`}`);
           }
-          const parameters = portrait && provider
-            ? { ...config.imageParameters, ...referenceParametersFor(provider, portrait, config) }
-            : {
-                ...config.imageParameters,
-                ...(provider === "comfyui" && config.imageParameters.denoise === undefined ? { denoise: 0.0 } : {})
-              };
+          // A mapped ComfyUI reference switch follows the reference: on with
+          // one, off (and no denoise 0.0) without one.
+          const switched = referenceSwitchParameters(
+            provider,
+            config.imageParameters,
+            portrait && provider ? referenceParametersFor(provider, portrait, config) : null,
+            referenceSwitch
+          );
+          if (config.debugLogging && switched.note) spindle.log.info(`[VN] cue p${cue.paragraphIndex}: ${switched.note}`);
+          const parameters = switched.parameters;
           const { connectionId, workflowId } = splitConnectionSelection(config.imageConnectionId);
           // Scene pictures are wide on the stage: send a landscape size
           // unless the user's image parameters already set one.

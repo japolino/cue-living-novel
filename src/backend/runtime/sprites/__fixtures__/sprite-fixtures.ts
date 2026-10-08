@@ -52,6 +52,8 @@ export type MockSpindleOptions = {
   gated?: boolean;
   failGenerate?: (call: GenerateCall) => string | null;
   failUpload?: boolean;
+  /** Connection metadata (ComfyUI workflow config); a function that throws simulates a failed read. */
+  metadata?: Record<string, unknown> | (() => Record<string, unknown>);
 };
 
 /** A spindle double for the sprite service: storage, image generation, upload/delete and frontend messages. */
@@ -64,6 +66,12 @@ export function mockSpindle(options: MockSpindleOptions = {}) {
   const deleted: string[] = [];
   let seq = 0;
   let failUpload = options.failUpload ?? false;
+  const withMetadata = (connection: Record<string, unknown>): Record<string, unknown> => {
+    const metadata = options.metadata;
+    if (typeof metadata === "function") Object.defineProperty(connection, "metadata", { get: metadata, enumerable: true });
+    else if (metadata) connection.metadata = metadata;
+    return connection;
+  };
   const spindle = {
     userStorage: {
       getJson: async (path: string, readOptions: { fallback: unknown; userId?: string }) => {
@@ -75,8 +83,8 @@ export function mockSpindle(options: MockSpindleOptions = {}) {
       },
     },
     imageGen: {
-      getConnection: async () => ({ provider: options.provider ?? "comfyui", model: options.provider === "novelai" ? "nai-diffusion-4-5-full" : "sdxl" }),
-      listConnections: async () => [{ provider: options.provider ?? "comfyui", model: "m", is_default: true }],
+      getConnection: async () => withMetadata({ provider: options.provider ?? "comfyui", model: options.provider === "novelai" ? "nai-diffusion-4-5-full" : "sdxl" }),
+      listConnections: async () => [withMetadata({ provider: options.provider ?? "comfyui", model: "m", is_default: true })],
       generate: async (input: GenerateCall) => {
         calls.push(input);
         seq += 1;

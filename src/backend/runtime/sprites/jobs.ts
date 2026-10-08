@@ -24,6 +24,7 @@ import {
   resolveImageProfile,
   splitConnectionSelection,
 } from "../images.js";
+import { referenceSwitchParameters, resolveReferenceSwitch } from "../comfy-reference-switch.js";
 import { fetchReferenceImageViaFrontend } from "../reference-source.js";
 import {
   SpriteCutBridge,
@@ -720,9 +721,9 @@ export class SpriteService {
     const { provider, config } = await this.providerFor(loaded, userId);
     const request = compileKeyMomentRequest({ config, provider, scene });
     const { connectionId, workflowId } = splitConnectionSelection(config.imageConnectionId);
+    const base = await this.baseParameters(userId, provider, config, null, "key moment");
     const parameters = {
-      ...config.imageParameters,
-      ...(provider === "comfyui" && config.imageParameters.denoise === undefined ? { denoise: 0.0 } : {}),
+      ...base,
       ...request.parameters,
       ...(workflowId ? { workflow_id: workflowId } : {}),
     };
@@ -1101,6 +1102,24 @@ export class SpriteService {
     return { provider, config };
   }
 
+  /**
+   * User image parameters plus the reference parameters (or null without a
+   * reference). A mapped ComfyUI reference switch is turned on with a
+   * reference and off without one (then no `denoise: 0.0`).
+   */
+  private async baseParameters(
+    userId: string | undefined,
+    provider: string | null,
+    config: VisualNovelConfig,
+    reference: Record<string, unknown> | null,
+    label: string,
+  ): Promise<Record<string, unknown>> {
+    const switchKey = provider === "comfyui" ? await resolveReferenceSwitch(this.spindle, config, userId) : null;
+    const switched = referenceSwitchParameters(provider, config.imageParameters, reference, switchKey);
+    if (switched.note) this.deps.log?.(`${label}: ${switched.note}`, userId);
+    return switched.parameters;
+  }
+
   private async generateSprite(userId: string | undefined, work: InflightWork & { kind: "sprite" }, signal: AbortSignal): Promise<{ imageId: string; imageUrl: string }> {
     const loaded = await this.deps.loadConfig(userId);
     const { provider, config } = await this.providerFor(loaded, userId);
@@ -1114,9 +1133,13 @@ export class SpriteService {
     const request = compileSpriteRequest({ config, provider, member: set, expression: work.expression, seed });
     const anchorable = referenceAnchoringEnabled(config) && provider !== null && REFERENCE_PROVIDERS.has(provider);
     const reference = anchorable && work.expression !== "idle" ? await this.idleReference(userId, set, signal) : null;
-    const base = reference && provider
-      ? { ...config.imageParameters, ...referenceParametersFor(provider, reference, config, { comfyDefaultStrength: SPRITE_REFERENCE_STRENGTH }) }
-      : { ...config.imageParameters, ...(provider === "comfyui" && config.imageParameters.denoise === undefined ? { denoise: 0.0 } : {}) };
+    const base = await this.baseParameters(
+      userId,
+      provider,
+      config,
+      reference && provider ? referenceParametersFor(provider, reference, config, { comfyDefaultStrength: SPRITE_REFERENCE_STRENGTH }) : null,
+      `sprite ${work.setKey}/${work.expression}`,
+    );
     const captureIdle = anchorable && work.expression === "idle";
     return this.generate(userId, work, signal, config, request, base, captureIdle ? work.setKey : null);
   }
@@ -1129,7 +1152,7 @@ export class SpriteService {
     if (!plate) throw new Error("This background plate is no longer in the library.");
     const seed = plate.attempts > 0 ? spriteSeedFor(work.plateKey, plate.attempts) : plate.seed;
     const request = compilePlateRequest({ config, provider, plate, seed });
-    const base = { ...config.imageParameters, ...(provider === "comfyui" && config.imageParameters.denoise === undefined ? { denoise: 0.0 } : {}) };
+    const base = await this.baseParameters(userId, provider, config, null, `plate ${work.plateKey}`);
     return this.generate(userId, work, signal, config, request, base, null);
   }
 

@@ -245,6 +245,20 @@ wanted: it keeps one pose across the expressions.
   outfit and copies less pose and fewer defects than 0.7; at 0 (no
   reference) the outfit drifts and duplicates are frequent. Scene images
   keep 0.7; NovelAI is unchanged.
+- **Reference switch (ComfyUI).** Optional: add a Boolean node that turns
+  the IP-Adapter on/off (for example a switch between the IP-Adapter model
+  and the plain model), map its value as Custom in the Lumiverse workflow
+  setup, and give it a title with "IP-Adapter" or "reference". Cue turns it
+  on only when it sends a reference (expressions with the idle reference)
+  and off for idles, plates and key moments; then it sends no `denoise: 0.0`.
+  Detection: the first `custom` mapping on a Boolean node (PrimitiveBoolean
+  or a boolean input) whose title or class type matches
+  `/ip[\s_-]?adapter|reference|\bref\b/i`
+  (`src/backend/runtime/comfy-reference-switch.ts`, read from the connection
+  profile and cached for 30 s per selection). The value goes in
+  `comfyui_custom_fields` (merged with the user's `comfyui_custom_fields` or
+  `custom`; the user's own value for that key wins). No such field, or a
+  failed lookup: unchanged (`denoise: 0.0` without a reference).
 - **Duplicate check (browser).** The cut-out kernel (`figureCheck`) checks
   the cut-out alpha: mask = alpha > 127; in the rows from 10% to 60% of the
   height, a row is split when it holds at least two opaque runs at least 25%
