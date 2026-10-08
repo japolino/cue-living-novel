@@ -5,8 +5,18 @@ import type { AssetView, BackendResponse, ConnectionCatalogOption, FrontendReque
 import { AudioEngine, VnStage, isAmbientEffect, isStageEffect } from "../stage/index.js";
 import type { AmbientEffect, StageEffect } from "../store/index.js";
 import { VisualNovelSettingsPanel } from "../settings/panel.js";
-import { DEFAULT_SPRITE_MODEL_URL } from "../../shared/sprites.js";
-import { clearCutoutModel, getCachedCutoutModelBytes, getCutoutModelState, onCutoutModelState, prepareCutoutModel } from "../sprites/cutout/index.js";
+import { DEFAULT_SPRITE_FACE_MODEL_URL, DEFAULT_SPRITE_MODEL_URL } from "../../shared/sprites.js";
+import {
+  clearCutoutModel,
+  getCachedCutoutModelBytes,
+  getCachedFaceModelBytes,
+  getCutoutModelState,
+  getFaceModelState,
+  onCutoutModelState,
+  onFaceModelState,
+  prepareCutoutModel,
+  prepareFaceModel,
+} from "../sprites/cutout/index.js";
 import type { VnChoice, VnTurnInput } from "../store/index.js";
 import { createVnHeaderLauncher } from "./manual-launcher.js";
 import { captureSimTrackerCards } from "./panel-capture.js";
@@ -26,6 +36,7 @@ import { createSpeechTransport } from "../speech/transport.js";
 import { SpeechDock } from "../speech/ui.js";
 import { SpeechSettingsSection } from "../speech/settings-ui.js";
 import { createSpriteCutService } from "../sprites/cut-service.js";
+import { createSpriteFaceService } from "../sprites/face-service.js";
 import { withPlate, withSpriteImage } from "../stage/sprite-layer.js";
 import { spriteIllustrationViewFor, type PlateView, type SpriteIllustrationView, type SpriteImageView } from "../../shared/sprites.js";
 
@@ -769,18 +780,27 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       prepareCutoutModel(configRef.current?.spriteModelUrl ?? DEFAULT_SPRITE_MODEL_URL).catch((error: unknown) => {
         settingsPanel?.setCutoutModelState({ state: "error", error: error instanceof Error ? error.message : String(error) });
       });
+      // The face finder (emote placement) comes along; its state shows its own errors.
+      prepareFaceModel(DEFAULT_SPRITE_FACE_MODEL_URL).catch(() => {});
     },
     onClearCutoutModel: () => {
       clearCutoutModel()
         .then(() => {
           settingsPanel?.setCutoutModelCachedBytes(null);
           settingsPanel?.setCutoutModelState(getCutoutModelState());
+          settingsPanel?.setFaceModelCachedBytes(null);
+          settingsPanel?.setFaceModelState(getFaceModelState());
         })
         .catch((error: unknown) => settingsPanel?.setCutoutModelState({ state: "error", error: error instanceof Error ? error.message : String(error) }));
     },
   }) : null;
   settingsPanel?.setCutoutModelState(getCutoutModelState());
   const unsubCutoutModel = settingsPanel ? onCutoutModelState((state) => settingsPanel.setCutoutModelState(state)) : () => {};
+  settingsPanel?.setFaceModelState(getFaceModelState());
+  const unsubFaceModel = settingsPanel ? onFaceModelState((state) => settingsPanel.setFaceModelState(state)) : () => {};
+  if (settingsPanel) {
+    getCachedFaceModelBytes(DEFAULT_SPRITE_FACE_MODEL_URL).then((bytes) => settingsPanel.setFaceModelCachedBytes(bytes)).catch(() => {});
+  }
   // A model cached by an earlier visit is not loaded in this page yet: show it as downloaded.
   let cachedModelUrl = "";
   function refreshCachedCutoutModel(url: string): void {
@@ -823,6 +843,16 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   const spriteCuts = createSpriteCutService({
     sendToBackend: (request) => ctx.sendToBackend(request),
     fetchImage: (imageId) => fetchLumiverseImage(imageId, (input, init) => fetch(input, init)),
+    getConfig: () => configRef.current,
+  });
+  // Face backfill for older sprites (emote placement); never delays showing them.
+  const spriteFaces = createSpriteFaceService({
+    sendToBackend: (request) => ctx.sendToBackend(request),
+    fetchImage: async (url) => {
+      const response = await fetch(url, { credentials: "same-origin" });
+      if (!response.ok) throw new Error(`Image fetch failed (${response.status}).`);
+      return response.blob();
+    },
     getConfig: () => configRef.current,
   });
 
@@ -1012,6 +1042,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       else panelCapture.fingerprint = next.sourceFingerprint;
     }
     turn = next;
+    spriteFaces.wantView(next.sprites);
     stage.setAssetProgress(computeAssetProgress(next));
     const decision = decideTurnApplication(previous, next, stage.getState().currentParagraphIndex, active, stage.getState().paragraphs.length > 0);
     vnDebug("turn decision", decision.kind, {
@@ -1193,6 +1224,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       if (pendingNextTurn) pendingNextTurn = turnWithSpriteImage(pendingNextTurn, message.setKey, message.image);
       stage.updateSpriteImage(message.setKey, message.image);
       settingsPanel?.applySpriteUpdate?.(message.setKey, message.image);
+      if (turn?.sprites && Object.values(turn.sprites.sets).some((set) => set.setKey === message.setKey)) spriteFaces.want(message.setKey, message.image);
       return;
     }
     if (type === "vn_plate_update" && message.type === "vn_plate_update") {
@@ -1303,6 +1335,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     speechDock.destroy();
     speechSettings?.destroy();
     unsubCutoutModel();
+    unsubFaceModel();
     settingsPanel?.destroy();
     settingsHandle?.destroy();
     audioEngine.destroy();
@@ -1310,6 +1343,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     gameBridge?.destroy();
     imageBridge.destroy();
     spriteCuts.dispose();
+    spriteFaces.dispose();
     for (const pending of panelRequests.values()) { clearTimeout(pending.timer); pending.reject(new Error("Panel layer closed.")); }
     panelRequests.clear();
     stage.destroy();

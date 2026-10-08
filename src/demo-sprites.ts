@@ -34,8 +34,18 @@ const BBOX: Record<string, [number, number, number, number]> = {
   ren_idle: [0.0577, 0, 0.8702, 1],
 };
 
+/**
+ * Face box of each fixture cut-out (face_detect_v1.4_n, the stage's face
+ * finder), normalized [x, y, w, h]: emotes sit on and beside the face.
+ */
+const FACE: Record<string, [number, number, number, number]> = {
+  mira_idle: [0.3669, 0.16, 0.2343, 0.1497],
+  aoi_idle: [0.3346, 0.1215, 0.2358, 0.15],
+  ren_idle: [0.3726, 0.0816, 0.2149, 0.1531],
+};
+
 function spriteImage(file: string, expression: string): SpriteImageView {
-  return { expression, status: "ready", url: asset(file), bbox: BBOX[file] ?? [0, 0, 1, 1], width: 416, height: 608 };
+  return { expression, status: "ready", url: asset(file), bbox: BBOX[file] ?? [0, 0, 1, 1], width: 416, height: 608, ...(FACE[file] ? { face: FACE[file] } : {}) };
 }
 
 /** A set with only the given expressions ready; the rest of the hot set is "missing". */

@@ -16,6 +16,7 @@ import {
   normalizeSpriteExpressionCount,
   countReady,
   describeCutoutModel,
+  describeFaceModel,
   describeSpriteLibrary,
   expressionLabel,
   formatBytes,
@@ -255,5 +256,17 @@ describe("expression thumbnails", () => {
     expect(SPRITE_LIBRARY_CSS).toContain("prefers-reduced-motion: reduce");
     const source = readFileSync(new URL("./sprite-library.ts", import.meta.url), "utf8");
     expect(source).toContain('loading: "lazy"');
+  });
+});
+
+describe("face finder line", () => {
+  test("short states under the cut-out model; basic quality says it is off", () => {
+    expect(describeFaceModel({ state: "absent" }, "basic")).toBe("Face finder: off with Basic quality. Emotes use an estimate.");
+    expect(describeFaceModel({ state: "absent" }, "best")).toMatch(/downloads once \(about 12 MB\)/);
+    expect(describeFaceModel({ state: "absent" }, "best", 12 * MB)).toMatch(/downloaded, 12/);
+    expect(describeFaceModel({ state: "downloading", receivedBytes: 6 * MB, totalBytes: 12 * MB }, "best")).toBe("Face finder: downloading… 50%");
+    expect(describeFaceModel({ state: "ready", backend: "wasm", bytes: 12 * MB }, "best")).toMatch(/^Face finder \(places emotes\): ready/);
+    expect(describeFaceModel({ state: "error", error: "HTTP 404" }, "best")).toMatch(/HTTP 404.*estimate/);
+    expect(describeFaceModel({ state: "unsupported", reason: "x" }, "best")).toMatch(/cannot run/);
   });
 });

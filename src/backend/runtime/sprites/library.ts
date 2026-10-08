@@ -67,6 +67,12 @@ export const StoredSpriteImageSchema = z.object({
   twoFigures: z.boolean().nullable().default(null),
   /** This image already had its one automatic regeneration after a flagged check. */
   autoRetried: z.boolean().default(false),
+  /**
+   * Face box of the current cut-out (browser face detector), normalized to
+   * the whole image. null: no face found. Absent: not detected yet (older
+   * data; the stage detects it once and saves it with `vn_sprite_face`).
+   */
+  face: BboxSchema.nullable().optional(),
   createdAt: Stamp,
   updatedAt: Stamp,
 });

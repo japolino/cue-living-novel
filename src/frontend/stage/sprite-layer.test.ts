@@ -7,7 +7,10 @@ import {
   narrowSpriteX,
   SPRITE_NARROW_X,
   resolveSpriteImage,
+  estimateSpriteFace,
   spriteEmoteMarkup,
+  spriteFaceSpot,
+  spriteFaceVars,
   spriteGeometry,
   spriteGeometryVars,
   spriteMirrored,
@@ -189,6 +192,59 @@ describe("sprite layout and choice helpers", () => {
         expect(markup).not.toMatch(/https?:/);
       }
     }
+  });
+});
+
+describe("face spot (emote placement)", () => {
+  // Rin full body (set_44cb544e): bbox and detected face of the idle sprite.
+  const fullBody = { bbox: [0.234, 0.046, 0.529, 0.931] as [number, number, number, number], width: 624, height: 912 };
+  const face: [number, number, number, number] = [0.444, 0.118, 0.13, 0.118];
+
+  test("a detected face: centre offset from the anchor, edges above the bottom of the figure", () => {
+    const spot = spriteFaceSpot({ ...fullBody, face });
+    const g = spriteGeometry(fullBody);
+    expect(spot.source).toBe("detected");
+    expect(spot.dx).toBeCloseTo(0.444 + 0.065 - g.cx, 6);
+    expect(spot.top).toBeCloseTo(g.by - 0.118, 6);
+    expect(spot.bottom).toBeCloseTo(g.by - 0.236, 6);
+    expect(spot.w).toBeCloseTo(0.13, 6);
+    expect(spriteFaceVars(spot)).toEqual({
+      "--vn-sprite-face-dx": String(Math.round(spot.dx * 10000) / 10000),
+      "--vn-sprite-face-top": "0.859",
+      "--vn-sprite-face-bottom": "0.741",
+      "--vn-sprite-face-w": "0.13",
+    });
+  });
+
+  test("no face (absent or null): the framing estimate; full body puts the cheeks much higher than a crop", () => {
+    const crop = { bbox: [0, 0, 1, 1] as [number, number, number, number], width: 624, height: 912 };
+    for (const image of [crop, { ...crop, face: null }]) {
+      const spot = spriteFaceSpot(image);
+      expect(spot.source).toBe("estimate");
+      expect(spot.dx).toBe(0);
+      // Thighs-up crop: cheek line about 71% up the figure, as before.
+      expect(spot.top - (spot.top - spot.bottom) * 0.62).toBeCloseTo(0.71, 2);
+    }
+    const full = spriteFaceSpot(fullBody);
+    const cheek = (full.top - (full.top - full.bottom) * 0.62) / fullBody.bbox[3];
+    expect(cheek).toBeCloseTo(0.845, 3);
+    // The detected cheek line of the real sprite is within a few percent.
+    const real = spriteFaceSpot({ ...fullBody, face });
+    expect(Math.abs((real.top - (real.top - real.bottom) * 0.62) / fullBody.bbox[3] - cheek)).toBeLessThan(0.02);
+  });
+
+  test("estimate by framing: narrow crops get a lower cheek line than wide ones, within bounds", () => {
+    const narrow = estimateSpriteFace(spriteGeometry({ bbox: [0.3, 0.01, 0.4, 0.99], width: 624, height: 912 }));
+    const wide = estimateSpriteFace(spriteGeometry({ bbox: [0, 0, 1, 1], width: 624, height: 912 }));
+    expect(narrow.cheek).toBeGreaterThan(wide.cheek);
+    expect(narrow.cheek).toBeLessThanOrEqual(0.78);
+    expect(wide.cheek).toBeGreaterThanOrEqual(0.7);
+    expect(estimateSpriteFace(spriteGeometry({ bbox: [0.2, 0.05, 0.5, 0.9], width: 624, height: 912 })).cheek).toBe(0.845);
+  });
+
+  test("a broken face box counts as unknown", () => {
+    expect(spriteFaceSpot({ bbox: [0, 0, 1, 1], face: [0.1, 0.1, 0, 0.2] }).source).toBe("estimate");
+    expect(spriteFaceSpot({ bbox: [0, 0, 1, 1], face: [Number.NaN, 0.1, 0.2, 0.2] }).source).toBe("estimate");
   });
 });
 
@@ -470,5 +526,41 @@ describe("narrow portrait layout (3 actors)", () => {
     } finally {
       restore();
     }
+  });
+});
+
+describe("SpriteLayer face vars", () => {
+  let restore: () => void;
+  let container: FakeNode;
+  let layer: SpriteLayer;
+  beforeEach(() => {
+    restore = installFakeDocument();
+    container = new FakeNode("div");
+    layer = new SpriteLayer({ container: () => container as unknown as HTMLElement });
+    layer.setEnabled(true);
+  });
+  afterEach(() => { layer.destroy(); restore(); });
+
+  test("face vars on the actor; the emote sits in the marks box (not the mirrored figure); a later face moves it", () => {
+    const sets = { mira: set("set_mira", "Mira", [ready("idle", "/mira/idle.png")]) };
+    layer.setTurn(turnView([{ actors: [actor("mira", { emote: "blush", facing: "right" })], plateKey: null, light: "day" }], sets));
+    layer.show(0, { animate: false });
+    const mira = container.querySelector('[data-vn-sprite][data-vn-sprite-key="mira"]')!;
+    expect(mira.dataset.vnSpriteMirrored).toBe("true");
+    expect(mira.dataset.vnSpriteFace).toBe("estimate");
+    expect(mira.style["--vn-sprite-face-dx"]).toBe("0");
+    const emote = mira.querySelector("[data-vn-sprite-emote]")!;
+    expect(emote.dataset.vnSpriteEmotePlace).toBe("face");
+    expect(mira.querySelector("[data-vn-sprite-marks] [data-vn-sprite-emote]")).toBe(emote);
+    expect(mira.querySelector("[data-vn-sprite-figure] [data-vn-sprite-emote]")).toBeNull();
+    expect(layer.snapshot().actors[0]!.face).toBe("estimate");
+
+    layer.updateImage("set_mira", ready("idle", "/mira/idle.png", { face: [0.3, 0.1, 0.2, 0.15] }));
+    expect(mira.dataset.vnSpriteFace).toBe("detected");
+    expect(mira.style["--vn-sprite-face-dx"]).toBe(String(Math.round((0.4 - 0.5) * 10000) / 10000));
+    expect(mira.style["--vn-sprite-face-top"]).toBe("0.9");
+    expect(mira.style["--vn-sprite-face-bottom"]).toBe("0.75");
+    expect(mira.style["--vn-sprite-face-w"]).toBe("0.2");
+    expect(layer.snapshot().actors[0]!.face).toBe("detected");
   });
 });

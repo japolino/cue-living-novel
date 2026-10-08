@@ -796,6 +796,33 @@ export function describeCutoutModel(state: CutoutModelState, quality: VisualNove
   }
 }
 
+/**
+ * One short line about the face finder (it places emotes on the face), shown
+ * under the cut-out model. It downloads with the cut-out model, or by itself
+ * the first time a sprite needs it.
+ */
+export function describeFaceModel(state: CutoutModelState, quality: VisualNovelSpriteCutout, cachedBytes: number | null = null): string {
+  if (quality === "basic") return "Face finder: off with Basic quality. Emotes use an estimate.";
+  switch (state.state) {
+    case "absent":
+      return cachedBytes && cachedBytes > 0
+        ? `Face finder (places emotes): downloaded, ${formatBytes(cachedBytes)}.`
+        : "Face finder (places emotes): downloads once (about 12 MB) when needed.";
+    case "downloading": {
+      const total = state.totalBytes && state.totalBytes > 0 ? state.totalBytes : null;
+      return total ? `Face finder: downloading… ${Math.round(Math.min(1, state.receivedBytes / total) * 100)}%` : "Face finder: downloading…";
+    }
+    case "loading":
+      return "Face finder: loading…";
+    case "ready":
+      return `Face finder (places emotes): ready, ${formatBytes(state.bytes)}.`;
+    case "unsupported":
+      return "Face finder: cannot run in this browser. Emotes use an estimate.";
+    case "error":
+      return `Face finder: could not be prepared (${state.error}). Emotes use an estimate.`;
+  }
+}
+
 /** Sprite model URL for Advanced: https (or http on this computer). Empty restores the default. */
 export function parseSpriteModelUrl(value: string): string {
   const trimmed = value.trim();

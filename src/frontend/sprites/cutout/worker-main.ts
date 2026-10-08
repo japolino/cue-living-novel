@@ -8,6 +8,7 @@
  * Without Worker support the same function runs on the main thread behind a
  * MessageChannel, so both paths share one implementation.
  */
+import type { FaceCandidate, FaceKernel } from "./face-kernel.js";
 import type { CutoutBBox, CutoutFigureCheck, CutoutKernel } from "./kernel.js";
 
 export type CutoutBackend = "webgpu" | "wasm";
@@ -23,12 +24,31 @@ export type CutoutLoadRequest = {
   numThreads: number;
 };
 
+/** Load the face detector (always on WASM: it is small, and WebGPU memory stays for the cut-out). */
+export type FaceLoadRequest = {
+  id: number;
+  type: "loadFace";
+  model: ArrayBuffer;
+  ortBaseUrl: string;
+  numThreads: number;
+  /** Lowest box score that counts as a face. */
+  threshold: number;
+};
+
 export type CutoutWorkerRequest =
   | CutoutLoadRequest
-  | { id: number; type: "cut"; image: Blob; useModel: boolean }
-  | { id: number; type: "unload" };
+  | FaceLoadRequest
+  | { id: number; type: "cut"; image: Blob; useModel: boolean; detectFace?: boolean }
+  | { id: number; type: "face"; image: Blob }
+  | { id: number; type: "unload" }
+  | { id: number; type: "unloadFace" };
 
 export type CutoutLoadResult = { backend: CutoutBackend; inputSize: number; loadMs: number; notes: string[] };
+
+export type FaceLoadResult = { backend: "wasm"; loadMs: number };
+
+/** Face detection of one image: the chosen face (null: none found) and every box found. */
+export type FaceDetectResult = { face: FaceCandidate | null; candidates: FaceCandidate[]; ms: number };
 
 export type CutoutCutTimings = { decodeMs: number; modelMs: number; cutMs: number; encodeMs: number };
 
@@ -42,6 +62,8 @@ export type CutoutWorkerCutResult = {
   figures: CutoutFigureCheck;
   /** Set when the model was requested but could not run (the result is "basic"). */
   modelError: string | null;
+  /** Face detection on the source image; absent when it was not asked for or could not run. */
+  face?: FaceDetectResult;
   timings: CutoutCutTimings;
 };
 
@@ -65,9 +87,13 @@ export type CutoutPort = {
 /** Largest image the cut-out accepts (pixels). */
 export const CUTOUT_MAX_PIXELS = 4096 * 4096;
 
-export function cutoutWorkerMain(port: CutoutPort, createKernel: () => CutoutKernel): void {
+export function cutoutWorkerMain(port: CutoutPort, createKernel: () => CutoutKernel, createFace?: () => FaceKernel): void {
   const MAX_PIXELS = 4096 * 4096;
   const kernel = createKernel();
+  const faceKernel = createFace ? createFace() : null;
+  let faceSession: any = null;
+  let faceOrt: OrtModule = null;
+  let faceThreshold = 0.3;
   type OrtModule = any;
   const ortModules: Record<string, Promise<OrtModule> | undefined> = {};
   let session: any = null;
@@ -79,6 +105,8 @@ export function cutoutWorkerMain(port: CutoutPort, createKernel: () => CutoutKer
   const coded = (code: string, text: string): Error => Object.assign(new Error(text), { code });
 
   function importOrt(base: string, backend: "webgpu" | "wasm", numThreads: number): Promise<OrtModule> {
+    // Any loaded bundle runs WASM too: the face detector reuses the cut-out's one.
+    if (backend === "wasm" && !ortModules["ort.wasm.min.mjs"] && ortModules["ort.webgpu.min.mjs"]) return ortModules["ort.webgpu.min.mjs"]!;
     const file = backend === "webgpu" ? "ort.webgpu.min.mjs" : "ort.wasm.min.mjs";
     let pending = ortModules[file];
     if (!pending) {
@@ -142,6 +170,51 @@ export function cutoutWorkerMain(port: CutoutPort, createKernel: () => CutoutKer
     throw coded(sessionFailed ? "session" : "runtime", failures.length ? failures.join("; ") : "No usable backend.");
   }
 
+  async function releaseFace(): Promise<void> {
+    const current = faceSession;
+    faceSession = null;
+    faceOrt = null;
+    if (current) { try { await current.release(); } catch { /* already gone */ } }
+  }
+
+  async function loadFace(request: FaceLoadRequest): Promise<FaceLoadResult> {
+    const started = performance.now();
+    if (typeof WebAssembly !== "object") throw coded("unsupported", "This browser has no WebAssembly.");
+    if (!faceKernel) throw coded("unsupported", "No face detector in this worker.");
+    await releaseFace();
+    let ort: OrtModule;
+    try {
+      ort = await importOrt(request.ortBaseUrl, "wasm", request.numThreads);
+    } catch (error) {
+      throw coded("runtime", "wasm runtime: " + message(error));
+    }
+    try {
+      faceSession = await ort.InferenceSession.create(new Uint8Array(request.model), { executionProviders: ["wasm"], graphOptimizationLevel: "all" });
+      faceOrt = ort;
+    } catch (error) {
+      throw coded("session", "wasm: " + message(error));
+    }
+    faceThreshold = request.threshold > 0 && request.threshold < 1 ? request.threshold : 0.3;
+    return { backend: "wasm", loadMs: performance.now() - started };
+  }
+
+  async function detectFace(rgba: Uint8ClampedArray, width: number, height: number): Promise<FaceDetectResult> {
+    const started = performance.now();
+    const ort = faceOrt, current = faceSession;
+    if (!current || !faceKernel) throw new Error("The face model is not loaded.");
+    const input = faceKernel.faceInput(rgba, width, height, kernel.resizeBilinear);
+    const tensor = new ort.Tensor("float32", input.tensor, [1, 3, input.height, input.width]);
+    const feeds: Record<string, unknown> = {};
+    feeds[current.inputNames[0]] = tensor;
+    const outputs = await current.run(feeds);
+    const output = outputs[current.outputNames[0]];
+    const data: Float32Array = typeof output.getData === "function" ? await output.getData(true) : output.data;
+    const dims: number[] = Array.isArray(output.dims) ? output.dims.map(Number) : [];
+    for (const name of Object.keys(outputs)) { try { outputs[name].dispose(); } catch { /* cpu tensor */ } }
+    const candidates = faceKernel.decode(data, dims, input, faceThreshold);
+    return { face: faceKernel.pick(candidates), candidates: candidates.slice(0, 8), ms: performance.now() - started };
+  }
+
   function makeCanvas(width: number, height: number): any {
     if (typeof g.OffscreenCanvas === "function") return new g.OffscreenCanvas(width, height);
     const canvas = g.document.createElement("canvas");
@@ -195,10 +268,15 @@ export function cutoutWorkerMain(port: CutoutPort, createKernel: () => CutoutKer
     return kernel.modelMask(data, input, width, height);
   }
 
-  async function cut(image: Blob, useModel: boolean): Promise<CutoutWorkerCutResult> {
+  async function cut(image: Blob, useModel: boolean, withFace: boolean): Promise<CutoutWorkerCutResult> {
     let t = performance.now();
     const { rgba, width, height } = await decode(image);
     const decodeMs = performance.now() - t;
+    // On the source (white background): the cut changes rgba in place below.
+    let face: FaceDetectResult | undefined;
+    if (withFace && faceSession) {
+      try { face = await detectFace(rgba, width, height); } catch { face = undefined; }
+    }
     let mask: Float32Array | null = null;
     let modelError: string | null = null;
     t = performance.now();
@@ -215,7 +293,13 @@ export function cutoutWorkerMain(port: CutoutPort, createKernel: () => CutoutKer
     t = performance.now();
     const png = await encode(result.rgba, width, height);
     const encodeMs = performance.now() - t;
-    return { png, width, height, bbox: result.bbox, quality: mask ? "best" : "basic", figures: result.figures, modelError, timings: { decodeMs, modelMs, cutMs, encodeMs } };
+    return { png, width, height, bbox: result.bbox, quality: mask ? "best" : "basic", figures: result.figures, modelError, ...(face ? { face } : {}), timings: { decodeMs, modelMs, cutMs, encodeMs } };
+  }
+
+  async function face(image: Blob): Promise<FaceDetectResult> {
+    if (!faceSession) throw new Error("The face model is not loaded.");
+    const { rgba, width, height } = await decode(image);
+    return detectFace(rgba, width, height);
   }
 
   // One request at a time, in arrival order.
@@ -227,7 +311,10 @@ export function cutoutWorkerMain(port: CutoutPort, createKernel: () => CutoutKer
       try {
         let value: unknown;
         if (request.type === "load") value = await load(request);
-        else if (request.type === "cut") value = await cut(request.image, request.useModel);
+        else if (request.type === "loadFace") value = await loadFace(request);
+        else if (request.type === "cut") value = await cut(request.image, request.useModel, request.detectFace === true);
+        else if (request.type === "face") value = await face(request.image);
+        else if (request.type === "unloadFace") { await releaseFace(); value = null; }
         else { await release(); value = null; }
         port.postMessage({ type: "result", id: request.id, ok: true, value });
       } catch (error) {

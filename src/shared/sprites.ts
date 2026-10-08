@@ -578,7 +578,32 @@ export type SpriteImageView = {
   error?: string;
   /** Ready, but the duplicate check found what looks like two figures (kept after one automatic retry). */
   twoFigures?: true;
+  /**
+   * Detected face, normalized 0..1 to the whole image: [x, y, width, height].
+   * null: the detector found no face. Absent: not detected yet (older data).
+   * Places emotes (blush on the cheeks, marks beside the head).
+   */
+  face?: SpriteFaceBox | null;
 };
+
+/** Normalized face box: [x, y, width, height], 0..1 of the whole image. */
+export type SpriteFaceBox = [number, number, number, number];
+
+/**
+ * A face box from untrusted input, clamped to the image, or null when it is
+ * not a usable box (wrong shape, not finite, empty, or tiny).
+ */
+export function normalizeSpriteFaceBox(value: unknown): SpriteFaceBox | null {
+  if (!Array.isArray(value) || value.length !== 4 || !value.every((item) => typeof item === "number" && Number.isFinite(item))) return null;
+  const clamp = (item: number) => Math.min(1, Math.max(0, item));
+  const x = clamp(value[0]);
+  const y = clamp(value[1]);
+  const w = Math.min(clamp(value[2]), 1 - x);
+  const h = Math.min(clamp(value[3]), 1 - y);
+  if (w < 0.005 || h < 0.005) return null;
+  const round = (item: number) => Math.round(item * 10000) / 10000;
+  return [round(x), round(y), round(w), round(h)];
+}
 
 export type SpriteSetView = {
   setKey: string;
@@ -665,8 +690,17 @@ export type SpriteCutMeta = {
    * from older frontends (unknown).
    */
   twoFigures?: boolean;
+  /** Detected face (see SpriteImageView.face). Absent: not detected (unknown). */
+  face?: SpriteFaceBox | null;
   durationMs: number;
 };
 
 /** Default cut-out model (ISNet-anime, Apache-2.0, SkyTNT/anime-segmentation). */
 export const DEFAULT_SPRITE_MODEL_URL = "https://huggingface.co/skytnt/anime-seg/resolve/main/isnetis.onnx";
+
+/**
+ * Face detector for emote placement (YOLOv8n, 12 MB, MIT licence,
+ * deepghs/anime_face_detection face_detect_v1.4_n). Found the face in all
+ * 275 test sprites, slime, animal and monster girls included.
+ */
+export const DEFAULT_SPRITE_FACE_MODEL_URL = "https://huggingface.co/deepghs/anime_face_detection/resolve/main/face_detect_v1.4_n/model.onnx";

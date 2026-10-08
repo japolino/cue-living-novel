@@ -66,6 +66,7 @@ export function spriteImageView(image: StoredSpriteImage): SpriteImageView {
     ...(image.status === "failed" && image.error ? { error: image.error } : {}),
     ...(image.status === "ready" && !ready ? { error: "The cut-out is missing." } : {}),
     ...(ready && image.twoFigures === true ? { twoFigures: true as const } : {}),
+    ...(ready && image.face !== undefined ? { face: image.face ? [...image.face] as [number, number, number, number] : null } : {}),
   };
 }
 

@@ -1712,6 +1712,13 @@ async function handleFrontendMessage(spindle: SpindleAPI, request: FrontendReque
       spriteService(spindle).handleCutResult(userId, request);
       return;
     }
+    case "vn_sprite_face": {
+      // A face the browser detected on an older cut-out (emote placement).
+      if (typeof request.setKey !== "string" || request.setKey.length > 512 || typeof request.expression !== "string" || request.expression.length > 80) return;
+      if (typeof request.url !== "string" || request.url.length > 2048) return;
+      await spriteService(spindle).saveFace(userId, request);
+      return;
+    }
     case "vn_get_sprite_library":
       await spriteService(spindle).sendLibrary(userId);
       return;

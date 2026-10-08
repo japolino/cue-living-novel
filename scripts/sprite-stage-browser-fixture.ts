@@ -42,8 +42,19 @@ const CAST = [
   { characterKey: "yuki", name: "Yuki", identity: "silver hair", attire: "white dress" },
 ];
 
+/** Detected face of each fixture cut-out (face_detect_v1.4_n), normalized [x, y, w, h]. */
+const FACE: Record<string, [number, number, number, number]> = {
+  mira_idle: [0.3669, 0.16, 0.2343, 0.1497],
+  mira_surprised: [0.3379, 0.1397, 0.2968, 0.2147],
+  aoi_idle: [0.3346, 0.1215, 0.2358, 0.15],
+  aoi_sad: [0.3516, 0.1097, 0.2926, 0.1943],
+  ren_idle: [0.3726, 0.0816, 0.2149, 0.1531],
+  kaede_idle: [0.4023, 0.1373, 0.2394, 0.1564],
+  yuki_idle: [0.3868, 0.1296, 0.2331, 0.1577],
+};
+
 export function spriteImage(file: string, expression: string): SpriteImageView {
-  return { expression, status: "ready", url: `/sprites/${file}.webp`, bbox: BBOX[file] ?? [0, 0, 1, 1], width: 416, height: 608 };
+  return { expression, status: "ready", url: `/sprites/${file}.webp`, bbox: BBOX[file] ?? [0, 0, 1, 1], width: 416, height: 608, ...(FACE[file] ? { face: FACE[file] } : {}) };
 }
 
 function makeSet(key: string, name: string, ready: Record<string, string>): SpriteSetView {

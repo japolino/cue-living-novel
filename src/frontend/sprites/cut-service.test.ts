@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_CONFIG, type VisualNovelConfig } from "../../config.js";
 import type { FrontendRequest } from "../../protocol.js";
-import { SPRITE_CUT_CHUNK_CHARS } from "../../shared/sprites.js";
+import { DEFAULT_SPRITE_FACE_MODEL_URL, SPRITE_CUT_CHUNK_CHARS } from "../../shared/sprites.js";
 import { blobToBase64, chunkBase64, createSpriteCutService, type SpriteCutRequest } from "./cut-service.js";
 import type { CutoutOptions, CutoutResult } from "./cutout/index.js";
 
@@ -51,6 +51,19 @@ describe("sprite cut service", () => {
     const { service, sent } = setup({ cut: async () => result(new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" }), { twoFigures: true, splitShare: 0.7 }) });
     await service.handle(request("two"));
     expect(sent[0]!.meta?.twoFigures).toBe(true);
+  });
+
+  test("the face box travels in the meta (also null); absent when it was not detected", async () => {
+    const png = () => new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" });
+    for (const face of [[0.4, 0.1, 0.2, 0.15] as [number, number, number, number], null]) {
+      const { service, sent, cuts } = setup({ cut: async () => result(png(), { face }) });
+      await service.handle(request("f"));
+      expect(cuts[0]!.options.faceModelUrl).toBe(DEFAULT_SPRITE_FACE_MODEL_URL);
+      expect(sent[0]!.meta?.face).toEqual(face);
+    }
+    const { service, sent } = setup();
+    await service.handle(request("none"));
+    expect(sent[0]!.meta && "face" in sent[0]!.meta).toBe(false);
   });
 
   test("without config: best quality and the default model", async () => {

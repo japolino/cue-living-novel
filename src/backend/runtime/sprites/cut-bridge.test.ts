@@ -171,3 +171,15 @@ describe("cut bridge", () => {
     expect([...decodeBase64(toBase64(bytes))]).toEqual([...bytes]);
   });
 });
+
+describe("cut meta: face box", () => {
+  test("a face box is clamped and kept, null kept, a broken one dropped (unknown)", () => {
+    const size = { width: 832, height: 1216 };
+    expect(normalizeCutMeta({ ...META, face: [0.4, 0.1, 0.2, 0.15] }, size)!.face).toEqual([0.4, 0.1, 0.2, 0.15]);
+    expect(normalizeCutMeta({ ...META, face: [0.9, -0.1, 0.3, 0.2] }, size)!.face).toEqual([0.9, 0, 0.1, 0.2]);
+    expect(normalizeCutMeta({ ...META, face: null }, size)!.face).toBeNull();
+    expect("face" in normalizeCutMeta({ ...META, face: [0.4, "x", 0.2, 0.15] }, size)!).toBe(false);
+    expect("face" in normalizeCutMeta({ ...META, face: [0.4, 0.1, 0, 0.15] }, size)!).toBe(false);
+    expect("face" in normalizeCutMeta(META, size)!).toBe(false);
+  });
+});

@@ -671,3 +671,58 @@ describe("sprite jobs: set seed and user regeneration", () => {
     expect(set.seed).not.toBe(oldSeed);
   });
 });
+
+describe("sprite jobs: face boxes", () => {
+  async function readyIdle(f: ReturnType<typeof setup>, meta: Record<string, unknown> = CUT_META) {
+    await f.service.prepareCast("u1", [MIRA], spriteConfig());
+    await f.service.settle("u1");
+    const setKey = spriteSetKeyFor(MIRA, f.styleKey);
+    f.answerCut(f.cutRequests()[0]!, meta);
+    await f.service.settle("u1");
+    return setKey;
+  }
+
+  test("a face from the cut is stored and sent; old cut meta without one leaves it unknown", async () => {
+    const f = setup();
+    const setKey = await readyIdle(f, { ...CUT_META, face: [0.4, 0.1, 0.2, 0.15] });
+    const idle = (await f.library()).sets[setKey]!.images.idle!;
+    expect(idle.face).toEqual([0.4, 0.1, 0.2, 0.15]);
+    const update = f.of("vn_sprite_update").find((message) => (message.image as { status: string }).status === "ready");
+    expect((update!.image as { face?: unknown }).face).toEqual([0.4, 0.1, 0.2, 0.15]);
+    const g = setup();
+    const other = await readyIdle(g);
+    expect("face" in (await g.library()).sets[other]!.images.idle!).toBe(false);
+  });
+
+  test("saveFace fills a missing face of the current cut-out once, and broadcasts it", async () => {
+    const f = setup();
+    const setKey = await readyIdle(f);
+    const idle = (await f.library()).sets[setKey]!.images.idle!;
+    const url = idle.cutUrl!;
+    const before = f.of("vn_sprite_update").length;
+    // Wrong URL (a replaced cut-out), bad box, unknown set: ignored.
+    expect(await f.service.saveFace("u1", { setKey, expression: "idle", url: "/api/v1/images/old", face: [0.4, 0.1, 0.2, 0.15] })).toBe(false);
+    expect(await f.service.saveFace("u1", { setKey, expression: "idle", url, face: [0.4, 0.1] })).toBe(false);
+    expect(await f.service.saveFace("u1", { setKey: "set_nope", expression: "idle", url, face: null })).toBe(false);
+    expect(await f.service.saveFace("u1", { setKey, expression: "idle", url, face: [0.4, 0.1, 0.2, 0.15] })).toBe(true);
+    await f.service.library.flush("u1");
+    expect(f.stored()!.sets[setKey]!.images.idle!.face).toEqual([0.4, 0.1, 0.2, 0.15]);
+    const sent = f.of("vn_sprite_update").slice(before);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ setKey, image: { expression: "idle", face: [0.4, 0.1, 0.2, 0.15] } });
+    // Already known: not overwritten.
+    expect(await f.service.saveFace("u1", { setKey, expression: "idle", url, face: null })).toBe(false);
+  });
+
+  test("null (no face found) is stored too; a re-cut forgets the face", async () => {
+    const f = setup();
+    const setKey = await readyIdle(f);
+    const url = (await f.library()).sets[setKey]!.images.idle!.cutUrl!;
+    expect(await f.service.saveFace("u1", { setKey, expression: "idle", url, face: null })).toBe(true);
+    expect((await f.library()).sets[setKey]!.images.idle!.face).toBeNull();
+    const update = f.of("vn_sprite_update").at(-1)!;
+    expect((update.image as { face?: unknown }).face).toBeNull();
+    await f.service.action("u1", { type: "vn_sprite_action", action: "recut", setKey, expression: "idle" }, { config: spriteConfig() });
+    expect("face" in (await f.library()).sets[setKey]!.images.idle!).toBe(false);
+  });
+});

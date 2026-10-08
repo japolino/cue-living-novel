@@ -7,6 +7,8 @@ import {
   clearCutoutModel,
   configureCutoutRuntime,
   cutSprite,
+  detectSpriteFace,
+  getFaceModelState,
   getCutoutModelState,
   getCutoutRunnerMode,
   onCutoutModelState,
@@ -36,6 +38,23 @@ const decodePng = async (blob: Blob): Promise<FakePixels> => JSON.parse(await bl
 
 const FAKE_ORT = `
 export const env = { wasm: {}, webgpu: {} };
+// Fake YOLO face detector: one box around the dark pixels (score 0.9), a
+// shifted duplicate (NMS drops it) and a weak box (below the threshold).
+function fakeFaceSession(found) {
+  return {
+    inputNames: ["images"], outputNames: ["output0"], inputMetadata: [{ shape: ["batch", 3, "height", "width"] }],
+    async run(feeds) {
+      const t = feeds.images; const h = t.dims[2], w = t.dims[3];
+      let x0 = w, y0 = h, x1 = -1, y1 = -1;
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (t.data[y * w + x] < 0.5) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x + 1); y1 = Math.max(y1, y + 1); }
+      const rows = [[(x0 + x1) / 2, (y0 + y1) / 2, x1 - x0, y1 - y0, found ? 0.9 : 0.1], [(x0 + x1) / 2 + 0.5, (y0 + y1) / 2, x1 - x0, y1 - y0, found ? 0.8 : 0.1], [4, 4, 4, 4, 0.2]];
+      const data = new Float32Array(15);
+      rows.forEach((row, i) => row.forEach((v, c) => { data[c * 3 + i] = v; }));
+      return { output0: { data, dims: [1, 5, 3], dispose() {} } };
+    },
+    async release() {},
+  };
+}
 export class Tensor { constructor(type, data, dims) { this.type = type; this.data = data; this.dims = dims; } }
 export const InferenceSession = {
   async create(bytes, options) {
@@ -43,6 +62,7 @@ export const InferenceSession = {
     globalThis.__fakeOrtCreates = (globalThis.__fakeOrtCreates ?? 0) + 1;
     globalThis.__fakeOrtOptions = options;
     if (head === "BROKEN") throw new Error("failed to allocate");
+    if (head === "FACEMD" || head === "NOFACE") return fakeFaceSession(head === "FACEMD");
     return {
       inputNames: ["img"], outputNames: ["mask"], inputMetadata: [{ shape: [1, 3, 16, 16] }],
       async run(feeds) {
@@ -91,7 +111,8 @@ beforeAll(() => {
     if (url.startsWith("file:")) return (saved.fetch as typeof fetch)(input);
     fetches.push(url);
     if (url.includes("missing")) return new Response("nope", { status: 404 });
-    const body = url.includes("broken") ? "BROKEN".padEnd(4096, "x") : url.includes("throws") ? "THROWS".padEnd(4096, "x") : modelBody;
+    const body = url.includes("broken") ? "BROKEN".padEnd(4096, "x") : url.includes("throws") ? "THROWS".padEnd(4096, "x")
+      : url.includes("noface") ? "NOFACE".padEnd(4096, "x") : url.includes("face") ? "FACEMD".padEnd(4096, "x") : modelBody;
     return new Response(body, { headers: { "Content-Length": String(body.length) } });
   };
 });
@@ -223,5 +244,43 @@ describe("cut-out runtime", () => {
     expect(getCutoutModelState()).toEqual({ state: "absent" });
     await prepareCutoutModel("https://models.test/isnet.onnx");
     expect(fetches).toHaveLength(2);
+  });
+
+  test("best cut with the face model: the face box rides along", async () => {
+    configure();
+    const result = await cutSprite(sprite(), { quality: "best", modelUrl: "https://models.test/isnet.onnx", faceModelUrl: "https://models.test/face.onnx" });
+    expect(result.quality).toBe("best");
+    expect(fetches).toEqual(["https://models.test/isnet.onnx", "https://models.test/face.onnx"]);
+    expect(result.face).toEqual([5 / 16, 4 / 16, 6 / 16, 8 / 16]);
+    expect(getFaceModelState()).toEqual({ state: "ready", backend: "wasm", bytes: 4096 });
+    // Basic cuts never download the face model.
+    const basic = await cutSprite(sprite(), { quality: "basic", modelUrl: "", faceModelUrl: "https://models.test/face.onnx" });
+    expect(basic.face).toBeUndefined();
+  });
+
+  test("face model download fails: the cut still works, face is unknown", async () => {
+    configure();
+    const result = await cutSprite(sprite(), { quality: "best", modelUrl: "https://models.test/isnet.onnx", faceModelUrl: "https://models.test/missing-face.onnx" });
+    expect(result.quality).toBe("best");
+    expect(result.face).toBeUndefined();
+    expect(getFaceModelState().state).toBe("error");
+  });
+
+  test("detectSpriteFace: a cut-out on transparent counts as on white; no face gives null", async () => {
+    configure();
+    const cutout = fakeImage(16, 16, (x, y) => (x >= 5 && x < 11 && y >= 4 && y < 12 ? [30, 30, 40, 255] : [0, 0, 0, 0]));
+    const found = await detectSpriteFace(cutout, { modelUrl: "https://models.test/face.onnx" });
+    expect(found.face).toEqual([5 / 16, 4 / 16, 6 / 16, 8 / 16]);
+    expect(found.score).toBeCloseTo(0.9, 5);
+    expect(found.count).toBe(1);
+    const none = await detectSpriteFace(cutout, { modelUrl: "https://models.test/noface.onnx" });
+    expect(none).toMatchObject({ face: null, score: null, count: 0 });
+    await clearCutoutModel();
+    expect(getFaceModelState()).toEqual({ state: "absent" });
+  });
+
+  test("detectSpriteFace rejects when the face model cannot be fetched", async () => {
+    configure();
+    await expect(detectSpriteFace(sprite(), { modelUrl: "https://models.test/missing-face.onnx" })).rejects.toThrow(/404/);
   });
 });

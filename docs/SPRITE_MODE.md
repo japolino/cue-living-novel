@@ -451,6 +451,13 @@ layers, crossfaded) → ambient overlay (behind sprites) → `[data-vn-sprites]`
 - Motion and emotes: CSS/inline SVG, scaled by intensity, respect effect
   intensity and reduced motion. Idle breathing and a small talking bob while
   the focused speaker's line types out.
+- Emote placement: from the image's face box (`face`, see "Face boxes"):
+  blush on the cheek line (62% down the face box, 0.9 face widths wide),
+  side marks at the temple toward the stage centre, gloom over the forehead,
+  sizes from the face width. Without a box, an estimate from the framing
+  (`estimateSpriteFace`: full body when the figure ends above the image
+  bottom, else a crop). Emotes sit in `[data-vn-sprite-marks]`, which
+  breathes with the figure but is not mirrored (x is flipped in CSS).
 - Light: CSS filter presets per `SpriteLight`.
 - A set with nothing ready shows no sprite and a status badge
   ("Preparing Mira 0/4"; the total is the set size); an unready expression
@@ -478,6 +485,21 @@ median of the image border.
 "basic" quality skips the model. The model is downloaded once from
 `spriteModelUrl` and cached in the browser; onnxruntime-web is loaded lazily
 (WebGPU, else WASM) so the frontend bundle stays small.
+
+### Face boxes
+
+A small face detector (`DEFAULT_SPRITE_FACE_MODEL_URL`: deepghs
+face_detect_v1.4_n, YOLOv8n, 12 MB, MIT) runs in the cut-out worker on WASM
+("best" quality only), on the source image on white, stretched to 448x640.
+Highest-scoring box above 0.5 wins. Bench on 275 library cut-outs (humans,
+cat, rat, bee, slime and monster girls, old crops and full body): a face on
+all 275, the 5 extra boxes are real second figures; ~280 ms per image in
+Chromium WASM, one thread. The box rides on the cut meta and is stored on
+the library image (`face`: box, null = none found, absent = unknown).
+Backfill: when a staged set has ready images without `face`, the browser
+detects them once in the background (`face-service.ts`, after a short delay,
+one at a time) and sends `vn_sprite_face`; the backend stores it only if the
+image still has that cut-out and no face, and broadcasts `vn_sprite_update`.
 
 ## Implementation notes (v1)
 
@@ -643,12 +665,12 @@ Stage:
   size stays the same) and fit the space above it; the lower 16% fades out.
 - Facing rule: sprites are assumed to face the viewer or screen left
   (`SPRITE_NATURAL_FACING = "left"`); "right" mirrors around the bbox centre.
-- Head position is estimated from the bbox top (emotes, blush).
+- Emotes follow the detected face box; without one, the framing estimate.
 
 ## Not in v1
 
 Mouth/blink variants (lip flap), face-only repaint for expression variants,
-persona sprite, a per-image face box / natural orientation. Known gap: after switching back to scene mode, a
+persona sprite, a per-image natural orientation. Known gap: after switching back to scene mode, a
 sprite-planned turn is replanned only on the next reply, swipe or refresh.
 (Wave 2 added key-moment illustrations with two-character interactions, the
 front ambient layer, parallax, grounding and rim light, the narrow 3-actor

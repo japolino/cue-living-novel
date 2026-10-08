@@ -68,6 +68,7 @@ import {
   KEY_ILLUSTRATION_OPTIONS,
   normalizeKeyIllustrations,
   describeCutoutModel,
+  describeFaceModel,
   normalizePresentationMode,
   normalizeSpriteCutout,
   normalizeSpriteImageSize,
@@ -464,6 +465,8 @@ export class VisualNovelSettingsPanel {
   private spriteLibrary!: SpriteLibraryView;
   private spriteLibraryVisible = false;
   private cutoutModelState: CutoutModelState = { state: "absent" };
+  private faceModelState: CutoutModelState = { state: "absent" };
+  private faceCachedBytes: number | null = null;
   /** Bytes of a model cached in this browser but not loaded in this page yet. */
   private cutoutCachedBytes: number | null = null;
   private cutoutConfirmTimer: ReturnType<typeof setTimeout> | null = null;
@@ -646,9 +649,10 @@ export class VisualNovelSettingsPanel {
                   <fieldset aria-label="Cut-out quality" ${find("Cut-out quality", "sprites cutout cut-out background removal transparent model download isnet quality basic best")}>
                     ${optionList("spriteCutout", SPRITE_CUTOUT_OPTIONS)}
                   </fieldset>
-                  <div data-readiness="cutout" data-level="loading" ${find("Cut-out model", "sprites cutout cut-out background removal model download remove onnx isnet storage")}>
+                  <div data-readiness="cutout" data-level="loading" ${find("Cut-out model", "sprites cutout cut-out background removal model download remove onnx isnet storage face finder emotes blush")}>
                     <div>
                       <b data-readiness-title></b><small data-readiness-action></small>
+                      <small data-face-readiness></small>
                       <progress data-cutout-progress max="1" value="0" hidden aria-label="Model download"></progress>
                       <div data-actions><button type="button" data-cutout-download>Download model</button><button type="button" data-cutout-remove>Remove downloaded model</button></div>
                     </div>
@@ -1931,6 +1935,7 @@ export class VisualNovelSettingsPanel {
     row.dataset.state = this.cutoutModelState.state;
     row.querySelector("[data-readiness-title]")!.textContent = summary.title;
     row.querySelector("[data-readiness-action]")!.textContent = summary.detail;
+    row.querySelector("[data-face-readiness]")!.textContent = describeFaceModel(this.faceModelState, config.spriteCutout, this.faceCachedBytes);
     const progress = row.querySelector<HTMLProgressElement>("[data-cutout-progress]")!;
     progress.hidden = this.cutoutModelState.state !== "downloading";
     if (summary.progress === null) progress.removeAttribute("value");
@@ -1949,6 +1954,18 @@ export class VisualNovelSettingsPanel {
   /** Cut-out model state from the browser cut-out module (`onCutoutModelState`). */
   setCutoutModelState(state: CutoutModelState): void {
     this.cutoutModelState = state;
+    this.renderCutoutModel();
+  }
+
+  /** Face finder state from the browser cut-out module (`onFaceModelState`). */
+  setFaceModelState(state: CutoutModelState): void {
+    this.faceModelState = state;
+    this.renderCutoutModel();
+  }
+
+  /** Size of the face model already cached in this browser, or null. */
+  setFaceModelCachedBytes(bytes: number | null): void {
+    this.faceCachedBytes = bytes && bytes > 0 ? bytes : null;
     this.renderCutoutModel();
   }
 

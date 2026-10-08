@@ -228,3 +228,23 @@ describe("sprite views", () => {
     expect(spriteLibraryView(library).sets.map((set) => set.name)).toEqual(["B", "A"]);
   });
 });
+
+describe("sprite library: face boxes", () => {
+  test("old images without a face load as unknown; a box and null persist", () => {
+    const set = newSpriteSet(member, "set_a", STYLE, "2026-01-01T00:00:00.000Z");
+    const ready = { ...set.images.idle!, status: "ready" as const, cutImageId: "c1", cutUrl: "/api/v1/images/c1", bbox: [0, 0, 1, 1] as [number, number, number, number] };
+    const raw = JSON.parse(JSON.stringify({ version: 1, sets: { set_a: { ...set, images: {
+      idle: ready,
+      smile: { ...ready, expression: "smile", face: [0.4, 0.1, 0.2, 0.15] },
+      sad: { ...ready, expression: "sad", face: null },
+    } } }, plates: {}, updatedAt: "x" }));
+    const images = normalizeSpriteLibrary(raw).sets.set_a!.images;
+    expect("face" in images.idle!).toBe(false);
+    expect(images.smile!.face).toEqual([0.4, 0.1, 0.2, 0.15]);
+    expect(images.sad!.face).toBeNull();
+    const view = spriteSetView(normalizeSpriteLibrary(raw).sets.set_a!);
+    expect("face" in view.expressions.idle!).toBe(false);
+    expect(view.expressions.smile!.face).toEqual([0.4, 0.1, 0.2, 0.15]);
+    expect(view.expressions.sad!.face).toBeNull();
+  });
+});

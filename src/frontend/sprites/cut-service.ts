@@ -1,6 +1,6 @@
 import type { VisualNovelConfig } from "../../config.js";
 import type { BackendResponse, FrontendRequest } from "../../protocol.js";
-import { DEFAULT_SPRITE_MODEL_URL, SPRITE_CUT_CHUNK_CHARS, SPRITE_CUT_MAX_BYTES } from "../../shared/sprites.js";
+import { DEFAULT_SPRITE_FACE_MODEL_URL, DEFAULT_SPRITE_MODEL_URL, SPRITE_CUT_CHUNK_CHARS, SPRITE_CUT_MAX_BYTES } from "../../shared/sprites.js";
 import { cutSprite, type CutoutOptions, type CutoutResult } from "./cutout/index.js";
 
 export type SpriteCutRequest = Extract<BackendResponse, { type: "vn_sprite_cut" }>;
@@ -61,6 +61,7 @@ export function createSpriteCutService(deps: SpriteCutServiceDeps): SpriteCutSer
       const result = await cut(image, {
         quality: config?.spriteCutout ?? "best",
         modelUrl: config?.spriteModelUrl || DEFAULT_SPRITE_MODEL_URL,
+        faceModelUrl: DEFAULT_SPRITE_FACE_MODEL_URL,
         signal: controller.signal,
       });
       if (controller.signal.aborted) return;
@@ -75,7 +76,7 @@ export function createSpriteCutService(deps: SpriteCutServiceDeps): SpriteCutSer
           chunkCount: chunks.length,
           dataBase64,
           ...(chunkIndex === 0
-            ? { meta: { width: result.width, height: result.height, bbox: result.bbox, quality: result.quality, twoFigures: result.twoFigures === true, durationMs: Math.round(result.durationMs) } }
+            ? { meta: { width: result.width, height: result.height, bbox: result.bbox, quality: result.quality, twoFigures: result.twoFigures === true, ...(result.face !== undefined ? { face: result.face } : {}), durationMs: Math.round(result.durationMs) } }
             : {}),
         });
       });

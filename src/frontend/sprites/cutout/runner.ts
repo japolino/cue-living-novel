@@ -3,6 +3,7 @@
  * thread). When a Worker cannot start (no Worker, CSP), the same code runs
  * on the main thread behind a MessageChannel.
  */
+import { createFaceKernel } from "./face-kernel.js";
 import { createCutoutKernel } from "./kernel.js";
 import {
   cutoutWorkerMain,
@@ -11,6 +12,8 @@ import {
   type CutoutPort,
   type CutoutWorkerCutResult,
   type CutoutWorkerResponse,
+  type FaceDetectResult,
+  type FaceLoadResult,
 } from "./worker-main.js";
 
 export type CutoutRunnerMode = "worker" | "inline";
@@ -20,14 +23,18 @@ export type CutoutRunner = {
   /** True once the worker crashed or was terminated; start a new runner. */
   isClosed(): boolean;
   load(model: ArrayBuffer, options: { ortBaseUrl: string; backend: CutoutBackendPreference; numThreads: number }): Promise<CutoutLoadResult>;
-  cut(image: Blob, useModel: boolean): Promise<CutoutWorkerCutResult>;
+  cut(image: Blob, useModel: boolean, detectFace?: boolean): Promise<CutoutWorkerCutResult>;
   unload(): Promise<void>;
+  loadFace(model: ArrayBuffer, options: { ortBaseUrl: string; numThreads: number; threshold: number }): Promise<FaceLoadResult>;
+  /** Detect the face of one image (the face model must be loaded). */
+  face(image: Blob): Promise<FaceDetectResult>;
+  unloadFace(): Promise<void>;
   terminate(): void;
 };
 
 /** Source of the worker script (exported for tests). */
 export function cutoutWorkerSource(): string {
-  return `"use strict";\n(${String(cutoutWorkerMain)})(self, ${String(createCutoutKernel)});\n`;
+  return `"use strict";\n(${String(cutoutWorkerMain)})(self, ${String(createCutoutKernel)}, ${String(createFaceKernel)});\n`;
 }
 
 type Endpoint = {
@@ -72,8 +79,11 @@ function connect(endpoint: Endpoint, mode: CutoutRunnerMode, onClose: () => void
     mode,
     isClosed: () => closed,
     load: (model, options) => call<CutoutLoadResult>({ type: "load", model, ...options }, [model]),
-    cut: (image, useModel) => call<CutoutWorkerCutResult>({ type: "cut", image, useModel }),
+    cut: (image, useModel, detectFace = false) => call<CutoutWorkerCutResult>({ type: "cut", image, useModel, detectFace }),
     unload: () => call<void>({ type: "unload" }),
+    loadFace: (model, options) => call<FaceLoadResult>({ type: "loadFace", model, ...options }, [model]),
+    face: (image) => call<FaceDetectResult>({ type: "face", image }),
+    unloadFace: () => call<void>({ type: "unloadFace" }),
     terminate: () => fail("The cut-out worker was stopped."),
     handleFailure: fail,
   };
@@ -81,7 +91,7 @@ function connect(endpoint: Endpoint, mode: CutoutRunnerMode, onClose: () => void
 
 function startInline(): CutoutRunner {
   const channel = new MessageChannel();
-  cutoutWorkerMain(channel.port2 as unknown as CutoutPort, createCutoutKernel);
+  cutoutWorkerMain(channel.port2 as unknown as CutoutPort, createCutoutKernel, createFaceKernel);
   const runner = connect(channel.port1, "inline", () => { channel.port1.close(); channel.port2.close(); });
   return runner;
 }

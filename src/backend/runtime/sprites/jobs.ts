@@ -7,6 +7,7 @@ import { POSE_EXPRESSION_CATALOGUE } from "../../../shared/character.js";
 import {
   SPRITE_HOT_SET,
   normalizeSpriteExpressionCount,
+  normalizeSpriteFaceBox,
   spriteExpressionChain,
   spriteExpressionSet,
   spriteHash,
@@ -545,6 +546,7 @@ export class SpriteService {
     image.cutImageId = null;
     image.cutUrl = null;
     image.bbox = null;
+    delete image.face;
     image.width = null;
     image.height = null;
     image.quality = null;
@@ -1449,6 +1451,8 @@ export class SpriteService {
       image.height = outcome.meta.height;
       image.quality = outcome.meta.quality;
       if (outcome.meta.twoFigures !== undefined) image.twoFigures = outcome.meta.twoFigures;
+      if (outcome.meta.face !== undefined) image.face = outcome.meta.face;
+      else delete image.face;
       // A basic cut while "best" is selected gets one silent upgrade later.
       image.upgrade = image.upgrade === "pending" ? "done" : null;
       image.error = null;
@@ -1524,6 +1528,35 @@ export class SpriteService {
     for (const broadcast of broadcasts) broadcast();
     for (const id of doomed) await this.deleteImage(userId, id);
     void this.pump(userId);
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Face backfill                                                        */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * Store a face the browser detected on a ready cut-out (`vn_sprite_face`).
+   * Only fills a missing face, and only for the cut-out the detection ran
+   * on. Broadcasts the image so the stage moves its emotes. Returns whether
+   * it was stored.
+   */
+  async saveFace(userId: string | undefined, request: { setKey?: unknown; expression?: unknown; url?: unknown; face?: unknown }): Promise<boolean> {
+    if (typeof request.setKey !== "string" || typeof request.expression !== "string" || typeof request.url !== "string") return false;
+    if (request.face !== null && !normalizeSpriteFaceBox(request.face)) return false;
+    const face = request.face === null ? null : normalizeSpriteFaceBox(request.face);
+    const { setKey, expression, url } = request;
+    const library = await this.library.get(userId);
+    const fits = (image: StoredSpriteImage | undefined): image is StoredSpriteImage =>
+      Boolean(image && image.status === "ready" && image.cutUrl === url && image.face === undefined);
+    if (!fits(library.sets[setKey]?.images[expression])) return false;
+    const broadcast = await this.library.update(userId, (lib) => {
+      const image = lib.sets[setKey]?.images[expression];
+      if (!fits(image)) return null;
+      image.face = face;
+      return () => this.broadcastImage(userId, setKey, image);
+    });
+    broadcast?.();
+    return broadcast !== null;
   }
 
   /* ------------------------------------------------------------------ */

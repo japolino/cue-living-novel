@@ -1,5 +1,5 @@
 import type { BackendResponse, FrontendRequest } from "../../../protocol.js";
-import { SPRITE_CUT_CHUNK_CHARS, SPRITE_CUT_MAX_BYTES, type SpriteCutMeta } from "../../../shared/sprites.js";
+import { normalizeSpriteFaceBox, SPRITE_CUT_CHUNK_CHARS, SPRITE_CUT_MAX_BYTES, type SpriteCutMeta } from "../../../shared/sprites.js";
 
 /**
  * Cut bridge: the backend cannot read image bytes, so a generated sprite is
@@ -70,6 +70,8 @@ export function normalizeCutMeta(meta: unknown, size: { width: number; height: n
     bbox,
     quality: record.quality === "best" ? "best" : "basic",
     ...(typeof record.twoFigures === "boolean" ? { twoFigures: record.twoFigures } : {}),
+    // A broken face box counts as "not detected" (the stage detects again later).
+    ...(record.face === null ? { face: null } : normalizeSpriteFaceBox(record.face) ? { face: normalizeSpriteFaceBox(record.face) } : {}),
     durationMs: Math.round(duration),
   };
 }

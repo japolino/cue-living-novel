@@ -243,6 +243,68 @@ export function spriteGeometryVars(geometry: SpriteGeometry): Record<string, str
   };
 }
 
+/**
+ * Where the face is, relative to the figure's anchor (bbox bottom-centre):
+ * `dx` = face centre x in image widths (not mirrored), `top` / `bottom` =
+ * face top and bottom above the anchor in image heights, `w` = face width in
+ * image widths. Emotes are placed from it (sprite-css.ts).
+ */
+export type SpriteFaceSpot = {
+  dx: number;
+  top: number;
+  bottom: number;
+  w: number;
+  /** "detected": the face detector's box; "estimate": the framing rule (no box known). */
+  source: "detected" | "estimate";
+};
+
+/** Cheek line (blush centre) as a share of the face box height, from its top. */
+export const SPRITE_CHEEK_LINE = 0.62;
+
+/**
+ * Face estimate when no box is known, from the framing (fitted on 275 face
+ * boxes of 26 sets): a figure that ends above the image bottom is full body
+ * (cheeks at 84.5% of its height, face 14.8% of it wide); a figure cut by
+ * the bottom edge has a larger head, more so the narrower it is (cheeks at
+ * 70-78%, face 22% wide). Figure aspect = bbox width / height in pixels.
+ */
+export function estimateSpriteFace(geometry: SpriteGeometry): { cheek: number; faceW: number; faceH: number } {
+  const fullBody = geometry.by < 0.99;
+  if (fullBody) return { cheek: 0.845, faceW: 0.148, faceH: 0.126 };
+  const figureAspect = (geometry.bw * geometry.aspect) / geometry.bh;
+  return { cheek: Math.min(0.78, Math.max(0.7, 0.775 - (figureAspect - 0.36) * 0.2)), faceW: 0.22, faceH: 0.2 };
+}
+
+/** The face spot of an image: its detected face box, else the framing estimate. */
+export function spriteFaceSpot(image: Pick<SpriteImageView, "bbox" | "width" | "height" | "face">, geometry = spriteGeometry(image)): SpriteFaceSpot {
+  const face = image.face;
+  if (Array.isArray(face) && face.length === 4 && face.every((value) => Number.isFinite(value)) && face[2] > 0 && face[3] > 0) {
+    const [x, y, w, h] = face;
+    return { dx: x + w / 2 - geometry.cx, top: geometry.by - y, bottom: geometry.by - (y + h), w, source: "detected" };
+  }
+  const estimate = estimateSpriteFace(geometry);
+  // Figure units -> image heights (bh) and image widths (bh / aspect).
+  const cheek = estimate.cheek * geometry.bh;
+  const faceH = estimate.faceH * geometry.bh;
+  return {
+    dx: 0,
+    top: cheek + SPRITE_CHEEK_LINE * faceH,
+    bottom: cheek - (1 - SPRITE_CHEEK_LINE) * faceH,
+    w: (estimate.faceW * geometry.bh) / geometry.aspect,
+    source: "estimate",
+  };
+}
+
+/** CSS custom properties for a face spot (see sprite-css.ts, "Emotes"). */
+export function spriteFaceVars(spot: SpriteFaceSpot): Record<string, string> {
+  return {
+    "--vn-sprite-face-dx": round(spot.dx),
+    "--vn-sprite-face-top": round(spot.top),
+    "--vn-sprite-face-bottom": round(spot.bottom),
+    "--vn-sprite-face-w": round(spot.w),
+  };
+}
+
 /** Whether the requested facing mirrors the cut-out (see SPRITE_NATURAL_FACING). */
 export function spriteMirrored(facing: SpriteFacing | undefined): boolean {
   return facing !== undefined && facing !== "viewer" && facing !== SPRITE_NATURAL_FACING;
@@ -397,6 +459,8 @@ export type SpriteActorSnapshot = {
   emote: SpriteEmote;
   intensity: number;
   talking: boolean;
+  /** How emotes are placed: from a detected face, the framing estimate, or null (no image yet). */
+  face: SpriteFaceSpot["source"] | null;
 };
 
 export type SpriteLayerSnapshot = {
@@ -415,8 +479,11 @@ type ActorEntry = {
   el: HTMLElement;
   body: HTMLElement;
   figure: HTMLElement;
+  /** Zero-size box at the anchor holding the emote; breathes with the figure but is never mirrored. */
+  marks: HTMLElement;
   emote: HTMLElement;
   layers: [HTMLElement, HTMLElement];
+  faceSource: SpriteFaceSpot["source"] | null;
   active: 0 | 1;
   url: string | null;
   shownExpression: string | null;
@@ -654,6 +721,7 @@ export class SpriteLayer {
         emote: entry.emoteName,
         intensity: entry.stage.intensity,
         talking: entry.talking,
+        face: entry.url ? entry.faceSource : null,
       });
     }
     actors.sort((a, b) => a.x - b.x);
@@ -756,13 +824,16 @@ export class SpriteLayer {
     };
     const layers: [HTMLElement, HTMLElement] = [makeLayer("active"), makeLayer("idle")];
     figure.append(layers[0], layers[1]);
+    const marks = document.createElement("div");
+    marks.setAttribute("data-vn-sprite-marks", "");
     const emote = document.createElement("span");
     emote.setAttribute("data-vn-sprite-emote", "");
     emote.hidden = true;
-    body.append(figure, emote);
+    marks.append(emote);
+    body.append(figure, marks);
     el.append(body);
     return {
-      key, el, body, figure, emote, layers, active: 0, url: null, shownExpression: null,
+      key, el, body, figure, marks, emote, layers, faceSource: null, active: 0, url: null, shownExpression: null,
       stage: { characterKey: key, expression: "idle", slot: "center", facing: "viewer", focus: false, motion: "none", emote: "none", intensity: 3 },
       x: 50, emoteName: "none", talking: false, token: 0, exiting: false,
       exitTimer: null, motionTimer: null, emoteTimer: null, enterTimer: null, fadeTimer: null,
@@ -782,11 +853,15 @@ export class SpriteLayer {
       for (const layer of entry.layers) this.emptyLayer(layer);
       return;
     }
-    const vars = spriteGeometryVars(spriteGeometry(image));
+    const geometry = spriteGeometry(image);
+    const spot = spriteFaceSpot(image, geometry);
+    const vars = { ...spriteGeometryVars(geometry), ...spriteFaceVars(spot) };
+    entry.faceSource = spot.source;
     if (entry.url === image.url) {
       entry.shownExpression = image.expression;
       setVars(entry.layers[entry.active], vars);
       setVars(entry.el, vars);
+      entry.el.dataset.vnSpriteFace = spot.source;
       return;
     }
     const token = ++entry.token;
@@ -795,6 +870,7 @@ export class SpriteLayer {
     entry.shownExpression = image.expression;
     const apply = () => {
       if (this.destroyed || token !== entry.token) return;
+      entry.el.dataset.vnSpriteFace = spot.source;
       if (firstImage) this.paintFirst(entry, image.url, image.expression, vars, enter);
       else this.crossfade(entry, image.url, image.expression, vars);
     };

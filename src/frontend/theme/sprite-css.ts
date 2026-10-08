@@ -378,37 +378,65 @@ export const VN_SPRITE_CSS = `
 [data-vn-scene][data-vn-scene-ambient="embers"] [data-vn-sprites] { --vn-sprite-air-filter: saturate(1.06) sepia(0.08); }
 [data-vn-scene][data-vn-scene-ambient="fog"] [data-vn-sprites] { --vn-sprite-air-filter: contrast(0.9) saturate(0.86) brightness(1.02); }
 
-/* ---- Emotes (SPRITE_EMOTES) -------------------------------------------- */
+/* ---- Emotes (SPRITE_EMOTES) --------------------------------------------
+   Placed from the face spot (sprite-layer.ts spriteFaceSpot): the detected
+   face box, or an estimate from the framing. --vn-sprite-face-dx is the
+   face centre from the anchor (image widths), -top / -bottom the face edges
+   above the anchor (image heights), -w the face width (image widths). The
+   marks box sits at the anchor like the figure and breathes with it, but is
+   not mirrored, so x is flipped here for mirrored sprites. */
+[data-vn-sprite] {
+  --vn-sprite-flip: 1;
+}
+[data-vn-sprite][data-vn-sprite-mirrored="true"] {
+  --vn-sprite-flip: -1;
+}
+[data-vn-sprite-marks] {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 0;
+  height: 0;
+  z-index: 3;
+  /* Face centre x, width, height and top, in px from the anchor. */
+  --vn-sprite-face-cx: calc(var(--vn-sprite-img-w) * var(--vn-sprite-face-dx, 0) * var(--vn-sprite-flip, 1));
+  --vn-sprite-face-wpx: calc(var(--vn-sprite-img-w) * var(--vn-sprite-face-w, 0.15));
+  --vn-sprite-face-hpx: calc(var(--vn-sprite-img-h) * (var(--vn-sprite-face-top, 0.9) - var(--vn-sprite-face-bottom, 0.7)));
+  --vn-sprite-face-tpx: calc(var(--vn-sprite-img-h) * var(--vn-sprite-face-top, 0.9));
+}
 [data-vn-sprite-emote] {
   position: absolute;
-  --vn-sprite-emote-size: clamp(26px, calc(var(--vn-sprite-fig-h) * 0.085), 76px);
+  --vn-sprite-emote-size: clamp(24px, calc(var(--vn-sprite-face-wpx) * 0.42), 76px);
   width: var(--vn-sprite-emote-size);
   height: var(--vn-sprite-emote-size);
-  /* Beside the head, toward the stage centre. */
-  left: calc(var(--vn-sprite-fig-h) * 0.075);
-  bottom: calc(var(--vn-sprite-fig-h) * 0.9);
-  z-index: 3;
+  /* Beside the head at the temple, toward the stage centre. */
+  left: calc(var(--vn-sprite-face-cx) + var(--vn-sprite-face-wpx) * 0.42);
+  bottom: calc(var(--vn-sprite-face-tpx) - var(--vn-sprite-face-hpx) * 0.12);
   filter: drop-shadow(0 0 1.5px rgba(255, 255, 255, 0.95)) drop-shadow(0 2px 3px rgba(0, 0, 0, 0.35));
   transform-origin: 30% 90%;
+  /* A face found later (or a new expression) moves the mark smoothly. */
+  transition: left 260ms ease, bottom 260ms ease, width 260ms ease, height 260ms ease;
 }
 [data-vn-sprite][data-vn-sprite-slot="right"] [data-vn-sprite-emote][data-vn-sprite-emote-place="side"] {
-  left: calc(var(--vn-sprite-fig-h) * -0.075 - var(--vn-sprite-emote-size));
+  left: calc(var(--vn-sprite-face-cx) - var(--vn-sprite-face-wpx) * 0.42 - var(--vn-sprite-emote-size));
   transform-origin: 70% 90%;
 }
+/* Gloom lines hang from above the head down over the forehead. */
 [data-vn-sprite-emote][data-vn-sprite-emote-place="top"] {
-  width: calc(var(--vn-sprite-emote-size) * 1.9);
-  height: calc(var(--vn-sprite-emote-size) * 1.6);
-  left: calc(var(--vn-sprite-emote-size) * -0.95);
-  bottom: calc(var(--vn-sprite-fig-h) * 0.84);
+  width: calc(var(--vn-sprite-face-wpx) * 1.15);
+  height: calc(var(--vn-sprite-face-hpx) * 0.95);
+  left: calc(var(--vn-sprite-face-cx) - var(--vn-sprite-face-wpx) * 0.575);
+  bottom: calc(var(--vn-sprite-face-tpx) - var(--vn-sprite-face-hpx) * 0.15);
   filter: drop-shadow(0 0 1px rgba(255, 255, 255, 0.6));
   transform-origin: 50% 0;
 }
+/* Blush: the two ovals (svg y 26 of 48, x 11 and 37) on the cheek line,
+   62% down the face box (SPRITE_CHEEK_LINE), under the eyes. */
 [data-vn-sprite-emote][data-vn-sprite-emote-place="face"] {
-  width: calc(var(--vn-sprite-emote-size) * 1.15);
-  height: calc(var(--vn-sprite-emote-size) * 1.15);
-  left: calc(var(--vn-sprite-emote-size) * -0.575);
-  /* Estimated cheek line: the head is not detected, so this is approximate. */
-  bottom: calc(var(--vn-sprite-fig-h) * 0.715);
+  width: calc(var(--vn-sprite-face-wpx) * 0.9);
+  height: calc(var(--vn-sprite-face-wpx) * 0.9);
+  left: calc(var(--vn-sprite-face-cx) - var(--vn-sprite-face-wpx) * 0.45);
+  bottom: calc(var(--vn-sprite-face-tpx) - var(--vn-sprite-face-hpx) * 0.62 - var(--vn-sprite-face-wpx) * 0.9 * 0.46);
   filter: none;
   opacity: 0.85;
   transform-origin: 50% 50%;
@@ -436,11 +464,15 @@ export const VN_SPRITE_CSS = `
 
   /* Idle breathing: a slow rise of the chest line, around the feet. */
   [data-vn-sprite][data-vn-sprite-state="shown"] [data-vn-sprite-figure],
-  [data-vn-sprite][data-vn-sprite-state="entering"] [data-vn-sprite-figure] {
+  [data-vn-sprite][data-vn-sprite-state="entering"] [data-vn-sprite-figure],
+  [data-vn-sprite][data-vn-sprite-state="shown"] [data-vn-sprite-marks]:has(> [data-vn-sprite-emote]:not([hidden])),
+  [data-vn-sprite][data-vn-sprite-state="entering"] [data-vn-sprite-marks]:has(> [data-vn-sprite-emote]:not([hidden])) {
     animation: vn-sprite-breathe 4.6s ease-in-out infinite;
   }
-  [data-vn-sprite][data-vn-sprite-order="1"] [data-vn-sprite-figure] { animation-delay: -1.5s; }
-  [data-vn-sprite][data-vn-sprite-order="2"] [data-vn-sprite-figure] { animation-delay: -3.1s; }
+  [data-vn-sprite][data-vn-sprite-order="1"] [data-vn-sprite-figure],
+  [data-vn-sprite][data-vn-sprite-order="1"] [data-vn-sprite-marks] { animation-delay: -1.5s; }
+  [data-vn-sprite][data-vn-sprite-order="2"] [data-vn-sprite-figure],
+  [data-vn-sprite][data-vn-sprite-order="2"] [data-vn-sprite-marks] { animation-delay: -3.1s; }
 
   /* Talking bob while the speaker's line types out. */
   [data-vn-sprite][data-vn-sprite-talking="true"] [data-vn-sprite-body] {
@@ -490,6 +522,7 @@ export const VN_SPRITE_CSS = `
   /* "Off": no motion or emote animation; positions still change. */
   [data-vn-root][data-vn-effect-intensity="off"] [data-vn-sprite] [data-vn-sprite-body],
   [data-vn-root][data-vn-effect-intensity="off"] [data-vn-sprite] [data-vn-sprite-figure],
+  [data-vn-root][data-vn-effect-intensity="off"] [data-vn-sprite] [data-vn-sprite-marks],
   [data-vn-root][data-vn-effect-intensity="off"] [data-vn-sprite-emote],
   [data-vn-root][data-vn-effect-intensity="off"] [data-vn-sprite-emote] svg,
   [data-vn-root][data-vn-effect-intensity="off"] [data-vn-sprite-emote] circle {

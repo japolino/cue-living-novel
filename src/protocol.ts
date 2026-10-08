@@ -1,7 +1,7 @@
 import type { VisualNovelConfig } from "./config.js";
 import type { PanelArtifact } from "./shared/panels.js";
 import type { CueImageRequest, CueImageResult } from "./shared/cue-images.js";
-import type { PlateView, SpriteCutMeta, SpriteImageView, SpriteSetView, SpriteTurnView } from "./shared/sprites.js";
+import type { PlateView, SpriteCutMeta, SpriteFaceBox, SpriteImageView, SpriteSetView, SpriteTurnView } from "./shared/sprites.js";
 
 export type FrontendRequest =
   | { type: "vn_external_image"; request: CueImageRequest }
@@ -68,6 +68,13 @@ export type FrontendRequest =
       meta?: SpriteCutMeta;
       error?: string;
     }
+  /**
+   * Sprite mode: the browser detected the face of a ready cut-out that had
+   * none stored (backfill of older sprites). `url` is the cut-out URL the
+   * detection ran on; a result for a replaced cut-out is ignored. `face`
+   * null: no face found.
+   */
+  | { type: "vn_sprite_face"; setKey: string; expression: string; url: string; face: SpriteFaceBox | null }
   /** Sprite mode: ask for the whole sprite library (sets and plates). */
   | { type: "vn_get_sprite_library" }
   /** Sprite mode: library actions from settings or the stage. */
