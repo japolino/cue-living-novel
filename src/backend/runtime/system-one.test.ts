@@ -23,7 +23,7 @@ const message = {
 const decisions = {
   model: "jev-latest", usage: { input_tokens: 250, output_tokens: 20 },
   answers: {
-    scene_change: { type: "noul", noul: 0.01 },
+    scene_start: { type: "choice", choice: "same_place", confidence: 0.95, probabilities: { same_place: 0.95, different_place: 0.05 } },
     needs_description: { type: "noul", noul: 0.01 },
     speaker_0: { type: "choice", choice: "Mira", confidence: 0.91, probabilities: { Mira: 0.95, Narrator: 0.05 } },
     expression_0: { type: "choice", choice: "listen", confidence: 0.9, probabilities: { listen: 0.95, idle: 0.05 } },
@@ -39,8 +39,11 @@ function spindle(raw: () => Promise<unknown>, logs: string[], response: unknown,
       assert.equal(request.headers.Authorization, "Bearer test-secret");
       const body = JSON.parse(request.body);
       assert.equal(body.model, "jev-latest");
-      assert.equal(body.state.previousScene.environment.location, "Library");
-      assert.equal(body.questions.expression_0.type, "choice");
+      if (body.questions.scene_start) assert.equal(body.state.previousScene.location, "Library");
+      else {
+        assert.equal(body.state.previousScene.environment.location, "Library");
+        assert.equal(body.questions.expression_0.type, "choice");
+      }
       return { status: 200, body: JSON.stringify(response) };
     },
     generate: { raw },
@@ -92,7 +95,7 @@ test("System One endpoint accepts HTTPS and local HTTP, but rejects remote HTTP 
 
 test("a detected scene change keeps the prose planner in charge", async () => {
   let plannerCalls = 0;
-  const response = { ...decisions, answers: { ...decisions.answers, scene_change: { type: "noul", noul: 0.9 } } };
+  const response = { ...decisions, answers: { ...decisions.answers, scene_start: { type: "choice", choice: "different_place", confidence: 0.9, probabilities: { same_place: 0.05, different_place: 0.95 } } } };
   const result = await planTurn(spindle(async () => { plannerCalls++; throw new Error("planner unavailable"); }, [], response), input("on"));
   assert.equal(plannerCalls, 2);
   assert.equal(result.usedFallback, true);

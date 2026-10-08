@@ -2556,10 +2556,10 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
   };
   if (debug.enabled) {
     for (const line of wardrobeDebugLines(systemOne, input.config.systemOneMode === "on", timeline.wardrobeNotes)) debug.line(line);
-    if (sceneVerdict && (sceneVerdict.source !== "none" || systemOne?.scene)) {
+    if (input.previousScene && systemOne?.scene && proposals[0]) {
       const place = (env: SceneState["environment"]) => [env.location, env.timeOfDay].filter(Boolean).join(" / ");
       const first = scenes[0];
-      const verdict = applySystemOne ? sceneVerdict.reason : `jev ${systemOne?.scene?.map((value) => value?.toFixed(2) ?? "?").join("/") ?? "none"}`;
+      const verdict = decideScene({ previousEnvironment: input.previousScene.environment, plannerEnvironment: proposals[0].environment, paragraphs: replyParagraphs, jev: systemOne.scene }).reason;
       debug.line(!applySystemOne
         ? `scene: ${verdict} -> not applied (${input.config.systemOneMode})`
         : sceneKeptBySystemOne && first

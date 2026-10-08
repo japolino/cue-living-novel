@@ -174,31 +174,6 @@ Stored with `spindle.userStorage` (one JSON index, bounded: newest 64 sets,
   by `sameOutfit` (`src/shared/outfit.ts`; two usual outfits also match)
   stands in (most ready images first, then the latest used), so a reworded
   outfit, another branch or another chat does not make a new set.
-
-### Outfit and place continuity
-
-The planner describes the outfit again on most turns, often in new words.
-Before staging and image prompts, the cue timeline (`core/cue-state.ts`)
-asks `decideOutfit` (`core/change-decisions.ts`, the one swappable decision)
-whenever the planner's outfit differs from the current one:
-
-- System One on: Jev gets 3 yes/no questions per known character with an
-  outfit in continuity (not the persona; at most 3, the previous scene
-  character first): did the top, the bottoms, or the whole outfit change?
-  They go to every batch (the first 24 paragraphs). "same" (every answer
-  <= 0.2) keeps the current outfit; "changed" (any answer >= 0.6) takes the
-  planner's.
-- Unsure, no Jev, or a paragraph past Jev's 24: the `sameOutfit` text check
-  (garment categories and colours; fit, fabric and state words, legwear,
-  footwear and accessories are ignored) keeps a reworded outfit. A planner
-  outfit that repeats one overruled earlier in the turn stays overruled.
-
-A kept outfit is the same text everywhere (scene, cues, terminal state,
-continuity), so the sprite set key does not change. Jev's `scene_change`
-also goes to every batch: "same" for the turn's first scene keeps the
-previous location, time of day and weather (the plate key stays); a later
-scene in the turn is the planner's. Debug logging prints one `wardrobe` line
-per decision and one `scene:` line.
 - `plateKeyFor({ location, timeOfDay, weather }, styleKey)`.
 - `styleKey` = hash of the image connection, model override, prompt prefix,
   suffix, negative, NovelAI quality toggles, and a sprite prompt version.
@@ -210,6 +185,41 @@ be redone (`recut`) from the raw image.
 
 Generation runs only while a Cue view is open for the user (same rule as
 scene mode), through the existing per-provider scheduler and concurrency.
+
+### Outfit and place continuity
+
+The planner describes the outfit again on most turns, often in new words.
+Before staging and image prompts, the cue timeline (`core/cue-state.ts`)
+asks `decideOutfit` (`core/change-decisions.ts`, the one swappable decision;
+the Jev questions are `wardrobeQuestions` and `SCENE_QUESTION` in
+`runtime/system-one.ts`) whenever the planner's outfit differs from the
+current one:
+
+- System One on: one extra request per reply (in parallel with the
+  per-paragraph batches) sends the whole reply, cleaned (no HTML tags, no
+  80+ character blobs), and asks per known character with an outfit in
+  continuity (not the persona; at most 3, the previous scene character
+  first) a choice (same_outfit / changed_outfit) and a yes/no, with the
+  outfit in the question. Score = mean of P(changed_outfit) and the yes/no
+  (max over chunks when the reply needs more than one 64 KiB request).
+  Score > 0.4 takes the planner's outfit; else the current outfit stays.
+- No Jev answer (off, failed, character not asked): the `sameOutfit` text
+  check (garment categories and colours; fit, fabric and state words,
+  legwear, footwear and accessories are ignored) keeps a reworded outfit.
+  A planner outfit that repeats one overruled earlier in the turn stays
+  overruled.
+
+A kept outfit is the same text everywhere (scene, cues, terminal state,
+continuity), so the sprite set key does not change.
+
+Place: one more request sends the previous scene (location, time of day,
+weather; never the planner's scene) and the start of the reply (the first
+2 chunks of <= 3000 characters) with one 6-option choice. Score = 1 -
+P(same_place) - P(same_place_reworded) - P(flashback_or_call); <= 0.5 keeps
+the previous location, time of day and weather for the turn's first scene
+(the plate key stays); a later scene in the turn is the planner's. The same
+score is the `sceneChange` flag of the continuation rule. Debug logging
+prints one `wardrobe` line per decision and one `scene:` line with the scores.
 
 ### Prompts
 

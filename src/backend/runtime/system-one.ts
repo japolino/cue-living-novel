@@ -4,7 +4,7 @@ import type { VisualNovelConfig } from "../../config.js";
 import type { SceneState } from "../../shared/contracts.js";
 import { POSE_EXPRESSION_CATALOGUE } from "../../shared/character.js";
 import { getAudioCatalog } from "./audio-catalog.js";
-import type { JevWardrobeAnswers } from "../core/change-decisions.js";
+import { SCENE_CHANGED_ABOVE, sceneScore, type JevSceneAnswer, type JevWardrobeAnswers } from "../core/change-decisions.js";
 
 export const SYSTEM_ONE_KEY = "system_one_api_key";
 
@@ -32,26 +32,86 @@ const Response = z.object({
 });
 type AnswerValue = z.infer<typeof Answer>;
 
-/** A known character's outfit at the start of the turn (asked about in every batch). */
+/** A known character's outfit at the start of the turn. */
 export type WardrobeQuestion = { name: string; attire: string };
-/** Raw Jev answers for one character, one value per batch (decided in core/change-decisions.ts). */
+/** Raw Jev answers for one character (decided in core/change-decisions.ts). */
 export type WardrobeAnswers = WardrobeQuestion & JevWardrobeAnswers;
 export const MAX_WARDROBE_QUESTIONS = 3;
-/** Paragraphs Jev reads per turn (the rest of a long reply is not sent). */
+/** Paragraphs the per-paragraph questions (speaker, expression, audio) cover. */
 export const SYSTEM_ONE_MAX_PARAGRAPHS = 24;
+const REQUEST_BYTE_LIMIT = 65_536;
+const PARAGRAPH_TEXT_LIMIT = 3000;
 
-/** The scene question (every batch when a previous scene exists). */
-export const SCENE_CHANGE_QUESTION = { type: "noul", instructions: "Does the target response explicitly move to a different physical location, make a major time jump, or replace the visible environment? A speaker change alone is not a scene change." } as const;
+/*
+ * The change questions (the whole set lives here; core/change-decisions.ts
+ * scores the answers). Texts from the October 2026 bench, copied as tested.
+ */
 
-/** The wardrobe questions for one character (the whole question set lives here). */
-export function wardrobeQuestions(entry: WardrobeQuestion): { top: unknown; bottom: unknown; other: unknown } {
+/** Scene: one choice about the START of the reply (h6-bg-jev). */
+export const SCENE_QUESTION = {
+  type: "choice",
+  instructions: "Compared with previousScene, what happens at the start of the reply?",
+  criteria: {
+    same_place: "Same place and about the same time as previousScene",
+    same_place_reworded: "Same place as previousScene, only named differently, or only a short time passes",
+    moved_within_building: "The characters are in another room or area of the same building or site",
+    different_place: "The characters are in a clearly different place",
+    big_time_jump: "Same place but a big time jump (hours later, night to morning, next day)",
+    flashback_or_call: "A flashback, memory, dream, phone call or plan; the characters' real place does not change",
+  },
+} as const;
+
+const MAJOR_GARMENTS = "top, bottoms, dress, outerwear such as apron/jacket/hoodie, swimwear, sleepwear, underwear-only, nudity";
+
+/** Outfit: a choice and a yes/no per character, the outfit in the question text (h2-jev-whole). */
+export function wardrobeQuestions(entry: WardrobeQuestion): { choice: unknown; noul: unknown } {
+  const name = entry.name;
   const outfit = entry.attire.trim().slice(0, 300);
-  const tail = `${entry.name}'s current outfit: ${outfit}. Rewording or a closer description of the same clothes is not a change. Answer no when ${entry.name} is not in these paragraphs.`;
   return {
-    top: { type: "noul", instructions: `Does ${entry.name}'s top (shirt, blouse, sweater: the upper part of the outfit) change, come off, or get covered by something new in these paragraphs? ${tail}` },
-    bottom: { type: "noul", instructions: `Do ${entry.name}'s bottoms (skirt, pants, shorts, the lower part of the outfit) change or come off in these paragraphs? ${tail}` },
-    other: { type: "noul", instructions: `Does ${entry.name} change into a different outfit, put on or take off outerwear, a dress, an apron or swimwear, or undress in these paragraphs? ${tail}` },
+    choice: {
+      type: "choice",
+      instructions: `Compare what ${name} is wearing at the END of these paragraphs with her outfit before them: "${outfit}". Did ${name} put on, take off or swap a major garment (${MAJOR_GARMENTS}), or end up in a clearly different outfit? Rewording, small details (socks, a button, accessories), other people's clothes, memories and plans do not count.`,
+      criteria: {
+        same_outfit: "still wears the same clothes; only rewording or minor details differ, or her clothes are not mentioned.",
+        changed_outfit: "changed, removed or added a major garment, or ends in a different outfit.",
+      },
+    },
+    noul: {
+      type: "noul",
+      instructions: `Is ${name} wearing different clothes at the end of these paragraphs than at the start? Her outfit at the start: ${outfit}. Only count putting on, taking off or swapping a major garment (${MAJOR_GARMENTS}). Rewording, minor details like socks or accessories, other people's clothes, memories and plans do not count.`,
+    },
   };
+}
+
+/** Reply text for the change questions: no HTML tags, no 80+ character blobs (base64). */
+export function cleanReplyText(text: string): string {
+  return text
+    .replace(/<[^>]*>/g, " ")
+    .split(/(\s+)/)
+    .filter((token) => !/^\S{80,}$/.test(token))
+    .join("")
+    .replace(/[ \t]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .trim();
+}
+
+/** The start of the reply for the scene question: the first 2 chunks of <= 3000 chars (paragraphs merged in order). */
+export function sceneStartChunks(paragraphs: ReadonlyArray<{ text: string }>): string[] {
+  const chunks: string[] = [];
+  let current = "";
+  for (const paragraph of paragraphs) {
+    const text = cleanReplyText(paragraph.text);
+    if (!text) continue;
+    if (current && current.length + 2 + text.length <= PARAGRAPH_TEXT_LIMIT) {
+      current = `${current}\n\n${text}`;
+      continue;
+    }
+    if (current) chunks.push(current);
+    if (chunks.length >= 2) return chunks;
+    current = text.slice(0, PARAGRAPH_TEXT_LIMIT);
+  }
+  if (current && chunks.length < 2) chunks.push(current);
+  return chunks;
 }
 
 export type SystemOneDecisions = {
@@ -63,9 +123,9 @@ export type SystemOneDecisions = {
   needsDescription: boolean;
   /** Per known character with an outfit (input order); empty when none was asked. */
   wardrobe: WardrobeAnswers[];
-  /** scene_change per batch; null without a previous scene. */
-  scene: Array<number | null> | null;
-  /** Last paragraph index Jev read; wardrobe and scene decisions cover paragraphs 0..this. */
+  /** The scene question's answer; null without a previous scene or a usable answer. */
+  scene: JevSceneAnswer | null;
+  /** Last paragraph index the wardrobe answers cover (the whole reply). */
   coveredThrough: number;
   durationMs: number;
   inputTokens: number;
@@ -96,15 +156,9 @@ export async function decidePresentation(
   const questions: Record<string, unknown> = {};
   // Reuse is safe only when the scene questions can see every paragraph in full.
   const completeSceneView = input.paragraphs.length <= 7 && input.paragraphs.every((paragraph) => paragraph.text.length <= 3000);
-  // scene_change goes to every batch (the scene decision); needs_description
-  // and the continuation rule still use only a complete (<= 7 paragraph) view.
-  const sceneQuestion = input.previousScene ? SCENE_CHANGE_QUESTION : null;
   if (input.previousScene && completeSceneView) {
     questions.needs_description = { type: "noul", instructions: "Does the target response add a visible location, wardrobe, appearance, prop, or action not represented in the previous scene?" };
   }
-  // Wardrobe: the known characters' current outfits, asked in every batch.
-  const wardrobe = (input.wardrobe ?? []).filter((entry) => entry.name.trim() && entry.attire.trim()).slice(0, MAX_WARDROBE_QUESTIONS);
-  const wardrobeAsked = wardrobe.map((entry) => wardrobeQuestions(entry));
   for (const paragraph of input.paragraphs.slice(0, SYSTEM_ONE_MAX_PARAGRAPHS)) {
     const index = paragraph.index;
     questions[`speaker_${index}`] = { type: "choice", instructions: `Who speaks or owns paragraph ${index}? Choose Narrator for omniscient narration; choose unknown when the text does not identify a speaker.`, criteria: Object.fromEntries([...names, "unknown"].map((name) => [name, name === "unknown" ? "The speaker cannot be determined" : null])) };
@@ -112,33 +166,10 @@ export async function decidePresentation(
     if (music.length) questions[`bgm_${index}`] = { type: "choice", instructions: `Should background music change at paragraph ${index}?`, criteria: { keep_current: "No music change", ...Object.fromEntries(music.map((entry) => [entry.id, `${entry.name}; ${entry.tags.join(", ")}`])) } };
     if (sounds.length) questions[`sfx_${index}`] = { type: "choice", instructions: `Is a sound effect clearly called for at paragraph ${index}?`, criteria: { none: "No sound effect", ...Object.fromEntries(sounds.map((entry) => [entry.id, `${entry.name}; ${entry.tags.join(", ")}`])) } };
   }
-  const started = Date.now();
-  const paragraphs = input.paragraphs.slice(0, SYSTEM_ONE_MAX_PARAGRAPHS);
-  const batches = Array.from({ length: Math.ceil(paragraphs.length / 7) }, (_, i) => paragraphs.slice(i * 7, (i + 1) * 7));
-  const parsedBatches = await Promise.all(batches.map(async (batch, batchIndex) => {
-    const batchQuestions: Record<string, unknown> = {};
-    if (sceneQuestion) batchQuestions.scene_change = sceneQuestion;
-    if (batchIndex === 0 && questions.needs_description) batchQuestions.needs_description = questions.needs_description;
-    wardrobeAsked.forEach((asked, index) => {
-      batchQuestions[`wardrobe_top_${index}`] = asked.top;
-      batchQuestions[`wardrobe_bottom_${index}`] = asked.bottom;
-      batchQuestions[`wardrobe_other_${index}`] = asked.other;
-    });
-    for (const paragraph of batch) {
-      for (const prefix of ["speaker", "expression", "bgm", "sfx"]) {
-        const name = `${prefix}_${paragraph.index}`;
-        if (questions[name]) batchQuestions[name] = questions[name];
-      }
-    }
-    const body = JSON.stringify({
-      model,
-      state: {
-        previousScene: input.previousScene ? { environment: input.previousScene.environment, character: input.previousScene.character, attire: input.previousScene.attire } : null,
-        paragraphs: batch.map((paragraph) => ({ index: paragraph.index, text: paragraph.text.slice(0, 3000) })),
-      },
-      questions: batchQuestions,
-    });
-    if (new TextEncoder().encode(body).length > 65_536) throw new Error("System One request exceeds the API's 64 KiB limit");
+  const encoder = new TextEncoder();
+  const send = async (payload: unknown) => {
+    const body = JSON.stringify(payload);
+    if (encoder.encode(body).length > REQUEST_BYTE_LIMIT) throw new Error("System One request exceeds the API's 64 KiB limit");
     const response = await spindle.cors(endpoint, {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
@@ -146,7 +177,70 @@ export async function decidePresentation(
     }) as { status: number; body: string };
     if (response.status < 200 || response.status >= 300) throw new Error(`System One request failed (${response.status})`);
     return Response.parse(JSON.parse(response.body));
-  }));
+  };
+  const started = Date.now();
+  const paragraphs = input.paragraphs.slice(0, SYSTEM_ONE_MAX_PARAGRAPHS);
+  const batches = Array.from({ length: Math.ceil(paragraphs.length / 7) }, (_, i) => paragraphs.slice(i * 7, (i + 1) * 7));
+  const batchRequests = batches.map((batch, batchIndex) => {
+    const batchQuestions: Record<string, unknown> = batchIndex === 0 && questions.needs_description ? { needs_description: questions.needs_description } : {};
+    for (const paragraph of batch) {
+      for (const prefix of ["speaker", "expression", "bgm", "sfx"]) {
+        const name = `${prefix}_${paragraph.index}`;
+        if (questions[name]) batchQuestions[name] = questions[name];
+      }
+    }
+    return send({
+      model,
+      state: {
+        previousScene: input.previousScene ? { environment: input.previousScene.environment, character: input.previousScene.character, attire: input.previousScene.attire } : null,
+        paragraphs: batch.map((paragraph) => ({ index: paragraph.index, text: paragraph.text.slice(0, 3000) })),
+      },
+      questions: batchQuestions,
+    });
+  });
+
+  // Outfit: the whole cleaned reply in one request (the fewest chunks under 64 KiB), 2 questions per character.
+  const wardrobe = (input.wardrobe ?? []).filter((entry) => entry.name.trim() && entry.attire.trim()).slice(0, MAX_WARDROBE_QUESTIONS);
+  const wardrobeAsked: Record<string, unknown> = {};
+  wardrobe.forEach((entry, index) => {
+    const asked = wardrobeQuestions(entry);
+    wardrobeAsked[`outfit_choice_${index}`] = asked.choice;
+    wardrobeAsked[`outfit_change_${index}`] = asked.noul;
+  });
+  const cleaned = input.paragraphs
+    .map((paragraph) => ({ index: paragraph.index, text: cleanReplyText(paragraph.text).slice(0, PARAGRAPH_TEXT_LIMIT) }))
+    .filter((paragraph) => paragraph.text);
+  const wardrobeChunks: Array<typeof cleaned> = [];
+  if (wardrobe.length) {
+    const fits = (chunk: typeof cleaned) => encoder.encode(JSON.stringify({ model, state: { paragraphs: chunk }, questions: wardrobeAsked })).length <= REQUEST_BYTE_LIMIT;
+    let current: typeof cleaned = [];
+    for (const paragraph of cleaned) {
+      if (current.length && !fits([...current, paragraph])) {
+        wardrobeChunks.push(current);
+        current = [];
+      }
+      current.push(paragraph);
+    }
+    if (current.length) wardrobeChunks.push(current);
+  }
+  const wardrobeRequests = wardrobeChunks.map((chunk) => send({ model, state: { paragraphs: chunk }, questions: wardrobeAsked }));
+
+  // Scene: the start of the reply only; the planner's scene is never sent.
+  const sceneChunks = input.previousScene ? sceneStartChunks(input.paragraphs) : [];
+  const sceneRequest = input.previousScene && sceneChunks.length
+    ? send({
+        model,
+        state: {
+          previousScene: { location: input.previousScene.environment.location, timeOfDay: input.previousScene.environment.timeOfDay, weather: input.previousScene.environment.weather },
+          paragraphs: sceneChunks.map((text, index) => ({ index, text })),
+        },
+        questions: { scene_start: SCENE_QUESTION },
+      })
+    : Promise.resolve(null);
+
+  const [parsedBatches, parsedWardrobe, parsedScene] = await Promise.all([
+    Promise.all(batchRequests), Promise.all(wardrobeRequests), sceneRequest,
+  ]);
   const answers = Object.assign({}, ...parsedBatches.map((batch) => batch.answers)) as Record<string, AnswerValue>;
   const speakers = new Map<number, string>();
   const expressions = new Map<number, string>();
@@ -162,22 +256,30 @@ export async function decidePresentation(
     const effect = chosen(answers[`sfx_${paragraph.index}`], new Set(["none", ...sounds.map((entry) => entry.id)]), 0.7);
     if (effect && effect !== "none") sfx.set(paragraph.index, effect);
   }
-  const noul = (answer: AnswerValue | undefined): number | null => answer?.type === "noul" ? answer.noul : null;
-  // The continuation rule reads scene_change only from a complete one-batch view, as before.
-  const scene = completeSceneView ? parsedBatches[0]?.answers.scene_change : undefined;
   const description = answers.needs_description;
-  const wardrobeAnswers: WardrobeAnswers[] = wardrobe.map((entry, index) => {
-    const values = (part: string) => parsedBatches.map((batch) => noul(batch.answers[`wardrobe_${part}_${index}`]));
-    return { ...entry, top: values("top"), bottom: values("bottom"), other: values("other") };
-  });
+  const wardrobeAnswers: WardrobeAnswers[] = wardrobe.map((entry, index) => ({
+    ...entry,
+    chunks: parsedWardrobe.map((chunk) => {
+      const choice = chunk.answers[`outfit_choice_${index}`];
+      const change = chunk.answers[`outfit_change_${index}`];
+      return {
+        changedOutfit: choice?.type === "choice" ? choice.probabilities.changed_outfit ?? (choice.choice === "changed_outfit" ? choice.confidence : 1 - choice.confidence) : null,
+        noul: change?.type === "noul" ? change.noul : null,
+      };
+    }),
+  }));
+  const sceneAnswer = parsedScene?.answers.scene_start;
+  const scene: JevSceneAnswer | null = sceneAnswer?.type === "choice" ? { choice: sceneAnswer.choice, probabilities: sceneAnswer.probabilities } : null;
+  const usage = [...parsedBatches, ...parsedWardrobe, ...(parsedScene ? [parsedScene] : [])];
   return {
     speakers, expressions, bgm, sfx,
-    sceneChange: scene?.type !== "noul" || scene.noul > 0.2,
+    // The continuation rule: no confident "same place" answer = a scene change.
+    sceneChange: scene ? sceneScore(scene) > SCENE_CHANGED_ABOVE : true,
     needsDescription: description?.type !== "noul" || description.noul > 0.2,
     wardrobe: wardrobeAnswers,
-    scene: sceneQuestion ? parsedBatches.map((batch) => noul(batch.answers.scene_change)) : null,
-    coveredThrough: paragraphs.at(-1)?.index ?? -1,
+    scene,
+    coveredThrough: input.paragraphs.at(-1)?.index ?? -1,
     durationMs: Date.now() - started,
-    inputTokens: parsedBatches.reduce((total, batch) => total + (batch.usage?.input_tokens ?? 0), 0),
+    inputTokens: usage.reduce((total, batch) => total + (batch.usage?.input_tokens ?? 0), 0),
   };
 }
