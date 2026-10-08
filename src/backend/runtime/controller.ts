@@ -1621,7 +1621,7 @@ async function handleFrontendMessage(spindle: SpindleAPI, request: FrontendReque
     case "vn_scan_audio": {
       const config = await loadConfig(spindle, userId);
       const dir = request.directory?.trim() || config.audioDirectory;
-      const catalog = await scanAudioCatalog(spindle, dir);
+      const catalog = await scanAudioCatalog(spindle, dir, { force: true });
       spindle.sendToFrontend({
         type: "vn_audio_scanned",
         bgmCount: catalog.bgm.length,

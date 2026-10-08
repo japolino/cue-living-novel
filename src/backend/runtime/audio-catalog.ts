@@ -148,9 +148,16 @@ let cachedPrefix = "";
  * module or Bun.file access is used. The binary is converted to a browser-safe
  * data URL once during catalog creation.
  */
-export async function scanAudioCatalog(spindle: SpindleAPI, requestedPrefix = "audio"): Promise<AudioCatalog> {
+export async function scanAudioCatalog(
+  spindle: SpindleAPI,
+  requestedPrefix = "audio",
+  options: { force?: boolean } = {}
+): Promise<AudioCatalog> {
   const prefix = normalizeAudioStoragePrefix(requestedPrefix);
-  if (cachedPrefix === prefix && cachedCatalog.all.length > 0) return cachedCatalog;
+  // "Check library" forces a fresh listing so files added or removed on disk
+  // (outside the import flow) show up without restarting the extension.
+  if (options.force) clearAudioCatalogCache();
+  else if (cachedPrefix === prefix && cachedCatalog.all.length > 0) return cachedCatalog;
 
   let files: string[];
   try {

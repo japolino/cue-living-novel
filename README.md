@@ -200,6 +200,12 @@ Dialogue can style a few words with an inline tag. Wrap the words and close the 
 
 Custom CSS can restyle effects through `[data-vn-text-fx="<id>"]`, the per-letter `[data-vn-text-fx-ch]` spans (index in `--vn-ch`), and the tuning properties `--vn-text-fx-amp`, `--vn-text-fx-speed`, `--vn-text-fx-glow`, `--vn-text-fx-rainbow-mix`, `--vn-text-fx-rainbow-1` … `-7`, and `--vn-text-fx-split-a` / `-b`.
 
+## Music and sound pack
+
+`cue-audio-pack.zip` holds 24 music tracks and 24 sound effects made for Cue: one clear mood or sound per file (`bgm_romance_sweet`, `bgm_tension_suspense`, `sfx_door_knock`, `sfx_heartbeat`, ...), music loudness-matched, sound effects trimmed and levelled. Every file is CC0 or CC BY; `CREDITS.md` inside the zip lists each source and credit line, so keep it with the pack when you share it.
+
+To install, unzip it, open **Settings → Music library → Import music folder…**, choose the `cue-audio` folder, then **Check library** (24 BGM / 24 SFX). Cue offers System One the first 24 music tracks and the first 24 sound effects sorted by path, so remove an older pack from `data/extensions/visual_novel_preview/storage/audio/` first. **Check library** rescans the folder, so files added or removed there by hand show up without a restart.
+
 ## Run the standalone preview
 
 ```powershell

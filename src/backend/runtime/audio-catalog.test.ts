@@ -150,3 +150,20 @@ describe("audio-catalog scoped storage scanner & cache", () => {
     clearAudioCatalogCache();
   });
 });
+
+describe("audio-catalog rescans", () => {
+  test("a forced scan picks up files changed on disk; a plain scan keeps the cache", async () => {
+    clearAudioCatalogCache();
+    const files: Record<string, string> = { "audio/old/bgm/bgm_menu_theme.mp3": "a" };
+    const live = storageSpindle(files);
+    expect((await scanAudioCatalog(live, "audio")).all.map((entry) => entry.id)).toEqual(["old/bgm/bgm_menu_theme"]);
+    delete files["audio/old/bgm/bgm_menu_theme.mp3"];
+    files["audio/cue-audio/bgm/bgm_daily_calm.mp3"] = "b";
+    files["audio/cue-audio/sfx/sfx_door_knock.mp3"] = "c";
+    expect((await scanAudioCatalog(live, "audio")).all.map((entry) => entry.id)).toEqual(["old/bgm/bgm_menu_theme"]);
+    const fresh = await scanAudioCatalog(live, "audio", { force: true });
+    expect(fresh.bgm.map((entry) => entry.id)).toEqual(["cue-audio/bgm/bgm_daily_calm"]);
+    expect(fresh.sfx.map((entry) => entry.id)).toEqual(["cue-audio/sfx/sfx_door_knock"]);
+    clearAudioCatalogCache();
+  });
+});
