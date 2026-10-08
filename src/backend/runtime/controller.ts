@@ -64,7 +64,9 @@ import {
   saveTurnRecord,
   turnPath,
   updateConfig,
-  type StoredTurnRecord
+  type StoredChatState,
+  type StoredTurnRecord,
+  type TurnBaseline
 } from "./storage.js";
 
 type NormalizedChatMessage = ChatMessageDTO & {
@@ -866,23 +868,54 @@ async function persistActiveTurn(
   userId?: string
 ): Promise<void> {
   await saveTurnRecord(spindle, path, record, userId);
-  const lastScene = record.plan.scenes.at(-1) ?? null;
   await saveChatState(spindle, record.plan.key.chatId, {
     schemaVersion: 1,
     activeTurnPath: path,
-    latestScene: lastScene && record.plan.terminalVisualState ? {
-      ...lastScene,
-      character: record.plan.terminalVisualState.character,
-      ...(record.plan.terminalVisualState.characterId ? { characterId: record.plan.terminalVisualState.characterId } : {}),
-      ...(record.plan.terminalVisualState.subjectCategory ? { subjectCategory: record.plan.terminalVisualState.subjectCategory } : {}),
-      identityPrompt: record.plan.terminalVisualState.identity || null,
-      attire: record.plan.terminalVisualState.attire,
-      continuity: record.plan.terminalContinuity,
-      activeAssetId: null
-    } : lastScene,
+    latestScene: terminalSceneState(record),
     terminalContinuity: record.plan.terminalContinuity,
     updatedAt: new Date().toISOString()
   }, userId);
+}
+
+/** The chat's latest scene after a turn: its last scene with the terminal subject and continuity. */
+function terminalSceneState(record: StoredTurnRecord): StoredChatState["latestScene"] {
+  const lastScene = record.plan.scenes.at(-1) ?? null;
+  return lastScene && record.plan.terminalVisualState ? {
+    ...lastScene,
+    character: record.plan.terminalVisualState.character,
+    ...(record.plan.terminalVisualState.characterId ? { characterId: record.plan.terminalVisualState.characterId } : {}),
+    ...(record.plan.terminalVisualState.subjectCategory ? { subjectCategory: record.plan.terminalVisualState.subjectCategory } : {}),
+    identityPrompt: record.plan.terminalVisualState.identity || null,
+    attire: record.plan.terminalVisualState.attire,
+    continuity: record.plan.terminalContinuity,
+    activeAssetId: null
+  } : lastScene;
+}
+
+/**
+ * The state a stored turn was planned from (the state before its message).
+ * Records stored before baselines fall back to: `plan.initialContinuity`, and
+ * as the previous scene the terminal scene of the previous assistant message's
+ * stored turn (its current swipe); no scene when the message is the chat's
+ * first assistant turn; the record's own first scene (what retry used before
+ * baselines) when that previous turn is not stored or the message is unknown.
+ */
+async function recordBaseline(
+  spindle: SpindleAPI,
+  record: StoredTurnRecord,
+  messages: readonly NormalizedChatMessage[],
+  userId?: string
+): Promise<{ baseline: TurnBaseline; source: string }> {
+  if (record.baseline) return { baseline: record.baseline, source: "stored baseline" };
+  const previousContinuity = record.plan.initialContinuity;
+  const index = messages.findIndex((candidate) => candidate.id === record.plan.key.assistantMessageId);
+  if (index >= 0) {
+    const prior = messages.slice(0, index).reverse().find((candidate) => !candidate.is_user && candidate.content.trim());
+    if (!prior) return { baseline: { previousScene: null, previousContinuity }, source: "legacy: first assistant turn" };
+    const priorRecord = await loadTurnRecord(spindle, turnPath(record.plan.key.chatId, prior.id, prior.swipe_id), userId).catch(() => null);
+    if (priorRecord) return { baseline: { previousScene: terminalSceneState(priorRecord), previousContinuity }, source: `legacy: previous turn ${prior.id}` };
+  }
+  return { baseline: { previousScene: record.plan.scenes[0] ?? null, previousContinuity }, source: "legacy: own first scene" };
 }
 
 async function startAssets(
@@ -1113,6 +1146,18 @@ async function processAssistantMessage(
     const singleCharacter = await loadSingleCharacterState(spindle, chatId, userId);
     const characterAppearance = await loadCharacterAppearance(spindle, userId, chatId);
     const characterRegistry = await loadCharacterRegistry(spindle, chatId, userId);
+    // Another swipe or an edit of the active message plans from the state
+    // before that message, not from the discarded swipe's end state.
+    const activeRecord = await loadTurnRecord(spindle, chatState.activeTurnPath, userId).catch(() => null);
+    const planned: { baseline: TurnBaseline; source: string } = replacesGreeting
+      ? { baseline: { previousScene: null, previousContinuity: null }, source: "greeting reset" }
+      : options?.retry && existing
+        ? await recordBaseline(spindle, existing, messages, userId)
+        : activeRecord && activeRecord.plan.key.assistantMessageId === message.id
+          ? await recordBaseline(spindle, activeRecord, messages, userId)
+          : { baseline: { previousScene: chatState.latestScene, previousContinuity: chatState.terminalContinuity }, source: "chat latest state" };
+    const baseline = planned.baseline;
+    dbg(spindle, userId, `planning baseline chat=${chatId} message=${message.id} swipe=${message.swipe_id} source=${planned.source} scene=${baseline.previousScene ? `${baseline.previousScene.sceneId} rev${baseline.previousScene.revision}` : "none"} continuity=rev${baseline.previousContinuity?.revision ?? "none"}`);
     const recentMessages = config.includeRecentMessages > 0
       ? await resolveContextMessages(spindle, chatId, messages.slice(-config.includeRecentMessages), resolutionCache, userId)
       : [];
@@ -1121,8 +1166,8 @@ async function processAssistantMessage(
       message,
       content: resolved,
       sourceFingerprint: fingerprint,
-      previousScene: replacesGreeting ? null : options?.retry && existing ? existing.plan.scenes[0] ?? null : chatState.latestScene,
-      previousContinuity: replacesGreeting ? null : options?.retry && existing ? existing.plan.initialContinuity : chatState.terminalContinuity,
+      previousScene: baseline.previousScene,
+      previousContinuity: baseline.previousContinuity,
       recentMessages,
       config,
       singleCharacter,
@@ -1247,6 +1292,7 @@ async function processAssistantMessage(
       resolvedSourceText: resolved,
       source: { version: 2, rawFingerprint },
       settingsSnapshot,
+      baseline,
       attempts: [
         {
           attemptNumber: 1,
