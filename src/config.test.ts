@@ -214,7 +214,7 @@ test("configuration defaults audioDirectory, bgmVolume, and sfxVolume", () => {
   const config = normalizeConfig({});
   assert.equal(config.audioDirectory, "");
   assert.equal(config.bgmVolume, 0.7);
-  assert.equal(config.sfxVolume, 0.8);
+  assert.equal(config.sfxVolume, 0.5);
 });
 
 test("configuration clamps bgmVolume and sfxVolume to [0, 1]", () => {
@@ -237,7 +237,7 @@ test("configuration clamps bgmVolume and sfxVolume to [0, 1]", () => {
     sfxVolume: null,
   });
   assert.equal(invalid.bgmVolume, 0.7);
-  assert.equal(invalid.sfxVolume, 0.8);
+  assert.equal(invalid.sfxVolume, 0.5);
 });
 
 test("prompt presets normalize to safe named entries", () => {

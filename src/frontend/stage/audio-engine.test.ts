@@ -80,7 +80,7 @@ describe("AudioEngine", () => {
       clearInterval: clock.clearInterval,
     });
     expect(engine.getBgmVolume()).toBe(0.7);
-    expect(engine.getSfxVolume()).toBe(0.8);
+    expect(engine.getSfxVolume()).toBe(0.5);
 
     engine.setBgmVolume(0.4);
     expect(engine.getBgmVolume()).toBe(0.4);

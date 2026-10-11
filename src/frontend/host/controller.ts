@@ -528,7 +528,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   let destroyed = false;
   const audioEngine = new AudioEngine({
     bgmVolume: configRef.current?.bgmVolume ?? 0.7,
-    sfxVolume: configRef.current?.sfxVolume ?? 0.8,
+    sfxVolume: configRef.current?.sfxVolume ?? 0.5,
   });
 
   let speech: SpeechController;

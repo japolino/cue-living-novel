@@ -225,7 +225,7 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   textScale: 1,
   audioDirectory: "",
   bgmVolume: 0.7,
-  sfxVolume: 0.8,
+  sfxVolume: 0.5,
   speech: DEFAULT_SPEECH_SETTINGS,
 };
 

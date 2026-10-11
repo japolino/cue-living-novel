@@ -108,7 +108,7 @@ export class AudioEngine {
 
   constructor(options: AudioEngineOptions = {}) {
     this.bgmVolume = Math.max(0, Math.min(1, options.bgmVolume ?? 0.7));
-    this.sfxVolume = Math.max(0, Math.min(1, options.sfxVolume ?? 0.8));
+    this.sfxVolume = Math.max(0, Math.min(1, options.sfxVolume ?? 0.5));
     this.crossfadeDuration = options.crossfadeDuration ?? DEFAULT_CROSSFADE_DURATION_MS;
     this.audioFactory = options.audioFactory ?? defaultAudioFactory;
     this.now = options.now ?? (() => Date.now());
