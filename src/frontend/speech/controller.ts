@@ -258,6 +258,7 @@ export class SpeechController {
       try {
         await this.choirBridge.playParagraph({
           text: cleanText,
+          speaker: this.speakerLabel().speaker,
           nextText: cursor.nextText ? stripTextEffectTags(cursor.nextText) : undefined,
           chatId: cursor.chatId,
           messageId: cursor.messageId,
