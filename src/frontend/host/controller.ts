@@ -203,12 +203,14 @@ export function nameplateForParagraph(view: TurnView, index: number): string {
 export function speechCursorFor(view: TurnView, index: number): SpeechCursor | null {
   const text = view.paragraphs[index];
   if (typeof text !== "string") return null;
+  const nextRaw = view.paragraphs[index + 1];
   return {
     chatId: view.chatId,
     messageId: view.messageId,
     sourceFingerprint: view.sourceFingerprint,
     paragraphIndex: index,
     text,
+    nextText: typeof nextRaw === "string" ? nextRaw : undefined,
     paragraphSpeaker: view.paragraphSpeakers?.[index],
     turnSpeaker: view.speaker,
   };

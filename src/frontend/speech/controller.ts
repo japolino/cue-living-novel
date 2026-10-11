@@ -30,6 +30,7 @@ export type SpeechCursor = {
   sourceFingerprint: string;
   paragraphIndex: number;
   text: string;
+  nextText?: string | undefined;
   /** Raw paragraph attribution: "" narrator, name, or null/undefined = unknown. */
   paragraphSpeaker: string | null | undefined;
   turnSpeaker: string;
@@ -257,6 +258,7 @@ export class SpeechController {
       try {
         await this.choirBridge.playParagraph({
           text: cleanText,
+          nextText: cursor.nextText ? stripTextEffectTags(cursor.nextText) : undefined,
           chatId: cursor.chatId,
           messageId: cursor.messageId,
           paragraphIndex: cursor.paragraphIndex,

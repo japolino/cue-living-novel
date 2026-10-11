@@ -9,6 +9,7 @@
 
 export interface ChoirParagraphRequest {
   text: string;
+  nextText?: string | undefined;
   chatId?: string;
   messageId?: string;
   paragraphIndex?: number;
