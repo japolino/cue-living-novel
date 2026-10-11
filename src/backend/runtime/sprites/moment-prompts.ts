@@ -35,6 +35,7 @@ import {
   PLATE_SIZE,
   renderComfy,
   sizeParameters,
+  spriteCharacterReferenceTag,
   spriteIdentityTags,
   stylePrefix,
   tagKey,
@@ -312,6 +313,7 @@ export function compileKeyMomentRequest(input: {
   const light = KEY_MOMENT_LIGHT_TAGS[scene.light] ?? "";
   const eyesSet = /\bclosed eyes\b/i.test(interaction);
   const blocks = subjects.map((subject) => dedupeSections([
+    spriteCharacterReferenceTag(subject.character.name, config, provider === "novelai"),
     stripCounts(spriteIdentityTags(subject.character)),
     keyMomentFaceTags(subject.character.expression, eyesSet),
   ]).join(", "));
@@ -345,7 +347,11 @@ export function compileKeyMomentRequest(input: {
   }
   // Two characters: one phrase each keeps outfits apart (see keyMomentCharacterPhrase).
   const tagBlocks = pair
-    ? subjects.map((subject) => keyMomentCharacterPhrase(subject.label, subject.character, keyMomentFaceTags(subject.character.expression, eyesSet)))
+    ? subjects.map((subject) => {
+        const ref = spriteCharacterReferenceTag(subject.character.name, config, false);
+        const phrase = keyMomentCharacterPhrase(subject.label, subject.character, keyMomentFaceTags(subject.character.expression, eyesSet));
+        return ref ? `${ref}, ${phrase}` : phrase;
+      })
     : blocks;
   const sections = assemble([stylePrefix(config, false), count, interaction], tagBlocks, [framing, place, description, light, config.promptSuffix]);
   return { prompt: renderComfy(sections), negativePrompt: comfyNegative(config, negativeExtra), parameters: extra };

@@ -176,8 +176,8 @@ Stored with `spindle.userStorage` (one JSON index, bounded: newest 64 sets,
   outfit, another branch or another chat does not make a new set.
 - `plateKeyFor({ location, timeOfDay, weather }, styleKey)`.
 - `styleKey` = hash of the image connection, model override, prompt prefix,
-  suffix, negative, NovelAI quality toggles, and a sprite prompt version.
-  A style change starts new sets.
+  suffix, negative, NovelAI quality toggles, active series reference tag, and
+  a sprite prompt version. A style change starts new sets.
 
 Each sprite image: status (`SpriteImageStatus`), raw image id, cut image id +
 URL, bbox, size, error, attempts. Failed images can be regenerated; a cut can
@@ -223,7 +223,8 @@ prints one `wardrobe` line per decision and one `scene:` line with the scores.
 
 ### Prompts
 
-- Sprite: style prefix + identity tags + attire + expression suffix
+- Sprite: style prefix + subject + character creation / series reference tag
+  (when enabled) + identity tags + attire + expression suffix
   (`POSE_EXPRESSION_CATALOGUE`) + sprite framing (`SPRITE_FRAMING_TAGS`) +
   style suffix. Negative: style negative + `SPRITE_NEGATIVE_TAGS`. Portrait
   size where the provider takes a size (`spriteImageSize`; NovelAI always

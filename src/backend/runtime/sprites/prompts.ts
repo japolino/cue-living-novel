@@ -155,6 +155,25 @@ export function weightSkinColourTags(identity: string, weight = SPRITE_SKIN_COLO
 }
 
 /**
+ * Character creation / series reference tag when `originalReference` is enabled:
+ * - NovelAI: `Character, Series` (comma-separated tags)
+ * - Other providers (ComfyUI / SwarmUI): `Character \(Series\)` (parenthetical)
+ * Returns "" when the feature is disabled, or when name or creation name is empty.
+ */
+export function spriteCharacterReferenceTag(
+  name: string | undefined,
+  config: Partial<Pick<VisualNovelConfig, "originalReference" | "originalCreationName">>,
+  novelAi: boolean,
+): string {
+  if (!config.originalReference) return "";
+  const source = config.originalCreationName?.trim() ?? "";
+  if (!source) return "";
+  const clean = (name ?? "").replace(/\s*\([^)]*\)\s*/g, " ").replace(/\s+/g, " ").trim();
+  if (!clean) return "";
+  return novelAi ? `${clean}, ${source}` : `${clean} \\(${source}\\)`;
+}
+
+/**
  * Sprite request: style prefix + subject + identity + outfit + expression
  * suffix + white-background sprite framing + style suffix, in the provider's
  * prompt syntax. NovelAI V4+ gets the character in a character caption (as
@@ -177,10 +196,11 @@ export function compileSpriteRequest(input: {
   if (provider === "novelai") {
     const model = config.imageModel || "nai-diffusion-4-5-full";
     const caps = novelAiCapabilities(model);
-    const characterSections = dedupeSections([identity, pose.suffix]);
+    const characterReference = spriteCharacterReferenceTag(member.name, config, true);
+    const characterSections = dedupeSections([characterReference, identity, pose.suffix]);
     const base = caps.structured
       ? dedupeSections([stylePrefix(config, true), subject, SPRITE_FRAMING_TAGS, config.promptSuffix])
-      : dedupeSections([stylePrefix(config, true), subject, identity, pose.suffix, SPRITE_FRAMING_TAGS, config.promptSuffix]);
+      : dedupeSections([stylePrefix(config, true), subject, characterReference, identity, pose.suffix, SPRITE_FRAMING_TAGS, config.promptSuffix]);
     const quality = novelAiQuality(config, model, [...base, ...(caps.structured ? characterSections : [])], true);
     const prompt = renderNovelAiEmphasis([...base, ...quality].join(", "), model);
     const negativePrompt = novelAiNegative(config, SPRITE_NEGATIVE_TAGS, model);
@@ -197,7 +217,8 @@ export function compileSpriteRequest(input: {
       },
     };
   }
-  const sections = dedupeSections([stylePrefix(config, false), subject, identity, pose.suffix, SPRITE_FRAMING_TAGS, config.promptSuffix]);
+  const characterReference = spriteCharacterReferenceTag(member.name, config, false);
+  const sections = dedupeSections([stylePrefix(config, false), subject, characterReference, identity, pose.suffix, SPRITE_FRAMING_TAGS, config.promptSuffix]);
   return { prompt: renderComfy(sections), negativePrompt: comfyNegative(config, SPRITE_NEGATIVE_TAGS), parameters: extra };
 }
 

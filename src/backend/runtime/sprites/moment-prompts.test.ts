@@ -212,3 +212,28 @@ describe("key-moment scene from a staged plan", () => {
     expect(keyMomentScenes(plan, [{ jobId: "b", paragraphIndex: 1 }]).size).toBe(0);
   });
 });
+
+describe("key-moment prompts: character creation / series reference tag", () => {
+  const ddlcConfig: VisualNovelConfig = { ...config, originalReference: true, originalCreationName: "doki doki literature club" };
+
+  test("ComfyUI pair: includes Character \\(Series\\) for both characters", () => {
+    const request = compileKeyMomentRequest({ config: ddlcConfig, provider: "comfyui", scene: scene("kiss", [mira, kai]) });
+    expect(request.prompt).toContain("Mira \\(doki doki literature club\\)");
+    expect(request.prompt).toContain("Kai \\(doki doki literature club\\)");
+  });
+
+  test("NovelAI V4+: includes Character, Series in each character caption", () => {
+    const naiConfig = { ...ddlcConfig, imageModel: "nai-diffusion-4-5-full" };
+    const request = compileKeyMomentRequest({ config: naiConfig, provider: "novelai", scene: scene("kiss", [mira, kai]) });
+    const captions = (request.parameters.characterTags as Array<{ tags: string }>).map((c) => c.tags);
+    expect(captions).toHaveLength(2);
+    expect(captions[0]).toContain("Mira, doki doki literature club");
+    expect(captions[1]).toContain("Kai, doki doki literature club");
+  });
+
+  test("disabled originalReference does not include series reference", () => {
+    const offConfig = { ...config, originalReference: false, originalCreationName: "doki doki literature club" };
+    const request = compileKeyMomentRequest({ config: offConfig, provider: "comfyui", scene: scene("kiss", [mira, kai]) });
+    expect(request.prompt).not.toContain("doki doki literature club");
+  });
+});

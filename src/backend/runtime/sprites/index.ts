@@ -18,6 +18,7 @@ export {
 export {
   compilePlateRequest,
   compileSpriteRequest,
+  spriteCharacterReferenceTag,
   spriteImageSizeFor,
   NOVELAI_PLATE_SIZE,
   NOVELAI_SPRITE_SIZE,

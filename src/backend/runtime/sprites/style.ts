@@ -16,8 +16,8 @@ export const SPRITE_PROMPT_VERSION = "sprite-prompt-v2";
 export function spriteStyleKey(config: Pick<
   VisualNovelConfig,
   "imageConnectionId" | "imageModel" | "promptPrefix" | "promptSuffix" | "negativePrompt" | "novelAiQualityTags" | "novelAiUseDefaultNegative"
->): string {
-  return `style_${spriteHash(JSON.stringify([
+> & Partial<Pick<VisualNovelConfig, "originalReference" | "originalCreationName">>): string {
+  const parts: unknown[] = [
     SPRITE_PROMPT_VERSION,
     config.imageConnectionId ?? null,
     config.imageModel ?? "",
@@ -26,7 +26,11 @@ export function spriteStyleKey(config: Pick<
     config.negativePrompt ?? "",
     config.novelAiQualityTags !== false,
     config.novelAiUseDefaultNegative !== false,
-  ]))}`;
+  ];
+  if (config.originalReference && config.originalCreationName?.trim()) {
+    parts.push(config.originalCreationName.trim());
+  }
+  return `style_${spriteHash(JSON.stringify(parts))}`;
 }
 
 /**

@@ -11,6 +11,7 @@ import {
   SPRITE_NEGATIVE_TAGS,
   SPRITE_SIZE,
   SPRITE_SKIN_COLOUR_WEIGHT,
+  spriteCharacterReferenceTag,
   spriteImageSizeFor,
   weightSkinColourTags,
 } from "./prompts.js";
@@ -44,6 +45,19 @@ describe("sprite style key", () => {
 
   test("unrelated settings do not start new sets", () => {
     expect(spriteStyleKey(config({ textSpeed: 99, presentationMode: "sprites", imageConcurrency: 4 }))).toBe(spriteStyleKey(config()));
+  });
+
+  test("series reference tag changes styleKey only when enabled and non-empty", () => {
+    const base = config();
+    expect(spriteStyleKey(config({ originalReference: false, originalCreationName: "doki doki literature club" }))).toBe(spriteStyleKey(base));
+    expect(spriteStyleKey(config({ originalReference: true, originalCreationName: "" }))).toBe(spriteStyleKey(base));
+    expect(spriteStyleKey(config({ originalReference: true, originalCreationName: "   " }))).toBe(spriteStyleKey(base));
+
+    const ddlc = spriteStyleKey(config({ originalReference: true, originalCreationName: "doki doki literature club" }));
+    const touhou = spriteStyleKey(config({ originalReference: true, originalCreationName: "touhou project" }));
+    expect(ddlc).not.toBe(spriteStyleKey(base));
+    expect(touhou).not.toBe(spriteStyleKey(base));
+    expect(ddlc).not.toBe(touhou);
   });
 
   test("seeds are fixed per key and vary per regeneration", () => {
@@ -309,5 +323,78 @@ describe("sprite identity: non-natural skin colours are weighted", () => {
     expect((nai.parameters.characterTags as Array<{ tags: string }>)[0]!.tags).toContain("1.15::blue skin::");
     const legacy = compileSpriteRequest({ config: config({ imageModel: "nai-diffusion-3" }), provider: "novelai", member: slime, expression: "idle", seed: 1 });
     expect(legacy.prompt).toContain("{{{blue skin}}}");
+  });
+});
+
+describe("sprite character creation / series reference tag", () => {
+  const ddlcConfig = config({ originalReference: true, originalCreationName: "doki doki literature club" });
+
+  test("spriteCharacterReferenceTag formats tags for NovelAI and parentheticals for ComfyUI", () => {
+    expect(spriteCharacterReferenceTag("Sayori", ddlcConfig, true)).toBe("Sayori, doki doki literature club");
+    expect(spriteCharacterReferenceTag("Sayori", ddlcConfig, false)).toBe("Sayori \\(doki doki literature club\\)");
+
+    // Parentheticals in the character name are stripped cleanly
+    expect(spriteCharacterReferenceTag("Sayori (casual)", ddlcConfig, true)).toBe("Sayori, doki doki literature club");
+    expect(spriteCharacterReferenceTag("Sayori (school uniform)", ddlcConfig, false)).toBe("Sayori \\(doki doki literature club\\)");
+
+    // Disabled or empty inputs return empty string
+    expect(spriteCharacterReferenceTag("Sayori", config({ originalReference: false, originalCreationName: "ddlc" }), true)).toBe("");
+    expect(spriteCharacterReferenceTag("Sayori", config({ originalReference: true, originalCreationName: "" }), true)).toBe("");
+    expect(spriteCharacterReferenceTag("", ddlcConfig, true)).toBe("");
+    expect(spriteCharacterReferenceTag(undefined, ddlcConfig, false)).toBe("");
+  });
+
+  test("ComfyUI: injects Character \\(Series\\) into sprite prompt when enabled", () => {
+    const request = compileSpriteRequest({ config: ddlcConfig, provider: "comfyui", member: mira, expression: "idle", seed: 1 });
+    expect(request.prompt).toContain("Mira \\(doki doki literature club\\)");
+    // Should be placed after subject and before framing
+    const tags = request.prompt.split(",\n\n").map((s) => s.trim());
+    const refIdx = tags.indexOf("Mira \\(doki doki literature club\\)");
+    expect(refIdx).toBeGreaterThan(0);
+  });
+
+  test("NovelAI V4+: injects Character, Series into characterTags caption, not base prompt", () => {
+    const request = compileSpriteRequest({
+      config: config({ ...ddlcConfig, imageModel: "nai-diffusion-4-5-full" }),
+      provider: "novelai",
+      member: mira,
+      expression: "idle",
+      seed: 1,
+    });
+    expect(request.prompt).not.toContain("doki doki literature club");
+    const characterTags = request.parameters.characterTags as Array<{ tags: string }>;
+    expect(characterTags).toHaveLength(1);
+    expect(characterTags[0]!.tags).toContain("Mira, doki doki literature club");
+    expect(characterTags[0]!.tags).toContain("silver hair");
+  });
+
+  test("NovelAI V3: injects Character, Series into the base prompt", () => {
+    const request = compileSpriteRequest({
+      config: config({ ...ddlcConfig, imageModel: "nai-diffusion-3" }),
+      provider: "novelai",
+      member: mira,
+      expression: "idle",
+      seed: 1,
+    });
+    expect(request.prompt).toContain("Mira, doki doki literature club");
+    expect(request.parameters.characterTags).toEqual([]);
+  });
+
+  test("disabled originalReference does not inject series tag", () => {
+    const offConfig = config({ originalReference: false, originalCreationName: "doki doki literature club" });
+    const comfy = compileSpriteRequest({ config: offConfig, provider: "comfyui", member: mira, expression: "idle", seed: 1 });
+    expect(comfy.prompt).not.toContain("doki doki literature club");
+    expect(comfy.prompt).not.toContain("Mira \\(");
+
+    const nai = compileSpriteRequest({
+      config: config({ ...offConfig, imageModel: "nai-diffusion-4-5-full" }),
+      provider: "novelai",
+      member: mira,
+      expression: "idle",
+      seed: 1,
+    });
+    expect(nai.prompt).not.toContain("doki doki literature club");
+    const characterTags = nai.parameters.characterTags as Array<{ tags: string }>;
+    expect(characterTags[0]!.tags).not.toContain("doki doki literature club");
   });
 });
