@@ -433,12 +433,10 @@ function pane(id: SettingsSectionId, body: string, extra = ""): string {
 }
 
 const VOICE_SEARCH_ENTRIES: ReadonlyArray<{ label: string; keywords: string }> = [
-  { label: "Read paragraphs aloud", keywords: "speech tts voice enable speak" },
-  { label: "TTS profiles", keywords: "speech load profiles voice connection" },
-  { label: "Narrator voice", keywords: "speech tts narration" },
-  { label: "Character voices", keywords: "speech tts per character override default voice" },
-  { label: "Delivery style", keywords: "speech gemini audio tags whisper emotion" },
-  { label: "Speech volume", keywords: "speech tts autoplay auto-play loudness" },
+  { label: "Read paragraphs aloud with Choir", keywords: "speech tts voice enable speak choir audio" },
+  { label: "Mute narrator", keywords: "speech mute narrator dialogue only choir" },
+  { label: "Choir voice casting", keywords: "speech choir voices narrator character cast" },
+  { label: "Speech volume", keywords: "speech tts autoplay auto-play loudness volume" },
 ];
 
 export class VisualNovelSettingsPanel {
@@ -510,7 +508,7 @@ export class VisualNovelSettingsPanel {
 
   private template(): string {
     const tabs = SETTINGS_SECTIONS.map(({ id, label }) => `
-          <button type="button" role="tab" id="tab-${id}" data-tab="${id}" aria-controls="pane-${id}" aria-selected="false" tabindex="-1" aria-labelledby="tab-${id}-label" aria-describedby="tab-${id}-summary">
+          <button type="button" role="tab" id="tab-${id}" data-tab="${id}" aria-controls="pane-${id}" aria-selected="false" tabindex="-1" aria-labelledby="tab-${id}-label" aria-describedby="tab-${id}-summary"${id === "voice" ? " hidden" : ""}>
             ${icon(ICONS[id])}<span data-tab-text><span id="tab-${id}-label" data-tab-label>${esc(label)}</span><span id="tab-${id}-summary" data-tab-summary></span></span>${id === "connections" ? '<span data-tab-dot data-level="loading" aria-hidden="true"></span>' : ""}<span data-tab-badge hidden></span>
           </button>`).join("");
     return `
@@ -738,7 +736,7 @@ export class VisualNovelSettingsPanel {
 
           ${pane("voice", `
             <div data-speech-mount></div>
-            <p data-voice-empty class="muted">Speech settings are not available in this host.</p>
+            <p data-voice-empty class="muted">Speech settings require the Choir companion extension. Enable Choir in Extensions to configure character and narrator voices.</p>
           `)}
 
           ${pane("connections", `
@@ -912,6 +910,23 @@ export class VisualNovelSettingsPanel {
     this.voiceMounted = true;
     this.root.querySelector<HTMLElement>("[data-voice-empty]")!.hidden = true;
     return this.root.querySelector<HTMLElement>("[data-speech-mount]")!;
+  }
+
+  /**
+   * Sets whether the Choir companion extension is available.
+   * If Choir is not active, the Voice settings tab is hidden.
+   */
+  setVoiceAvailable(available: boolean): void {
+    this.voiceMounted = available;
+    const tab = this.root.querySelector<HTMLElement>('[data-tab="voice"]');
+    if (tab) tab.hidden = !available;
+    const pane = this.root.querySelector<HTMLElement>('[data-pane="voice"]');
+    if (pane && !available) pane.hidden = true;
+    if (!available && this.section === "voice") {
+      this.openSection("reading");
+    }
+    const emptyNotice = this.root.querySelector<HTMLElement>("[data-voice-empty]");
+    if (emptyNotice) emptyNotice.hidden = available;
   }
 
   private rememberedSection(): SettingsSectionId {

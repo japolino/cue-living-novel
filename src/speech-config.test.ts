@@ -63,6 +63,13 @@ describe("speech settings normalization", () => {
     expect(speech.narrator?.parameters?.speed).toBe(4);
   });
 
+  test("muteNarrator preserves boolean true and rejects non-boolean", () => {
+    expect(DEFAULT_SPEECH_SETTINGS.muteNarrator).toBe(false);
+    expect(normalizeSpeechSettings({ muteNarrator: true }).muteNarrator).toBe(true);
+    expect(normalizeSpeechSettings({ muteNarrator: "true" }).muteNarrator).toBe(false);
+    expect(normalizeSpeechSettings({ muteNarrator: 1 }).muteNarrator).toBe(false);
+  });
+
   test("unknown delivery modes fall back to none", () => {
     expect(normalizeSpeechSettings({ deliveryMode: "ssml" }).deliveryMode).toBe("none");
     expect(normalizeSpeechSettings({ deliveryMode: "gemini-audio-tags" }).deliveryMode).toBe("gemini-audio-tags");

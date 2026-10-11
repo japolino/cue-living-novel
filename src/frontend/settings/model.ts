@@ -417,7 +417,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<{ id: SettingsSectionId; label: st
   { id: "look", label: "Look", blurb: "Theme, text and scene effects." },
   { id: "pictures", label: "Pictures", blurb: "Where pictures come from and how many." },
   { id: "sound", label: "Sound", blurb: "Music, sound effects and volume." },
-  { id: "voice", label: "Voice", blurb: "Read paragraphs aloud with your Lumiverse TTS profiles." },
+  { id: "voice", label: "Voice", blurb: "Read dialogue and narration aloud with Choir companion." },
   { id: "connections", label: "Connections", blurb: "The models Cue uses to read the story." },
   { id: "advanced", label: "Advanced", blurb: "Prompts, filters, CSS and technical controls." },
 ];

@@ -32,6 +32,7 @@ import {
   type HostStageError,
 } from "./turn-status.js";
 import { SpeechController, type SpeechCursor } from "../speech/controller.js";
+import { ChoirBridge } from "./choir-bridge.js";
 import { createSpeechTransport } from "../speech/transport.js";
 import { SpeechDock } from "../speech/ui.js";
 import { SpeechSettingsSection } from "../speech/settings-ui.js";
@@ -647,6 +648,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   let panelCapture: { chatId: string; messageId: string; fingerprint: string | null; cards: Array<{ title: string; html: string }> } | null = null;
   // Speech (default-off TTS). Own player and lifecycle; never the SFX channel.
   // Mounted into stage.panelMount so it renders in front of the stage scene and background.
+  const choirBridge = new ChoirBridge(typeof window !== "undefined" ? window : null);
+
   speechDock = new SpeechDock({
     mount: stage.panelMount,
     onPlay: () => { void speech.playCurrent(); },
@@ -654,6 +657,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     onStop: () => speech.stop("user-stop"),
   });
   speech = new SpeechController({
+    choirBridge,
     transport: createSpeechTransport(),
     onStatus: (status) => {
       speechDock.setStatus(status);
@@ -815,11 +819,18 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   // own save path). Profile/voice listing happens only on explicit button
   // presses inside it (metadata calls, no synthesis).
   const speechTransport = createSpeechTransport();
+  choirBridge.onAvailabilityChange((available) => {
+    settingsPanel?.setVoiceAvailable(available);
+  });
   const speechSettings = settingsHandle ? new SpeechSettingsSection({
     mount: settingsPanel?.voiceMount() ?? settingsHandle.root,
     onSave: (speechPatch) => {
       ctx.sendToBackend({ type: "vn_set_config", patch: { speech: speechPatch }, chatId: chatId() });
     },
+    onOpenChoir: () => choirBridge.openDrawer(),
+    isChoirAvailable: () => choirBridge.isAvailable(),
+    isNarratorMuted: () => choirBridge.isNarratorMuted(),
+    onMuteNarratorChange: (muted) => choirBridge.setNarratorMuted(muted),
     listProfiles: () => speechTransport.listProfiles(new AbortController().signal),
     listVoices: (connectionId) => speechTransport.listVoices(connectionId, new AbortController().signal),
     getChatId: () => chatId(),
@@ -1331,6 +1342,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     headerLauncher.destroy();
     action.destroy();
     document.removeEventListener("visibilitychange", onVisibilityChanged);
+    choirBridge.destroy();
     speech.dispose();
     speechDock.destroy();
     speechSettings?.destroy();

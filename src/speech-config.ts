@@ -36,6 +36,8 @@ export type SpeechSettings = {
   autoplay: boolean;
   /** Speech volume (own player, independent of BGM/SFX). */
   volume: number;
+  /** Mute narrator speech (dialogue only). */
+  muteNarrator: boolean;
   /** Narration voice. Null means "not configured" (silence + settings hint). */
   narrator: SpeechVoiceRef | null;
   /** Fallback voice for any character without an override. Null = fall back to narrator. */
@@ -60,6 +62,7 @@ export const DEFAULT_SPEECH_SETTINGS: SpeechSettings = {
   enabled: false,
   autoplay: false,
   volume: 0.8,
+  muteNarrator: false,
   narrator: null,
   characterDefault: null,
   characters: {},
@@ -112,6 +115,7 @@ export function normalizeSpeechSettings(value: unknown): SpeechSettings {
     enabled: raw.enabled === true,
     autoplay: raw.autoplay === true,
     volume: Number.isFinite(volume) ? Math.min(1, Math.max(0, volume)) : DEFAULT_SPEECH_SETTINGS.volume,
+    muteNarrator: raw.muteNarrator === true,
     narrator: normalizeVoiceRef(raw.narrator),
     characterDefault: normalizeVoiceRef(raw.characterDefault),
     characters: normalizeCharacters(raw.characters),

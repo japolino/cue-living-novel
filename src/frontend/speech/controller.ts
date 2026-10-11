@@ -4,6 +4,7 @@ import { DELIVERY_ADAPTER_VERSION, deliveryTagAllowedForModel, formatOutboundTex
 import { resolveVoiceForParagraph } from "./voice-resolution.js";
 import { stripTextEffectTags } from "../../shared/text-effects.js";
 import { SpeechTransportError, type TtsTransport } from "./transport.js";
+import type { ChoirBridge } from "../host/choir-bridge.js";
 
 /**
  * Frontend speech player for the CURRENT assistant paragraph.
@@ -56,13 +57,14 @@ export type SpeechAudioElement = {
 };
 
 export type SpeechControllerOptions = {
-  transport: TtsTransport;
-  onStatus?: (status: SpeechStatus) => void;
-  createAudio?: () => SpeechAudioElement;
-  createObjectUrl?: (blob: Blob) => string;
-  revokeObjectUrl?: (url: string) => void;
-  maxCacheItems?: number;
-  maxCacheBytes?: number;
+  transport?: TtsTransport | undefined;
+  choirBridge?: ChoirBridge | undefined;
+  onStatus?: ((status: SpeechStatus) => void) | undefined;
+  createAudio?: (() => SpeechAudioElement) | undefined;
+  createObjectUrl?: ((blob: Blob) => string) | undefined;
+  revokeObjectUrl?: ((url: string) => void) | undefined;
+  maxCacheItems?: number | undefined;
+  maxCacheBytes?: number | undefined;
 };
 
 const DEFAULT_MAX_CACHE_ITEMS = 16;
@@ -79,7 +81,8 @@ function sameCursorIdentity(left: SpeechCursor, right: SpeechCursor): boolean {
 }
 
 export class SpeechController {
-  private readonly transport: TtsTransport;
+  private readonly transport: TtsTransport | undefined;
+  private readonly choirBridge: ChoirBridge | undefined;
   private readonly onStatus: (status: SpeechStatus) => void;
   private readonly createAudio: () => SpeechAudioElement;
   private readonly createObjectUrl: (blob: Blob) => string;
@@ -111,6 +114,7 @@ export class SpeechController {
 
   constructor(options: SpeechControllerOptions) {
     this.transport = options.transport;
+    this.choirBridge = options.choirBridge;
     this.onStatus = options.onStatus ?? (() => undefined);
     this.createAudio = options.createAudio ?? (() => new Audio());
     this.createObjectUrl = options.createObjectUrl ?? ((blob) => URL.createObjectURL(blob));
@@ -184,6 +188,12 @@ export class SpeechController {
 
   pause(): void {
     if (this.disposed) return;
+    if (this.choirBridge?.isAvailable()) {
+      this.choirBridge.stop();
+      this.playState = "paused";
+      this.publish({ kind: "paused", ...this.speakerLabel() });
+      return;
+    }
     if (this.starting) {
       // Playback was dispatched but audio.play() has not settled yet: remember
       // the pause so the post-await path settles to paused instead of playing.
@@ -202,6 +212,9 @@ export class SpeechController {
   stop(reason: string): void {
     void reason;
     if (this.disposed) return;
+    if (this.choirBridge?.isAvailable()) {
+      this.choirBridge.stop();
+    }
     this.pauseRequested = false;
     this.starting = false;
     this.abortInflight(reason);
@@ -226,6 +239,67 @@ export class SpeechController {
       return;
     }
     const cursor = this.cursor!;
+
+    if (this.choirBridge && this.choirBridge.isAvailable()) {
+      this.gestureUnlocked = true;
+      this.abortInflight("superseded");
+      const myEpoch = ++this.epoch;
+      const abort = new AbortController();
+      this.inflight = abort;
+      this.publish({ kind: "loading", ...this.speakerLabel() });
+
+      const cleanText = stripTextEffectTags(cursor.text);
+      if (!cleanText.trim()) {
+        this.publishBaseline();
+        return;
+      }
+
+      try {
+        await this.choirBridge.playParagraph({
+          text: cleanText,
+          chatId: cursor.chatId,
+          messageId: cursor.messageId,
+          paragraphIndex: cursor.paragraphIndex,
+          signal: abort.signal,
+          onStatus: (st) => {
+            if (this.disposed || myEpoch !== this.epoch) return;
+            const spk = st.speaker ?? this.speakerLabel().speaker;
+            if (st.kind === "playing") {
+              this.playState = "playing";
+              this.publish(spk !== undefined ? { kind: "playing", speaker: spk } : { kind: "playing" });
+            } else if (st.kind === "loading") {
+              this.publish(spk !== undefined ? { kind: "loading", speaker: spk } : { kind: "loading" });
+            } else if (st.kind === "idle") {
+              this.playState = "stopped";
+              this.publish({ kind: "idle" });
+            }
+          },
+        });
+        if (this.disposed || myEpoch !== this.epoch) return;
+        this.playState = "stopped";
+        this.publish({ kind: "idle" });
+      } catch (err) {
+        if (this.disposed || myEpoch !== this.epoch) return;
+        if (abort.signal.aborted) {
+          this.publishBaseline();
+          return;
+        }
+        this.playState = "stopped";
+        this.publish({ kind: "error", message: err instanceof Error ? err.message : String(err) });
+      } finally {
+        if (this.inflight === abort) this.inflight = null;
+      }
+      return;
+    }
+
+    if (!this.transport) {
+      this.publish({
+        kind: "unconfigured",
+        message: "Choir companion extension is not active.",
+      });
+      return;
+    }
+
     const resolved = resolveVoiceForParagraph(this.settings, {
       chatId: cursor.chatId,
       paragraphSpeaker: cursor.paragraphSpeaker,

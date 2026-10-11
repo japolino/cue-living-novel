@@ -25,10 +25,14 @@ import { SETTINGS_TOKENS_CSS } from "../settings/controls-css.js";
 export type SpeechSettingsSectionOptions = {
   mount: HTMLElement;
   onSave: (speech: SpeechSettings) => void;
-  listProfiles: () => Promise<SafeTtsProfile[]>;
-  listVoices: (connectionId: string) => Promise<VoiceOption[]>;
+  listProfiles?: (() => Promise<SafeTtsProfile[]>) | undefined;
+  listVoices?: ((connectionId: string) => Promise<VoiceOption[]>) | undefined;
   /** Active chat id, used to scope per-character overrides. Empty = no chat. */
-  getChatId: () => string;
+  getChatId?: (() => string) | undefined;
+  onOpenChoir?: (() => void) | undefined;
+  isChoirAvailable?: (() => boolean) | undefined;
+  isNarratorMuted?: (() => boolean) | undefined;
+  onMuteNarratorChange?: ((muted: boolean) => void) | undefined;
 };
 
 const SECTION_CSS = `${SETTINGS_TOKENS_CSS}
@@ -229,7 +233,7 @@ export class SpeechSettingsSection {
       loadButton.disabled = true;
       status.textContent = "Asking the host for this profile’s voices…";
       try {
-        const voices = await this.options.listVoices(selected.connectionId);
+        const voices = this.options.listVoices ? await this.options.listVoices(selected.connectionId) : [];
         this.voiceOptions.set(selected.connectionId, voices);
         status.textContent = voices.length ? `${voices.length} voice(s) listed. Free text is still allowed.` : "The provider listed no voices; type a voice id manually.";
         datalist.replaceChildren(...voices.map((voice) => {
@@ -289,7 +293,7 @@ export class SpeechSettingsSection {
       } catch { /* ignored for non-text inputs */ }
     }
 
-    const currentChatId = this.options.getChatId();
+    const currentChatId = this.options.getChatId ? this.options.getChatId() : '';
     if (currentChatId !== this.lastChatId) {
       this.lastChatId = currentChatId;
       this.draftAddName = "";
@@ -342,7 +346,7 @@ export class SpeechSettingsSection {
       this.profiles = { status: "loading", profiles: this.profiles.profiles };
       this.render();
       try {
-        const profiles = await this.options.listProfiles();
+        const profiles = this.options.listProfiles ? await this.options.listProfiles() : [];
         this.profiles = { status: "ready", profiles };
       } catch (error) {
         this.profiles = { status: "error", profiles: this.profiles.profiles, error: `Could not list profiles: ${error instanceof Error ? error.message : String(error)}` };
@@ -548,6 +552,52 @@ export class SpeechSettingsSection {
     volumeInput.value = String(settings.volume);
     volumeInput.addEventListener("change", () => this.save((next) => { next.volume = Number(volumeInput.value); }));
     volume.append(volumeTitle, volumeInput);
+
+    if (this.options.onOpenChoir || this.options.isChoirAvailable?.()) {
+      const choirMuteInput = document.createElement("input");
+      choirMuteInput.type = "checkbox";
+      choirMuteInput.setAttribute("data-speech-field", "mute-narrator");
+      choirMuteInput.checked = Boolean(settings.muteNarrator);
+      choirMuteInput.addEventListener("change", () => {
+        this.options.onMuteNarratorChange?.(choirMuteInput.checked);
+        this.save((next) => { next.muteNarrator = choirMuteInput.checked; });
+      });
+      const choirMuteLabel = document.createElement("label");
+      choirMuteLabel.className = "check";
+      const choirMuteText = document.createElement("span");
+      choirMuteText.innerHTML = "Mute narrator (dialogue only)<small>Only character dialogue is voiced. Descriptive narration and story beats stay silent.</small>";
+      choirMuteLabel.append(choirMuteInput, choirMuteText);
+
+      const choirOpenBtn = document.createElement("button");
+      choirOpenBtn.type = "button";
+      choirOpenBtn.setAttribute("data-speech-field", "open-choir");
+      choirOpenBtn.textContent = "Open Choir Voice Setup";
+      choirOpenBtn.addEventListener("click", () => {
+        this.options.onOpenChoir?.();
+      });
+      const choirActions = document.createElement("div");
+      choirActions.className = "actions";
+      choirActions.append(choirOpenBtn);
+      const choirCard = card("Choir Voice Casting", (() => {
+        const p = document.createElement("p");
+        p.className = "muted";
+        p.textContent = "Choir assigns voices to your narrator, persona, and characters with Gemini voice styles, Fish Audio, and dynamic NPCs.";
+        const cWrap = document.createElement("div");
+        cWrap.append(p, choirActions);
+        return cWrap;
+      })());
+
+      const speechCard = card("Visual Novel Speech", enable, choirMuteLabel);
+      speechCard.querySelector("header")!.append(summaryState);
+
+      body.append(
+        speechCard,
+        card("Playback", autoplay, volume),
+        choirCard,
+      );
+      this.shadow.replaceChildren(style, body);
+      return;
+    }
 
     const speechCard = card("Speech", enable, overlap);
     speechCard.querySelector("header")!.append(summaryState);
