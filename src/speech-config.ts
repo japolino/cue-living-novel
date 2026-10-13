@@ -38,6 +38,8 @@ export type SpeechSettings = {
   volume: number;
   /** Mute narrator speech (dialogue only). */
   muteNarrator: boolean;
+  /** Choir plays sound effects, ambience and music; Cue's own pack audio stays quiet. */
+  choirSound: boolean;
   /** Narration voice. Null means "not configured" (silence + settings hint). */
   narrator: SpeechVoiceRef | null;
   /** Fallback voice for any character without an override. Null = fall back to narrator. */
@@ -63,6 +65,7 @@ export const DEFAULT_SPEECH_SETTINGS: SpeechSettings = {
   autoplay: false,
   volume: 0.8,
   muteNarrator: false,
+  choirSound: false,
   narrator: null,
   characterDefault: null,
   characters: {},
@@ -116,6 +119,7 @@ export function normalizeSpeechSettings(value: unknown): SpeechSettings {
     autoplay: raw.autoplay === true,
     volume: Number.isFinite(volume) ? Math.min(1, Math.max(0, volume)) : DEFAULT_SPEECH_SETTINGS.volume,
     muteNarrator: raw.muteNarrator === true,
+    choirSound: raw.choirSound === true,
     narrator: normalizeVoiceRef(raw.narrator),
     characterDefault: normalizeVoiceRef(raw.characterDefault),
     characters: normalizeCharacters(raw.characters),

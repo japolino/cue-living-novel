@@ -35,6 +35,9 @@ button:focus-visible { outline: 2px solid var(--vn-shell-accent, #c1b0eb); outli
 button:disabled { opacity: .45; cursor: default; }
 [data-status] { max-width: 16rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vn-shell-muted, var(--lumiverse-text-muted, rgba(255,255,255,.72))); }
 [data-status]:empty { display: none; }
+/* The CC BY line for Choir's music, under the pill and inside its width. */
+[data-music-credit] { display: block; margin-top: .25rem; padding: 0 .5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; font-size: .72rem; color: var(--vn-shell-muted, var(--lumiverse-text-muted, rgba(255,255,255,.72))); text-shadow: 0 1px 3px rgba(0,0,0,.7); }
+[data-music-credit][hidden] { display: none; }
 [data-status][data-tone="error"] { color: var(--lumiverse-danger, #ff8ca0); white-space: normal; }
 @media (pointer: coarse) { button { min-width: 2.75rem; min-height: 2.75rem; } }
 @media (prefers-reduced-motion: reduce) { button { transition: none; } button:active:not(:disabled) { transform: none; } }
@@ -59,6 +62,7 @@ export class SpeechDock {
   private readonly playButton: HTMLButtonElement;
   private readonly stopButton: HTMLButtonElement;
   private readonly statusEl: HTMLElement;
+  private readonly creditEl: HTMLElement;
   private enabled = false;
   private overlayActive = false;
   private playing = false;
@@ -89,7 +93,10 @@ export class SpeechDock {
     this.statusEl.setAttribute("role", "status");
     this.statusEl.setAttribute("aria-live", "polite");
     dock.append(this.playButton, this.stopButton, this.statusEl);
-    shadow.append(style, dock);
+    this.creditEl = document.createElement("small");
+    this.creditEl.setAttribute("data-music-credit", "");
+    this.creditEl.hidden = true;
+    shadow.append(style, dock, this.creditEl);
     this.setStatus({ kind: "off" });
     this.sync();
     options.mount.appendChild(this.host);
@@ -115,6 +122,13 @@ export class SpeechDock {
     const tone = status.kind === "error" || status.kind === "blocked" || status.kind === "unconfigured" ? "error" : "info";
     this.statusEl.setAttribute("data-tone", tone);
     this.statusEl.textContent = describeStatus(status);
+  }
+
+  /** Credit line for the music Choir is playing; null hides it. */
+  setMusicCredit(credit: string | null): void {
+    this.creditEl.textContent = credit ?? "";
+    this.creditEl.title = credit ?? "";
+    this.creditEl.hidden = !credit;
   }
 
   destroy(): void {

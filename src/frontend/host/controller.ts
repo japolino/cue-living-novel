@@ -36,6 +36,7 @@ import { ChoirBridge } from "./choir-bridge.js";
 import { createSpeechTransport } from "../speech/transport.js";
 import { SpeechDock } from "../speech/ui.js";
 import { SpeechSettingsSection } from "../speech/settings-ui.js";
+import type { SpeechSettings } from "../../speech-config.js";
 import { createSpriteCutService } from "../sprites/cut-service.js";
 import { createSpriteFaceService } from "../sprites/face-service.js";
 import { withPlate, withSpriteImage } from "../stage/sprite-layer.js";
@@ -51,6 +52,15 @@ function base64FromBytes(bytes: Uint8Array): string {
     binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
   }
   return btoa(binary);
+}
+
+/**
+ * Sound comes from Choir when speech is on, the user turned on "Sound from
+ * Choir" and the installed Choir can switch its sound for Cue; otherwise Cue
+ * plays its own audio packs.
+ */
+export function choirPlaysSound(speech: SpeechSettings | undefined, choir: Pick<ChoirBridge, "isAvailable" | "canControlSound">): boolean {
+  return Boolean(speech?.enabled && speech.choirSound) && choir.isAvailable() && choir.canControlSound();
 }
 
 /**
@@ -550,13 +560,24 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
 
   let currentBgm: string | null = null;
   let turnOpeningBgm: string | null = null;
+  const choirSoundOn = (): boolean => choirPlaysSound(configRef.current?.speech, choirBridge);
+  let choirSoundActive = false;
+  /** On a source flip: to Choir stops pack audio, back to packs resumes the music in effect. */
+  function syncSoundSource(): void {
+    const next = choirSoundOn();
+    if (next === choirSoundActive) return;
+    choirSoundActive = next;
+    if (next) audioEngine.stopAll();
+    else if (active && currentBgm) audioEngine.playBgm(currentBgm);
+  }
   function syncAudioForParagraph(activeTurn: TurnView, paragraphIndex: number): void {
     if (!activeTurn.audioCues || activeTurn.audioCues.length === 0) return;
     const cue = activeTurn.audioCues.find((c) => c.paragraphIndex === paragraphIndex);
     if (!cue) return;
     const bgmSrc = cue.bgmUrl || cue.bgm;
+    if (bgmSrc) currentBgm = bgmSrc;
+    if (choirSoundOn()) return;
     if (bgmSrc) {
-      currentBgm = bgmSrc;
       vnDebug("audio", `p${paragraphIndex}`, "bgm ->", bgmSrc);
       audioEngine.playBgm(bgmSrc);
     }
@@ -587,7 +608,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       const earlierMusic = turn?.audioCues?.filter((cue) => cue.paragraphIndex <= paragraphIndex && (cue.bgmUrl || cue.bgm))
         .sort((a, b) => b.paragraphIndex - a.paragraphIndex)[0];
       currentBgm = earlierMusic?.bgmUrl || earlierMusic?.bgm || turnOpeningBgm;
-      if (currentBgm) audioEngine.playBgm(currentBgm);
+      if (currentBgm && !choirSoundOn()) audioEngine.playBgm(currentBgm);
       void syncImageForParagraph(paragraphIndex);
     },
     onAdvance: (paragraphIndex) => {
@@ -658,6 +679,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     onPause: () => speech.pause(),
     onStop: () => speech.stop("user-stop"),
   });
+  choirBridge.onMusicChange((music) => speechDock.setMusicCredit(music?.credit ?? null));
   speech = new SpeechController({
     choirBridge,
     transport: createSpeechTransport(),
@@ -772,6 +794,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
         pushConfigToStage(next);
         audioEngine.setBgmVolume(next.bgmVolume);
         audioEngine.setSfxVolume(next.sfxVolume);
+        syncSoundSource();
         settingsPanel?.setConfig(next);
       }
       ctx.sendToBackend({ type: "vn_set_config", patch, chatId: chatId() });
@@ -821,9 +844,6 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   // own save path). Profile/voice listing happens only on explicit button
   // presses inside it (metadata calls, no synthesis).
   const speechTransport = createSpeechTransport();
-  choirBridge.onAvailabilityChange((available) => {
-    settingsPanel?.setVoiceAvailable(available);
-  });
   const speechSettings = settingsHandle ? new SpeechSettingsSection({
     mount: settingsPanel?.voiceMount() ?? settingsHandle.root,
     onSave: (speechPatch) => {
@@ -833,10 +853,17 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     isChoirAvailable: () => choirBridge.isAvailable(),
     isNarratorMuted: () => choirBridge.isNarratorMuted(),
     onMuteNarratorChange: (muted) => choirBridge.setNarratorMuted(muted),
+    canControlChoirSound: () => choirBridge.canControlSound(),
+    onChoirSoundChange: (on) => choirBridge.setSoundEnabled(on),
     listProfiles: () => speechTransport.listProfiles(new AbortController().signal),
     listVoices: (connectionId) => speechTransport.listVoices(connectionId, new AbortController().signal),
     getChatId: () => chatId(),
   }) : null;
+  choirBridge.onAvailabilityChange((available) => {
+    settingsPanel?.setVoiceAvailable(available);
+    speechSettings?.refresh();
+    syncSoundSource();
+  });
 
   function chatId(): string {
     return ctx.getActiveChat().chatId ?? "";
@@ -1135,6 +1162,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       pushConfigToStage(configRef.current);
       audioEngine.setBgmVolume(configRef.current.bgmVolume);
       audioEngine.setSfxVolume(configRef.current.sfxVolume);
+      syncSoundSource();
       speech.setSettings(configRef.current.speech);
       speechDock.setEnabled(configRef.current.speech.enabled);
       speechSettings?.setConfig(configRef.current.speech);
@@ -1168,6 +1196,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       pushConfigToStage(configRef.current);
       audioEngine.setBgmVolume(configRef.current.bgmVolume);
       audioEngine.setSfxVolume(configRef.current.sfxVolume);
+      syncSoundSource();
       speech.setSettings(configRef.current.speech);
       speechDock.setEnabled(configRef.current.speech.enabled);
       speechSettings?.setConfig(configRef.current.speech);

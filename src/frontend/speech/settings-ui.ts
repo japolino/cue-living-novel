@@ -33,6 +33,9 @@ export type SpeechSettingsSectionOptions = {
   isChoirAvailable?: (() => boolean) | undefined;
   isNarratorMuted?: (() => boolean) | undefined;
   onMuteNarratorChange?: ((muted: boolean) => void) | undefined;
+  /** True when the installed Choir can switch its sound on and off for Cue. */
+  canControlChoirSound?: (() => boolean) | undefined;
+  onChoirSoundChange?: ((on: boolean) => void) | undefined;
 };
 
 const SECTION_CSS = `${SETTINGS_TOKENS_CSS}
@@ -133,6 +136,11 @@ export class SpeechSettingsSection {
     if (changed || draftsRemoved) {
       this.render();
     }
+  }
+
+  /** Re-renders after the host's Choir capabilities change (Choir loaded or left). */
+  refresh(): void {
+    if (!this.destroyed) this.render();
   }
 
   destroy(): void {
@@ -588,6 +596,22 @@ export class SpeechSettingsSection {
       })());
 
       const speechCard = card("Visual Novel Speech", enable, choirMuteLabel);
+      if (this.options.canControlChoirSound?.()) {
+        const choirSoundInput = document.createElement("input");
+        choirSoundInput.type = "checkbox";
+        choirSoundInput.setAttribute("data-speech-field", "choir-sound");
+        choirSoundInput.checked = settings.choirSound;
+        choirSoundInput.addEventListener("change", () => {
+          this.options.onChoirSoundChange?.(choirSoundInput.checked);
+          this.save((next) => { next.choirSound = choirSoundInput.checked; });
+        });
+        const choirSoundLabel = document.createElement("label");
+        choirSoundLabel.className = "check";
+        const choirSoundText = document.createElement("span");
+        choirSoundText.innerHTML = "Sound from Choir<small>Choir plays Freesound sound effects, looping ambience and incompetech music while it reads each paragraph. Cue’s own music and sound effects stay quiet while this is on.</small>";
+        choirSoundLabel.append(choirSoundInput, choirSoundText);
+        speechCard.append(choirSoundLabel);
+      }
       speechCard.querySelector("header")!.append(summaryState);
 
       body.append(

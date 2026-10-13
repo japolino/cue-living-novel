@@ -70,6 +70,13 @@ describe("speech settings normalization", () => {
     expect(normalizeSpeechSettings({ muteNarrator: 1 }).muteNarrator).toBe(false);
   });
 
+  test("choirSound is off by default and only true turns it on", () => {
+    expect(DEFAULT_SPEECH_SETTINGS.choirSound).toBe(false);
+    expect(normalizeSpeechSettings({}).choirSound).toBe(false);
+    expect(normalizeSpeechSettings({ choirSound: true }).choirSound).toBe(true);
+    expect(normalizeSpeechSettings({ choirSound: "true" }).choirSound).toBe(false);
+  });
+
   test("unknown delivery modes fall back to none", () => {
     expect(normalizeSpeechSettings({ deliveryMode: "ssml" }).deliveryMode).toBe("none");
     expect(normalizeSpeechSettings({ deliveryMode: "gemini-audio-tags" }).deliveryMode).toBe("gemini-audio-tags");

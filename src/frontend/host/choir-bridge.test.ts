@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { ChoirBridge, type ChoirBridgeApi, type ChoirParagraphRequest } from "./choir-bridge.js";
+import { ChoirBridge, type ChoirBridgeApi, type ChoirMusic, type ChoirParagraphRequest } from "./choir-bridge.js";
 import { SpeechController, type SpeechCursor } from "../speech/controller.js";
+import { DEFAULT_SPEECH_SETTINGS } from "../../speech-config.js";
+import { choirPlaysSound } from "./controller.js";
 
 describe("ChoirBridge companion", () => {
   test("detects Choir presence on target window", () => {
@@ -99,6 +101,7 @@ describe("ChoirBridge companion", () => {
       deliveryMode: "none",
       deliveryTag: "",
       deliveryAllProviders: false,
+      choirSound: false,
     });
 
     controller.setActive(true);
@@ -168,6 +171,7 @@ describe("SpeechController with Choir: stop paths", () => {
       deliveryMode: "none",
       deliveryTag: "",
       deliveryAllProviders: false,
+      choirSound: false,
     });
     controller.setActive(true);
     controller.setVisible(true);
@@ -203,5 +207,67 @@ describe("SpeechController with Choir: stop paths", () => {
     expect(requests[1]!.signal?.aborted).toBe(true);
     bridge.destroy();
     controller.dispose();
+  });
+});
+
+describe("ChoirBridge sound control and music", () => {
+  function fakeWindow(api: Partial<ChoirBridgeApi> | null) {
+    const listeners = new Map<string, Set<(event: Event) => void>>();
+    const win: any = {
+      __CHOIR_API__: api ? { version: 1, isAvailable: () => true, isNarratorMuted: () => false, setNarratorMuted: () => {}, openDrawer: () => {}, stop: () => {}, playParagraph: async () => ({ played: 0 }), ...api } : undefined,
+      addEventListener: (type: string, fn: (event: Event) => void) => { if (!listeners.has(type)) listeners.set(type, new Set()); listeners.get(type)!.add(fn); },
+      removeEventListener: (type: string, fn: (event: Event) => void) => { listeners.get(type)?.delete(fn); },
+      dispatchEvent: (event: Event) => { listeners.get(event.type)?.forEach((fn) => fn(event)); return true; },
+    };
+    return win;
+  }
+
+  test("an older Choir without setSoundEnabled cannot control sound", () => {
+    const bridge = new ChoirBridge(fakeWindow({}));
+    expect(bridge.isAvailable()).toBe(true);
+    expect(bridge.canControlSound()).toBe(false);
+    expect(bridge.getMusic()).toBeNull();
+    bridge.setSoundEnabled(true);
+    bridge.destroy();
+  });
+
+  test("setSoundEnabled is forwarded to Choir", () => {
+    const calls: boolean[] = [];
+    const bridge = new ChoirBridge(fakeWindow({ setSoundEnabled: (on) => { calls.push(on); } }));
+    expect(bridge.canControlSound()).toBe(true);
+    bridge.setSoundEnabled(true);
+    bridge.setSoundEnabled(false);
+    expect(calls).toEqual([true, false]);
+    bridge.destroy();
+  });
+
+  test("onMusicChange reports the current track, each change, and null when Choir leaves", () => {
+    const track: ChoirMusic = { title: "Gymnopedie", credit: '"Gymnopedie" Kevin MacLeod (incompetech.com) · CC BY 4.0' };
+    const win = fakeWindow({ getMusic: () => track });
+    const bridge = new ChoirBridge(win);
+    const seen: Array<ChoirMusic | null> = [];
+    bridge.onMusicChange((music) => seen.push(music));
+    win.dispatchEvent(new CustomEvent("choir-music-v1", { detail: null }));
+    delete win.__CHOIR_API__;
+    win.dispatchEvent(new CustomEvent("choir-unavailable-v1"));
+    expect(seen).toEqual([track, null, null]);
+
+    bridge.destroy();
+    win.dispatchEvent(new CustomEvent("choir-music-v1", { detail: track }));
+    expect(seen.length).toBe(3);
+  });
+});
+
+describe("choirPlaysSound", () => {
+  const capable = { isAvailable: () => true, canControlSound: () => true };
+  const on = { ...DEFAULT_SPEECH_SETTINGS, enabled: true, choirSound: true };
+
+  test("Choir plays sound only with speech on, the toggle on and a capable Choir", () => {
+    expect(choirPlaysSound(on, capable)).toBe(true);
+    expect(choirPlaysSound({ ...on, enabled: false }, capable)).toBe(false);
+    expect(choirPlaysSound({ ...on, choirSound: false }, capable)).toBe(false);
+    expect(choirPlaysSound(on, { ...capable, isAvailable: () => false })).toBe(false);
+    expect(choirPlaysSound(on, { ...capable, canControlSound: () => false })).toBe(false);
+    expect(choirPlaysSound(undefined, capable)).toBe(false);
   });
 });

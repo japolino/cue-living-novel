@@ -43,7 +43,7 @@ try {
   await page.locator("[data-speech-fixture-ready]").waitFor();
 
   const dock = page.locator(".vn-speech-dock");
-  const card = page.locator(".vn-speech-settings");
+  const card = page.locator(".vn-speech-settings").first();
   // The section is flat now (it renders inside the settings Voice section): no disclosure to open.
   assert.equal(await card.getByRole("button", { name: "Load profiles" }).isVisible(), true, "speech settings are visible without expanding anything");
 
@@ -167,8 +167,27 @@ try {
   await savedRow.waitFor();
   assert.equal(await savedRow.locator("select").inputValue(), "gem-1", "save echo keeps the row with its profile");
 
+  // 10) Sound from Choir: shown only when the installed Choir can switch its sound; toggling calls the host and saves.
+  const choirCard = page.locator("[data-choir-section] .vn-speech-settings");
+  const choirSound = choirCard.locator('[data-speech-field="choir-sound"]');
+  assert.equal(await choirSound.count(), 0, "no Sound from Choir toggle on a Choir without sound control");
+  await fx(page, `f.choirCanControlSound = true; f.choirSection.refresh();`);
+  assert.equal(await choirSound.isChecked(), false, "Sound from Choir is off by default");
+  await choirSound.check();
+  const choirState = await page.evaluate(`(() => ({ calls: [...window.speechFixture.choirSoundCalls], last: window.speechFixture.choirPatches.at(-1)?.choirSound }))()`) as { calls: boolean[]; last: boolean };
+  assert.deepEqual(choirState, { calls: [true], last: true }, "the toggle switches Choir's sound and saves choirSound");
+  assert.equal(await choirSound.isChecked(), true, "the toggle stays on after the save echo");
+
+  // 11) Music credit under the dock: shown with a track, hidden without one.
+  const credit = dock.locator("[data-music-credit]");
+  await fx(page, `f.dock.setMusicCredit('"Gymnopedie" Kevin MacLeod (incompetech.com) · CC BY 4.0');`);
+  assert.equal(await credit.isVisible(), true, "credit shows while Choir plays music");
+  assert.match(await credit.innerText(), /Kevin MacLeod \(incompetech\.com\) · CC BY 4\.0/);
+  await fx(page, `f.dock.setMusicCredit(null);`);
+  assert.equal(await credit.isVisible(), false, "credit hides when the music stops");
+
   assert.deepEqual(external, [], "nothing ever left the page");
-  console.log("Speech browser checks passed: default-disabled zero requests, explicit profile listing, selection save echo, manual Play/Pause/Stop, narrator vs named fallback, Gemini-route tag gating, updated_at cache keying, stale completion after close, no external requests.");
+  console.log("Speech browser checks passed: default-disabled zero requests, explicit profile listing, selection save echo, manual Play/Pause/Stop, narrator vs named fallback, Gemini-route tag gating, updated_at cache keying, stale completion after close, Sound from Choir toggle, music credit, no external requests.");
 } finally {
   await browser?.close();
   server.stop(true);

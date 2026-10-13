@@ -27,6 +27,9 @@ const fixture = {
   holdSynthesis: false,
   releaseSynthesis: null as (() => void) | null,
   config: normalizeSpeechSettings({}),
+  choirCanControlSound: false,
+  choirSoundCalls: [] as boolean[],
+  choirPatches: [] as SpeechSettings[],
   bumpProfile(id: string, revision: string) { profiles[id]!.updated_at = revision; },
   setProfileVoice(id: string, voice: string) { profiles[id]!.voice = voice; },
 };
@@ -112,6 +115,20 @@ section.setConfig(fixture.config);
 controller.setSettings(fixture.config);
 dock.setEnabled(fixture.config.enabled);
 
+// The same card as the host renders it with Choir installed (mounted second).
+const choirMount = document.createElement("div");
+choirMount.setAttribute("data-choir-section", "");
+document.body.append(choirMount);
+const choirSection = new SpeechSettingsSection({
+  mount: choirMount,
+  onSave: (speech) => { fixture.choirPatches.push(speech); choirSection.setConfig(normalizeSpeechSettings(speech)); },
+  onOpenChoir: () => {},
+  isChoirAvailable: () => true,
+  canControlChoirSound: () => fixture.choirCanControlSound,
+  onChoirSoundChange: (on) => { fixture.choirSoundCalls.push(on); },
+});
+choirSection.setConfig(normalizeSpeechSettings({}));
+
 Object.assign(window, {
   speechFixture: Object.assign(fixture, {
     controller,
@@ -129,6 +146,8 @@ Object.assign(window, {
       });
     },
     endAudio: () => audio.emitEnded(),
+    dock,
+    choirSection,
     applySpeech: (patch: Record<string, unknown>) => {
       fixture.config = normalizeSpeechSettings({ ...fixture.config, ...patch });
       section.setConfig(fixture.config);
