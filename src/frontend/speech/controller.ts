@@ -180,7 +180,9 @@ export class SpeechController {
     if (this.disposed) return;
     if (cursor && this.cursor && sameCursorIdentity(this.cursor, cursor)) return;
     this.cursor = cursor;
-    this.stop("cursor-changed");
+    // Choir hands off between paragraphs itself (the aborted one stops its own
+    // speech), so its ambience and music beds keep running across paragraphs.
+    this.stopOwnPlayback("cursor-changed");
     this.publishBaseline();
     if (cursor && this.settings.autoplay && this.gestureUnlocked && this.eligible()) {
       void this.playCurrent({ auto: true });
@@ -211,11 +213,15 @@ export class SpeechController {
   }
 
   stop(reason: string): void {
-    void reason;
     if (this.disposed) return;
     if (this.choirBridge?.isAvailable()) {
       this.choirBridge.stop();
     }
+    this.stopOwnPlayback(reason);
+  }
+
+  /** Stops Cue's own player and aborts the in-flight request; Choir keeps playing. */
+  private stopOwnPlayback(reason: string): void {
     this.pauseRequested = false;
     this.starting = false;
     this.abortInflight(reason);
