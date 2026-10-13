@@ -193,6 +193,8 @@ export class SpeechController {
     if (this.disposed) return;
     if (this.choirBridge?.isAvailable()) {
       this.choirBridge.stop();
+      // Drop the paragraph in flight so its late status cannot undo the pause.
+      this.abortInflight("paused");
       this.playState = "paused";
       this.publish({ kind: "paused", ...this.speakerLabel() });
       return;
