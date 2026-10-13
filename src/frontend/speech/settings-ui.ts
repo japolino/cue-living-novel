@@ -608,7 +608,7 @@ export class SpeechSettingsSection {
         const choirSoundLabel = document.createElement("label");
         choirSoundLabel.className = "check";
         const choirSoundText = document.createElement("span");
-        choirSoundText.innerHTML = "Sound from Choir<small>Choir plays Freesound sound effects, looping ambience and incompetech music while it reads each paragraph. Cue’s own music and sound effects stay quiet while this is on.</small>";
+        choirSoundText.innerHTML = "Sound from Choir<small>Choir plays Freesound sound effects, looping ambience and incompetech music while it reads each paragraph. While Choir’s sound is on, Cue’s own music and sound effects stay quiet.</small>";
         choirSoundLabel.append(choirSoundInput, choirSoundText);
         speechCard.append(choirSoundLabel);
       }

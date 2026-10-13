@@ -38,7 +38,7 @@ export type SpeechSettings = {
   volume: number;
   /** Mute narrator speech (dialogue only). */
   muteNarrator: boolean;
-  /** Choir plays sound effects, ambience and music; Cue's own pack audio stays quiet. */
+  /** Use Choir's sound effects, ambience and music; Cue's own pack audio stays quiet while Choir's sound is on. */
   choirSound: boolean;
   /** Narration voice. Null means "not configured" (silence + settings hint). */
   narrator: SpeechVoiceRef | null;

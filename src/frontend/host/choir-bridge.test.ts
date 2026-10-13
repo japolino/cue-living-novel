@@ -208,6 +208,38 @@ describe("SpeechController with Choir: stop paths", () => {
     bridge.destroy();
     controller.dispose();
   });
+
+  test("pause drops the paragraph in flight, so its late status cannot undo the pause", async () => {
+    const statuses: string[] = [];
+    let finish: (() => void) | undefined;
+    const fakeApi: ChoirBridgeApi = {
+      version: 1,
+      isAvailable: () => true,
+      isNarratorMuted: () => false,
+      setNarratorMuted: () => {},
+      openDrawer: () => {},
+      stop: () => {},
+      // Like a Choir that still reports and settles after stop().
+      playParagraph: (request) => new Promise((resolve) => {
+        finish = () => { request.onStatus?.({ kind: "playing" }); resolve({ played: 1 }); };
+      }),
+    };
+    const bridge = new ChoirBridge({ __CHOIR_API__: fakeApi, addEventListener: () => {}, removeEventListener: () => {}, dispatchEvent: () => true } as any);
+    const controller = new SpeechController({ choirBridge: bridge, onStatus: (status) => statuses.push(status.kind) });
+    controller.setSettings({ ...DEFAULT_SPEECH_SETTINGS, enabled: true });
+    controller.setActive(true);
+    controller.setCursor(paragraph(0));
+    const playing = controller.playCurrent();
+
+    controller.pause();
+    finish!();
+    await playing;
+
+    expect(controller.getStatus().kind).toBe("paused");
+    expect(statuses.at(-1)).toBe("paused");
+    bridge.destroy();
+    controller.dispose();
+  });
 });
 
 describe("ChoirBridge sound control and music", () => {
@@ -256,18 +288,47 @@ describe("ChoirBridge sound control and music", () => {
     win.dispatchEvent(new CustomEvent("choir-music-v1", { detail: track }));
     expect(seen.length).toBe(3);
   });
+
+  test("a Choir that arrives later reports the track it is already playing", () => {
+    const track: ChoirMusic = { title: "Gymnopedie", credit: '"Gymnopedie" Kevin MacLeod (incompetech.com) · CC BY 4.0' };
+    const win = fakeWindow(null);
+    const bridge = new ChoirBridge(win);
+    const seen: Array<ChoirMusic | null> = [];
+    bridge.onMusicChange((music) => seen.push(music));
+    win.__CHOIR_API__ = fakeWindow({ getMusic: () => track }).__CHOIR_API__;
+    win.dispatchEvent(new CustomEvent("choir-available-v1"));
+    expect(seen).toEqual([null, track]);
+    bridge.destroy();
+  });
+
+  test("soundEnabled follows Choir's switches: music, or effects and ambience with a Freesound key", () => {
+    const enabled = (config: Record<string, unknown> | null) => {
+      const bridge = new ChoirBridge(fakeWindow({ getConfig: () => config }));
+      const result = bridge.soundEnabled();
+      bridge.destroy();
+      return result;
+    };
+    expect(enabled({ enableSfx: false, enableAmbience: false, enableMusic: true })).toBe(true);
+    expect(enabled({ freesoundApiKey: "k" })).toBe(true);
+    expect(enabled({ enableSfx: false, enableAmbience: true, freesoundApiKey: "k" })).toBe(true);
+    expect(enabled({})).toBe(false);
+    expect(enabled({ enableSfx: false, enableAmbience: false, enableMusic: false, freesoundApiKey: "k" })).toBe(false);
+    expect(enabled(null)).toBe(false);
+  });
 });
 
 describe("choirPlaysSound", () => {
-  const capable = { isAvailable: () => true, canControlSound: () => true };
+  const capable = { isAvailable: () => true, canControlSound: () => true, soundEnabled: () => true };
   const on = { ...DEFAULT_SPEECH_SETTINGS, enabled: true, choirSound: true };
 
-  test("Choir plays sound only with speech on, the toggle on and a capable Choir", () => {
+  test("Choir plays sound only with speech on, the toggle on and a capable Choir whose sound is on", () => {
     expect(choirPlaysSound(on, capable)).toBe(true);
     expect(choirPlaysSound({ ...on, enabled: false }, capable)).toBe(false);
     expect(choirPlaysSound({ ...on, choirSound: false }, capable)).toBe(false);
     expect(choirPlaysSound(on, { ...capable, isAvailable: () => false })).toBe(false);
     expect(choirPlaysSound(on, { ...capable, canControlSound: () => false })).toBe(false);
+    // Choir's own switches are off (or no Freesound key): the pack keeps playing.
+    expect(choirPlaysSound(on, { ...capable, soundEnabled: () => false })).toBe(false);
     expect(choirPlaysSound(undefined, capable)).toBe(false);
   });
 });

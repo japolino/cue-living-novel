@@ -25,7 +25,7 @@ export type ChoirMusic = { title: string; credit: string };
 export interface ChoirBridgeApi {
   version: number;
   isAvailable: () => boolean;
-  getConfig?: () => Record<string, unknown>;
+  getConfig?: () => Record<string, unknown> | null;
   isNarratorMuted: () => boolean;
   setNarratorMuted: (muted: boolean) => void;
   openDrawer: () => void;
@@ -96,6 +96,17 @@ export class ChoirBridge {
     this.api?.setSoundEnabled?.(on);
   }
 
+  /**
+   * Whether Choir's own switches let it play sound in this chat: music, or
+   * effects and ambience with a Freesound key (Choir skips those without one).
+   */
+  soundEnabled(): boolean {
+    const config = this.api?.getConfig?.();
+    if (!config) return false;
+    return config.enableMusic === true
+      || ((config.enableSfx !== false || config.enableAmbience !== false) && Boolean(config.freesoundApiKey));
+  }
+
   getMusic(): ChoirMusic | null {
     return this.api?.getMusic?.() ?? null;
   }
@@ -131,7 +142,7 @@ export class ChoirBridge {
         // Safe dispatch
       }
     }
-    if (!available) this.emitMusic(null);
+    this.emitMusic(available ? this.getMusic() : null);
   }
 
   private emitMusic(music: ChoirMusic | null): void {

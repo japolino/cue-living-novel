@@ -33,6 +33,7 @@ import {
 } from "./turn-status.js";
 import { SpeechController, type SpeechCursor } from "../speech/controller.js";
 import { ChoirBridge } from "./choir-bridge.js";
+import { PackSound } from "./pack-sound.js";
 import { createSpeechTransport } from "../speech/transport.js";
 import { SpeechDock } from "../speech/ui.js";
 import { SpeechSettingsSection } from "../speech/settings-ui.js";
@@ -56,11 +57,12 @@ function base64FromBytes(bytes: Uint8Array): string {
 
 /**
  * Sound comes from Choir when speech is on, the user turned on "Sound from
- * Choir" and the installed Choir can switch its sound for Cue; otherwise Cue
- * plays its own audio packs.
+ * Choir", the installed Choir can switch its sound for Cue and Choir's own
+ * switches have sound on in this chat; otherwise Cue plays its own audio
+ * packs, so the two never leave Cue silent.
  */
-export function choirPlaysSound(speech: SpeechSettings | undefined, choir: Pick<ChoirBridge, "isAvailable" | "canControlSound">): boolean {
-  return Boolean(speech?.enabled && speech.choirSound) && choir.isAvailable() && choir.canControlSound();
+export function choirPlaysSound(speech: SpeechSettings | undefined, choir: Pick<ChoirBridge, "isAvailable" | "canControlSound" | "soundEnabled">): boolean {
+  return Boolean(speech?.enabled && speech.choirSound) && choir.isAvailable() && choir.canControlSound() && choir.soundEnabled();
 }
 
 /**
@@ -558,34 +560,21 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   };
   document.addEventListener("visibilitychange", onVisibilityChanged);
 
-  let currentBgm: string | null = null;
+  const packSound = new PackSound(audioEngine);
   let turnOpeningBgm: string | null = null;
-  const choirSoundOn = (): boolean => choirPlaysSound(configRef.current?.speech, choirBridge);
-  let choirSoundActive = false;
-  /** On a source flip: to Choir stops pack audio, back to packs resumes the music in effect. */
+  /** Choir's switches can change inside Choir or with the chat, so this runs before each cue too. */
   function syncSoundSource(): void {
-    const next = choirSoundOn();
-    if (next === choirSoundActive) return;
-    choirSoundActive = next;
-    if (next) audioEngine.stopAll();
-    else if (active && currentBgm) audioEngine.playBgm(currentBgm);
+    packSound.useChoir(choirPlaysSound(configRef.current?.speech, choirBridge), active);
   }
   function syncAudioForParagraph(activeTurn: TurnView, paragraphIndex: number): void {
-    if (!activeTurn.audioCues || activeTurn.audioCues.length === 0) return;
-    const cue = activeTurn.audioCues.find((c) => c.paragraphIndex === paragraphIndex);
+    syncSoundSource();
+    const cue = activeTurn.audioCues?.find((c) => c.paragraphIndex === paragraphIndex);
     if (!cue) return;
-    const bgmSrc = cue.bgmUrl || cue.bgm;
-    if (bgmSrc) currentBgm = bgmSrc;
-    if (choirSoundOn()) return;
-    if (bgmSrc) {
-      vnDebug("audio", `p${paragraphIndex}`, "bgm ->", bgmSrc);
-      audioEngine.playBgm(bgmSrc);
-    }
-    const sfxSrc = cue.sfxUrl || cue.sfx;
-    if (sfxSrc) {
-      vnDebug("audio", `p${paragraphIndex}`, "sfx ->", sfxSrc);
-      audioEngine.playSfx(sfxSrc);
-    }
+    const bgm = cue.bgmUrl || cue.bgm;
+    const sfx = cue.sfxUrl || cue.sfx;
+    if (bgm) vnDebug("audio", `p${paragraphIndex}`, "bgm ->", bgm);
+    if (sfx) vnDebug("audio", `p${paragraphIndex}`, "sfx ->", sfx);
+    packSound.play({ bgm, sfx });
   }
 
   // Moves from game-engine extensions (Warp etc.): shown on the stage, picked back to their owner.
@@ -604,11 +593,10 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     onPrevious: (paragraphIndex) => {
       panels.setCursor(paragraphIndex);
       syncSpeechCursor(turn, paragraphIndex);
-      audioEngine.stopAll();
       const earlierMusic = turn?.audioCues?.filter((cue) => cue.paragraphIndex <= paragraphIndex && (cue.bgmUrl || cue.bgm))
         .sort((a, b) => b.paragraphIndex - a.paragraphIndex)[0];
-      currentBgm = earlierMusic?.bgmUrl || earlierMusic?.bgm || turnOpeningBgm;
-      if (currentBgm && !choirSoundOn()) audioEngine.playBgm(currentBgm);
+      syncSoundSource();
+      packSound.restore(earlierMusic?.bgmUrl || earlierMusic?.bgm || turnOpeningBgm);
       void syncImageForParagraph(paragraphIndex);
     },
     onAdvance: (paragraphIndex) => {
@@ -847,6 +835,11 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   const speechSettings = settingsHandle ? new SpeechSettingsSection({
     mount: settingsPanel?.voiceMount() ?? settingsHandle.root,
     onSave: (speechPatch) => {
+      // Applied at once, like the panel's onSave, so Sound from Choir silences the pack without waiting for the echo.
+      if (configRef.current) {
+        configRef.current = { ...configRef.current, speech: speechPatch };
+        syncSoundSource();
+      }
       ctx.sendToBackend({ type: "vn_set_config", patch: { speech: speechPatch }, chatId: chatId() });
     },
     onOpenChoir: () => choirBridge.openDrawer(),
@@ -1115,7 +1108,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     panels.setTurn(next, 0);
     const mode = requestedMode === "cyoa" && next.choices.length > 0 ? "cyoa" : "standard";
     const preserveImage = shouldPreserveImage(previous, next);
-    turnOpeningBgm = preserveImage ? currentBgm : null;
+    turnOpeningBgm = preserveImage ? packSound.currentMusic : null;
     stage.loadTurn(stageTurnInput(next, mode, preserveImage, configRef.current?.effectIntensity ?? "full"));
     syncSpeechCursor(next, 0);
     void syncImageForParagraph(0);
@@ -1337,6 +1330,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     panels.setTurn(null);
     turn = null;
     pendingNextTurn = null;
+    packSound.reset();
+    turnOpeningBgm = null;
     speech.onChatChanged();
     stage.reset();
     requestState();
@@ -1346,6 +1341,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     panels.setTurn(null);
     turn = null;
     pendingNextTurn = null;
+    packSound.reset();
+    turnOpeningBgm = null;
     speech.onChatChanged();
     stage.reset();
     requestState();
