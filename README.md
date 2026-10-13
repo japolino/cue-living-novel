@@ -206,6 +206,10 @@ Custom CSS can restyle effects through `[data-vn-text-fx="<id>"]`, the per-lette
 
 To install, unzip it, open **Settings → Music library → Import music folder…**, choose the `cue-audio` folder, then **Check library** (24 BGM / 24 SFX). Cue offers System One the first 24 music tracks and the first 24 sound effects sorted by path, so remove an older pack from `data/extensions/visual_novel_preview/storage/audio/` first. **Check library** rescans the folder, so files added or removed there by hand show up without a restart.
 
+### Sound from Choir
+
+With the Choir companion extension installed, **Settings → Voice → Sound from Choir** lets Choir provide the sound instead of the pack. While Choir reads each paragraph aloud, it chooses sound effects and looping ambience from Freesound and background music from Kevin MacLeod's incompetech catalog. Ambience and music keep playing into the next paragraph. The setting turns Choir's sound effects, ambience and music on or off together. While it is on and Cue speech is on, Cue's own pack stays quiet. With speech off, the pack plays as before. Enter the Freesound API key, switch single kinds and set the volumes in Choir. The credit for the current track ("Title" Kevin MacLeod (incompetech.com) · CC BY 4.0) shows under the speech controls. The setting appears only with a Choir version that offers it.
+
 ## Run the standalone preview
 
 ```powershell
