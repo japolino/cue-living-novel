@@ -29,7 +29,7 @@ own expression and there is no picture cap.
 |---|---|---|---|
 | `presentationMode` | `"scene"` \| `"sprites"` | `"scene"` | at once (everyday) |
 | `spriteCutout` | `"best"` (model) \| `"basic"` (no download) | `"best"` | at once (everyday) |
-| `spriteModelUrl` | https URL | ISNet-anime on Hugging Face | Advanced (Apply) |
+| `spriteModelUrl` | https URL | ISNet-anime on Hugging Face (its float16 copy downloads where it runs) | Advanced (Apply) |
 | `keyIllustrations` | `"off"` \| `"few"` (≤ 1 per reply) | `"off"` | at once (everyday, sprite mode only) |
 | `spriteImageSize` | `"standard"` \| `"upscaled"` | `"standard"` | at once (everyday, both modes) |
 | `spriteExpressionCount` | `4` \| `8` \| `12` | `4` | at once (everyday, sprite mode only) |
@@ -156,7 +156,8 @@ sprite job:  prompt -> image gen (portrait) -> imageId
              -> vn_sprite_cut {requestId, imageId, crop?}  ----->  frontend cut service
                                                                   fetch /api/v1/images/<id>
                                                                   crop (inset renders only)
-                                                                  cutSprite() (ISNet + flood fill)
+                                                                  cutSprite() (pre-cut: keep alpha;
+                                                                  else ISNet + flood fill)
              <- vn_sprite_cut_result chunks (PNG base64) ------
              -> spindle.images.upload(...) -> cut image id/url
              -> library: status "ready", bbox
@@ -636,6 +637,62 @@ median of the image border.
 `spriteModelUrl` and cached in the browser; onnxruntime-web is loaded lazily
 (WebGPU, else WASM) so the frontend bundle stays small.
 
+Half-precision download: for the default `spriteModelUrl` the browser
+downloads `DEFAULT_SPRITE_MODEL_F16_URL` instead (the same ISNet-anime in
+float16, onnx-community/anime-seg-ONNX, 88 MB instead of 176 MB;
+`chooseCutoutModelUrl`). Exceptions: the float32 model is already cached
+(kept, no second download), or WebGPU is there without the `shader-f16`
+feature (onnxruntime-web cannot build the f16 session on that GPU and would
+drop to WASM, so the float32 model downloads and keeps WebGPU speed). Without
+WebGPU both run on WASM at the same speed. A custom `spriteModelUrl` is used
+as it is. Measured (October 2026): cut alpha against float32 on 58 sprites
+(bake-off, reply test, white-character set; ORT CPU) mean abs. difference
+0.00001, IoU 0.99998 (min 0.9991); Edge WebGPU on an RTX 5060 106 ms vs 119
+ms per inference, GPU memory +0.78 GB vs +1.47 GB; WASM 18 s vs 17 s (one
+thread).
+
+Pre-cut sources: when the generated image is already transparent (at least
+half of its 1-px border has alpha ≤ 8 and some pixel is opaque, `isPreCut`),
+the cut-out keeps the image's own alpha: no model, no flood fill, only the
+bbox and the duplicate check. It reports quality "best" (so it is never
+queued for a basic → best re-cut). This lets a ComfyUI workflow cut on the
+GPU (see "Server-side cut in ComfyUI" below). Images with a few transparent
+pixels on an opaque frame still count as on white. The check runs on the
+image the cut-out gets, so a NovelAI V5 inset render is judged after its
+crop, on the repainted half alone (on the whole canvas, the opaque reference
+half would be half of the border).
+
+### Server-side cut in ComfyUI (optional, workflow side)
+
+ComfyUI has native background-removal nodes: `LoadBackgroundRemovalModel`
+(models/background_removal/, BiRefNet Swin-L checkpoints) →
+`RemoveBackground` (IMAGE → MASK, 1 = foreground). `JoinImageWithAlpha`
+uses 1 − mask as alpha, so a workflow that ends in VAE Decode →
+RemoveBackground → InvertMask → JoinImageWithAlpha → SaveImage saves an RGBA
+PNG. To cut sprites only (plates and key moments must stay opaque), a
+Boolean node routed into the core If/Else Switch (`ComfySwitchNode`, lazy:
+the removal runs only when on) can pick the RGBA or the plain image; Cue
+would set it like the reference switch (`comfy-reference-switch.ts`): on for
+sprites, off otherwise. Not built yet: today the workflow is the user's.
+Lumiverse's ComfyUI provider fetches the saved file and stores its bytes
+unchanged (read in Lumiverse `comfy-runner.ts` / `images.service.ts`, not
+run end to end), and the cut-out above keeps the alpha.
+
+Bench notes (October 2026; synthetic ground truth from 6 white-themed
+sprites rendered on black, composited on flat backgrounds):
+
+- ComfyUI's BiRefNet config feeds pixels 0..1 with mean 0 / std 1, not the
+  ImageNet normalisation BiRefNet was trained with. Folding the
+  normalisation into the first convolutions of the checkpoint (patch embed
+  and the decoder's image-patch convs) fixes it: on white, BiRefNet IoU
+  0.976 vs 0.949 unfolded, ToonOut 0.962 vs 0.949.
+- On white, folded BiRefNet (IoU 0.976, SAD 12) and ToonOut (0.962, SAD 19)
+  beat the browser pipeline (ISNet + kernel 0.946, SAD 27), but no model
+  won on every image (BiRefNet 0.904 on one, ISNet + kernel 0.799 on
+  another, ToonOut never below 0.903). On mid grey both reach 0.994.
+- ~0.7–1.4 s per image in batches on a GPU that was generating at the same
+  time (no idle-GPU timing).
+
 ### Face boxes
 
 A small face detector (`DEFAULT_SPRITE_FACE_MODEL_URL`: deepghs
@@ -784,6 +841,7 @@ Cut-out runtime:
 - onnxruntime-web 1.30.0, imported lazily from jsDelivr into a blob-URL
   module Worker (inline fallback); WebGPU first, then WASM. The model is
   cached in Cache Storage (IndexedDB on http origins).
+- Model file: float16 copy by default (see "Half-precision download").
 - Measured on the bake-off set (19 sprites, Chromium): fp32 + WebGPU ≈ 0.35–0.4 s
   per sprite (IoU 0.995 vs. the reference); fp32 + WASM ≈ 14–16 s; int8 runs
   on both but is not faster (ConvInteger falls back to the CPU on WebGPU);

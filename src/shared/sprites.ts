@@ -698,8 +698,21 @@ export type SpriteCutMeta = {
   durationMs: number;
 };
 
-/** Default cut-out model (ISNet-anime, Apache-2.0, SkyTNT/anime-segmentation). */
+/** Default cut-out model (ISNet-anime, Apache-2.0, SkyTNT/anime-segmentation; 176 MB, float32). */
 export const DEFAULT_SPRITE_MODEL_URL = "https://huggingface.co/skytnt/anime-seg/resolve/main/isnetis.onnx";
+
+/**
+ * The same model in half precision (88 MB, onnx-community/anime-seg-ONNX).
+ * Same masks: on 58 sprites the cut alpha differs from the float32 model by
+ * 0.00001 on average (IoU 0.9999). Downloaded instead of the default unless
+ * the default is already cached or the GPU lacks half-precision shaders.
+ */
+export const DEFAULT_SPRITE_MODEL_F16_URL = "https://huggingface.co/onnx-community/anime-seg-ONNX/resolve/main/onnx/model_fp16.onnx";
+
+/** The half-precision copy of a cut-out model URL, when there is one (only the default model has one). */
+export function spriteModelF16Url(modelUrl: string): string | undefined {
+  return modelUrl === DEFAULT_SPRITE_MODEL_URL ? DEFAULT_SPRITE_MODEL_F16_URL : undefined;
+}
 
 /**
  * Face detector for emote placement (YOLOv8n, 12 MB, MIT licence,

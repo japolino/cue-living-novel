@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_CONFIG, type VisualNovelConfig } from "../../config.js";
 import type { FrontendRequest } from "../../protocol.js";
-import { DEFAULT_SPRITE_FACE_MODEL_URL, SPRITE_CUT_CHUNK_CHARS } from "../../shared/sprites.js";
+import { DEFAULT_SPRITE_FACE_MODEL_URL, DEFAULT_SPRITE_MODEL_F16_URL, DEFAULT_SPRITE_MODEL_URL, SPRITE_CUT_CHUNK_CHARS } from "../../shared/sprites.js";
 import { blobToBase64, chunkBase64, createSpriteCutService, type SpriteCutRequest } from "./cut-service.js";
 import type { CutoutOptions, CutoutResult } from "./cutout/index.js";
 import type { PixelRect } from "../../shared/novelai-inset.js";
@@ -169,6 +169,23 @@ describe("sprite cut service", () => {
     await plain.service.handle(request("plain"));
     expect(plain.crops).toEqual([]);
     expect(plain.sent[0]!.meta && "crop" in plain.sent[0]!.meta).toBe(false);
+  });
+
+  test("an inset crop and the half-precision model URL go through the same cut", async () => {
+    // Default model: the cut gets the cropped image with both model files to choose from.
+    const crop = { x: 608, y: 0, width: 608, height: 832 };
+    const inset = setup({ config: { spriteModelUrl: DEFAULT_SPRITE_MODEL_URL } });
+    await inset.service.handle({ ...request("inset"), crop });
+    expect(await inset.cuts[0]!.image.text()).toBe("img-inset@608,0,608x832");
+    expect(inset.cuts[0]!.options.modelUrl).toBe(DEFAULT_SPRITE_MODEL_URL);
+    expect(inset.cuts[0]!.options.modelUrlF16).toBe(DEFAULT_SPRITE_MODEL_F16_URL);
+    expect(inset.sent[0]!.meta?.crop).toEqual(crop);
+    // A custom model has no half-precision copy; the crop still applies.
+    const custom = setup({ config: { spriteModelUrl: "https://example.test/m.onnx" } });
+    await custom.service.handle({ ...request("custom"), crop });
+    expect(await custom.cuts[0]!.image.text()).toBe("img-custom@608,0,608x832");
+    expect(custom.cuts[0]!.options.modelUrl).toBe("https://example.test/m.onnx");
+    expect("modelUrlF16" in custom.cuts[0]!.options).toBe(false);
   });
 
   test("an invalid crop fails the cut instead of cutting the whole canvas", async () => {

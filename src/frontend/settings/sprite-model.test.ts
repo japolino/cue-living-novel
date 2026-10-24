@@ -55,7 +55,7 @@ describe("sprite mode options", () => {
 
   test("cut-out quality names the download cost", () => {
     expect(SPRITE_CUTOUT_OPTIONS.map((option) => option.value)).toEqual([...SPRITE_CUTOUT_QUALITIES]);
-    expect(SPRITE_CUTOUT_OPTIONS[0]!.label).toBe("Best (downloads a 176 MB model once)");
+    expect(SPRITE_CUTOUT_OPTIONS[0]!.label).toBe("Best (downloads an 88 MB model once)");
     expect(SPRITE_CUTOUT_OPTIONS[1]!.label).toBe("Basic (no download)");
     expect(normalizeSpriteCutout("basic")).toBe("basic");
     expect(normalizeSpriteCutout("")).toBe("best");

@@ -4,12 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  chooseCutoutModelUrl,
   clearCutoutModel,
   configureCutoutRuntime,
   cutSprite,
   detectSpriteFace,
   getFaceModelState,
   getCutoutModelState,
+  getCachedCutoutModelBytes,
   getCutoutRunnerMode,
   onCutoutModelState,
   ORT_CDN_BASE,
@@ -189,6 +191,68 @@ describe("cut-out runtime", () => {
     expect(fetches).toHaveLength(2);
   });
 
+  describe("half-precision copy", () => {
+    const FULL = "https://models.test/isnet.onnx";
+    const HALF = "https://models.test/isnet_fp16.onnx";
+    const nav = (globalThis as unknown as { navigator?: Record<string, unknown> }).navigator;
+    const setGpu = (gpu: unknown): void => {
+      if (nav) Object.defineProperty(nav, "gpu", { value: gpu, configurable: true, writable: true });
+    };
+    afterEach(() => {
+      if (nav) delete nav.gpu;
+      delete (globalThis as { caches?: unknown }).caches;
+    });
+    const adapter = (features: string[]) => ({ requestAdapter: async () => ({ features: new Set(features) }) });
+
+    test("WASM runs either: the half-size copy downloads", async () => {
+      configure();
+      const result = await cutSprite(sprite(), { quality: "best", modelUrl: FULL, modelUrlF16: HALF });
+      expect(result.quality).toBe("best");
+      expect(fetches).toEqual([HALF]);
+      expect(await chooseCutoutModelUrl(FULL, HALF)).toBe(HALF);
+      await prepareCutoutModel(FULL, HALF);
+      expect(fetches).toEqual([HALF]); // already loaded
+    });
+
+    test("WebGPU with shader-f16: the copy; without it: the full model keeps WebGPU", async () => {
+      if (!nav) return;
+      configure();
+      configureCutoutRuntime({ backend: "auto" });
+      setGpu(adapter(["shader-f16"]));
+      expect(await chooseCutoutModelUrl(FULL, HALF)).toBe(HALF);
+      resetCutoutRuntime();
+      setGpu(adapter([]));
+      const result = await cutSprite(sprite(), { quality: "best", modelUrl: FULL, modelUrlF16: HALF });
+      expect(result.quality).toBe("best");
+      expect(fetches).toEqual([FULL]);
+      expect(getCutoutModelState()).toMatchObject({ state: "ready", backend: "webgpu" });
+      resetCutoutRuntime();
+      setGpu({ requestAdapter: async () => null }); // no adapter: WASM, so the copy
+      expect(await chooseCutoutModelUrl(FULL, HALF)).toBe(HALF);
+    });
+
+    test("a full model already in the cache stays in use; cached bytes fall back to the copy", async () => {
+      configure();
+      const store = new Map<string, Response>();
+      (globalThis as { caches?: unknown }).caches = {
+        open: async () => ({
+          match: async (url: string) => store.get(url)?.clone(),
+          put: async (url: string, response: Response) => { store.set(url, response); },
+        }),
+        delete: async () => { store.clear(); return true; },
+      };
+      store.set(FULL, new Response(modelBody, { headers: { "Content-Length": String(modelBody.length) } }));
+      expect(await chooseCutoutModelUrl(FULL, HALF)).toBe(FULL);
+      expect(await getCachedCutoutModelBytes(FULL, HALF)).toBe(4096);
+      await clearCutoutModel();
+      store.set(HALF, new Response("x".repeat(2048), { headers: { "Content-Length": "2048" } }));
+      expect(await getCachedCutoutModelBytes(FULL, HALF)).toBe(2048);
+      expect(await chooseCutoutModelUrl(FULL, HALF)).toBe(HALF);
+      expect(await chooseCutoutModelUrl("https://models.test/custom.onnx")).toBe("https://models.test/custom.onnx");
+      expect(fetches).toEqual([]);
+    });
+  });
+
   test("download blocked: best falls back to basic, state says why, retry waits", async () => {
     configure();
     const result = await cutSprite(sprite(), { quality: "best", modelUrl: "https://models.test/missing.onnx" });
@@ -220,13 +284,32 @@ describe("cut-out runtime", () => {
     expect(getCutoutModelState()).toEqual({ state: "error", error: "device lost" });
   });
 
-  test("transparent input pixels count as white background", async () => {
+  test("a few transparent pixels on an opaque image count as white background", async () => {
     configure();
-    const image = fakeImage(16, 16, (x, y) => (x >= 4 && x < 12 && y >= 4 && y < 12 ? [200, 40, 40, 255] : [0, 0, 0, 0]));
+    // Top row transparent (16 of 60 border pixels), the rest of the frame white and opaque.
+    const image = fakeImage(16, 16, (x, y) => (y === 0 ? [0, 0, 0, 0] : x >= 4 && x < 12 && y >= 4 && y < 12 ? [200, 40, 40, 255] : [255, 255, 255, 255]));
     const result = await cutSprite(image, { quality: "basic", modelUrl: "" });
     const png = await decodePng(result.png);
     expect(png.data.slice(0, 4)).toEqual([255, 255, 255, 0]);
     expect(result.bbox).toEqual([0.25, 0.25, 0.5, 0.5]);
+    expect(result.preCut).toBeUndefined();
+  });
+
+  test("a source that is already cut out keeps its alpha and skips the model", async () => {
+    configure();
+    // Transparent frame, opaque figure, a soft edge pixel; colours under alpha 0 are kept as they are.
+    const image = fakeImage(16, 16, (x, y) => (x === 3 && y === 8 ? [200, 40, 40, 128] : x >= 4 && x < 12 && y >= 4 && y < 12 ? [200, 40, 40, 255] : [9, 9, 9, 0]));
+    for (const quality of ["basic", "best"] as const) {
+      const result = await cutSprite(image, { quality, modelUrl: "https://models.test/isnet.onnx" });
+      const png = await decodePng(result.png);
+      expect(png.data.slice(0, 4)).toEqual([9, 9, 9, 0]);
+      expect(png.data.slice((8 * 16 + 3) * 4, (8 * 16 + 3) * 4 + 4)).toEqual([200, 40, 40, 128]);
+      expect(png.data[(8 * 16 + 8) * 4 + 3]).toBe(255);
+      expect(result.bbox).toEqual([3 / 16, 0.25, 9 / 16, 0.5]);
+      expect(result.quality).toBe("best");
+      expect(result.preCut).toBe(true);
+      expect(result.timings?.modelMs).toBe(0);
+    }
   });
 
   test("abort before the cut rejects with AbortError", async () => {

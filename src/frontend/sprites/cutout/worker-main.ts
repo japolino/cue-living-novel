@@ -58,6 +58,8 @@ export type CutoutWorkerCutResult = {
   height: number;
   bbox: CutoutBBox;
   quality: "best" | "basic";
+  /** The source was already transparent and kept its own alpha (quality "best", no model run). */
+  preCut?: true;
   /** Duplicate check on the cut-out alpha. */
   figures: CutoutFigureCheck;
   /** Set when the model was requested but could not run (the result is "basic"). */
@@ -223,7 +225,8 @@ export function cutoutWorkerMain(port: CutoutPort, createKernel: () => CutoutKer
     return canvas;
   }
 
-  async function decode(image: Blob): Promise<{ rgba: Uint8ClampedArray; width: number; height: number }> {
+  /** Decoded RGBA, straight alpha as stored in the file. */
+  async function decodeRaw(image: Blob): Promise<{ rgba: Uint8ClampedArray; width: number; height: number }> {
     const bitmap = await g.createImageBitmap(image, { premultiplyAlpha: "none", colorSpaceConversion: "none" });
     const width = bitmap.width, height = bitmap.height;
     if (!width || !height || width * height > MAX_PIXELS) { bitmap.close(); throw new Error("Sprite image size " + width + "x" + height + " is not supported."); }
@@ -231,8 +234,11 @@ export function cutoutWorkerMain(port: CutoutPort, createKernel: () => CutoutKer
     if (!ctx) { bitmap.close(); throw new Error("No 2D canvas available."); }
     ctx.drawImage(bitmap, 0, 0);
     bitmap.close();
-    const rgba: Uint8ClampedArray = ctx.getImageData(0, 0, width, height).data;
-    // Like the reference (RGB), but a transparent source counts as white.
+    return { rgba: ctx.getImageData(0, 0, width, height).data, width, height };
+  }
+
+  /** Composite on white in place: like the reference (RGB), a transparent source counts as white. */
+  function onWhite(rgba: Uint8ClampedArray): Uint8ClampedArray {
     for (let o = 3; o < rgba.length; o += 4) {
       const a = rgba[o]!;
       if (a === 255) continue;
@@ -242,7 +248,13 @@ export function cutoutWorkerMain(port: CutoutPort, createKernel: () => CutoutKer
       rgba[o - 1] = (rgba[o - 1]! * a + k) / 255;
       rgba[o] = 255;
     }
-    return { rgba, width, height };
+    return rgba;
+  }
+
+  async function decode(image: Blob): Promise<{ rgba: Uint8ClampedArray; width: number; height: number }> {
+    const raw = await decodeRaw(image);
+    onWhite(raw.rgba);
+    return raw;
   }
 
   async function encode(rgba: Uint8ClampedArray, width: number, height: number): Promise<Blob> {
@@ -270,7 +282,25 @@ export function cutoutWorkerMain(port: CutoutPort, createKernel: () => CutoutKer
 
   async function cut(image: Blob, useModel: boolean, withFace: boolean): Promise<CutoutWorkerCutResult> {
     let t = performance.now();
-    const { rgba, width, height } = await decode(image);
+    const { rgba, width, height } = await decodeRaw(image);
+    // A source that is already cut out (the image workflow removed the
+    // background) keeps its own alpha: no model, no flood fill.
+    if (kernel.isPreCut(rgba, width, height)) {
+      const decodeMs = performance.now() - t;
+      let face: FaceDetectResult | undefined;
+      if (withFace && faceSession) {
+        try { face = await detectFace(onWhite(rgba.slice()), width, height); } catch { face = undefined; }
+      }
+      t = performance.now();
+      const bbox = kernel.opaqueBBox(rgba, width, height);
+      const figures = kernel.figureCheck(rgba, width, height);
+      const cutMs = performance.now() - t;
+      t = performance.now();
+      const png = await encode(rgba, width, height);
+      const encodeMs = performance.now() - t;
+      return { png, width, height, bbox, quality: "best", preCut: true, figures, modelError: null, ...(face ? { face } : {}), timings: { decodeMs, modelMs: 0, cutMs, encodeMs } };
+    }
+    onWhite(rgba);
     const decodeMs = performance.now() - t;
     // On the source (white background): the cut changes rgba in place below.
     let face: FaceDetectResult | undefined;

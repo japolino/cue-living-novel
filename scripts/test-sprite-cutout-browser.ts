@@ -18,6 +18,12 @@ import { mkdir, writeFile } from "node:fs/promises";
  *   - nothing heavy loads before a cut; the cut runs in a Worker;
  *   - "basic" (no model) on every sprite, IoU reported, sanity floor;
  *   - fallback: "best" with an unreachable model gives "basic" + state "error";
+ *   - pre-cut source: a cut-out fed back in is recognised (no model run) and
+ *     keeps its alpha, colours and bbox (3 sprites);
+ *   - inset crop + pre-cut: a NovelAI V5 inset canvas (opaque reference left,
+ *     transparent cut-out right) through the cut service is cropped first,
+ *     then recognised as pre-cut on the cropped half (alpha kept, crop echoed,
+ *     the half-precision model URL passed along);
  *   - for each model (int8, fp32) x backend (wasm, webgpu when headless
  *     Chromium gets an adapter): load time, per-image time, IoU (alpha >= 128)
  *     against the reference. Requirements: int8 (same model as the
@@ -179,6 +185,31 @@ try {
   assert.equal(fallback.quality, "basic", "missing model falls back to basic");
   assert.equal(fallback.state.state, "error", "state says the model failed");
   assert.match(fallback.state.error, /404/);
+
+  // ---- Pre-cut source: a cut-out fed back in keeps its own alpha ------------------
+  for (const name of names.slice(0, 3)) {
+    const trip = await page.evaluate((url) => (window as any).cutout.preCutRoundTrip(url), `/raw/${name}.png`);
+    assert.equal(trip.firstPreCut, false, `${name}: a generated sprite on white is not pre-cut`);
+    assert.equal(trip.preCut, true, `${name}: its cut-out is recognised as pre-cut`);
+    assert.equal(trip.quality, "best");
+    assert.equal(trip.modelMs, 0, "no model run on a pre-cut source");
+    assert.equal(trip.alphaDiff, 0, `${name}: alpha kept (${trip.alphaDiff})`);
+    assert.ok(trip.rgbDiff <= 1, `${name}: colours kept (${trip.rgbDiff})`);
+    assert.ok(trip.sameBbox, `${name}: same bbox`);
+  }
+  console.log("\npre-cut round trip: 3 cut-outs fed back in kept their alpha and bbox (no model run)");
+
+  // ---- Inset crop first, then the pre-cut check on the cropped half --------------
+  const insetTrip = await page.evaluate((url) => (window as any).cutout.insetPreCutTrip(url), `/raw/${names[0]}.png`);
+  assert.equal(insetTrip.error, null, "the inset cut succeeds");
+  assert.equal(insetTrip.seen.length, 1, "one cut");
+  assert.deepEqual([insetTrip.seen[0].width, insetTrip.seen[0].height], insetTrip.half, "the cut ran on the cropped half, not the whole canvas");
+  assert.equal(insetTrip.seen[0].preCut, true, "the cropped half is recognised as pre-cut");
+  assert.equal(insetTrip.seen[0].modelMs, 0, "no model run on the pre-cut half");
+  assert.equal(insetTrip.alphaDiff, 0, `the cut-out keeps the half's alpha (${insetTrip.alphaDiff})`);
+  assert.deepEqual(insetTrip.meta?.crop, insetTrip.crop, "the crop is echoed in the meta");
+  assert.match(insetTrip.seen[0].modelUrlF16 ?? "", /model_fp16\.onnx$/, "the half-precision model URL travels with the crop");
+  console.log(`inset crop + pre-cut: cropped ${insetTrip.half.join("x")} half kept its alpha (whole canvas would${insetTrip.wholePreCut ? "" : " not"} count as pre-cut)`);
 
   // ---- Models x backends --------------------------------------------------------
   const gpu = !NO_GPU && await page.evaluate(async () => !!(await (navigator as any).gpu?.requestAdapter().catch(() => null)));

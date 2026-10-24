@@ -1,7 +1,7 @@
 import type { VisualNovelConfig } from "../../config.js";
 import type { BackendResponse, FrontendRequest } from "../../protocol.js";
 import { normalizePixelRect, type PixelRect } from "../../shared/novelai-inset.js";
-import { DEFAULT_SPRITE_FACE_MODEL_URL, DEFAULT_SPRITE_MODEL_URL, SPRITE_CUT_CHUNK_CHARS, SPRITE_CUT_MAX_BYTES } from "../../shared/sprites.js";
+import { DEFAULT_SPRITE_FACE_MODEL_URL, DEFAULT_SPRITE_MODEL_URL, SPRITE_CUT_CHUNK_CHARS, SPRITE_CUT_MAX_BYTES, spriteModelF16Url } from "../../shared/sprites.js";
 import { cropImageBlob } from "./canvas-tools.js";
 import { cutSprite, type CutoutOptions, type CutoutResult } from "./cutout/index.js";
 
@@ -68,9 +68,15 @@ export function createSpriteCutService(deps: SpriteCutServiceDeps): SpriteCutSer
       if (request.crop !== undefined && !cropRect) throw new Error("The cut request has an invalid crop.");
       const image = cropRect ? await crop(fetched, cropRect) : fetched;
       if (controller.signal.aborted) return;
+      // The crop comes first: the cut-out's pre-cut check (an already
+      // transparent source keeps its alpha, no model run) judges the cropped
+      // half, never the whole inset canvas with its opaque reference half.
+      const modelUrl = config?.spriteModelUrl || DEFAULT_SPRITE_MODEL_URL;
+      const modelUrlF16 = spriteModelF16Url(modelUrl);
       const result = await cut(image, {
         quality: config?.spriteCutout ?? "best",
-        modelUrl: config?.spriteModelUrl || DEFAULT_SPRITE_MODEL_URL,
+        modelUrl,
+        ...(modelUrlF16 ? { modelUrlF16 } : {}),
         faceModelUrl: DEFAULT_SPRITE_FACE_MODEL_URL,
         signal: controller.signal,
       });
