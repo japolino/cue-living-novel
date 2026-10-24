@@ -129,8 +129,12 @@ request (`spindle.generate.raw` gets the operation's signal, and the call
 rejects locally even when the host keeps it running), with no retry and no
 fallback plan, so the chat's next plan starts at once instead of queueing
 behind it; a reopened view never joins a cancelled plan. A newer version of a
-message (another swipe, an edit) replaces a plan of its old version that is
-still queued or running, so the old swipe never paints. Leaving a chat
+message (another swipe, an edit) cancels every plan of its other versions that
+is still queued or running, whatever it shows itself: a new plan, its stored
+turn (reused, or kept because the host cannot resolve the message right now),
+or the waiting card of an unselected greeting. Only the newest intake cancels:
+one that a newer message event overtook while it read the stored turn is
+dropped. So the old swipe never paints. Leaving a chat
 sends `vn_view open:false` for the previous chat, and the home screen (empty
 chat id) closes whichever view is open, so a chat nobody is watching never
 keeps planning or generating. Opening one chat displaces the user's previously

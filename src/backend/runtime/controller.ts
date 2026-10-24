@@ -1088,13 +1088,29 @@ async function processAssistantMessage(
   if (resolved !== content) dbg(spindle, userId, `message ${message.id} macro-resolved: ${content.length} -> ${resolved.length} chars`);
   const path = turnPath(chatId, message.id, message.swipe_id);
   const existing = await loadTurnRecord(spindle, path, userId);
+  // A newer event may have started its own intake during the read: only the
+  // newest version of the message may replace plans of the others.
+  if ((intakeEpochs.get(intakeKey) ?? 0) !== intakeEpoch) {
+    dbg(spindle, userId, `intake for message ${message.id} superseded while loading its turn; dropped`);
+    return;
+  }
   const relation = relateRecord(existing, message, intake);
+  const fingerprint = selectionFingerprint(message, intake);
+  const dedupeId = `${message.id}:${message.swipe_id}:${fingerprint}`;
+  // Whatever this version of the message shows (its stored turn, a waiting
+  // card or a new plan), a plan of another swipe or an older edit that is
+  // still queued or running is stale: cancel it so it never persists or paints.
+  const supersedeOthers = (keepDedupeId: string) => {
+    const superseded = planningQueue.supersede(userId, chatId, message.id, keepDedupeId);
+    if (superseded.length) dbg(spindle, userId, `planning superseded ${superseded.length} older plan(s) of message ${message.id}`);
+  };
   // The host could not resolve the message right now (no interceptor loaded,
   // transient error). A turn already planned from a successful resolution
   // stays authoritative: never replace it with a waiting state or a replan
   // built from the stripped raw text.
   if (!intake.resolved && existing && !options?.forceRegenerate) {
     dbg(spindle, userId, `message ${message.id} could not be resolved by the host; keeping the stored turn`);
+    supersedeOthers(`${message.id}:${message.swipe_id}:${existing.plan.key.sourceFingerprint}`);
     const key = runtimeKey(userId, chatId);
     activeTurnKeys.set(key, existing.plan.key);
     await persistActiveTurn(spindle, existing, path, userId);
@@ -1103,10 +1119,10 @@ async function processAssistantMessage(
   }
   if (isUnselectedGreeting(content, resolved)) {
     dbg(spindle, userId, `message ${message.id} has no narrative after macro resolution; waiting for a scene selection`);
+    supersedeOthers(dedupeId);
     spindle.sendToFrontend({ type: "vn_waiting", chatId, messageId: message.id, reason: "greeting_unselected" }, userId);
     return;
   }
-  const fingerprint = selectionFingerprint(message, intake);
   const rawFingerprint = fingerprintForMessage({ id: message.id, swipe_id: message.swipe_id, content });
   if (!options?.retry && !options?.forceRegenerate && existing && relation === "current") {
     // Sprite mode never runs scene jobs, so their state does not matter; a
@@ -1119,6 +1135,7 @@ async function processAssistantMessage(
       ) || (existing.plan.spriteStaging !== undefined && (existing.jobs.length === 0 || isSpritePlannedRecord(existing)));
     if (!hasIncompleteJobs) {
       dbg(spindle, userId, `turn reused from storage chat=${chatId} message=${message.id} fingerprint=${fingerprint}`);
+      supersedeOthers(dedupeId);
       const key = runtimeKey(userId, chatId);
       activeTurnKeys.set(key, existing.plan.key);
       await persistActiveTurn(spindle, existing, path, userId);
@@ -1130,11 +1147,9 @@ async function processAssistantMessage(
     }
   }
 
-  const dedupeId = `${message.id}:${message.swipe_id}:${fingerprint}`;
   // Another swipe or an edit of this message replaces a plan of its old version
   // that is still queued or running, instead of queueing behind it.
-  const superseded = planningQueue.supersede(userId, chatId, message.id, dedupeId);
-  if (superseded.length) dbg(spindle, userId, `planning superseded ${superseded.length} older plan(s) of message ${message.id}`);
+  supersedeOthers(dedupeId);
   dbg(spindle, userId, `planning enqueued chat=${chatId} message=${message.id} swipe=${message.swipe_id} fingerprint=${fingerprint}`);
   const scheduled = planningQueue.enqueue(userId, chatId, message.id, async (operation) => {
     const planningStartedAt = Date.now();

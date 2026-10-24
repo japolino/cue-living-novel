@@ -1,31 +1,35 @@
 import { describe, expect, test } from "bun:test";
 import type { SpindleAPI } from "lumiverse-spindle-types";
 import { registerVisualNovelBackend } from "./controller.js";
-import { turnPath, type StoredTurnRecord } from "./storage.js";
+import { chatStatePath, turnPath, type StoredTurnRecord } from "./storage.js";
 
 /**
  * Cancelled planning frees the chat's planning queue at once: the planner
  * request is aborted (and rejected locally even when the host ignores the
  * signal), a reopened view plans again instead of joining the cancelled plan,
- * and a newer version of the message replaces the plan of the old one.
+ * and a newer version of the message replaces the plan of the old one. The
+ * replaced plan never persists, paints or seeds the chat's identity state.
  */
 
 const FIRST = "First paragraph.\n\nSecond paragraph.";
 const SECOND = "Another swipe opens.\n\nIt ends here.";
+const THIRD = "A third swipe. It closes.";
+const VEX = "Vex steps out of the dark.\n\nVex waits.";
 
-function plannerPayload() {
+function plannerPayload(content: string) {
+  const name = content.includes("Vex steps") ? "Vex" : "Mira";
   return {
     scenes: [{
       startParagraph: 0,
       boundary: { claimedNewScene: true, reason: "initial", location: "Observatory", timeOfDay: "night", majorTimeJump: false, environmentReplacement: false, forced: false },
       environment: { location: "Observatory", timeOfDay: "night", weather: null, lighting: "lantern light", description: "An old observatory", persistentElements: [] },
-      cast: ["Mira"],
+      cast: [name],
       basePrompt: "old observatory",
-      compositionLock: "Mira centered"
+      compositionLock: `${name} centered`
     }],
     cues: [{ paragraphIndex: 0 }],
     choices: [],
-    characters: [{ name: "Mira", description: "silver hair, green eyes" }]
+    characters: [{ name, description: "silver hair, green eyes" }]
   };
 }
 
@@ -37,7 +41,19 @@ async function waitFor(condition: () => boolean, timeoutMs = 2000): Promise<void
   }
 }
 
-function fixture() {
+const settle = (ms = 30) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+type FixtureOptions = {
+  config?: Record<string, unknown>;
+  /** Planner calls answer at once instead of parking until released. */
+  autoRelease?: boolean;
+  /** Runs before a storage read settles; awaiting it holds the read. */
+  beforeGet?: (path: string) => Promise<void> | void;
+  /** Runs before a storage write lands; awaiting it holds the write. */
+  beforeSet?: (path: string) => Promise<void> | void;
+};
+
+function fixture(options: FixtureOptions = {}) {
   const handlers = new Map<string, Array<(...args: unknown[]) => void>>();
   let frontend!: (payload: unknown, userId: string) => void;
   const data = new Map<string, unknown>();
@@ -45,11 +61,13 @@ function fixture() {
   const messages: Array<Record<string, unknown>> = [];
   // Planner calls park until the test releases them; the fake host ignores the signal.
   const planner: Array<{ content: string; signal?: AbortSignal; release: () => void }> = [];
+  let seq = 0;
   data.set("config.json", {
     generateImages: false,
     includeCharacterContext: false,
     includePersonaContext: false,
-    includeLorebookContext: false
+    includeLorebookContext: false,
+    ...options.config
   });
   const spindle = {
     on: (event: string, handler: (...args: unknown[]) => void) => {
@@ -57,18 +75,34 @@ function fixture() {
     },
     onFrontendMessage: (fn: (payload: unknown, userId: string) => void) => { frontend = fn; },
     userStorage: {
-      getJson: async (path: string, readOptions: { fallback: unknown }) => data.get(path) ?? readOptions.fallback,
-      setJson: async (path: string, value: unknown) => { data.set(path, value); }
+      getJson: async (path: string, readOptions: { fallback: unknown }) => {
+        await options.beforeGet?.(path);
+        return data.get(path) ?? readOptions.fallback;
+      },
+      setJson: async (path: string, value: unknown) => {
+        await options.beforeSet?.(path);
+        data.set(path, value);
+      }
     },
     chat: { getMessages: async (chatId: string) => messages.filter((m) => m.chat_id === chatId).map((m) => ({ ...m })) },
     generate: {
       raw: (request: { messages: Array<{ content: string }>; signal?: AbortSignal }) => new Promise((resolve) => {
-        planner.push({
-          content: request.messages.at(-1)?.content ?? "",
-          ...(request.signal ? { signal: request.signal } : {}),
-          release: () => resolve({ content: JSON.stringify(plannerPayload()) })
-        });
+        const content = request.messages.at(-1)?.content ?? "";
+        const release = () => resolve({ content: JSON.stringify(plannerPayload(content)) });
+        planner.push({ content, ...(request.signal ? { signal: request.signal } : {}), release });
+        if (options.autoRelease) release();
       })
+    },
+    // Sprite mode generates (and the frontend cuts) sprites in the background.
+    imageGen: {
+      getConnection: async () => ({ provider: "comfyui" }),
+      listConnections: async () => [{ provider: "comfyui", is_default: true }],
+      generate: async () => { seq += 1; return { imageId: `img-${seq}`, imageUrl: `/api/v1/images/img-${seq}` }; }
+    },
+    images: {
+      upload: async () => { seq += 1; return { id: `cut-${seq}`, url: `/api/v1/images/cut-${seq}` }; },
+      delete: async () => true,
+      get: async (id: string) => ({ id })
     },
     sendToFrontend: (message: Record<string, unknown>) => { sent.push(message); },
     log: { warn() {}, error() {}, info() {} }
@@ -77,15 +111,22 @@ function fixture() {
     for (const handler of handlers.get(event) ?? []) handler(...args);
   };
   registerVisualNovelBackend(spindle);
-  const message = (chatId: string, content: string, swipeId = 0) => ({
+  const message = (chatId: string, content: string, swipeId = 0, swipes?: string[]) => ({
     id: "m1", chat_id: chatId, content, is_user: false, name: "Mira", swipe_id: swipeId,
-    swipes: swipeId ? [FIRST, content] : [content], swipe_dates: [1], extra: {}, parent_message_id: null, branch_id: null,
+    swipes: swipes ?? (swipeId ? [FIRST, content] : [content]), swipe_dates: [1], extra: {}, parent_message_id: null, branch_id: null,
     created_at: 1, index_in_chat: 1, send_date: 1
   });
+  /** The host switches the message to another swipe and reports it. */
+  const swipe = (chatId: string, userId: string, content: string, swipeId: number, swipes?: string[]) => {
+    const swiped = message(chatId, content, swipeId, swipes);
+    messages.splice(0, messages.length, swiped);
+    fire("MESSAGE_SWIPED", { chatId, message: swiped }, userId);
+  };
   return {
-    fire, sent, planner, messages, message,
+    fire, sent, planner, messages, message, swipe, data,
     request: (payload: unknown, userId: string) => frontend(payload, userId),
     record: (chatId: string, swipeId = 0) => data.get(turnPath(chatId, "m1", swipeId)) as StoredTurnRecord | undefined,
+    activePath: (chatId: string) => (data.get(chatStatePath(chatId)) as { activeTurnPath?: string | null } | undefined)?.activeTurnPath,
     turns: () => sent.filter((m) => m.type === "vn_turn").map((m) => m.turn as { swipeId: number; paragraphs: string[] })
   };
 }
@@ -109,7 +150,7 @@ describe("cancelled planning frees the queue", () => {
     expect(f.record("pc-reopen")?.status).toBe("ready");
     // The cancelled request finishing late changes nothing.
     f.planner[0]!.release();
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await settle();
     expect(f.turns()).toHaveLength(1);
   });
 
@@ -120,18 +161,99 @@ describe("cancelled planning frees the queue", () => {
     f.fire("GENERATION_ENDED", { chatId: "pc-swipe", messageId: "m1", content: FIRST }, "user-pc2");
     await waitFor(() => f.planner.length === 1);
 
-    const swiped = f.message("pc-swipe", SECOND, 1);
-    f.messages.splice(0, 1, swiped);
-    f.fire("MESSAGE_SWIPED", { chatId: "pc-swipe", message: swiped }, "user-pc2");
+    f.swipe("pc-swipe", "user-pc2", SECOND, 1);
     await waitFor(() => f.planner.length === 2);
     expect(f.planner[0]?.signal?.aborted).toBe(true);
     expect(f.planner[1]?.content).toContain("Another swipe opens.");
     f.planner[1]!.release();
     f.planner[0]!.release();
     await waitFor(() => f.turns().length >= 1);
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await settle();
     // Only the new swipe is shown; the old swipe's plan never paints.
     expect(f.turns().map((turn) => turn.swipeId)).toEqual([1]);
     expect(f.record("pc-swipe", 0)).toBeUndefined();
+  });
+
+  test("swiping back to an already planned swipe cancels the plan of the swipe it left", async () => {
+    const f = fixture();
+    const chat = "pc-back";
+    f.request({ type: "vn_view", chatId: chat, open: true }, "user-pc3");
+    f.messages.push(f.message(chat, FIRST));
+    f.fire("GENERATION_ENDED", { chatId: chat, messageId: "m1", content: FIRST }, "user-pc3");
+    await waitFor(() => f.planner.length === 1);
+    f.planner[0]!.release();
+    await waitFor(() => f.turns().length === 1);
+
+    f.swipe(chat, "user-pc3", SECOND, 1);
+    await waitFor(() => f.planner.length === 2);
+    // Back to swipe 0: its stored turn is shown again as it is.
+    f.swipe(chat, "user-pc3", FIRST, 0, [FIRST, SECOND]);
+    await waitFor(() => f.turns().length === 2);
+    expect(f.planner[1]?.signal?.aborted).toBe(true);
+    f.planner[1]!.release();
+    await settle(60);
+    expect(f.turns().map((turn) => turn.swipeId)).toEqual([0, 0]);
+    expect(f.activePath(chat)).toBe(turnPath(chat, "m1", 0));
+    expect(f.record(chat, 1)).toBeUndefined();
+  });
+
+  test("swiping back to a stored turn the host cannot resolve right now cancels the other swipe's plan", async () => {
+    // No macro API on this host: `{{user}}` stays unresolved, the stored turn is kept.
+    const MACRO = "First paragraph for {{user}}.\n\nSecond paragraph.";
+    const f = fixture();
+    const chat = "pc-unresolved";
+    f.request({ type: "vn_view", chatId: chat, open: true }, "user-pc4");
+    f.messages.push(f.message(chat, MACRO));
+    f.fire("GENERATION_ENDED", { chatId: chat, messageId: "m1", content: MACRO }, "user-pc4");
+    await waitFor(() => f.planner.length === 1);
+    f.planner[0]!.release();
+    await waitFor(() => f.turns().length === 1);
+
+    f.swipe(chat, "user-pc4", SECOND, 1, [MACRO, SECOND]);
+    await waitFor(() => f.planner.length === 2);
+    f.swipe(chat, "user-pc4", MACRO, 0, [MACRO, SECOND]);
+    await waitFor(() => f.turns().length === 2);
+    expect(f.planner[1]?.signal?.aborted).toBe(true);
+    f.planner[1]!.release();
+    await settle(60);
+    expect(f.turns().map((turn) => turn.swipeId)).toEqual([0, 0]);
+    expect(f.activePath(chat)).toBe(turnPath(chat, "m1", 0));
+  });
+
+  test("swiping to a greeting that waits for a scene selection cancels the other swipe's plan", async () => {
+    const GREETING = "{{#when::{{getvar::scene}}::is::1}}The first scene opens.{{/when}}";
+    const f = fixture();
+    const chat = "pc-greeting";
+    f.request({ type: "vn_view", chatId: chat, open: true }, "user-pc5");
+    f.messages.push(f.message(chat, FIRST));
+    f.fire("GENERATION_ENDED", { chatId: chat, messageId: "m1", content: FIRST }, "user-pc5");
+    await waitFor(() => f.planner.length === 1);
+
+    f.swipe(chat, "user-pc5", GREETING, 1);
+    await waitFor(() => f.sent.some((m) => m.type === "vn_waiting"));
+    expect(f.planner[0]?.signal?.aborted).toBe(true);
+    f.planner[0]!.release();
+    await settle(60);
+    expect(f.turns()).toHaveLength(0);
+    expect(f.record(chat, 0)).toBeUndefined();
+  });
+
+  test("an older swipe whose stored turn loads slowly never replaces the newer swipe's plan", async () => {
+    const chat = "pc-order";
+    const f = fixture({ beforeGet: (path) => (path === turnPath(chat, "m1", 1) ? settle(40) : undefined) });
+    f.request({ type: "vn_view", chatId: chat, open: true }, "user-pc6");
+    f.swipe(chat, "user-pc6", SECOND, 1);
+    await settle(10);
+    // Swipe 2 arrives while swipe 1 is still reading its stored turn.
+    f.swipe(chat, "user-pc6", THIRD, 2, [FIRST, SECOND, THIRD]);
+    await waitFor(() => f.planner.some((call) => call.content.includes("A third swipe")));
+    await settle(60);
+    const third = f.planner.find((call) => call.content.includes("A third swipe"))!;
+    expect(third.signal?.aborted).toBe(false);
+    expect(f.planner.filter((call) => call.content.includes("Another swipe opens."))).toHaveLength(0);
+    for (const call of f.planner) call.release();
+    await waitFor(() => f.turns().length >= 1);
+    await settle();
+    expect(f.turns().map((turn) => turn.swipeId)).toEqual([2]);
   });
 });
