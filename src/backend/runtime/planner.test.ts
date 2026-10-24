@@ -1258,3 +1258,31 @@ test("game-engine hints come from the reply or the player message it answers", (
   assert.equal(gameHintsForTurn(messages, "missing"), "");
   assert.equal(gameHintsForTurn([{ id: "a", is_user: false, metadata: { vn_hints: "nope" } }], "a"), "");
 });
+
+test("a cancelled plan tears down the sidecar request and neither retries nor falls back", async () => {
+  const requests: Array<{ signal?: AbortSignal }> = [];
+  const spindle = {
+    // A host that ignores the signal: the request never settles on its own.
+    generate: { raw: async (request: { signal?: AbortSignal }) => { requests.push(request); return new Promise(() => undefined); } },
+    log: { warn() {}, info() {} }
+  } as unknown as SpindleAPI;
+  const controller = new AbortController();
+  const planned = planTurn(spindle, {
+    chatId: "chat-1",
+    message,
+    content: message.content,
+    previousScene: null,
+    previousContinuity: null,
+    recentMessages: [],
+    config: { ...DEFAULT_CONFIG, includeCharacterContext: false, includePersonaContext: false, includeLorebookContext: false },
+    singleCharacter: emptySingleCharacter(),
+    characterAppearance: {},
+    signal: controller.signal
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0]?.signal, controller.signal);
+  controller.abort("view closed");
+  await assert.rejects(planned, (error: unknown) => error instanceof Error && error.name === "AbortError");
+  assert.equal(requests.length, 1);
+});

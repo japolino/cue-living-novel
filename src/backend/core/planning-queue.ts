@@ -55,7 +55,9 @@ export class PlanningQueue {
   ): ScheduledPlanning<T> {
     const dedupeKey = compoundKey([userId, chatId, dedupeId]);
     const existing = this.operations.get(dedupeKey) as ScheduledPlanning<T> | undefined;
-    if (existing) return { ...existing, reused: true };
+    // A cancelled operation stays in the map until its task settles. Joining it
+    // would hand the caller a promise that only rejects, and nothing would plan.
+    if (existing && !existing.operation.controller.signal.aborted) return { ...existing, reused: true };
 
     const operation: PlanningOperation = {
       id: operationId(),
@@ -106,6 +108,24 @@ export class PlanningQueue {
         operation.controller.abort(reason);
         operation.stage = "cancelled";
       }
+      cancelled.push(operation.id);
+    }
+    return cancelled;
+  }
+
+  /**
+   * Cancel the chat's queued or running operations for one message
+   * (`sourceId`) except the one with `keepDedupeId`: a newer version of the
+   * message (another swipe, an edit) replaces the plan of the old version.
+   */
+  supersede(userId: string | undefined, chatId: string, sourceId: string, keepDedupeId: string, reason = "A newer version of the message replaced this plan."): string[] {
+    const cancelled: string[] = [];
+    for (const scheduled of this.operations.values()) {
+      const operation = scheduled.operation;
+      if (operation.userId !== userId || operation.chatId !== chatId || operation.sourceId !== sourceId) continue;
+      if (operation.dedupeId === keepDedupeId || operation.controller.signal.aborted) continue;
+      operation.controller.abort(reason);
+      operation.stage = "cancelled";
       cancelled.push(operation.id);
     }
     return cancelled;

@@ -1119,6 +1119,10 @@ async function processAssistantMessage(
   }
 
   const dedupeId = `${message.id}:${message.swipe_id}:${fingerprint}`;
+  // Another swipe or an edit of this message replaces a plan of its old version
+  // that is still queued or running, instead of queueing behind it.
+  const superseded = planningQueue.supersede(userId, chatId, message.id, dedupeId);
+  if (superseded.length) dbg(spindle, userId, `planning superseded ${superseded.length} older plan(s) of message ${message.id}`);
   dbg(spindle, userId, `planning enqueued chat=${chatId} message=${message.id} swipe=${message.swipe_id} fingerprint=${fingerprint}`);
   const scheduled = planningQueue.enqueue(userId, chatId, message.id, async (operation) => {
     const planningStartedAt = Date.now();
@@ -1174,7 +1178,8 @@ async function processAssistantMessage(
       characterAppearance,
       characterRegistry,
       gameHints: gameHintsForTurn(messages, message.id),
-      ...(userId ? { userId } : {})
+      ...(userId ? { userId } : {}),
+      signal: operation.controller.signal
     });
     if (operation.controller.signal.aborted) return;
     dbg(spindle, userId, [

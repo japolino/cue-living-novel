@@ -124,7 +124,13 @@ queued planning cancelled, scene-cache admission released — and persists
 stuck. That stamp is keyed to the aborted turn and skipped only when a new
 owner (retry, reply, reuse) has claimed the chat's turn meanwhile; a view that
 merely reopened still gets the stamp, plus `vn_asset` updates, because the
-aborted batch never resumes on its own. Leaving a chat
+aborted batch never resumes on its own. Cancelling a plan aborts its sidecar
+request (`spindle.generate.raw` gets the operation's signal, and the call
+rejects locally even when the host keeps it running), with no retry and no
+fallback plan, so the chat's next plan starts at once instead of queueing
+behind it; a reopened view never joins a cancelled plan. A newer version of a
+message (another swipe, an edit) replaces a plan of its old version that is
+still queued or running, so the old swipe never paints. Leaving a chat
 sends `vn_view open:false` for the previous chat, and the home screen (empty
 chat id) closes whichever view is open, so a chat nobody is watching never
 keeps planning or generating. Opening one chat displaces the user's previously
