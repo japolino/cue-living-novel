@@ -335,6 +335,26 @@ describe("NovelAI V5 inset: page reloads", () => {
     expect(f.log.some((line) => line.includes("reference inset unavailable"))).toBe(false);
   });
 
+  test("closing the view while a canvas is composed cancels the render (no plain fallback); it resumes as an inset", async () => {
+    let open = true;
+    const f = setup({ inset: "silent", deps: { insetTimeoutMs: 5_000, isViewOpen: () => open } });
+    await f.service.prepareCast("u1", [MIRA], f.config);
+    await f.until(() => f.insets().length === 1);
+    const calls = f.calls.length;
+    open = false;
+    f.service.pause("u1");
+    await f.service.settle("u1", 200);
+    expect(f.calls.length).toBe(calls);
+    expect(f.log.some((line) => line.includes("reference inset unavailable"))).toBe(false);
+    const statuses = await Promise.all(["smile", "sad", "angry"].map(async (expression) => (await f.image(expression)).status));
+    expect(statuses.every((status) => status === "queued")).toBe(true);
+    f.setInset("ok");
+    open = true;
+    await f.service.onViewOpened("u1");
+    await f.drive(f.allSettled);
+    expect(f.calls.filter(inpainting)).toHaveLength(3);
+  });
+
   test("after a reload, the page is asked again for a canvas that timed out", async () => {
     const f = setup({ gated: true, inset: "silent" });
     await f.service.prepareCast("u1", [MIRA], f.config);
