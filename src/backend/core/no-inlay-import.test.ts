@@ -26,6 +26,10 @@ function sourceFiles(dir: string): string[] {
   return files;
 }
 
+// Reading the whole tree takes under a second alone, but can pass the 5 s
+// default when the isolated suite runs on a busy machine.
+const SCAN_TIMEOUT_MS = 30_000;
+
 describe("no inlay imports remain", () => {
   test("no module under src/ imports from the removed inlay pipeline", () => {
     const offenders: string[] = [];
@@ -40,9 +44,9 @@ describe("no inlay imports remain", () => {
       }
     }
     expect(offenders).toEqual([]);
-  });
+  }, SCAN_TIMEOUT_MS);
 
   test("the source tree can still be enumerated", () => {
     expect(sourceFiles(SRC).length).toBeGreaterThan(0);
-  });
+  }, SCAN_TIMEOUT_MS);
 });
