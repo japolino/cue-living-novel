@@ -13,10 +13,12 @@ import {
   getCutoutModelState,
   getCachedCutoutModelBytes,
   getCutoutRunnerMode,
+  getStudioCutoutSupport,
   onCutoutModelState,
   ORT_CDN_BASE,
   ORT_VERSION,
   prepareCutoutModel,
+  prepareStudioCutoutModel,
   resetCutoutRuntime,
   type CutoutModelState,
 } from "./index.js";
@@ -70,6 +72,7 @@ export const InferenceSession = {
       async run(feeds) {
         if (head === "THROWS") throw new Error("device lost");
         const t = feeds.img; const n = 16 * 16; const out = new Float32Array(n);
+        globalThis.__fakeOrtFirstRow = Array.from(t.data.subarray(0, 16));
         // "Segmentation": dark pixels are foreground.
         for (let i = 0; i < n; i++) out[i] = t.data[i] < 0.5 ? 1 : 0;
         return { mask: { data: out, dispose() {} } };
@@ -250,6 +253,129 @@ describe("cut-out runtime", () => {
       expect(await chooseCutoutModelUrl(FULL, HALF)).toBe(HALF);
       expect(await chooseCutoutModelUrl("https://models.test/custom.onnx")).toBe("https://models.test/custom.onnx");
       expect(fetches).toEqual([]);
+    });
+  });
+
+  describe("studio quality", () => {
+    const BEST = "https://models.test/isnet.onnx";
+    const STUDIO = "http://localhost:8790/studio.onnx";
+    const nav = (globalThis as unknown as { navigator?: Record<string, unknown> }).navigator;
+    const setGpu = (gpu: unknown): void => {
+      if (nav) Object.defineProperty(nav, "gpu", { value: gpu, configurable: true, writable: true });
+    };
+    const adapter = (features: string[]) => ({ requestAdapter: async () => ({ features: new Set(features) }) });
+    const g = globalThis as Record<string, unknown>;
+    afterEach(() => {
+      if (nav) delete nav.gpu;
+      delete g.__fakeOrtOptions;
+      delete g.__fakeOrtFirstRow;
+    });
+    /** 16x8 white image with a dark block: letterboxed it gets zero rows on top, stretched it does not. */
+    const wide = () => fakeImage(16, 8, (x, y) => (x >= 5 && x < 11 && y >= 2 && y < 6 ? [30, 30, 40, 255] : [255, 255, 255, 255]));
+    const studioGpu = (): boolean => {
+      if (!nav) return false;
+      configure();
+      configureCutoutRuntime({ backend: "auto" });
+      setGpu(adapter(["shader-f16"]));
+      return true;
+    };
+
+    test("WebGPU with shader-f16: the Studio model downloads, runs on WebGPU with a stretched input", async () => {
+      if (!studioGpu()) return;
+      expect(await getStudioCutoutSupport()).toBeNull();
+      const states: CutoutModelState[] = [];
+      const off = onCutoutModelState((state) => states.push(state));
+      const result = await cutSprite(wide(), { quality: "studio", modelUrl: BEST, studioModelUrl: STUDIO });
+      off();
+      expect(result.quality).toBe("best");
+      expect(result.studio).toBe(true);
+      expect(fetches).toEqual([STUDIO]);
+      expect((g.__fakeOrtOptions as { executionProviders: string[] }).executionProviders).toEqual(["webgpu"]);
+      // Stretched: the top row is the white image, not letterbox padding.
+      expect(g.__fakeOrtFirstRow).toEqual(new Array(16).fill(1));
+      expect(states[0]).toEqual({ state: "downloading", receivedBytes: 0, totalBytes: null, studio: true });
+      expect(states.at(-2)).toEqual({ state: "loading", studio: true });
+      expect(states.at(-1)).toEqual({ state: "ready", backend: "webgpu", bytes: 4096, studio: true });
+      expect(result.bbox).toEqual([5 / 16, 2 / 8, 6 / 16, 4 / 8]);
+      // Best letterboxes the same image (zero padding on top).
+      const best = await cutSprite(wide(), { quality: "best", modelUrl: BEST, studioModelUrl: STUDIO });
+      expect(best.studio).toBeUndefined();
+      expect(g.__fakeOrtFirstRow).toEqual(new Array(16).fill(0));
+    });
+
+    test("no shader-f16: no Studio download, Best cuts, the ready state says why", async () => {
+      if (!nav) return;
+      configure();
+      configureCutoutRuntime({ backend: "auto" });
+      setGpu(adapter([]));
+      expect(await getStudioCutoutSupport()).toMatch(/shader-f16/);
+      const result = await cutSprite(sprite(), { quality: "studio", modelUrl: BEST, studioModelUrl: STUDIO });
+      expect(result.quality).toBe("best");
+      expect(result.studio).toBeUndefined();
+      expect(fetches).toEqual([BEST]);
+      const state = getCutoutModelState();
+      expect(state).toMatchObject({ state: "ready", backend: "webgpu" });
+      expect(state.state === "ready" && state.note).toMatch(/shader-f16/);
+      await cutSprite(sprite(), { quality: "studio", modelUrl: BEST, studioModelUrl: STUDIO });
+      expect(fetches).toEqual([BEST]);
+      // An explicit prepare still refuses before any download.
+      await expect(prepareStudioCutoutModel(STUDIO)).rejects.toThrow(/shader-f16/);
+      expect(fetches).toEqual([BEST]);
+    });
+
+    test("WebAssembly backend or no Studio URL: Best, nothing else downloads", async () => {
+      configure();
+      expect(await getStudioCutoutSupport()).toMatch(/WebAssembly/);
+      const wasm = await cutSprite(sprite(), { quality: "studio", modelUrl: BEST, studioModelUrl: STUDIO });
+      expect(wasm.quality).toBe("best");
+      expect(wasm.studio).toBeUndefined();
+      resetCutoutRuntime();
+      configure();
+      const noUrl = await cutSprite(sprite(), { quality: "studio", modelUrl: BEST });
+      expect(noUrl.quality).toBe("best");
+      expect(fetches).toEqual([BEST, BEST]);
+      const state = getCutoutModelState();
+      expect(state.state === "ready" && state.note).toMatch(/No Studio model URL/);
+    });
+
+    test("the Studio session cannot be built: sticky, Best cuts, no second Studio download", async () => {
+      if (!studioGpu()) return;
+      const broken = "http://localhost:8790/studio-broken.onnx";
+      const result = await cutSprite(sprite(), { quality: "studio", modelUrl: BEST, studioModelUrl: broken });
+      expect(result.quality).toBe("best");
+      expect(result.studio).toBeUndefined();
+      expect(fetches).toEqual([broken, BEST]);
+      const state = getCutoutModelState();
+      expect(state.state === "ready" && state.note).toMatch(/Studio model cannot run.*failed to allocate/);
+      await cutSprite(sprite(), { quality: "studio", modelUrl: BEST, studioModelUrl: broken });
+      expect(fetches).toEqual([broken, BEST]);
+    });
+
+    test("the Studio download fails: Best cuts and the note names the Studio model", async () => {
+      if (!studioGpu()) return;
+      const missing = "http://localhost:8790/studio-missing.onnx";
+      const result = await cutSprite(sprite(), { quality: "studio", modelUrl: BEST, studioModelUrl: missing });
+      expect(result.quality).toBe("best");
+      expect(result.studio).toBeUndefined();
+      expect(fetches).toEqual([missing, BEST]);
+      const state = getCutoutModelState();
+      expect(state.state === "ready" && state.note).toMatch(/^The Studio model is not available: .*404/);
+    });
+
+    test("the Studio model fails while cutting: that sprite is cut again with Best", async () => {
+      if (!studioGpu()) return;
+      const throws = "http://localhost:8790/studio-throws.onnx";
+      const result = await cutSprite(sprite(), { quality: "studio", modelUrl: BEST, studioModelUrl: throws });
+      expect(result.quality).toBe("best");
+      expect(result.studio).toBeUndefined();
+      expect(result.bbox).toEqual([5 / 16, 4 / 16, 6 / 16, 8 / 16]);
+      expect(fetches).toEqual([throws, BEST]);
+      const state = getCutoutModelState();
+      expect(state.state === "ready" && state.note).toMatch(/device lost/);
+      // Best keeps cutting; the Studio model is not tried again on this page.
+      const again = await cutSprite(sprite(), { quality: "studio", modelUrl: BEST, studioModelUrl: throws });
+      expect(again.quality).toBe("best");
+      expect(fetches).toEqual([throws, BEST]);
     });
   });
 
