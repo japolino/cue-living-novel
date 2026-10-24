@@ -526,13 +526,13 @@ export class VisualNovelSettingsPanel {
           <div id="settings-search-results" data-search-results hidden></div>
         </div>
         <span data-status role="status" aria-live="polite"></span>
-        <button type="button" data-open-preview>Open preview</button>
+        <button type="button" data-open-preview>Open Cue</button>
       </div>
 
       <section data-setup aria-labelledby="setup-title" hidden>
         <header>
           <h2 id="setup-title">Get started</h2>
-          <small>Three choices. Nothing is generated until you send a message.</small>
+          <small>Three choices. Cue reads replies and makes pictures only while a chat is open in it.</small>
         </header>
         <ol>
           <li><div>
@@ -557,7 +557,7 @@ export class VisualNovelSettingsPanel {
         </ol>
         <footer>
           <button type="button" data-primary data-setup-done>Done</button>
-          <button type="button" data-open-preview>Open preview</button>
+          <button type="button" data-open-preview>Open Cue</button>
           <small>You can change any of this later. Choices here are saved as you make them.</small>
         </footer>
       </section>

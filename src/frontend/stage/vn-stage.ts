@@ -162,10 +162,10 @@ export interface VnSceneImageRequest {
 }
 
 /** The empty stage before the host knows of a chat to write in. */
-const EMPTY_TEXT = "There is no reply to show yet. Go back to chat, send the first message, then open Visual novel again.";
+const EMPTY_TEXT = "There is no reply to show yet. Go back to chat, send the first message, then open Cue again.";
 
 const THEME_MARKUP = `
-  <main data-vn-root data-vn-phase="idle" tabindex="0" aria-label="Visual novel">
+  <main data-vn-root data-vn-phase="idle" tabindex="0" aria-label="Cue">
     <div data-vn-scene aria-hidden="true">
       <img data-vn-scene-image data-vn-layer="active" data-vn-empty="true" alt="" />
       <img data-vn-scene-image data-vn-layer="incoming" data-vn-empty="true" alt="" />

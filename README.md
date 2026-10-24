@@ -1,6 +1,6 @@
 # Cue — Living Novel
 
-Cue is a Lumiverse extension that turns a chat into a living visual novel. It replaces the native message and input surfaces only while VN mode is active. Canonical chat messages remain the source of truth.
+Cue is a Lumiverse extension that turns a chat into a living visual novel. It replaces the native message and input surfaces only while Cue is open. Canonical chat messages remain the source of truth.
 
 > The project was previously named *Visual Novel Preview*. Its install identifier remains `visual_novel_preview` so existing installations upgrade in place.
 
@@ -239,7 +239,7 @@ Copy this directory, including `dist`, into:
 data\extensions\visual_novel_preview\repo
 ```
 
-Enable the extension and grant its requested permissions in Lumiverse. Enter from **Visual novel** in the chat header, or **Composer Extras → Open visual novel**. The settings tab controls connections, generation limits, planning context, prompts, scene-image fit, the visual-novel theme preset, and the custom CSS layer.
+Enable the extension and grant its requested permissions in Lumiverse. Enter from **Cue** in the chat header, **Composer Extras → Open Cue**, or **Open Cue** at the top of the **Cue** settings tab. The settings tab controls connections, generation limits, planning context, prompts, scene-image fit, the visual-novel theme preset, and the custom CSS layer.
 
 Opening an existing chat bootstraps its latest assistant reply automatically. A new empty chat opens at **Your turn**: write the first message in the reply box and the story starts there.
 
@@ -249,7 +249,7 @@ The overlay feature-detects the staging component override API. If that API is a
 
 ### Pinned status cards and inline HTML
 
-Open **Panels** at the top left of VN. The button shows only when the chat has something for it: a card in the reply so far, a pinned card or a status rule. Newly planned replies expose complete HTML/SVG blocks when their paragraph is reached. Choose **Pin this card** for a saved snapshot, or **Keep it updated** for a uniquely identified status source. Drag the title, drag the lower-right resize handle, or use arrow keys on the title; Shift + arrows resizes. Positions and pins are stored per chat in this browser. **Reset positions** recovers misplaced cards; **Unpin all** removes saved cards.
+Open **Panels** at the top left of Cue. The button shows only when the chat has something for it: a card in the reply so far, a pinned card or a status rule. Newly planned replies expose complete HTML/SVG blocks when their paragraph is reached. Choose **Pin this card** for a saved snapshot, or **Keep it updated** for a uniquely identified status source. Drag the title, drag the lower-right resize handle, or use arrow keys on the title; Shift + arrows resizes. Positions and pins are stored per chat in this browser. **Reset positions** recovers misplaced cards; **Unpin all** removes saved cards.
 
 SimTracker is optional. Panels shows available cards from the current reply first; **Advanced tools** holds SimTracker capture, pasted HTML, and status template rules. Opening or closing advanced tools does not disable saved rules or pinned updates.
 
@@ -263,11 +263,11 @@ Rules do not change filtering. **Ignored tags** hides whole blocks from dialogue
 
 Frames allow CSS layouts, SVG drawings, and CSS-only checkbox/radio interactions, but no scripts or navigation. Remote images/fonts are blocked unless explicitly enabled for that frame. A content update rebuilds that card's frame; other cards retain their state. Followed values from previous turns are hidden until the source appears in the current turn. Snapshot pins deliberately remain visible.
 
-For stock SimTracker, let its card render in normal chat, open VN, then choose **Capture SimTracker snapshot**. This captures markup and checkbox state, not JavaScript behavior. Live updates require the companion adapter in [integrations/simtracker-vn-bridge.ts](./integrations/simtracker-vn-bridge.ts), wired to SimTracker's own template output. It is not installed into SimTracker automatically. The adapter must return only the requested chat/message/swipe's cards, call `refresh()` after updates, and `destroy()` on teardown. No DOM nodes are moved between extensions.
+For stock SimTracker, let its card render in normal chat, open Cue, then choose **Capture SimTracker snapshot**. This captures markup and checkbox state, not JavaScript behavior. Live updates require the companion adapter in [integrations/simtracker-vn-bridge.ts](./integrations/simtracker-vn-bridge.ts), wired to SimTracker's own template output. It is not installed into SimTracker automatically. The adapter must return only the requested chat/message/swipe's cards, call `refresh()` after updates, and `destroy()` on teardown. No DOM nodes are moved between extensions.
 
 ### Game engine extensions
 
-A rules engine such as Warp can play alongside VN mode:
+A rules engine such as Warp can play alongside Cue:
 
 - **Moves on the stage.** Its choices (with success odds) appear as chips at **Your turn**, above the suggested replies and the reply box. Picking one shows it as your line and hands it back to the engine, which rolls and sends the message. The contract lives in [src/frontend/host/game-bridge.ts](./src/frontend/host/game-bridge.ts): the engine sends `vn-game-state-v1` (`{ version: 1, provider, chatId, choices: [{ id, label, group?, detail?, odds? }], busy? }`), VN answers picks with `vn-game-pick-v1` and asks for a fresh state with `vn-game-request-v1`. Up to 12 moves are shown.
 - **Live status cards.** Providers named `warp` (as well as `simtracker`) may publish **Keep it updated** cards over the panel bridge above.

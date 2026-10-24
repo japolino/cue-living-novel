@@ -728,8 +728,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
 
   const action = ctx.ui.registerInputBarAction({
     id: "visual-novel-preview-toggle",
-    label: "Open visual novel",
-    subtitle: "Open this chat in the full-screen visual novel view",
+    label: "Open Cue",
+    subtitle: "Open this chat as a full-screen visual novel",
     enabled: true
   });
   const headerLauncher = createVnHeaderLauncher(
@@ -738,10 +738,10 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   );
   const settingsHandle = ctx.ui.registerSettingsTab?.({
     id: "visual-novel-preview",
-    title: "Visual novel",
-    shortName: "VN",
-    description: "Visual-novel presentation, generation, and custom CSS settings",
-    keywords: ["visual novel", "cyoa", "images", "custom css"],
+    title: "Cue",
+    shortName: "Cue",
+    description: "Cue: reading, pictures, sound, voice and look of the visual-novel view",
+    keywords: ["cue", "visual novel", "cyoa", "images", "custom css"],
     position: "after-display"
   });
   const settingsPanel: (VisualNovelSettingsPanel & SettingsFeedbackTarget) | null = settingsHandle ? new VisualNovelSettingsPanel({
@@ -1046,7 +1046,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     panelCapture = captureMessageId ? { chatId: chatId(), messageId: captureMessageId, fingerprint: turn?.sourceFingerprint ?? null, cards: captureSimTrackerCards(ctx.dom.findMessageElement(captureMessageId), document) } : null;
     registerOverrides();
     app.setVisible(true);
-    action.setLabel("Exit visual novel");
+    action.setLabel("Exit Cue");
     headerLauncher.setActive(true);
     const activeChatId = chatId();
     if (!turn || turn.chatId !== activeChatId) {
@@ -1075,7 +1075,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     audioEngine.stopAll();
     destroyOverrides();
     app.setVisible(false);
-    action.setLabel("Open visual novel");
+    action.setLabel("Open Cue");
     headerLauncher.setActive(false);
   }
 
@@ -1375,8 +1375,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       if (!message.granted) {
         deactivate();
         reportStageError({
-          message: "Visual novel mode needs a permission that was turned off.",
-          detail: `Permission revoked: ${message.permission}. Re-enable it before reopening visual novel mode.`,
+          message: "Cue needs a permission that was turned off.",
+          detail: `Permission revoked: ${message.permission}. Re-enable it before reopening Cue.`,
           source: "permission",
           retryable: false,
         });

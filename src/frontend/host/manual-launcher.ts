@@ -5,8 +5,8 @@ export interface VnLauncherCopy {
 
 export function visualNovelLauncherCopy(active: boolean): VnLauncherCopy {
   return {
-    label: active ? "Exit VN" : "Visual novel",
-    title: active ? "Exit visual novel mode" : "Open visual novel mode",
+    label: active ? "Exit Cue" : "Cue",
+    title: active ? "Exit Cue" : "Open this chat in Cue",
   };
 }
 
@@ -55,9 +55,6 @@ button:focus-visible {
   border-radius: 0.4rem;
   background: var(--lumiverse-primary, #a986ff);
   color: var(--lumiverse-primary-contrast, #15101d);
-  font-size: 0.68rem;
-  font-weight: 850;
-  letter-spacing: -0.03em;
 }
 
 @media (max-width: 560px) {
@@ -99,7 +96,8 @@ export function createVnHeaderLauncher(
   const mark = document.createElement("span");
   mark.setAttribute("data-vn-launcher-mark", "");
   mark.setAttribute("aria-hidden", "true");
-  mark.textContent = "VN";
+  // An open book, as on the stage's empty card: the button's name is Cue.
+  mark.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14" focusable="false" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4.2C6.6 3.2 4.6 2.8 2.5 3v9.4c2.1-.2 4.1.2 5.5 1.2 1.4-1 3.4-1.4 5.5-1.2V3c-2.1-.2-4.1.2-5.5 1.2z" /><path d="M8 4.2v9.4" /></svg>';
   const label = document.createElement("span");
   label.setAttribute("data-vn-launcher-label", "");
   button.append(mark, label);
