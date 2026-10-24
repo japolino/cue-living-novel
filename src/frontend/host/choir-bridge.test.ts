@@ -88,21 +88,11 @@ describe("ChoirBridge companion", () => {
     const controller = new SpeechController({
       choirBridge: bridge,
       onStatus: (st) => statuses.push(st.kind),
+      // No user gesture yet: nothing is read until Play.
+      hasUserActivation: () => false,
     });
 
-    controller.setSettings({
-      enabled: true,
-      autoplay: false,
-      volume: 0.8,
-      muteNarrator: true,
-      narrator: null,
-      characterDefault: null,
-      characters: {},
-      deliveryMode: "none",
-      deliveryTag: "",
-      deliveryAllProviders: false,
-      choirSound: false,
-    });
+    controller.setSettings({ ...DEFAULT_SPEECH_SETTINGS, enabled: true, muteNarrator: true, choirSound: false });
 
     controller.setActive(true);
     controller.setVisible(true);
@@ -116,6 +106,7 @@ describe("ChoirBridge companion", () => {
       paragraphSpeaker: "Mira",
       turnSpeaker: "Mira",
     });
+    expect(playCalled).toBe(false);
 
     await controller.playCurrent();
 
@@ -160,28 +151,16 @@ describe("SpeechController with Choir: stop paths", () => {
     };
     const bridge = new ChoirBridge({ __CHOIR_API__: fakeApi, addEventListener: () => {}, removeEventListener: () => {}, dispatchEvent: () => true } as any);
     const controller = new SpeechController({ choirBridge: bridge });
-    controller.setSettings({
-      enabled: true,
-      autoplay: true,
-      volume: 0.8,
-      muteNarrator: false,
-      narrator: null,
-      characterDefault: null,
-      characters: {},
-      deliveryMode: "none",
-      deliveryTag: "",
-      deliveryAllProviders: false,
-      choirSound: false,
-    });
+    controller.setSettings({ ...DEFAULT_SPEECH_SETTINGS, enabled: true });
     controller.setActive(true);
     controller.setVisible(true);
+    // Read aloud reads each new paragraph as it appears.
     controller.setCursor(paragraph(0));
-    void controller.playCurrent();
     stopCalls = 0;
     return { controller, bridge, requests, stopCalls: () => stopCalls };
   }
 
-  test("moving to the next paragraph aborts the previous one without stopping Choir, then autoplays", () => {
+  test("moving to the next paragraph aborts the previous one without stopping Choir, then reads the next", () => {
     const { controller, bridge, requests, stopCalls } = setup();
     expect(requests.map((request) => request.paragraphIndex)).toEqual([0]);
 
@@ -225,7 +204,7 @@ describe("SpeechController with Choir: stop paths", () => {
       }),
     };
     const bridge = new ChoirBridge({ __CHOIR_API__: fakeApi, addEventListener: () => {}, removeEventListener: () => {}, dispatchEvent: () => true } as any);
-    const controller = new SpeechController({ choirBridge: bridge, onStatus: (status) => statuses.push(status.kind) });
+    const controller = new SpeechController({ choirBridge: bridge, onStatus: (status) => statuses.push(status.kind), hasUserActivation: () => false });
     controller.setSettings({ ...DEFAULT_SPEECH_SETTINGS, enabled: true });
     controller.setActive(true);
     controller.setCursor(paragraph(0));

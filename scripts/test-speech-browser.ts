@@ -2,14 +2,15 @@ import { chromium, type Browser, type Page } from "playwright";
 import assert from "node:assert/strict";
 
 /**
- * Focused offline browser checks for the speech feature. The page runs the
- * REAL transport/controller/dock/settings-card code against intercepted
- * in-page host endpoints (recorded, never leaving the page). Covers:
- * profile selection + save echo, manual Play/Pause/Stop, narrator vs named
- * fallback, default-disabled zero requests, delivery-tag route gating,
- * profile revision (updated_at) cache keying, and a stale completion after
- * the view closes. No paid calls; the external-request guard fails the run
- * if anything tries to leave the page.
+ * Focused offline browser checks for read aloud. The page runs the REAL
+ * ChoirBridge/controller/dock/settings-card code against a fake Choir on
+ * `window.__CHOIR_API__` (recorded, never leaving the page). Covers:
+ * default-off zero Choir calls, the Choir-only card (no TTS-profile pickers),
+ * enable + save echo, manual Play/Pause/Stop, reading each new paragraph once
+ * the page had a gesture, a late status after the view closes, Mute narrator,
+ * Sound from Choir (on by default), the card without Choir, and the music
+ * credit. The external-request guard fails the run if anything tries to
+ * leave the page.
  */
 
 const build = await Bun.build({ entrypoints: ["scripts/speech-browser-fixture.ts"], target: "browser" });
@@ -20,17 +21,17 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: (request) => n
   : new Response('<html><body><script type="module" src="/fixture.js"></script></body></html>', { headers: { "Content-Type": "text/html" } }) });
 
 type Snapshot = {
-  requests: Array<{ method: string; url: string; body: Record<string, unknown> | null }>;
+  paragraphs: Array<{ text: string; speaker?: string; paragraphIndex?: number }>;
+  stopCalls: number;
   patches: Array<Record<string, unknown>>;
-  playCalls: number;
-  pauseCalls: number;
   statuses: Array<{ kind: string; message?: string }>;
+  muteCalls: boolean[];
+  choirSoundCalls: boolean[];
 };
 const snap = (page: Page): Promise<Snapshot> => page.evaluate(`(() => {
-  const { requests, patches, playCalls, pauseCalls, statuses } = window.speechFixture;
-  return JSON.parse(JSON.stringify({ requests, patches, playCalls, pauseCalls, statuses }));
+  const { paragraphs, stopCalls, patches, statuses, muteCalls, choirSoundCalls } = window.speechFixture;
+  return JSON.parse(JSON.stringify({ paragraphs, stopCalls, patches, statuses, muteCalls, choirSoundCalls }));
 })()`) as Promise<Snapshot>;
-const synthCalls = (s: Snapshot) => s.requests.filter((r) => r.url.endsWith("/tts/synthesize"));
 const fx = (page: Page, script: string) => page.evaluate(`(() => { const f = window.speechFixture; ${script} })()`);
 
 let browser: Browser | undefined;
@@ -44,141 +45,86 @@ try {
 
   const dock = page.locator(".vn-speech-dock");
   const card = page.locator(".vn-speech-settings").first();
-  // The section is flat now (it renders inside the settings Voice section): no disclosure to open.
-  assert.equal(await card.getByRole("button", { name: "Load profiles" }).isVisible(), true, "speech settings are visible without expanding anything");
 
-  // 1) Default-disabled: dock hidden; cursor storms + activation trigger ZERO requests.
-  assert.equal(await dock.isVisible(), false, "dock hidden while speech is off");
+  // 1) The card is Choir-only: no TTS profiles, voice pickers, delivery tags, auto-play or volume.
+  assert.equal(await card.getByText("Read each paragraph aloud").isVisible(), true, "read aloud switch is visible without expanding anything");
+  assert.equal(await card.getByRole("button", { name: "Open Choir voice setup" }).isVisible(), true, "voices are cast in Choir");
+  for (const retired of ["Load profiles", "Narrator voice", "Character default voice", "Delivery style", "Auto-play", "Speech volume"]) {
+    assert.equal(await card.getByText(retired).count(), 0, `no "${retired}" in the Choir-only card`);
+  }
+
+  // 2) Default-off: dock hidden; cursor storms + activation reach Choir ZERO times.
+  assert.equal(await dock.isVisible(), false, "dock hidden while read aloud is off");
   await fx(page, `f.activate(); for (let i = 0; i < 4; i += 1) f.setCursor(i, "p" + i, ""); void f.controller.playCurrent();`);
   await page.waitForTimeout(50);
-  assert.equal((await snap(page)).requests.length, 0, "disabled speech never calls any endpoint");
-  assert.equal(await dock.isVisible(), false, "dock stays hidden while disabled even when the overlay is active");
+  assert.equal((await snap(page)).paragraphs.length, 0, "read aloud off never calls Choir");
+  assert.equal(await dock.isVisible(), false, "dock stays hidden while off even when the overlay is active");
 
-  // 2) Profile listing is explicit; selection saves and the echo re-render keeps the choice.
-  await card.getByRole("button", { name: "Load profiles" }).click();
-  await card.getByText("2 saved TTS profile(s)").waitFor();
+  // 3) Enable via the checkbox: patch saved, echo keeps it, dock appears (overlay is active).
+  await card.locator('[data-speech-field="enable"]').check();
   let s = await snap(page);
-  assert.equal(s.requests.length, 1, "one listing request, nothing else");
-  assert.match(s.requests[0]!.url, /\/api\/v1\/tts-connections\?/);
-  assert.equal(synthCalls(s).length, 0, "listing never synthesizes");
-  const narratorSelect = card.locator('fieldset:has(legend:text-is("Narrator voice")) > select');
-  await narratorSelect.selectOption("gem-1");
-  s = await snap(page);
-  assert.equal((s.patches.at(-1)!.narrator as { connectionId: string }).connectionId, "gem-1", "narrator profile saved");
-  assert.equal(await narratorSelect.inputValue(), "gem-1", "save echo keeps the selection after re-render");
-  const fallbackSelect = card.locator('fieldset:has(legend:text-is("Character default voice")) > select');
-  await fallbackSelect.selectOption("oai-1");
-  assert.equal(await fallbackSelect.inputValue(), "oai-1");
-
-  // 3) Enable via the checkbox: patch saved, dock appears (overlay is active).
-  await card.locator('input[type="checkbox"]').first().check();
-  s = await snap(page);
   assert.equal(s.patches.at(-1)!.enabled, true, "enable saved as a speech patch");
+  assert.equal(await card.locator('[data-speech-field="enable"]').isChecked(), true, "save echo keeps the switch on");
   assert.equal(await dock.isVisible(), true, "dock appears once enabled and active");
+  assert.equal(s.paragraphs.length, 0, "turning it on does not read the paragraph already shown");
 
-  // 4) Manual Play: profile revision read + one synthesis; Pause/resume/Stop behave.
+  // 4) The page has had a gesture (the click above), so a new paragraph is read
+  // as it appears; Pause stops Choir; Play starts it over; Stop.
   await fx(page, `f.setCursor(0, "The wind picks up.", "");`);
-  await dock.getByRole("button", { name: "Play this paragraph" }).click();
-  await dock.getByText(/Speaking/).waitFor();
+  await dock.getByText("Speaking — Narrator").waitFor();
   s = await snap(page);
-  assert.equal(s.requests.filter((r) => r.url === "/api/v1/tts-connections/gem-1").length, 1, "fresh Play reads the profile revision first");
-  assert.equal(synthCalls(s).length, 1, "exactly one synthesis");
-  assert.equal(synthCalls(s)[0]!.body!.connectionId, "gem-1", "narrator paragraph uses the narrator profile");
-  assert.equal(s.playCalls, 1);
+  assert.deepEqual(s.paragraphs.at(-1), { text: "The wind picks up.", speaker: "Narrator", paragraphIndex: 0 });
   await dock.getByRole("button", { name: "Pause speech" }).click();
   await dock.getByText("Paused").waitFor();
+  assert.equal((await snap(page)).stopCalls, 1, "Pause stops Choir");
   await dock.getByRole("button", { name: "Play this paragraph" }).click();
   await dock.getByText(/Speaking/).waitFor();
   s = await snap(page);
-  assert.equal(synthCalls(s).length, 1, "resume never re-synthesizes");
-  assert.equal(s.playCalls, 2);
+  assert.equal(s.paragraphs.length, 2, "Play after Pause starts the paragraph over");
   await dock.getByRole("button", { name: "Stop speech" }).click();
   await dock.getByText(/Speech ready/).waitFor();
 
-  // 5) Named speaker without an override falls back to the character default.
+  // 5) The next paragraph is read too, with no Play.
   await fx(page, `f.setCursor(1, "“You came back,” she says.", "Mira");`);
-  await dock.getByRole("button", { name: "Play this paragraph" }).click();
-  await dock.getByText(/Speaking — Mira/).waitFor();
+  await dock.getByText("Speaking — Mira").waitFor();
   s = await snap(page);
-  assert.equal(synthCalls(s).at(-1)!.body!.connectionId, "oai-1", "named speaker uses the character default");
+  assert.deepEqual(s.paragraphs.at(-1), { text: "“You came back,” she says.", speaker: "Mira", paragraphIndex: 1 });
+  await fx(page, `f.finishParagraph();`);
+  await dock.getByText("Speech ready — Mira").waitFor();
 
-  // 6) Delivery tags: Gemini route gets the tag; non-Gemini route never does automatically.
-  await fx(page, `f.applySpeech({ deliveryMode: "gemini-audio-tags", deliveryTag: "whispers" });`);
-  await fx(page, `f.setCursor(2, "A narrator line.", "");`); // narrator = gem-1 (Gemini model)
-  await dock.getByRole("button", { name: "Play this paragraph" }).click();
+  // 6) A late status after close: the view closes while Choir is reading; nothing shows as playing.
+  await fx(page, `f.setCursor(2, "Too late to speak.", "");`);
   await dock.getByText(/Speaking/).waitFor();
+  await fx(page, `f.deactivate(); f.finishParagraph(true);`);
+  await page.waitForTimeout(50);
   s = await snap(page);
-  assert.equal(synthCalls(s).at(-1)!.body!.text, "[whispers] A narrator line.", "Gemini-family model receives the tag");
-  await fx(page, `f.setCursor(3, "A spoken line.", "Mira");`); // characterDefault = oai-1 (non-Gemini)
-  await dock.getByRole("button", { name: "Play this paragraph" }).click();
-  await dock.getByText(/Speaking — Mira/).waitFor();
-  s = await snap(page);
-  assert.equal(synthCalls(s).at(-1)!.body!.text, "A spoken line.", "non-Gemini model gets NO tag without the labeled opt-in");
-
-  // 7) Revision keying: replay = cache hit; a host-side profile edit forces re-synthesis.
-  await fx(page, `f.applySpeech({ deliveryMode: "none", deliveryTag: "" });`);
-  await fx(page, `f.setCursor(4, "Cache me.", "");`);
-  await dock.getByRole("button", { name: "Play this paragraph" }).click();
-  await dock.getByText(/Speaking/).waitFor();
-  const afterFirst = synthCalls(await snap(page)).length;
-  await fx(page, `f.endAudio();`);
-  await dock.getByRole("button", { name: "Play this paragraph" }).click();
-  await dock.getByText(/Speaking/).waitFor();
-  s = await snap(page);
-  assert.equal(synthCalls(s).length, afterFirst, "unchanged profile revision replays from cache");
-  await fx(page, `f.endAudio(); f.bumpProfile("gem-1", "rev-2");`);
-  await dock.getByRole("button", { name: "Play this paragraph" }).click();
-  await dock.getByText(/Speaking/).waitFor();
-  s = await snap(page);
-  assert.equal(synthCalls(s).length, afterFirst + 1, "a profile edit (updated_at bump) misses the cache and synthesizes anew");
-
-  // 8) Stale completion after close: a response landing after deactivate never plays.
-  await fx(page, `f.endAudio(); f.setCursor(5, "Too late to speak.", ""); f.holdSynthesis = true;`);
-  const playsBeforeStale = (await snap(page)).playCalls;
-  await dock.getByRole("button", { name: "Play this paragraph" }).click();
-  await page.waitForFunction("window.speechFixture.releaseSynthesis !== null");
-  await fx(page, `f.deactivate();`); // view closed while the request is in flight
-  await fx(page, `f.holdSynthesis = false; const release = f.releaseSynthesis; if (release) release();`);
-  await page.waitForTimeout(80);
-  s = await snap(page);
-  assert.equal(s.playCalls, playsBeforeStale, "a completion landing after close never plays");
   assert.notEqual(s.statuses.at(-1)!.kind, "playing", "no playing status after close");
   assert.equal(await dock.isVisible(), false, "dock hides with the overlay");
 
-  // 9) Character override drafts: with no narrator/character default, "Add" keeps
-  // an editable row across the backend normalize+echo round-trip and saves
-  // nothing until a profile is chosen.
-  await fx(page, `f.activate(); f.applySpeech({ narrator: null, characterDefault: null });`);
+  // 7) Mute narrator calls Choir and saves.
+  await card.locator('[data-speech-field="mute-narrator"]').check();
   s = await snap(page);
-  const patchesBeforeAdd = s.patches.length;
-  const overridesBox = card.locator('fieldset:has(legend:text-is("Character voices (this chat)"))');
-  await card.getByPlaceholder("Character name (as shown on the nameplate)").fill("Bram");
-  await overridesBox.getByRole("button", { name: "Add" }).click();
-  await overridesBox.locator('[data-speech-draft-row="bram"]').waitFor();
-  s = await snap(page);
-  assert.equal(s.patches.length, patchesBeforeAdd, "Add with no voice saved stores a local draft, not a config patch");
-  const draftRow = overridesBox.locator('[data-speech-draft-row="bram"]');
-  await draftRow.locator("select").selectOption("gem-1");
-  s = await snap(page);
-  assert.equal(s.patches.length, patchesBeforeAdd + 1, "choosing a profile saves the override");
-  const savedChars = s.patches.at(-1)!.characters as Record<string, { connectionId: string }>;
-  assert.equal(savedChars["chat::chat-1::bram"]?.connectionId, "gem-1", "draft saves under the chat-scoped key");
-  const savedRow = overridesBox.locator('[data-speech-override-row="bram"]');
-  await savedRow.waitFor();
-  assert.equal(await savedRow.locator("select").inputValue(), "gem-1", "save echo keeps the row with its profile");
+  assert.deepEqual(s.muteCalls, [true], "the switch mutes Choir's narrator");
+  assert.equal(s.patches.at(-1)!.muteNarrator, true, "muteNarrator saved");
 
-  // 10) Sound from Choir: shown only when the installed Choir can switch its sound; toggling calls the host and saves.
-  const choirCard = page.locator("[data-choir-section] .vn-speech-settings");
-  const choirSound = choirCard.locator('[data-speech-field="choir-sound"]');
-  assert.equal(await choirSound.count(), 0, "no Sound from Choir toggle on a Choir without sound control");
-  await fx(page, `f.choirCanControlSound = true; f.choirSection.refresh();`);
-  assert.equal(await choirSound.isChecked(), false, "Sound from Choir is off by default");
-  await choirSound.check();
-  const choirState = await page.evaluate(`(() => ({ calls: [...window.speechFixture.choirSoundCalls], last: window.speechFixture.choirPatches.at(-1)?.choirSound }))()`) as { calls: boolean[]; last: boolean };
-  assert.deepEqual(choirState, { calls: [true], last: true }, "the toggle switches Choir's sound and saves choirSound");
-  assert.equal(await choirSound.isChecked(), true, "the toggle stays on after the save echo");
+  // 8) Sound from Choir: shown only when the installed Choir can switch its sound; on by default.
+  const choirSound = card.locator('[data-speech-field="choir-sound"]');
+  assert.equal(await choirSound.count(), 0, "no Sound from Choir switch on a Choir without sound control");
+  await fx(page, `f.choirCanControlSound = true; f.section.refresh();`);
+  assert.equal(await choirSound.isChecked(), true, "Sound from Choir is on by default");
+  await choirSound.uncheck();
+  s = await snap(page);
+  assert.deepEqual(s.choirSoundCalls, [false], "the switch turns Choir's sound off");
+  assert.equal(s.patches.at(-1)!.choirSound, false, "choirSound saved");
+  assert.equal(await choirSound.isChecked(), false, "the switch stays off after the save echo");
 
-  // 11) Music credit under the dock: shown with a track, hidden without one.
+  // 9) Without Choir the card says so and offers no switches.
+  const noChoir = page.locator("[data-no-choir-section] .vn-speech-settings");
+  assert.equal(await noChoir.getByText(/voiced by the Choir extension/).isVisible(), true, "the card says read aloud needs Choir");
+  assert.equal(await noChoir.locator("input").count(), 0, "no switches without Choir");
+
+  // 10) Music credit under the dock: shown with a track, hidden without one.
+  await fx(page, `f.activate();`);
   const credit = dock.locator("[data-music-credit]");
   await fx(page, `f.dock.setMusicCredit('"Gymnopedie" Kevin MacLeod (incompetech.com) · CC BY 4.0');`);
   assert.equal(await credit.isVisible(), true, "credit shows while Choir plays music");
@@ -187,7 +133,7 @@ try {
   assert.equal(await credit.isVisible(), false, "credit hides when the music stops");
 
   assert.deepEqual(external, [], "nothing ever left the page");
-  console.log("Speech browser checks passed: default-disabled zero requests, explicit profile listing, selection save echo, manual Play/Pause/Stop, narrator vs named fallback, Gemini-route tag gating, updated_at cache keying, stale completion after close, Sound from Choir toggle, music credit, no external requests.");
+  console.log("Read-aloud browser checks passed: Choir-only card, default-off zero Choir calls, enable save echo, manual Play/Pause/Stop, each new paragraph read after a gesture, late status after close, Mute narrator, Sound from Choir on by default, card without Choir, music credit, no external requests.");
 } finally {
   await browser?.close();
   server.stop(true);

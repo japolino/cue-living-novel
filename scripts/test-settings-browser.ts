@@ -489,7 +489,7 @@ try {
   await results.filter({ hasText: "Theme CSS" }).click();
   assert.equal(await settings.locator('[name="customCss"]').isVisible(), true, "results open Advanced settings too");
   await search.fill("narrator");
-  assert.match(await results.first().innerText(), /Narrator voice/);
+  assert.match(await results.first().innerText(), /Mute narrator/);
   await search.press("ArrowDown");
   await page.keyboard.press("Enter");
   assert.equal(await tab("Voice").getAttribute("aria-selected"), "true", "voice settings are searchable");
@@ -502,7 +502,11 @@ try {
   await openTab("Voice");
   assert.equal(await settings.locator('[data-pane="voice"] .vn-speech-settings').count(), 1, "speech settings mount inside Voice");
   assert.equal(await settings.locator("[data-voice-empty]").isVisible(), false);
-  assert.equal(await page.locator(".vn-speech-settings").getByRole("button", { name: "Load profiles" }).isVisible(), true);
+  const speechCard = page.locator(".vn-speech-settings");
+  assert.equal(await speechCard.getByText("Read each paragraph aloud").isVisible(), true, "read aloud is voiced by Choir");
+  await speechCard.getByRole("button", { name: "Open Choir voice setup" }).click();
+  assert.equal(await page.evaluate(() => (window as any).settingsFixture.choirOpens), 1, "voices are cast in Choir");
+  assert.equal(await speechCard.getByText("Load profiles").count(), 0, "no Lumiverse TTS-profile pickers");
 
   // The last open section is remembered across a remount (same storage).
   await openTab("Connections");

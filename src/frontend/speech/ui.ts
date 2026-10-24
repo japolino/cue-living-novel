@@ -4,7 +4,7 @@ import type { SpeechStatus } from "./controller.js";
  * Minimal speech dock: Play/Pause + Stop + a truthful status line for the
  * current assistant paragraph. Mounted by the host controller into the overlay
  * root as its own element (no VnStage changes), shown only while the overlay is
- * active AND speech is enabled. Errors/blocked autoplay are displayed here and
+ * active AND read aloud is on with Choir present. Errors are displayed here and
  * never thrown into the reading flow.
  */
 export type SpeechDockOptions = {
@@ -102,7 +102,7 @@ export class SpeechDock {
     options.mount.appendChild(this.host);
   }
 
-  /** Enabled = the speech setting; the dock stays hidden while speech is off. */
+  /** Enabled = read aloud is on and Choir is present; the dock stays hidden otherwise. */
   setEnabled(enabled: boolean): void {
     this.enabled = enabled;
     this.sync();
@@ -119,7 +119,7 @@ export class SpeechDock {
     this.playButton.setAttribute("aria-label", this.playing ? "Pause speech" : "Play this paragraph");
     this.playButton.disabled = status.kind === "loading";
     this.stopButton.disabled = status.kind === "off" || status.kind === "idle";
-    const tone = status.kind === "error" || status.kind === "blocked" || status.kind === "unconfigured" ? "error" : "info";
+    const tone = status.kind === "error" || status.kind === "unconfigured" ? "error" : "info";
     this.statusEl.setAttribute("data-tone", tone);
     this.statusEl.textContent = describeStatus(status);
   }
@@ -147,7 +147,6 @@ export function describeStatus(status: SpeechStatus): string {
     case "loading": return "Fetching audio…";
     case "playing": return status.speaker ? `Speaking — ${status.speaker}` : "Speaking";
     case "paused": return "Paused";
-    case "blocked": return status.message;
     case "unconfigured": return status.message;
     case "error": return status.message;
   }

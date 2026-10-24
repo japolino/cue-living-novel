@@ -191,7 +191,7 @@ Dialogue can style a few words with an inline tag. Wrap the words and close the 
 - Tags are case-insensitive and nest: `<rainbow><wave>la la</wave></rainbow>` gives rainbow letters that also ripple. Markdown works inside (`<shout>**NO**</shout>`).
 - A tag that is never closed, or a stray closing tag, is dropped; it never swallows the rest of the paragraph. Unknown tags (`<sparkle>`) and tags with attributes stay visible as plain text, like other unsupported HTML. Tags inside backticks stay literal.
 - The output form `<span data-vn-text-fx="wave">…</span>` is also accepted. Only catalogue ids pass the sanitizer; any other value is removed.
-- The tags are display markup only. Cue removes them from planner and image prompts and from text sent to speech (TTS), so they are never read aloud.
+- The tags are display markup only. Cue removes them from planner and image prompts and from text sent to Choir for read aloud, so they are never spoken.
 - The **Text effects** setting (config `textEffects`) has three modes: **Animated** (default), **Still** (config value `static`: colours, glow, and sizes stay; nothing moves), and **Off** (plain text). The OS "reduce motion" setting always behaves as Still. Effect intensity **Gentle** makes text motion smaller and slower. History always shows effects Still.
 - **Display regex rules** run before the tags are read, so a rule can add effects. For example, to make every "magic" shimmer: `/\b(magic)\b/gi => <rainbow>$1</rainbow>`.
 - **Teaching the model.** Paste this into a character card, lorebook entry, or preset (Settings also shows it with a Copy button):
@@ -213,7 +213,7 @@ To install, unzip it, open **Settings → Music library → Import music folder�
 
 ### Sound from Choir
 
-With the Choir companion extension installed, **Settings → Voice → Sound from Choir** lets Choir provide the sound instead of the pack. While Choir reads each paragraph aloud, it chooses sound effects and looping ambience from Freesound and background music from Kevin MacLeod's incompetech catalog. Ambience and music keep playing into the next paragraph. The setting turns Choir's sound effects, ambience and music on or off together. While it is on, Cue speech is on and Choir has sound on in the chat (music, or effects and ambience with a Freesound key), Cue's own pack stays quiet. Otherwise, for example with speech off, the pack plays as before. Enter the Freesound API key, switch single kinds and set the volumes in Choir. The credit for the current track ("Title" Kevin MacLeod (incompetech.com) · CC BY 4.0) shows under the speech controls. The setting appears only with a Choir version that offers it.
+With the Choir companion extension installed, **Settings → Voice → Sound from Choir** (on by default) lets Choir provide the sound instead of the pack. While Choir reads each paragraph aloud, it chooses sound effects and looping ambience from Freesound and background music from Kevin MacLeod's incompetech catalog. Ambience and music keep playing into the next paragraph. The setting turns Choir's sound effects, ambience and music on or off together. While it is on, read aloud is on and Choir has sound on in the chat (music, or effects and ambience with a Freesound key), Cue's own pack stays quiet. Otherwise, for example with read aloud off, the pack plays as before. Enter the Freesound API key, switch single kinds and set the volumes in Choir. The credit for the current track ("Title" Kevin MacLeod (incompetech.com) · CC BY 4.0) shows under the read-aloud controls. The setting appears only with a Choir version that offers it.
 
 ## Run the standalone preview
 
@@ -287,6 +287,6 @@ bun run build
 bun run build:demo
 ```
 
-See [SPEECH.md](./SPEECH.md) for the default-off paragraph speech (TTS) feature, its contracts, and its truthful limitations.
+See [SPEECH.md](./SPEECH.md) for read aloud (off by default, voiced by the Choir extension), its contracts, and its truthful limitations.
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for the viability decision, staging host contract, image pipeline, deterministic single-character identity, data ownership, state machines, and remaining preview limits.

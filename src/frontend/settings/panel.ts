@@ -435,10 +435,10 @@ function pane(id: SettingsSectionId, body: string, extra = ""): string {
 }
 
 const VOICE_SEARCH_ENTRIES: ReadonlyArray<{ label: string; keywords: string }> = [
-  { label: "Read paragraphs aloud with Choir", keywords: "speech tts voice enable speak choir audio" },
+  { label: "Read each paragraph aloud", keywords: "speech tts voice enable speak read aloud choir audio autoplay auto-play" },
   { label: "Mute narrator", keywords: "speech mute narrator dialogue only choir" },
-  { label: "Choir voice casting", keywords: "speech choir voices narrator character cast" },
-  { label: "Speech volume", keywords: "speech tts autoplay auto-play loudness volume" },
+  { label: "Sound from Choir", keywords: "choir sound effects ambience music freesound incompetech" },
+  { label: "Open Choir voice setup", keywords: "speech choir voices narrator character cast" },
 ];
 
 export class VisualNovelSettingsPanel {

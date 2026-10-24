@@ -76,7 +76,7 @@ const fixture = {
   clearedSystemOneKeys: 0,
   panel: null as VisualNovelSettingsPanel | null,
   speechPatches: [] as unknown[],
-  speechListings: 0,
+  choirOpens: 0,
   /** Destroys and rebuilds the panel on the same storage, like reopening the settings tab. */
   remount: () => {},
   storage: null as unknown,
@@ -112,17 +112,17 @@ const panelOptions: SettingsPanelOptions = {
   onClearCutoutModel: () => { fixture.modelClears += 1; panel.setCutoutModelState({ state: "absent" }); },
 };
 let panel = new VisualNovelSettingsPanel(panelOptions);
-// Mount the speech section inside the Voice section, like the controller does.
+// Mount the speech section inside the Voice section and report Choir present, like the controller does.
 let speech: SpeechSettingsSection | null = null;
 function mountSpeech(): void {
   speech = new SpeechSettingsSection({
     mount: panel.voiceMount(),
     onSave: (next) => { fixture.speechPatches.push(next); speech?.setConfig(normalizeSpeechSettings(next)); },
-    listProfiles: async () => { fixture.speechListings += 1; return []; },
-    listVoices: async () => [],
-    getChatId: () => "chat-1",
+    onOpenChoir: () => { fixture.choirOpens += 1; },
+    isChoirAvailable: () => true,
   });
   speech.setConfig(normalizeSpeechSettings({}));
+  panel.setVoiceAvailable(true);
 }
 if (!query.has("noSpeech")) mountSpeech();
 fixture.panel = panel;

@@ -37,7 +37,6 @@ import {
 import { SpeechController, type SpeechCursor } from "../speech/controller.js";
 import { ChoirBridge } from "./choir-bridge.js";
 import { PackSound } from "./pack-sound.js";
-import { createSpeechTransport } from "../speech/transport.js";
 import { SpeechDock } from "../speech/ui.js";
 import { SpeechSettingsSection } from "../speech/settings-ui.js";
 import type { SpeechSettings } from "../../speech-config.js";
@@ -675,7 +674,6 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   choirBridge.onMusicChange((music) => speechDock.setMusicCredit(music?.credit ?? null));
   speech = new SpeechController({
     choirBridge,
-    transport: createSpeechTransport(),
     onStatus: (status) => {
       speechDock.setStatus(status);
       if (status.kind === "loading" || status.kind === "playing" || status.kind === "paused") {
@@ -871,10 +869,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       .catch(() => {});
   }
   refreshCachedCutoutModel(DEFAULT_SPRITE_MODEL_URL);
-  // Speech settings render inside the panel's Voice section (own shadow root,
-  // own save path). Profile/voice listing happens only on explicit button
-  // presses inside it (metadata calls, no synthesis).
-  const speechTransport = createSpeechTransport();
+  // Read-aloud settings render inside the panel's Voice section (own shadow
+  // root, own save path), shown only while Choir is present.
   const speechSettings = settingsHandle ? new SpeechSettingsSection({
     mount: settingsPanel?.voiceMount() ?? settingsHandle.root,
     onSave: (speechPatch) => {
@@ -887,19 +883,20 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     },
     onOpenChoir: () => choirBridge.openDrawer(),
     isChoirAvailable: () => choirBridge.isAvailable(),
-    isNarratorMuted: () => choirBridge.isNarratorMuted(),
     onMuteNarratorChange: (muted) => choirBridge.setNarratorMuted(muted),
     canControlChoirSound: () => choirBridge.canControlSound(),
     onChoirSoundChange: (on) => choirBridge.setSoundEnabled(on),
-    listProfiles: () => speechTransport.listProfiles(new AbortController().signal),
-    listVoices: (connectionId) => speechTransport.listVoices(connectionId, new AbortController().signal),
-    getChatId: () => chatId(),
   }) : null;
   choirBridge.onAvailabilityChange((available) => {
     settingsPanel?.setVoiceAvailable(available);
     speechSettings?.refresh();
+    syncSpeechDock();
     syncSoundSource();
   });
+  /** The dock shows only while read aloud is on and Choir is there to voice it. */
+  function syncSpeechDock(): void {
+    speechDock.setEnabled(Boolean(configRef.current?.speech.enabled) && choirBridge.isAvailable());
+  }
 
   function chatId(): string {
     return ctx.getActiveChat().chatId ?? "";
@@ -1210,7 +1207,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       audioEngine.setSfxVolume(configRef.current.sfxVolume);
       syncSoundSource();
       speech.setSettings(configRef.current.speech);
-      speechDock.setEnabled(configRef.current.speech.enabled);
+      syncSpeechDock();
       speechSettings?.setConfig(configRef.current.speech);
       settingsPanel?.setConfig(configRef.current);
       refreshCachedCutoutModel(configRef.current.spriteModelUrl);
@@ -1245,7 +1242,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       audioEngine.setSfxVolume(configRef.current.sfxVolume);
       syncSoundSource();
       speech.setSettings(configRef.current.speech);
-      speechDock.setEnabled(configRef.current.speech.enabled);
+      syncSpeechDock();
       speechSettings?.setConfig(configRef.current.speech);
       settingsPanel?.setConfig(configRef.current);
       refreshCachedCutoutModel(configRef.current.spriteModelUrl);
