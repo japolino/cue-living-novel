@@ -7,7 +7,7 @@ so Cue stores no voice, provider or key.
 
 ## How it works
 
-- Settings live in **Settings → Voice** (`src/frontend/speech/settings-ui.ts`),
+- Settings live in the **Cue** settings tab, **Voice** (`src/frontend/speech/settings-ui.ts`),
   persisted in the extension config as `config.speech` (`src/speech-config.ts`):
   `enabled` (Read each paragraph aloud, off by default), `muteNarrator`
   (dialogue only) and `choirSound` (Sound from Choir, on by default). The Voice
