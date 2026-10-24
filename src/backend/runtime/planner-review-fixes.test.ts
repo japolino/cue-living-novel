@@ -193,6 +193,22 @@ test("a re-planned older turn never sends the messages after it as history", asy
   assert.doesNotMatch(recent, /AFTER_TARGET/);
 });
 
+test("chat positions drop only later messages, never one that shares the target's position", async () => {
+  for (const recentMessages of [
+    [
+      { id: "user-8", index_in_chat: 9, name: "Theo Grant", is_user: true, content: "SAME_POSITION line" },
+      { id: "assistant-9", index_in_chat: 9, name: "Aria", is_user: false, content }
+    ],
+    [{ id: "user-8", index_in_chat: 9, name: "Theo Grant", is_user: true, content: "SAME_POSITION line" }]
+  ]) {
+    const captured = { user: "" };
+    await planTurn(plannerSpindle({ scenes: [], cues: [] }, captured), input({ recentMessages }));
+    const recent = captured.user.split("RECENT CHAT")[1]?.split("TARGET ASSISTANT RESPONSE")[0] ?? "";
+    assert.match(recent, /SAME_POSITION/);
+    assert.doesNotMatch(recent, /tankard/);
+  }
+});
+
 test("a speaker only the reply names is a nameplate, never a sprite actor; nicknames and role labels are not new speakers", async () => {
   const result = await planTurn(plannerSpindle({
     speakers: { "0": "Aria", "1": "Dorran", "2": "The guard", "3": "Theo" },

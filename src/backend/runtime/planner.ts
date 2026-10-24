@@ -369,9 +369,8 @@ function clipTail(text: string, maximum: number): string {
 /**
  * The messages before the planned reply, oldest first, within
  * RECENT_CONTEXT_LIMITS. The reply itself is sent once, as TARGET ASSISTANT
- * RESPONSE, so it is dropped here with anything after it: by id, by chat
- * position (a re-planned older turn whose window ends later), or by text when
- * neither is known.
+ * RESPONSE, so it is dropped here with anything after it: by id, else by chat
+ * position (a re-planned older turn whose window ends later), else by text.
  */
 function recentContext(input: Pick<PlanTurnInput, "recentMessages" | "message" | "content" | "config">, personaName?: string): string {
   const maximum = input.config.includeRecentMessages;
@@ -380,7 +379,9 @@ function recentContext(input: Pick<PlanTurnInput, "recentMessages" | "message" |
   const targetIndex = window.findIndex((message) => (message as { id?: unknown }).id === input.message.id);
   if (targetIndex >= 0) window = window.slice(0, targetIndex);
   const position = input.message.index_in_chat;
-  if (typeof position === "number") window = window.filter((message) => typeof message.index_in_chat !== "number" || message.index_in_chat < position);
+  // Only later positions are dropped; a message sharing the target's position is
+  // left to the text check below.
+  if (targetIndex < 0 && typeof position === "number") window = window.filter((message) => typeof message.index_in_chat !== "number" || message.index_in_chat <= position);
   if (targetIndex < 0 && window.length && !window.at(-1)!.is_user && window.at(-1)!.content.trim() === input.content.trim()) window = window.slice(0, -1);
   // includeRecentMessages counts the reply itself, as the controller's window does.
   window = maximum > 1 ? window.slice(-(maximum - 1)) : [];
