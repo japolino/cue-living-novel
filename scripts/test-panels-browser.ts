@@ -105,7 +105,7 @@ try {
   assert.equal(await page.locator("[data-vn-speaker]").textContent(), "Speaker 1");
   await skip.click();
   await page.waitForFunction(() => (window as any).navigationFixture.stage.getState().phase === "awaiting-input");
-  assert.equal(await position(), 2, "read-only skip works after going back");
+  assert.equal(await position(), 2, "Skip runs to the end of the reply after going back");
   const draft = page.locator("[data-vn-input]");
   await draft.fill("Keep my draft");
   await draft.press("ArrowLeft");
@@ -126,5 +126,5 @@ try {
   const speakerBounds = await page.locator("[data-vn-speaker]").boundingBox();
   assert.ok(controlsBounds && speakerBounds && controlsBounds.y + controlsBounds.height <= speakerBounds.y, "mobile controls do not cover the nameplate");
   await page.screenshot({ path: ".cache/navigation-mobile.png" });
-  console.log("Browser checks passed: backward navigation, read-only skip, playback pause; basic/advanced disclosure, hidden-value preservation, validation recovery, mobile settings; reveal timing, CSS checkbox, script and network isolation, keyboard movement, mobile bounds, swipe/chat isolation, worker timeout.");
+  console.log("Browser checks passed: backward navigation, skip to the end, playback pause; basic/advanced disclosure, hidden-value preservation, validation recovery, mobile settings; reveal timing, CSS checkbox, script and network isolation, keyboard movement, mobile bounds, swipe/chat isolation, worker timeout.");
 } finally { await browser?.close(); server.stop(); }

@@ -342,7 +342,6 @@ export type VisualStageThemeTarget = Pick<
 > & {
   setTextSpeed?: (speed: number) => void;
   setAutoPlayDelay?: (delay: number) => void;
-  setSkipMode?: (mode: "read" | "all") => void;
   /** Dialogue text size multiplier (stage sets `--vn-text-scale`). */
   setTextScale?: (scale: number) => void;
   /** Lets the stage also gate its own heuristic effects (text-triggered shake). */
@@ -370,7 +369,6 @@ export function applyVisualConfigToStage(
   stage.setDisplayRegexRules(config.displayRegexRules);
   stage.setTextSpeed?.(config.textSpeed);
   stage.setAutoPlayDelay?.(config.autoPlayDelay);
-  stage.setSkipMode?.(config.skipMode);
   stage.setTextScale?.(config.textScale);
   stage.setEffectIntensity?.(config.effectIntensity);
   stage.setTextEffects?.(config.textEffects);

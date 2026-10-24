@@ -581,7 +581,6 @@ export class VisualNovelSettingsPanel {
                 ${segments("autoPlayStep", AUTO_PLAY_STEPS, true)}
                 <label data-field data-custom="autoPlayDelay" hidden><span>Milliseconds</span><input name="autoPlayDelay" type="number" min="500" max="10000" step="250" /></label>
               </fieldset>
-              <label data-field ${find("Fast forward", "skip read unread")}><span>Fast forward</span><select name="skipMode"><option value="read">Skip only text you have read</option><option value="all">Skip everything</option></select></label>
             `, { find: find("Pace", "speed") })}
             ${group("Your turn", `
               <label data-check ${find("Suggest replies", "choices options cyoa generate suggestions reply")}><input name="generateChoices" type="checkbox" /><span>Suggest replies<small>Shown above the reply box when the reply offers no choices of its own.</small></span></label>
@@ -1418,7 +1417,6 @@ export class VisualNovelSettingsPanel {
     const name = target.name;
     const checked = target instanceof HTMLInputElement && target.checked;
     switch (name) {
-      case "skipMode": return { skipMode: target.value === "all" ? "all" : "read" };
       case "generateChoices": return { generateChoices: checked };
       case "autoEnter": return { autoEnter: checked };
       case "referenceAnchoring": return { referenceAnchoring: checked };
@@ -1843,7 +1841,6 @@ export class VisualNovelSettingsPanel {
   }
 
   private syncEveryday(config: VisualNovelConfig): void {
-    this.control<HTMLSelectElement>("skipMode").value = config.skipMode;
     this.control<HTMLInputElement>("generateChoices").checked = config.generateChoices;
     this.control<HTMLInputElement>("autoEnter").checked = config.autoEnter;
     this.control<HTMLInputElement>("referenceAnchoring").checked = config.referenceAnchoring;

@@ -437,7 +437,6 @@ try {
     assert.equal((await displayed()).url, "/sprites/plate_street.webp", "failed: plate stays");
 
     // Skip through the moment ends on the plate; skip that ends on the moment shows it.
-    await page.evaluate(() => { const st = (window as any).fx.stage; st.setSkipMode("all"); });
     await load(page, MOMENT, 300);
     await page.evaluate(() => (window as any).fx.stage.toggleSkip(true));
     await page.waitForFunction(() => (window as any).fx.stage.getState().currentParagraphIndex === 2 && !(window as any).fx.stage.getState().isSkipping);

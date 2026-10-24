@@ -64,15 +64,12 @@ describe("reading UX", () => {
     expect(shell(s).querySelector("[data-vn-exit]")!.getAttribute("aria-label")).toBe("Leave the story");
   });
 
-  test("Skip explains its mode through aria-describedby", () => {
+  test("Skip explains through aria-describedby that it goes to the end of the reply", () => {
     const s = create();
     const skip = q(s, "[data-vn-control='skip']");
     const description = q(s, `#${skip.getAttribute("aria-describedby")}`);
-    expect(description.textContent).toBe("Skips text you have already read and stops at new text.");
-    s.setSkipMode("all");
-    expect(description.textContent).toBe("Skips all text until your next reply.");
-    s.setSkipMode("read");
-    expect(description.textContent).toContain("stops at new text");
+    expect(description.textContent).toBe("Skips to the end of the reply and stops at Your turn.");
+    expect(skip.getAttribute("title")).toBe("Skip to the end of the reply (S)");
   });
 
   test("Previous never leaves the reading toolbar, even at Your turn", () => {
@@ -193,38 +190,38 @@ describe("reading UX", () => {
     expect(state.textContent).toBe("");
   });
 
-  test("read-only Skip stops at new text and says so", async () => {
+  test("Skip on a fresh reply runs over unread text to Your turn and pauses there without submitting", async () => {
     const s = create();
-    s.loadTurn({ paragraphs: paragraphs(4) });
-    advance(s);
-    advance(s); // p0..p2 are now read
-    s.previous();
-    s.previous();
-    expect(s.getState().currentParagraphIndex).toBe(0);
+    let submitted = 0;
+    s.loadTurn({ paragraphs: paragraphs(4), choices: [{ id: "a", label: "A", value: "a" }] });
+    (s as unknown as { callbacks: { onChoice: () => void } }).callbacks.onChoice = () => { submitted++; };
     s.toggleSkip();
-    expect(q(s, "[data-vn-reading-state]").textContent).toBe("Skipping text you have read");
-    await wait(250);
-    expect(s.getState().currentParagraphIndex).toBe(2);
-    expect(s.getState().phase).toBe("revealing");
+    expect(q(s, "[data-vn-reading-state]").textContent).toBe("Skipping to the end of the reply");
+    await wait(400);
+    expect(s.getState().currentParagraphIndex).toBe(3);
+    expect(s.getState().phase).toBe("awaiting-input");
     const skip = q(s, "[data-vn-control='skip']");
     expect(skip.dataset.vnActive).toBe("false");
     expect(skip.getAttribute("aria-pressed")).toBe("false");
-    expect(q(s, "[data-vn-reading-state]").textContent).toBe("Skip stopped: new text ahead");
-    advance(s);
     expect(q(s, "[data-vn-reading-state]").textContent).toBe("");
+    expect(submitted).toBe(0);
   });
 
-  test("Skip all mode runs to Your turn and pauses there without submitting", async () => {
-    const s = create({ skipMode: "all" });
+  test("Auto stays on at Your turn, never submits, and goes on with the next reply", async () => {
     let submitted = 0;
-    s.loadTurn({ paragraphs: paragraphs(3), choices: [{ id: "a", label: "A", value: "a" }] });
-    (s as unknown as { callbacks: { onChoice: () => void } }).callbacks.onChoice = () => { submitted++; };
-    s.toggleSkip();
-    expect(q(s, "[data-vn-reading-state]").textContent).toBe("Skipping all text");
-    await wait(300);
+    const s = create({ autoPlayDelay: 500, onChoice: async () => { submitted++; }, onSubmit: async () => { submitted++; } });
+    s.loadTurn({ paragraphs: paragraphs(2), choices: [{ id: "a", label: "A", value: "a" }] });
+    s.toggleAutoPlay();
+    await wait(1300);
     expect(s.getState().phase).toBe("awaiting-input");
-    expect(q(s, "[data-vn-control='skip']").dataset.vnActive).toBe("false");
+    const auto = q(s, "[data-vn-control='auto']");
+    expect(auto.getAttribute("aria-pressed")).toBe("true");
+    expect(q(s, "[data-vn-reading-state]").textContent).toBe("Auto play on");
+    await wait(700);
     expect(submitted).toBe(0);
+    s.loadTurn({ paragraphs: [{ id: "n0", text: "Next reply.", speaker: "Mira" }, { id: "n1", text: "And more.", speaker: "Mira" }] });
+    await wait(700);
+    expect(s.getState().currentParagraphIndex).toBe(1);
   });
 
   test("Previous pauses Auto and Skip", () => {
@@ -257,6 +254,73 @@ describe("reading UX", () => {
     advance(s);
     expect(s.getState().phase).toBe("awaiting-input");
     expect(input.value).toBe("Keep my draft");
+  });
+
+  test("reading keys work from a focused suggestion, and 1-9 pick a suggestion; typing never triggers them", async () => {
+    const picked: string[] = [];
+    const s = create({ onChoice: async (choice) => { picked.push(choice.id); } });
+    s.loadTurn({ paragraphs: paragraphs(2), choices: [{ id: "a", label: "Stay", value: "a" }, { id: "b", label: "Go", value: "b" }] });
+    advance(s);
+    advance(s);
+    const first = q(s, "[data-vn-choice]");
+    expect(first.getAttribute("aria-keyshortcuts")).toBe("1");
+    expect(first.querySelector("[data-vn-choice-key]")!.textContent).toBe("1");
+    expect(first.querySelector("[data-vn-choice-label]")!.textContent).toBe("Stay");
+    const press = (target: FakeNode, key: string) => { const event = new FakeEvent("keydown", { key }); target.dispatchEvent(event); return event; };
+    // From a suggestion button: L opens History, Escape closes it, ArrowLeft goes back.
+    press(first, "l");
+    expect(q(s, "[data-vn-backlog]").hidden).toBe(false);
+    press(root(s), "Escape");
+    expect(q(s, "[data-vn-backlog]").hidden).toBe(true);
+    // Enter on a button presses the button (native), never advances or goes back.
+    expect(press(first, "Enter").defaultPrevented).toBe(false);
+    // Typing digits in the reply box stays text.
+    const input = q(s, "[data-vn-input]");
+    expect(press(input, "2").defaultPrevented).toBe(false);
+    expect(picked).toEqual([]);
+    // Elsewhere, 2 picks the second suggestion; 9 with no ninth does nothing.
+    expect(press(root(s), "9").defaultPrevented).toBe(false);
+    expect(press(first, "2").defaultPrevented).toBe(true);
+    await wait(0);
+    expect(picked).toEqual(["b"]);
+  });
+
+  test("ArrowLeft from a focused suggestion goes back a paragraph", () => {
+    const s = create();
+    s.loadTurn({ paragraphs: paragraphs(2), choices: [{ id: "a", label: "Stay", value: "a" }] });
+    advance(s);
+    advance(s);
+    q(s, "[data-vn-choice]").dispatchEvent(new FakeEvent("keydown", { key: "ArrowLeft" }));
+    expect(s.getState().currentParagraphIndex).toBe(0);
+  });
+
+  test("Escape in the reply box keeps the draft and hands the keys back to the stage", () => {
+    const s = create();
+    s.loadTurn({ paragraphs: paragraphs(1) });
+    advance(s);
+    const input = q(s, "[data-vn-input]");
+    input.value = "Draft";
+    input.dispatchEvent(new FakeEvent("input"));
+    input.focus();
+    const escape = new FakeEvent("keydown", { key: "Escape" });
+    input.dispatchEvent(escape);
+    expect(escape.defaultPrevented).toBe(true);
+    expect(FakeDocument.activeElement).toBe(root(s));
+    expect(s.getState().draft).toBe("Draft");
+  });
+
+  test("scrolling up opens History only over the dialogue box", () => {
+    const s = create();
+    s.loadTurn({ paragraphs: paragraphs(2) });
+    advance(s);
+    advance(s);
+    q(s, "[data-vn-choice-list]").dispatchEvent(new FakeEvent("wheel", { deltaY: -120 }));
+    q(s, "[data-vn-input-form]").dispatchEvent(new FakeEvent("wheel", { deltaY: -120 }));
+    expect(q(s, "[data-vn-backlog]").hidden).toBe(true);
+    q(s, "[data-vn-dialogue-text]").dispatchEvent(new FakeEvent("wheel", { deltaY: -10 }));
+    expect(q(s, "[data-vn-backlog]").hidden).toBe(true);
+    q(s, "[data-vn-dialogue-text]").dispatchEvent(new FakeEvent("wheel", { deltaY: -120 }));
+    expect(q(s, "[data-vn-backlog]").hidden).toBe(false);
   });
 
   test("waiting states use plain words and real counts, never percentages", () => {

@@ -186,22 +186,20 @@ test("configuration defaults ignoredTags, displayRegexRules, and useNativeCardIm
   assert.equal(config.useNativeCardImages, false);
 });
 
-test("configuration preserves textSpeed, autoPlayDelay, and skipMode", () => {
+test("configuration preserves textSpeed and autoPlayDelay", () => {
   const config = normalizeConfig({
     textSpeed: 35,
     autoPlayDelay: 3500,
-    skipMode: "all",
   });
   assert.equal(config.textSpeed, 35);
   assert.equal(config.autoPlayDelay, 3500);
-  assert.equal(config.skipMode, "all");
 });
 
-test("configuration defaults textSpeed, autoPlayDelay, and skipMode", () => {
-  const config = normalizeConfig({});
+test("configuration defaults textSpeed and autoPlayDelay; the old skipMode is dropped", () => {
+  const config = normalizeConfig({ skipMode: "all" });
   assert.equal(config.textSpeed, 20);
   assert.equal(config.autoPlayDelay, 2000);
-  assert.equal(config.skipMode, "read");
+  assert.equal("skipMode" in config, false);
 });
 
 test("configuration preserves audioDirectory, bgmVolume, and sfxVolume", () => {

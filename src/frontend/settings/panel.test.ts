@@ -43,7 +43,7 @@ describe("settings panel markup", () => {
   });
 
   test("everyday controls appear once (radio groups once per option list)", () => {
-    for (const name of ["skipMode", "generateChoices", "autoEnter", "referenceAnchoring", "parserConnectionId", "imageConnectionId",
+    for (const name of ["generateChoices", "autoEnter", "referenceAnchoring", "parserConnectionId", "imageConnectionId",
       "textSpeed", "autoPlayDelay", "textScale", "maxImagesPerTurn", "bgmVolume", "sfxVolume", "systemOneApiKey",
       "novelAiSteps", "novelAiGuidance", "novelAiSampler", "novelAiSeed", "novelAiWidth", "novelAiHeight"]) {
       expect(names.filter((candidate) => candidate === name)).toEqual([name]);

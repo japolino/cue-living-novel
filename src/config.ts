@@ -152,7 +152,6 @@ export type VisualNovelConfig = {
   useNativeCardImages: boolean;
   textSpeed: number;
   autoPlayDelay: number;
-  skipMode: "read" | "all";
   /** Presentation strength of one-shot stage effects. Default "full" keeps existing playback. */
   effectIntensity: VisualNovelEffectIntensity;
   /** Inline dialogue text effects (<shake>, <rainbow>, ...). Default "animated". */
@@ -220,7 +219,6 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   useNativeCardImages: false,
   textSpeed: 20,
   autoPlayDelay: 2000,
-  skipMode: "read",
   effectIntensity: "full",
   textEffects: "animated",
   presentationMode: "scene",
@@ -422,7 +420,6 @@ export function normalizeConfig(value: unknown): VisualNovelConfig {
     useNativeCardImages: bool(input.useNativeCardImages, DEFAULT_CONFIG.useNativeCardImages),
     textSpeed: integer(input.textSpeed, 0, 100, DEFAULT_CONFIG.textSpeed),
     autoPlayDelay: integer(input.autoPlayDelay, 500, 10000, DEFAULT_CONFIG.autoPlayDelay),
-    skipMode: input.skipMode === "all" ? "all" : "read",
     effectIntensity: effectIntensity(input.effectIntensity),
     textEffects: textEffectMode(input.textEffects),
     presentationMode: presentationMode(input.presentationMode),

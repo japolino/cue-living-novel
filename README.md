@@ -11,7 +11,9 @@ NovelAI profiles automatically use model-aware prompt formatting. V4+ receives s
 Under Advanced, NovelAI has toggles for model-specific quality tags and default negative tags. Custom positive prefixes and edited or empty negatives are preserved. Automatic quality tags are written into the request so they can be inspected; V4.5 Curated includes `rating:general` and reduced feet emphasis. These options do not affect other providers. The Lumiverse NovelAI adapter must also include the accompanying change that honors `qualityToggle: false` and empty negatives.
 
 - paragraph-by-paragraph reveal with a final acknowledgement gate
-- Previous button and Left Arrow to reread earlier paragraphs in the current reply. Going back pauses Auto and Skip, keeps your response draft, and does not rewind the chat. Skip still uses your selected mode.
+- Previous button and Left Arrow to reread earlier paragraphs in the current reply. Going back pauses Auto and Skip, keeps your response draft, and does not rewind the chat.
+- **Skip** runs to the end of the reply and stops at Your turn. **Auto** stays on across replies: it pauses at Your turn (it never sends anything) and goes on when the next reply arrives.
+- Keys: Enter, Space or Right Arrow continue, Left Arrow goes back, L opens History, A toggles Auto, S skips, 1–9 pick a suggested reply. They work from any button on the stage, never while you type in the reply box (Escape leaves it, keeping the draft). Scrolling up over the dialogue box opens History.
 - One **Your turn** for everyone: the reply box is always there (Enter sends, Shift+Enter adds a line; on phones Send sits beside it), with suggested replies above it when the reply offers choices or **Suggest replies** is on
 - a single native image pipeline — planner → asset scheduler — with per-provider bounded concurrency and progressive delivery
 - previous-image retention and decode-before-swap so a late image never blanks the stage

@@ -84,7 +84,6 @@ const baseConfig: VisualNovelConfig = {
   useNativeCardImages: false,
   textSpeed: 20,
   autoPlayDelay: 2000,
-  skipMode: "read",
   effectIntensity: "full",
   textEffects: "animated",
   presentationMode: "scene",

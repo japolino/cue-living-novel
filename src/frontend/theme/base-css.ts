@@ -617,18 +617,13 @@ button[data-vn-badge]:active {
   font-size: 0.78rem;
 }
 
-/* Plain-words playback state: "Auto play on", "Skipping text you have read", ... */
+/* Plain-words playback state: "Auto play on", "Skipping to the end of the reply". */
 [data-vn-reading-state] {
   display: inline-block;
   color: var(--vn-accent);
   font-size: 0.78rem;
   font-weight: 600;
   letter-spacing: 0.02em;
-}
-
-[data-vn-reading-state][data-vn-playback="skip-stopped"] {
-  color: var(--vn-muted-text);
-  font-weight: 500;
 }
 
 [data-vn-continue] {
@@ -947,6 +942,30 @@ button[data-vn-badge]:active {
     background-color 160ms ease,
     box-shadow 200ms ease,
     color 160ms ease;
+}
+
+/* The number key that picks a suggestion (hidden where there is no keyboard). */
+[data-vn-choice-key] {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  min-width: 1.45rem;
+  height: 1.45rem;
+  padding: 0 0.3rem;
+  border: 1px solid var(--vn-chrome-border);
+  border-radius: 0.4rem;
+  color: var(--vn-muted-text);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  [data-vn-choice-key] {
+    display: none;
+  }
 }
 
 [data-vn-choice]::after {
