@@ -1529,3 +1529,38 @@ test("skip non-story blocks: the compact speaker map is remapped, and only kept 
   assert.deepEqual(result.plan.nameplateOnlySpeakers, ["Dorran"]);
   assert.deepEqual(result.plan.visualCues.map((cue) => cue.paragraphIndex), [0, 2]);
 });
+
+test("skip non-story blocks: a long tracker on an earlier reply never pushes its story ending out of RECENT CHAT", async () => {
+  forgetStoryCheckFailures();
+  // About 3,500 characters of status lines: more than an older message's whole RECENT CHAT budget.
+  const tracker = (from: number) => Array.from({ length: 70 }, (_, index) => `[Stat ${from + index}: ${index}% | Mood: tired | Outfit: grey coat]`).join("\n");
+  const story = Array.from({ length: 8 }, (_, index) => `The harbor bell rang for the ${index + 1}th time while the gulls circled the masts.`).join(" ");
+  const earlier = `${tracker(0)}\n\n${story} She finally opened the sealed letter.`;
+  const content = `${tracker(100)}\n\nShe read it twice.`;
+  const requests: Array<{ messages: Array<{ content: string }> }> = [];
+  const spindle = {
+    generate: { raw: async (request: { messages: Array<{ content: string }> }) => {
+      const check = storyCheckReply(request);
+      if (check) return check;
+      requests.push(request);
+      return { content: JSON.stringify({ speakers: { "0": "Mira" }, scenes: [], cues: [], effects: [], characters: [] }) };
+    } },
+    log: { warn() {}, info() {} }
+  } as unknown as SpindleAPI;
+  await planTurn(spindle, {
+    chatId: "chat", message: { ...message, content }, content, previousScene: null, previousContinuity: null,
+    // The tracker reply is an older message (900-character budget): a user line follows it.
+    recentMessages: [{ name: "User", content: "Read it.", is_user: true }, { name: "Mira", content: earlier, is_user: false }, { name: "User", content: "Well?", is_user: true }],
+    config: { ...DEFAULT_CONFIG, skipNonStory: true }, singleCharacter: emptySingleCharacter(), characterAppearance: {}
+  });
+  const user = requests[0]!.messages[1]!.content;
+  const recent = user.slice(user.indexOf("RECENT CHAT"), user.indexOf("TARGET ASSISTANT RESPONSE"));
+  const line = recent.split("\n\n").findIndex((part) => part.startsWith("Mira: "));
+  const mira = recent.split("\n\n").slice(line).join("\n\n").split("\n\nUser: ")[0]!;
+  // The story ending survives, the status lines keep their start and their marker, within the message's budget.
+  assert.match(mira, /She finally opened the sealed letter\.\n\n\(status lines, not shown to the reader\)\n\[Stat 0: 0% \| Mood: tired/);
+  assert.ok(mira.length <= "Mira: ".length + 900, `${mira.length} characters`);
+  assert.ok(mira.slice(mira.indexOf("(status lines")).length <= 300);
+  // The target's own STATUS LINES block is unchanged: all of its 70 lines.
+  assert.match(user, /STATUS LINES \(taken out of the response and not shown to the reader; use them for place, time and the current outfit, never as paragraphs; attire still goes on a cue only where an outfit changes\)\n\n\[Stat 100:[^]*\[Stat 169: 69% \| Mood: tired \| Outfit: grey coat\]$/);
+});

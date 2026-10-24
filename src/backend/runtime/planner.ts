@@ -175,8 +175,12 @@ export type PlanTurnInput = {
   sourceFingerprint?: string;
   previousScene: SceneState | null;
   previousContinuity: TurnPlan["terminalContinuity"] | null;
-  /** The recent window; the planned message (by id) and anything after it are not sent as history. */
-  recentMessages: Array<Pick<ChatMessageDTO, "name" | "content" | "is_user"> & { id?: string; index_in_chat?: number }>;
+  /**
+   * The recent window; the planned message (by id) and anything after it are not sent as history.
+   * `statusLines` (Skip non-story blocks): an earlier reply's carded status lines, kept out of
+   * `content` so RECENT CHAT can give them a small share of the message's budget (see recentContext).
+   */
+  recentMessages: Array<Pick<ChatMessageDTO, "name" | "content" | "is_user"> & { id?: string; index_in_chat?: number; statusLines?: string }>;
   config: VisualNovelConfig;
   singleCharacter: SingleCharacterState;
   characterAppearance: CharacterAppearanceMap;
@@ -343,6 +347,31 @@ function isAttireReset(attire: string | null | undefined): boolean {
 /** Recent chat budget in characters: the newest message, each older one, and the whole block. */
 export const RECENT_CONTEXT_LIMITS = { newest: 2000, older: 900, total: 6000 } as const;
 
+/**
+ * Skip non-story blocks: an earlier reply's status lines in RECENT CHAT take
+ * at most this many characters (header included) and at most a third of the
+ * message's budget; the story text keeps the rest, so a long tracker never
+ * pushes the reply's story ending out.
+ */
+export const RECENT_STATUS_LIMIT = 300;
+const RECENT_STATUS_HEADER = "(status lines, not shown to the reader)";
+
+/**
+ * The status section of an earlier reply within `room` characters, or "". It
+ * keeps the start (place and time come first), cut after a whole line when
+ * that keeps at least half of the room.
+ */
+function recentStatusSection(status: string, room: number): string {
+  const space = room - RECENT_STATUS_HEADER.length - 1;
+  if (!status || space < 24) return "";
+  const points = Array.from(status);
+  if (points.length <= space) return `${RECENT_STATUS_HEADER}\n${status}`;
+  let kept = points.slice(0, space - 1).join("");
+  const lineEnd = kept.lastIndexOf("\n");
+  if (lineEnd >= kept.length / 2) kept = kept.slice(0, lineEnd);
+  return `${RECENT_STATUS_HEADER}\n${kept.trimEnd()}…`;
+}
+
 const REASONING_BLOCK = /<(think|thinking|thought|thoughts|reasoning|reflection)\b[^>]*>[\s\S]*?<\/\1\s*>/gi;
 
 /**
@@ -402,10 +431,16 @@ function recentContext(input: Pick<PlanTurnInput, "recentMessages" | "message" |
   for (let index = window.length - 1; index >= 0; index -= 1) {
     const message = window[index]!;
     const text = cleanContextText(message.content);
-    if (!text) continue;
+    const status = message.statusLines ? cleanContextText(message.statusLines) : "";
+    if (!text && !status) continue;
     const budget = Math.min(lines.length === 0 ? RECENT_CONTEXT_LIMITS.newest : RECENT_CONTEXT_LIMITS.older, RECENT_CONTEXT_LIMITS.total - used);
     if (budget < 200) break;
-    const line = `${message.is_user ? userLabel : message.name || "Assistant"}: ${clipTail(text, budget)}`;
+    // The story comes first and keeps its end; status lines get a small share after it.
+    const statusSection = recentStatusSection(status, Math.min(RECENT_STATUS_LIMIT, Math.floor(budget / 3)));
+    const storyText = text ? clipTail(text, budget - (statusSection ? statusSection.length + 2 : 0)) : "";
+    const body = [storyText, statusSection].filter(Boolean).join("\n\n");
+    if (!body) continue;
+    const line = `${message.is_user ? userLabel : message.name || "Assistant"}: ${body}`;
     lines.unshift(line);
     used += line.length;
   }
@@ -1322,7 +1357,7 @@ async function requestPlannerOutput(
           "TARGET ASSISTANT RESPONSE",
           paragraphText,
           ...(input.statusLines
-            ? ["STATUS LINES (taken out of the response and not shown to the reader; use them for place, time and outfit, never as paragraphs)", input.statusLines]
+            ? ["STATUS LINES (taken out of the response and not shown to the reader; use them for place, time and the current outfit, never as paragraphs; attire still goes on a cue only where an outfit changes)", input.statusLines]
             : [])
         ].join("\n\n")
       }
@@ -2285,7 +2320,8 @@ function statusLinesText(prepared: PreparedNarrative): string {
 /**
  * Recent replies as the planner reads them with Skip non-story blocks on: the
  * structural rules, plus the labels their own check left in the cache. Their
- * carded status lines stay, marked as not shown.
+ * carded status lines stay, kept apart in `statusLines` (recentContext marks
+ * them as not shown and caps them after the story).
  */
 async function storyOnlyRecentMessages(spindle: SpindleAPI, input: PlanTurnInput, ignoredTags: readonly string[]): Promise<PlanTurnInput["recentMessages"]> {
   if (!input.config.skipNonStory || !input.recentMessages.some((message) => !message.is_user)) return input.recentMessages;
@@ -2297,8 +2333,8 @@ async function storyOnlyRecentMessages(spindle: SpindleAPI, input: PlanTurnInput
     const story = (labels ? applyStoryLabels(prepared, labels) : prepared).paragraphs
       .map((paragraph) => paragraph.text).filter((text) => text !== PANELS_ONLY_TEXT).join("\n\n");
     const status = statusLinesText(prepared);
-    const content = [story, status && `(status lines, not shown to the reader)\n${status}`].filter(Boolean).join("\n\n");
-    return content ? [{ ...message, content }] : [];
+    if (!story && !status) return [];
+    return [{ ...message, content: story, ...(status ? { statusLines: status } : {}) }];
   });
 }
 
