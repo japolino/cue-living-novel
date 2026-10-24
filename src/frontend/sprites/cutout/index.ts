@@ -40,7 +40,7 @@ import type { CutoutInputFit } from "./kernel.js";
 import { cachedModelBytes, deleteCachedModels, downloadModel, readCachedModel, writeCachedModel } from "./model-store.js";
 import { startCutoutRunner, type CutoutRunner, type CutoutRunnerMode } from "./runner.js";
 import { clearStudioAttempt, readStudioAttempt, releaseStudioLock, studioDeviceProblem, takeStudioLock, writeStudioAttempt } from "./studio-device.js";
-import type { CutoutBackendPreference, CutoutCutTimings, CutoutLoadResult } from "./worker-main.js";
+import type { CutoutBackendPreference, CutoutCutTimings, CutoutLoadResult, CutoutWorkerCutResult } from "./worker-main.js";
 
 /** "studio": the opt-in BiRefNet model (`studioModelUrl`); "best": ISNet-anime; "basic": no model. */
 export type CutoutQuality = "studio" | "best" | "basic";
@@ -222,6 +222,20 @@ async function getRunner(): Promise<CutoutRunner> {
   return started;
 }
 
+/**
+ * Stop a runner and forget its models: the next call starts a fresh worker,
+ * and with it a fresh GPU device (after a Studio failure the old one may be
+ * lost or out of memory).
+ */
+function retireRunner(runner: CutoutRunner): void {
+  runner.terminate();
+  if (loaded?.runner === runner) setLoaded(null);
+  if (faceLoaded?.runner === runner) {
+    faceLoaded = null;
+    if (faceState.state === "ready") setFaceState({ state: "absent" });
+  }
+}
+
 async function ensureModel(url: string, force: boolean, spec: ModelSpec = BEST_SPEC): Promise<void> {
   const setFailure = (next: ModelFailure): void => { if (spec.studio) studioFailure = next; else failure = next; };
   const tag = spec.studio ? { studio: true as const } : {};
@@ -299,6 +313,7 @@ async function ensureModel(url: string, force: boolean, spec: ModelSpec = BEST_S
         setFailure({ url, at: Date.now(), sticky: true, message: reason });
         studioAttemptFailed(url, reason);
         releaseStudioLock();
+        retireRunner(runner);
         setState({ state: "unsupported", reason, ...tag });
         throw new Error(reason);
       }
@@ -497,11 +512,16 @@ function earlierStudioFailure(url: string): string | null {
     : "The Studio model did not finish loading or its first cut on an earlier visit (the tab or its cut-out worker most likely ran out of memory). Try Studio again in Settings to retry.";
 }
 
-/** The Studio model cannot run here: remember it (no retry this page, nor on this device) and use Best. */
-function studioFailed(url: string, text: string): void {
+/**
+ * The Studio model cannot run here: remember it (no retry this page, nor on
+ * this device), and retire the runner that ran it so Best starts on a fresh
+ * worker.
+ */
+function studioFailed(url: string, text: string, runner: CutoutRunner): void {
   studioFailure = { url, at: Date.now(), sticky: true, message: text };
   studioNote = text;
   studioAttemptFailed(url, text);
+  retireRunner(runner);
   if (loaded?.studio) setLoaded(null);
   releaseStudioLock();
   setState({ state: "unsupported", reason: text, studio: true });
@@ -558,37 +578,54 @@ export async function cutSprite(image: Blob, options: CutoutOptions): Promise<Cu
     }
   }
   throwIfAborted(options.signal);
-  let runner = await getRunner();
-  let result;
+  const withFaceOn = (on: CutoutRunner): boolean => withFace && faceLoaded?.runner === on;
+  /** The worker died running Best: remember it for the page (the cuts go on without a model). */
+  const bestCrashed = (url: string, error: unknown): void => {
+    const text = `The cut-out worker stopped while running the model: ${errorText(error)}`;
+    failure = { url, at: Date.now(), sticky: true, message: text };
+    setState({ state: "unsupported", reason: text });
+  };
+  /**
+   * Cut again after a failure: with Best when `withBest` and it loads (on the
+   * fresh worker a Studio failure leaves), else without a model. A worker that
+   * dies again here leaves a cut without a model on another fresh worker.
+   */
+  const cutAgain = async (withBest: boolean): Promise<CutoutWorkerCutResult> => {
+    throwIfAborted(options.signal);
+    const best = withBest && await useBest();
+    if (best && withFace && options.faceModelUrl) {
+      try { await ensureFaceModel(options.faceModelUrl, false); } catch { withFace = false; }
+    }
+    throwIfAborted(options.signal);
+    const again = await getRunner();
+    try {
+      return await again.cut(image, best, best && withFaceOn(again));
+    } catch (error) {
+      if (!again.isClosed()) throw error;
+      if (best) bestCrashed(modelUrl, error);
+      throwIfAborted(options.signal);
+      return (await getRunner()).cut(image, false);
+    }
+  };
+  const runner = await getRunner();
+  let result: CutoutWorkerCutResult;
   try {
-    result = await runner.cut(image, useModel, withFace && faceLoaded?.runner === runner);
+    result = await runner.cut(image, useModel, withFaceOn(runner));
   } catch (error) {
     if (!runner.isClosed()) throw error;
     // The worker died mid-cut (most likely out of memory in the model): retry once
     // without it ("studio": with the Best model).
-    if (useModel) {
-      const text = `The cut-out worker stopped while running the ${studio ? "Studio " : ""}model: ${errorText(error)}`;
-      if (studio) studioFailed(modelUrl, text);
-      else {
-        failure = { url: modelUrl, at: Date.now(), sticky: true, message: text };
-        setState({ state: "unsupported", reason: text });
-      }
-    }
-    throwIfAborted(options.signal);
-    useModel = studio && await useBest();
+    if (studio) studioFailed(modelUrl, `The cut-out worker stopped while running the Studio model: ${errorText(error)}`, runner);
+    else if (useModel) bestCrashed(modelUrl, error);
+    const again = studio;
     studio = false;
-    runner = await getRunner();
-    result = await runner.cut(image, useModel);
+    result = await cutAgain(again);
   }
   if (result.modelError && studio) {
     // The Studio model loaded but could not run (GPU memory): cut again with Best.
-    studioFailed(modelUrl, `The Studio model could not run: ${result.modelError}`);
+    studioFailed(modelUrl, `The Studio model could not run: ${result.modelError}`, runner);
     studio = false;
-    throwIfAborted(options.signal);
-    if (await useBest()) {
-      runner = await getRunner();
-      result = await runner.cut(image, true, withFace && faceLoaded?.runner === runner);
-    }
+    result = await cutAgain(true);
   }
   if (studio && result.quality === "best" && !result.modelError && !result.preCut) studioAttemptDone(modelUrl);
   if (result.modelError && loaded?.url === modelUrl) {

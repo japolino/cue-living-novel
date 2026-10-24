@@ -269,3 +269,42 @@ describe("Studio failures that stop the worker or the tab", () => {
     expect(await cutout.getStudioCutoutSupport()).toBeNull();
   });
 });
+
+describe("cutting again after a Studio failure", () => {
+  const FACE = "https://models.test/face.onnx";
+
+  test("a Studio run failure: Best cuts the sprite on a fresh worker (a new GPU device), the face finder comes along", async () => {
+    const url = studioUrl("modelerr");
+    cached(url);
+    const result = await cut(url, { faceModelUrl: FACE });
+    expect(result.quality).toBe("best");
+    expect(result.studio).toBeUndefined();
+    expect(result.face).toBeNull();
+    expect(runners).toHaveLength(2);
+    expect(runners[0]!.calls).toEqual(["load STUDIO-MODELERR webgpu stretch", "loadFace", "cut STUDIO-MODELERR face", "terminate"]);
+    expect(runners[1]!.calls).toEqual(["load BEST auto letterbox", "loadFace", "cut BEST face"]);
+    expect(note()).toMatch(/Studio model could not run: out of GPU memory/);
+  });
+
+  test("a Studio load failure leaves its worker too: Best starts on a fresh one", async () => {
+    const url = studioUrl("session");
+    cached(url);
+    expect((await cut(url)).quality).toBe("best");
+    expect(runners[0]!.closed).toBe(true);
+    expect(runners[1]!.calls).toEqual(["load BEST auto letterbox", "cut BEST"]);
+  });
+
+  test("the worker dies running Studio, then again running Best: the sprite is cut without a model, Best is not tried again", async () => {
+    const url = studioUrl("crashcut");
+    cached(url);
+    const bestCrash = "https://models.test/isnet-crashcut.onnx";
+    const result = await cutout.cutSprite(new Blob(["image"]), { quality: "studio", modelUrl: bestCrash, studioModelUrl: url });
+    expect(result.quality).toBe("basic");
+    expect(runners).toHaveLength(3);
+    expect(runners[2]!.calls).toEqual(["cut basic"]);
+    expect(cutout.getCutoutModelState()).toMatchObject({ state: "unsupported", reason: expect.stringMatching(/stopped while running the model/) });
+    const next = await cutout.cutSprite(new Blob(["image"]), { quality: "best", modelUrl: bestCrash });
+    expect(next.quality).toBe("basic");
+    expect(calls().filter((call) => call.startsWith("load BEST"))).toHaveLength(1);
+  });
+});
