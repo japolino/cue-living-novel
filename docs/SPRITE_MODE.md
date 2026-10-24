@@ -148,8 +148,14 @@ assistant reply
   -> vn_turn                                                    [frontend: stage]
 
 sprite job:  prompt -> image gen (portrait) -> imageId
-             -> vn_sprite_cut {requestId, imageId}  ---------->  frontend cut service
+             (NovelAI V5 + anchoring, not idle:
+              -> vn_novelai_inset {requestId, layout, imageId: idle} ->  frontend inset service
+                                                                  fetch the idle, draw canvas + mask
+              <- vn_novelai_inset_result chunks (image, mask) ---
+              -> image gen (inpainting, 1216x832 canvas) -> imageId, crop = right half)
+             -> vn_sprite_cut {requestId, imageId, crop?}  ----->  frontend cut service
                                                                   fetch /api/v1/images/<id>
+                                                                  crop (inset renders only)
                                                                   cutSprite() (ISNet + flood fill)
              <- vn_sprite_cut_result chunks (PNG base64) ------
              -> spindle.images.upload(...) -> cut image id/url
@@ -231,7 +237,9 @@ prints one `wardrobe` line per decision and one `scene:` line with the scores.
   832×1216). One shared seed per set where the provider takes a seed, and
   the set's `idle` render as reference image where reference anchoring is on
   and supported, for consistency (see "Seeds, reference strength and the
-  duplicate check").
+  duplicate check"). NovelAI V5 takes no reference image: there an
+  expression is a reference inset of the idle (see "NovelAI V5 reference
+  inset").
   - Framing (prompt version `sprite-prompt-v2`): `solo, standing, centered,
     front view, straight-on, facing viewer, looking at viewer, cowboy shot,
     simple background, white background, no shadow`. Negative add-on:
@@ -330,6 +338,124 @@ wanted: it keeps one pose across the expressions.
   a whole-set regenerate gives every expression the new seed. One other
   expression alone gets its own new seed, as before.
 
+### NovelAI V5 reference inset
+
+NovelAI Diffusion V5 has no Precise Reference or Vibe Transfer, and
+Lumiverse drops `resolvedReferenceImages` for V5 models, so before this the
+idle reference did nothing on V5 while expressions still waited for the
+idle. The inset (technique by "bequiet", arca.live AI-art channel, posts
+180786125, 185554190, 185642997) keeps a set consistent by inpainting:
+
+1. A 1216×832 white canvas, the set's idle render (raw, on white) contained
+   and centred in the left 608×832 box (832×1216 idle: drawn at x 19,
+   569×832). A mask: black (keep) left, white (repaint) right; the edge at
+   x = 608 sits on the 8-px latent grid (else a grey seam appears).
+2. An inpainting request draws the right half copying the character and
+   its art style from the left.
+3. The cut-out is made from the right half (608×832).
+
+When: provider `novelai`, effective model (`imageModel`, else the
+connection's model) `nai-diffusion-5*`, reference anchoring on, an
+expression (never the idle, which renders as before), and an idle render in
+the set. Geometry: `NOVELAI_INSET_LAYOUTS` (`src/shared/novelai-inset.ts`,
+one table, so a scene layout can be added). Request:
+`compileNovelAiInsetRequest` (`src/backend/runtime/sprites/novelai-inset.ts`).
+
+- **Composition (browser).** The backend runs without a canvas, so it sends
+  `vn_novelai_inset { requestId, layout: "sprite", imageId }` (the idle's
+  raw image id); the frontend (`src/frontend/sprites/inset-service.ts`,
+  `canvas-tools.ts`) fetches the image, draws the canvas and the mask, and
+  answers `vn_novelai_inset_result` chunks per part (`image`, `mask`). The
+  backend checks both are PNGs of the canvas size. Wait: 15 s
+  (`NOVELAI_INSET_TIMEOUT_MS`).
+- **Request.** What Cue sends through `spindle.imageGen.generate`
+  (`image`/`mask` are base64 PNGs):
+
+  ```text
+  model:      nai-diffusion-5-full-inpainting   (<model>-inpainting)
+  prompt:     "split screen, " + the sprite's base prompt
+  negative:   the sprite negative without "split screen", plus "comic"
+              ("multiple views" stays)
+  parameters: the sprite parameters (seed, characterTags = the character
+              caption unchanged, coords off, qualityToggle false,
+              negativePrompt as above) and
+              resolution: "1216x832"
+              rawRequestOverride: '{"parameters":{"noise":0,"image":"<png>","mask":"<png>"},"action":"infill"}'
+  ```
+
+  No `resolvedReferenceImages`. Steps, guidance and sampler stay the
+  user's (Lumiverse defaults 28, 5, Euler Ancestral, Karras, rescale 0; the
+  author used 14 steps, CFG 6.7). Lumiverse already sends
+  `add_original_image: true` and `inpaintImg2ImgStrength: 1`, and
+  deep-merges `rawRequestOverride` into the NovelAI body, where `action` and
+  `parameters.*` are not protected (`model` is, hence the model field).
+  Lumiverse merges extension parameters over the connection's defaults one
+  level deep, so Cue merges the user's own `rawRequestOverride` itself:
+  `noise: 0` < connection default < Cue's Image parameters < the inset's
+  `action`, `image` and `mask`. An override that is not valid JSON skips
+  the inset (plain expression).
+- **Crop.** The raw render is the whole canvas. The cut request carries
+  `crop` (608, 0, 608×832); the frontend crops before the cut-out and echoes
+  the crop in the cut meta, so the face box and the two-figure check run on
+  the cropped figure as before. The crop is stored on the library image
+  (`crop`, absent on every other render), so Re-cut, a cut retry and the
+  basic → best upgrade crop the same way. A cut without the echo (a page
+  from before the inset) fails ("reload the page, then use Re-cut") instead
+  of keeping both halves.
+- **Fallbacks.** A provider error (for example an unknown model name)
+  retries the expression once as the plain request (portrait, unanchored,
+  as V5 would draw it anyway), logs it (debug logging) and turns the inset
+  off for that user, connection and inpainting model until the backend
+  restarts; anchored expressions then stop waiting for the idle. No canvas
+  (browser error, timeout, a page without the inset service): the plain
+  expression, and that idle is not offered to the browser again for 5
+  minutes.
+- **A new idle.** Each inset render records the idle render it was drawn
+  from (`insetReference`). When the set gets a new idle render (flagged
+  idle, Regenerate, a failed idle rendered again), inset expressions drawn
+  from another idle are queued again (rendered, being cut or still
+  rendering) and drawn from the new one. Plain renders are left alone.
+- **Keys.** The sprite style key does not change: a set can hold inset and
+  plain (fallback) renders side by side, as it always could hold anchored
+  and unanchored ones; the per-image `insetReference` is what ties a render
+  to its idle. V4.5 Precise Reference and every other provider are
+  unchanged.
+- **Limits.** Output 608×832 (the stage scales sprites from the bbox, so a
+  set may mix 608×832 insets with an 832×1216 idle). The reference's
+  background bleeds in (the idle on white is the ideal reference). Too small
+  a repaint area gives several figures. One character per inset.
+- **Unverified** (no key during development): `nai-diffusion-5-full-inpainting`
+  is the author's; `nai-diffusion-5-curated-inpainting` is a guess (logged
+  as unverified; a failure turns the inset off). Lumiverse uses
+  `/ai/generate-image-stream` unless the connection is set to non-streaming;
+  whether infill works on the stream route is untested. Anlas cost: the
+  author reports it free on Opus at 1216×832 and ≤ 28 steps. Result quality
+  through Cue's prompts is untested. Cue adds no `strength` or `noise` beyond
+  `noise: 0` (Lumiverse's `inpaintImg2ImgStrength: 1` stays). With the connection's V5 mode set to
+  Furry, Lumiverse puts `fur dataset` before `split screen`.
+
+**Probe.** `scripts/novelai-v5-inset-probe.ts` (not part of the build) sends
+one inset request straight to NovelAI, with the body Lumiverse would build
+for Cue's request, so the owner can check the model name, the routes, the
+cost and the result with a real key:
+
+```sh
+# PowerShell: $env:NOVELAI_API_KEY = "..."   bash: export NOVELAI_API_KEY=...
+bun scripts/novelai-v5-inset-probe.ts --reference idle.png --seed 42 --route both \
+  --prompt "anime coloring, 1girl, solo, standing, simple background, white background" \
+  --character "1girl, silver hair, green eyes, school uniform, smile"
+```
+
+The key is read only from `NOVELAI_API_KEY` (never printed or written);
+without it, or with `--dry-run`, nothing is sent. It writes `canvas.png`,
+`mask.png`, `request.redacted.json` (image, mask and key redacted) and, per
+route, `<route>-full.png` and `<route>-right.png` (the 608×832 half Cue cuts
+out) to `.cache/improve/v5inset/`. Other options: `--negative`, `--model`
+(e.g. `nai-diffusion-5-curated`), `--steps`, `--scale`, `--sampler`, `--raw`
+(a user override to merge), `--route plain|stream|both`, `--out`. The script
+composes the canvas with a tiny PNG codec; the extension draws it in the
+browser, so resampling differs slightly.
+
 ## Order of work (backend, `sprites/jobs.ts`)
 
 One scheduler per user runs sprites, plates and key moments with the
@@ -341,7 +467,8 @@ so the order is decided at each start:
    - the opening plate is the very first job; a later plate goes before the
      sprites needed at its paragraph;
    - then the expressions the reply uses, one at a time, by first
-     appearance; with reference anchoring a character's idle comes first.
+     appearance; with reference anchoring a character's idle comes first
+     (NovelAI V5: while the reference inset is on).
    While an item waits for its idle (or the idle's two-figure check), items
    needed later wait too (one at a time). The wait is at most
    `IDLE_CHECK_WAIT_MS` (25 s).
@@ -475,8 +602,9 @@ for this chat, Regenerate, Re-cut, and Delete; the model URL under Advanced.
 
 ## Cut-out (frontend)
 
-Validated by the bake-off (anime line art and lineless painterly styles):
-ISNet-anime mask → border flood fill over background-coloured pixels (mask >
+A NovelAI V5 inset render is first cropped to its repainted half (the cut
+request's `crop`, see "NovelAI V5 reference inset"). Validated by the
+bake-off (anime line art and lineless painterly styles): ISNet-anime mask → border flood fill over background-coloured pixels (mask >
 0.7 guards against leaks) → enclosed near-background components whose mean
 mask < 0.5 become background → separate components whose mean mask < 0.3
 are dropped (brush specks) → defringe (un-mix the background colour from the
@@ -508,11 +636,12 @@ Code map:
 
 | Area | Files |
 |---|---|
-| Shared contract | `src/shared/sprites.ts` |
+| Shared contract | `src/shared/sprites.ts`, `src/shared/novelai-inset.ts` (inset geometry) |
 | Staging | `src/backend/runtime/sprite-staging.ts`, `system-one-sprites.ts` |
-| Library, prompts, jobs, cut bridge, views | `src/backend/runtime/sprites/**` |
+| Library, prompts, jobs, cut bridge, NovelAI V5 inset (request, bridge), views | `src/backend/runtime/sprites/**` |
 | Controller hooks | `src/backend/runtime/controller.ts` (`buildTurnView`, sprite request handlers) |
-| Cut-out | `src/frontend/sprites/cutout/**` (`kernel.ts` is the DOM-free algorithm), `cut-service.ts` |
+| Cut-out | `src/frontend/sprites/cutout/**` (`kernel.ts` is the DOM-free algorithm), `cut-service.ts` (crop of inset renders) |
+| NovelAI V5 inset canvas | `src/frontend/sprites/inset-service.ts`, `canvas-tools.ts`; probe `scripts/novelai-v5-inset-probe.ts` |
 | Stage | `src/frontend/stage/sprite-layer.ts`, `src/frontend/theme/sprite-css.ts`, VnStage sprite API |
 | Settings | `src/frontend/settings/sprite-library.ts`, sprite controls in `panel.ts` / `model.ts` |
 | Browser checks | `bun run test:sprite-stage`, `bun run test:sprite-cutout` |
@@ -621,7 +750,9 @@ Library and generation:
   624×912 / 912×624, upscaled 832×1216 / 1216×832), `seed`.
 - With reference anchoring, `idle` is generated first and the other
   expressions use it as the reference (after its duplicate check, at most
-  25 s); providers without anchoring skip it.
+  25 s); providers without anchoring skip it. NovelAI V5: the expressions
+  are reference insets (1216×832 inpainting canvas, the right 608×832 cut
+  out); see "NovelAI V5 reference inset".
 - Cut bridge: ≤ 2 cuts in flight per user, chunks in any order, PNG signature
   and IHDR checked, 5-minute inactivity timeout, failed after 3 timeouts.
   A "basic" cut made while "best" is selected is re-cut once on the next view
