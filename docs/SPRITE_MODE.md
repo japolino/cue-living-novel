@@ -286,8 +286,23 @@ prints one `wardrobe` line per decision and one `scene:` line with the scores.
     163° to blue 191°.
 - Plate: style prefix + location, time of day, weather, description +
   `scenery, no humans, detailed background, wide shot` + style suffix.
-  Negative: style negative + `1girl, 1boy, people, person, character,
-  text`. Landscape size (`spriteImageSize`; NovelAI always 1216×832).
+  ComfyUI / SwarmUI then add two plain-language sentences
+  (`plateSentence`): "An empty library, night, drawn as a detailed anime
+  background. Nobody is in the picture." (with the description in between
+  when it says more than the place). Negative: style negative + `1girl,
+  1boy, people, person, character, text`. Landscape size
+  (`spriteImageSize`; NovelAI always 1216×832).
+  - Why the sentences: the Anima 2.9B card says short prompts give bland,
+    simple backgrounds and natural language should be at least two
+    sentences. Anima 2.9B, October 2026, 4 places (classroom afternoon,
+    shopping street in evening rain, library at night, bedroom morning) × 4
+    seeds: the night library came out black or nearly black in 3 of 4
+    seeds without the sentences and 0 of 4 with them; over all 16 pairs the
+    dark-pixel share fell from 0.43 to 0.36 and the sentence version had
+    more edge detail in 10 of 16; daytime places looked about the same; no
+    plate drew a person in either version (posters on a bedroom wall, which
+    the description asks for, sometimes show characters). NovelAI plates
+    are unchanged (not tested there). Existing plates are kept.
 
 ### Seeds, reference strength and the duplicate check
 
