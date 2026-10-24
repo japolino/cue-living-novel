@@ -51,7 +51,7 @@ try {
   assert.equal(await tab("Reading").getAttribute("aria-selected"), "true");
   assert.equal(await settings.getByRole("tabpanel").count(), 1, "exactly one section is shown");
   assert.equal(await settings.locator('[data-pane="reading"]').isVisible(), true);
-  assert.equal(await settings.locator('[name="mode"]').isVisible(), true, "everyday reading controls show first");
+  assert.equal(await settings.locator('[name="generateChoices"]').isVisible(), true, "everyday reading controls show first");
 
   // First use: the guide is visible, uses listed connections, and saves choices immediately.
   const setup = settings.locator("[data-setup]");

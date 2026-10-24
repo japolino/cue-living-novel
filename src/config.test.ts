@@ -13,16 +13,14 @@ import {
   THEME_PRESET_IDS,
 } from "./config";
 
-test("configuration normalizes unsafe ranges and unknown modes", () => {
+test("configuration normalizes unsafe ranges", () => {
   const config = normalizeConfig({
-    mode: "unknown",
     maxImagesPerTurn: 500,
     imageConcurrency: 0,
     parserConnectionId: "  planner-id  ",
     imageConnectionId: "   ",
     customCss: 42
   });
-  assert.equal(config.mode, "standard");
   assert.equal(config.maxImagesPerTurn, 12);
   assert.equal(config.imageConcurrency, 1);
   assert.equal(config.parserConnectionId, "planner-id");
@@ -30,10 +28,17 @@ test("configuration normalizes unsafe ranges and unknown modes", () => {
   assert.equal(config.customCss, DEFAULT_CONFIG.customCss);
 });
 
-test("configuration preserves the CYOA and custom CSS controls", () => {
-  const config = normalizeConfig({ mode: "cyoa", customCss: "[data-vn-dialogue] { color: pink; }" });
-  assert.equal(config.mode, "cyoa");
+test("configuration preserves the custom CSS control", () => {
+  const config = normalizeConfig({ customCss: "[data-vn-dialogue] { color: pink; }" });
   assert.match(config.customCss, /color: pink/);
+});
+
+test("the old reply mode is dropped: suggested replies follow generateChoices alone", () => {
+  // Saved configs from before the unified Your turn still carry `mode`.
+  const standard = normalizeConfig({ mode: "standard" });
+  assert.equal("mode" in standard, false);
+  assert.equal(standard.generateChoices, true, "suggestions are on by default for everyone");
+  assert.equal(normalizeConfig({ mode: "cyoa", generateChoices: false }).generateChoices, false);
 });
 
 test("scene image fit defaults to cover for absent or invalid values", () => {

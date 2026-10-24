@@ -45,7 +45,7 @@ describe("VnStage.updateIllustration (sprite mode)", () => {
   afterEach(() => { stage.destroy(); restore(); });
 
   test("a ready picture for the current key paragraph replaces the sprites without a turn reload", async () => {
-    stage.loadTurn({ mode: "standard", paragraphs, sprites });
+    stage.loadTurn({ paragraphs, sprites });
     await flush();
     advance();
     await flush();
@@ -59,7 +59,7 @@ describe("VnStage.updateIllustration (sprite mode)", () => {
   });
 
   test("a failed picture keeps the sprites; a paragraph without the flag or an unchanged view is a no-op", async () => {
-    stage.loadTurn({ mode: "standard", paragraphs, sprites });
+    stage.loadTurn({ paragraphs, sprites });
     await flush();
     advance();
     await flush();

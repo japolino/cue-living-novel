@@ -50,7 +50,6 @@ const baseConfig: VisualNovelConfig = {
   themePreset: "lumiverse",
   enabled: true,
   autoEnter: false,
-  mode: "standard",
   sceneImageFit: "cover",
   debugLogging: false,
   generateImages: true,
@@ -408,10 +407,10 @@ describe("nameplateForParagraph (per-paragraph literal speaker)", () => {
 
 describe("stageTurnInput (production host-to-stage mapping)", () => {
   test("omits ambient only when the TurnView has no ambients array", () => {
-    expect(Object.hasOwn(stageTurnInput(turn(), "standard", true), "ambient")).toBe(false);
-    expect(stageTurnInput(turn({ ambients: [] }), "standard", true).ambient).toBeNull();
-    expect(stageTurnInput(turn({ ambients: [null] }), "standard", true).ambient).toBeNull();
-    expect(stageTurnInput(turn({ ambients: ["snow"] }), "standard", true).ambient).toBe("snow");
+    expect(Object.hasOwn(stageTurnInput(turn(), true), "ambient")).toBe(false);
+    expect(stageTurnInput(turn({ ambients: [] }), true).ambient).toBeNull();
+    expect(stageTurnInput(turn({ ambients: [null] }), true).ambient).toBeNull();
+    expect(stageTurnInput(turn({ ambients: ["snow"] }), true).ambient).toBe("snow");
   });
 
   test("forwards paragraph metadata independently of image assets", () => {
@@ -419,8 +418,7 @@ describe("stageTurnInput (production host-to-stage mapping)", () => {
       paragraphs: ["Rain.", "A flash.", "Inside."],
       ambients: ["rain", "rain", null], effects: [null, "flash_white", null],
       choices: [{ id: "go", label: "Go", value: "go" }]
-    }), "cyoa", false);
-    expect(input.mode).toBe("cyoa");
+    }), false);
     expect(input.preserveImage).toBe(false);
     expect(input.choices).toEqual([{ id: "go", label: "Go", value: "go" }]);
     expect(input.paragraphs.map((paragraph) => paragraph.ambient)).toEqual(["rain", "rain", null]);
@@ -437,20 +435,20 @@ describe("stageTurnInput (effect presentation preference)", () => {
   });
 
   test("defaults to full so existing playback is unchanged", () => {
-    const input = stageTurnInput(view(), "standard", false);
+    const input = stageTurnInput(view(), false);
     expect(input.paragraphs.map((paragraph) => paragraph.effect)).toEqual(["shake_hard", "flash_white", "confetti"]);
     expect(input.ambient).toBe("danger_pulse");
   });
 
   test("gentle softens strong shakes, drops flashes, keeps particles, and calms the danger pulse", () => {
-    const input = stageTurnInput(view(), "standard", false, "gentle");
+    const input = stageTurnInput(view(), false, "gentle");
     expect(input.paragraphs.map((paragraph) => paragraph.effect)).toEqual(["shake", undefined, "confetti"]);
     expect(input.paragraphs.map((paragraph) => paragraph.ambient)).toEqual(["vignette_dark", "rain", null]);
     expect(input.ambient).toBe("vignette_dark");
   });
 
   test("off removes every one-shot effect but keeps atmospheric ambients", () => {
-    const input = stageTurnInput(view(), "standard", false, "off");
+    const input = stageTurnInput(view(), false, "off");
     expect(input.paragraphs.every((paragraph) => paragraph.effect === undefined)).toBe(true);
     expect(input.paragraphs[1]?.ambient).toBe("rain");
   });

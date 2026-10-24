@@ -28,7 +28,8 @@ const firstScene = sceneDataUrl(["#402b63", "#d77d72"], "Sunset overlook");
 const secondScene = sceneDataUrl(["#07152f", "#31527d"], "Night overlook");
 const rerollScene = sceneDataUrl(["#1e1b4b", "#4338ca"], "Starry ridge");
 const query = new URLSearchParams(location.search);
-const mode = query.get("mode") === "standard" ? "standard" : "cyoa";
+/** `?suggestions=off` shows Your turn without suggested replies. */
+const suggestions = query.get("suggestions") !== "off";
 const requestedPreset = query.get("preset");
 const themePreset = isThemePresetId(requestedPreset) ? requestedPreset : "lumiverse";
 
@@ -50,12 +51,11 @@ function simulateGenerationFlow(rerollCount = 1): void {
           setTimeout(() => {
             stage.setAssetProgress(null);
             stage.loadTurn({
-              mode,
               paragraphs: [
                 { id: `r${rerollCount}-0`, speaker: "Mira", text: `[Reroll ${rerollCount}] The wind picks up as the constellations emerge in the twilight sky.` },
                 { id: `r${rerollCount}-1`, speaker: "Mira", text: "She looks out over the valley, smiling faintly at the quiet horizon." },
               ],
-              choices: [
+              choices: !suggestions ? [] : [
                 { id: "continue-looking", label: "Gaze at the stars", value: "Keep watching the sky with her." },
                 { id: "head-home", label: "Suggest heading back", value: "Let's make our way down before dark." },
               ],
@@ -102,14 +102,13 @@ const stage = new VnStage({
 });
 
 stage.loadTurn({
-  mode,
   paragraphs: [
     { id: "p0", speaker: "Mira", text: "The last sunlight spills across the valley. For a moment, neither of us says anything." },
     { id: "p1", speaker: "Mira", text: "By the time she turns toward you, the first stars have appeared over the ridge." },
     { id: "p2", speaker: "Mira", text: "\"<rainbow><wave>Look, a shooting star!</wave></rainbow>\" She grabs your sleeve. <whisper>Make a wish.</whisper> <tremble>Quick!</tremble>" },
     { id: "p3", speaker: "Mira", text: "So, she asks quietly, where do we go from here?" }
   ],
-  choices: [
+  choices: !suggestions ? [] : [
     { id: "stay", label: "Stay until sunrise", value: "Let's stay here until sunrise." },
     { id: "return", label: "Head back together", value: "We should head back together." },
     { id: "ask", label: "Ask what she wants", value: "What do you want to do?" }

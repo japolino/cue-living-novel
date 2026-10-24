@@ -18,7 +18,7 @@ const mount = document.createElement("div");
 // Same inline sizing the host controller applies to app.root (see src/frontend/host/controller.ts).
 Object.assign(mount.style, { position: "fixed", inset: "0", width: "100%", height: "calc(100dvh / var(--lumiverse-ui-scale, 1))", background: "#08090d" });
 appRoot.append(mount);
-const mode = params.get("mode") === "cyoa" ? "cyoa" : "standard";
+const suggestions = params.has("suggestions");
 const counters = { rerolls: 0, submits: 0, choices: 0, exits: 0 };
 const stage = new VnStage({
   mount,
@@ -31,9 +31,8 @@ const stage = new VnStage({
   onExit: () => { counters.exits++; },
 });
 const turn: VnTurnInput = {
-  mode,
   paragraphs: [0, 1, 2].map((i) => ({ id: `read-${i}`, text: `Paragraph ${i}. The evening settles over the ridge while the lamps come on one by one.`, speaker: `Speaker ${i}` })),
-  choices: mode === "cyoa" ? [
+  choices: suggestions ? [
     { id: "stay", label: "Stay until sunrise", value: "stay" },
     { id: "return", label: "Head back together", value: "return" },
     { id: "ask", label: "Ask what she wants", value: "ask" },

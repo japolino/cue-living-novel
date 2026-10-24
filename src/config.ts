@@ -1,8 +1,6 @@
 import { DEFAULT_SPEECH_SETTINGS, normalizeSpeechSettings, type SpeechSettings } from "./speech-config.js";
 import { DEFAULT_SPRITE_EXPRESSION_COUNT, DEFAULT_SPRITE_MODEL_URL, SPRITE_EXPRESSION_COUNTS, normalizeSpriteExpressionCount, type SpriteExpressionCount } from "./shared/sprites.js";
 
-export type VisualNovelMode = "standard" | "cyoa";
-
 export const SCENE_IMAGE_FITS = ["cover", "contain", "fill", "none", "scale-down"] as const;
 export type VisualNovelSceneImageFit = (typeof SCENE_IMAGE_FITS)[number];
 
@@ -112,7 +110,6 @@ export type VisualNovelConfig = {
   themePreset: VisualNovelThemePreset;
   enabled: boolean;
   autoEnter: boolean;
-  mode: VisualNovelMode;
   sceneImageFit: VisualNovelSceneImageFit;
   debugLogging: boolean;
   generateImages: boolean;
@@ -120,6 +117,7 @@ export type VisualNovelConfig = {
   referenceAnchoring: boolean;
   /** Where the reference anchor image comes from ("captured" render or "card" sprite). */
   referenceSource: VisualNovelReferenceSource;
+  /** Suggested replies at Your turn when the reply has no choices of its own (above the reply box). */
   generateChoices: boolean;
   parserConnectionId: string | null;
   systemOneMode: "off" | "compare" | "on";
@@ -186,7 +184,6 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   themePreset: "lumiverse",
   enabled: true,
   autoEnter: false,
-  mode: "standard",
   sceneImageFit: "cover",
   debugLogging: false,
   generateImages: true,
@@ -389,7 +386,6 @@ export function normalizeConfig(value: unknown): VisualNovelConfig {
     themePreset,
     enabled: bool(input.enabled, DEFAULT_CONFIG.enabled),
     autoEnter: bool(input.autoEnter, DEFAULT_CONFIG.autoEnter),
-    mode: input.mode === "cyoa" ? "cyoa" : "standard",
     sceneImageFit: sceneImageFit(input.sceneImageFit),
     debugLogging: bool(input.debugLogging, DEFAULT_CONFIG.debugLogging),
     generateImages: bool(input.generateImages, DEFAULT_CONFIG.generateImages),

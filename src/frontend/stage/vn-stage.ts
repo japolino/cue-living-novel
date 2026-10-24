@@ -161,7 +161,7 @@ export interface VnSceneImageRequest {
 }
 
 const THEME_MARKUP = `
-  <main data-vn-root data-vn-mode="standard" data-vn-phase="idle" tabindex="0" aria-label="Visual novel">
+  <main data-vn-root data-vn-phase="idle" tabindex="0" aria-label="Visual novel">
     <div data-vn-scene aria-hidden="true">
       <img data-vn-scene-image data-vn-layer="active" data-vn-empty="true" alt="" />
       <img data-vn-scene-image data-vn-layer="incoming" data-vn-empty="true" alt="" />
@@ -228,9 +228,9 @@ const THEME_MARKUP = `
         <p data-vn-interaction-hint></p>
       </div>
       <div data-vn-game-choices hidden aria-label="Game moves"></div>
-      <ol data-vn-choice-list hidden aria-label="Choose a reply"></ol>
+      <ol data-vn-choice-list hidden aria-label="Suggested replies"></ol>
       <form data-vn-input-form hidden>
-        <textarea data-vn-input aria-label="Your reply"></textarea>
+        <textarea data-vn-input rows="1" aria-label="Your reply"></textarea>
         <button data-vn-submit type="submit"><span data-vn-submit-label>Send</span><span data-vn-submit-icon aria-hidden="true"><svg viewBox="0 0 16 16" width="16" height="16" focusable="false" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 8h10" /><path d="M8.5 4l4 4-4 4" /></svg></span></button>
       </form>
     </section>
@@ -262,6 +262,19 @@ const queryRequired = <T extends Element>(
 const isInteractiveTarget = (target: EventTarget | null): boolean =>
   target instanceof Element &&
   Boolean(target.closest("button, textarea, input, select, option, a, [role='button']"));
+
+/**
+ * A touch-only device (no hover, coarse pointer): its on-screen keyboard's
+ * Enter adds a line and the Send button sends, and Your turn does not focus
+ * the reply box (that would open the keyboard over the stage).
+ */
+const isTouchOnly = (): boolean => {
+  try {
+    return typeof matchMedia === "function" && matchMedia("(hover: none) and (pointer: coarse)").matches;
+  } catch {
+    return false;
+  }
+};
 
 const phaseLoadingLabel = (phase: VnPhase): string | null => {
   switch (phase) {
@@ -1197,7 +1210,7 @@ export class VnStage {
     this.gameChoices = [...choices];
     this.gameBusy = busy;
     const view = selectVnStageView(this.state);
-    this.renderInteraction(view.showChoices, view.showStandardInput, view.isBusy);
+    this.renderInteraction(view.showChoices, view.showComposer, view.isBusy);
   }
 
   reset(): void {
@@ -1947,8 +1960,12 @@ export class VnStage {
       this.dispatch({ type: "set-draft", draft: this.input.value });
     });
 
+    // Enter sends and Shift+Enter adds a line; Ctrl/Cmd+Enter always sends. On a
+    // touch-only device Enter adds a line and the Send button sends.
     this.input.addEventListener("keydown", (event) => {
-      if (event.key !== "Enter" || (!event.ctrlKey && !event.metaKey)) return;
+      if (event.key !== "Enter" || event.isComposing) return;
+      const send = event.ctrlKey || event.metaKey || (!event.shiftKey && !event.altKey && !isTouchOnly());
+      if (!send) return;
       event.preventDefault();
       this.inputForm.requestSubmit();
     });
@@ -2048,7 +2065,7 @@ export class VnStage {
 
   private async submitDraft(): Promise<void> {
     const text = this.state.draft.trim();
-    if (!selectVnStageView(this.state).showStandardInput || !text || !this.callbacks.onSubmit) {
+    if (!selectVnStageView(this.state).showComposer || !text || !this.callbacks.onSubmit) {
       return;
     }
     this.dispatch({ type: "submit-started" });
@@ -2062,7 +2079,6 @@ export class VnStage {
 
   private render(previousPhase: VnPhase | null): void {
     const view = selectVnStageView(this.state);
-    this.root.dataset.vnMode = this.state.mode;
     this.root.dataset.vnPhase = this.state.phase;
     this.root.dataset.vnImageStatus = this.state.pendingImage
       ? "loading"
@@ -2100,16 +2116,14 @@ export class VnStage {
     this.syncSprites();
 
     this.renderStatus();
-    this.renderInteraction(view.showChoices, view.showStandardInput, view.isBusy);
+    this.renderInteraction(view.showChoices, view.showComposer, view.isBusy);
 
-    if (previousPhase !== "awaiting-input" && this.state.phase === "awaiting-input") {
+    // Your turn: the reply box takes focus so the reader can type at once
+    // (not on touch-only devices, where it would open the keyboard).
+    if (previousPhase !== "awaiting-input" && this.state.phase === "awaiting-input" && !isTouchOnly()) {
       queueMicrotask(() => {
-        if (this.destroyed) return;
-        if (this.state.mode === "cyoa") {
-          this.choiceList.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
-        } else {
-          this.input.focus({ preventScroll: true });
-        }
+        if (this.destroyed || this.state.phase !== "awaiting-input") return;
+        this.input.focus({ preventScroll: true });
       });
     }
   }
@@ -2694,22 +2708,24 @@ export class VnStage {
     );
   }
 
+  /**
+   * Your turn, the same for every reader: game moves and suggested replies
+   * (when there are any) above the reply box, which is always there.
+   */
   private renderInteraction(
     showChoices: boolean,
-    showStandardInput: boolean,
+    showComposer: boolean,
     isBusy: boolean,
   ): void {
-    const showGame = (showChoices || showStandardInput) && this.gameChoices.length > 0;
-    this.interaction.hidden = !showChoices && !showStandardInput;
+    const showGame = showComposer && this.gameChoices.length > 0;
+    this.interaction.hidden = !showComposer;
     this.choiceList.hidden = !showChoices;
     this.gameChoiceList.hidden = !showGame;
     this.renderGameChoices(showGame, isBusy || this.gameBusy);
-    this.inputForm.hidden = !showStandardInput;
-    const hint = showChoices
-      ? showGame ? "Pick a move or choose a reply." : "Choose a reply."
-      : showStandardInput
-        ? showGame ? "Pick a move, or write your own reply. Ctrl+Enter sends it." : "Write your reply. Ctrl+Enter sends it."
-        : "";
+    this.inputForm.hidden = !showComposer;
+    const picks = [showGame ? "a move" : "", showChoices ? "a suggestion" : ""].filter(Boolean).join(" or ");
+    const lead = picks ? `Pick ${picks}, or write your own reply.` : "Write your reply.";
+    const hint = !showComposer ? "" : isTouchOnly() ? lead : `${lead} Enter sends, Shift+Enter adds a line.`;
     if (this.interactionHint.textContent !== hint) this.interactionHint.textContent = hint;
 
     if (showChoices) {

@@ -997,8 +997,27 @@ button[data-vn-badge]:active {
 }
 
 [data-vn-interaction]:has([data-vn-input-form]:not([hidden])) [data-vn-interaction-heading],
-[data-vn-interaction]:has([data-vn-input-form]:not([hidden])) [data-vn-game-choices] {
+[data-vn-interaction]:has([data-vn-input-form]:not([hidden])) [data-vn-game-choices],
+[data-vn-interaction]:has([data-vn-input-form]:not([hidden])) [data-vn-choice-list] {
   width: var(--vn-composer-width);
+}
+
+/* Suggested replies sit above the reply box: compact rows, room left for the
+   box, and a shorter box while there are suggestions to pick from. */
+[data-vn-interaction]:has([data-vn-input-form]:not([hidden])) [data-vn-choice-list] {
+  max-height: max(6rem, min(calc(100 * var(--vn-dvh, 1dvh) - var(--vn-interaction-clearance) - 20rem), 22rem));
+  gap: 0.5rem;
+}
+
+[data-vn-interaction]:has([data-vn-input-form]:not([hidden])) [data-vn-choice] {
+  min-height: 2.75rem;
+  padding-top: 0.55rem;
+  padding-bottom: 0.55rem;
+  font-size: 0.96rem;
+}
+
+[data-vn-interaction]:has([data-vn-choice-list]:not([hidden])) [data-vn-input] {
+  min-height: 3.5rem;
 }
 
 [data-vn-input-form] {
@@ -1209,6 +1228,32 @@ button[data-vn-badge]:active {
 
   [data-vn-input] {
     min-height: 5rem;
+  }
+
+  /* Phones: Send sits beside the reply box, which is one line (growing as you
+     type) while there are suggestions, so the suggestions keep their room. At
+     least one suggestion row stays visible; the list scrolls for the rest. */
+  [data-vn-input-form] {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+    gap: 0.55rem;
+    padding: 0.6rem;
+  }
+
+  [data-vn-submit] {
+    padding: 0.55rem 0.9rem 0.55rem 1.05rem;
+  }
+
+  [data-vn-interaction]:has([data-vn-choice-list]:not([hidden])) [data-vn-input] {
+    min-height: 2.75rem;
+    padding-top: 0.55rem;
+    padding-bottom: 0.55rem;
+    field-sizing: content;
+  }
+
+  [data-vn-interaction]:has([data-vn-input-form]:not([hidden])) [data-vn-choice-list] {
+    min-height: 3.75rem;
+    max-height: max(6rem, calc(100 * var(--vn-dvh, 1dvh) - var(--vn-interaction-clearance) - 14rem));
   }
 
   [data-vn-game-choices] {

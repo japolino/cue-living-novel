@@ -584,8 +584,7 @@ export class VisualNovelSettingsPanel {
               <label data-field ${find("Fast forward", "skip read unread")}><span>Fast forward</span><select name="skipMode"><option value="read">Skip only text you have read</option><option value="all">Skip everything</option></select></label>
             `, { find: find("Pace", "speed") })}
             ${group("Your turn", `
-              <label data-field ${find("How you reply", "reply mode cyoa choose suggestions write standard")}><span>How you reply</span><select name="mode"><option value="standard">Write your own reply</option><option value="cyoa">Choose from suggestions</option></select></label>
-              <label data-check ${find("Suggest choices", "choices options cyoa generate")}><input name="generateChoices" type="checkbox" /><span>Suggest choices when the reply has none</span></label>
+              <label data-check ${find("Suggest replies", "choices options cyoa generate suggestions reply")}><input name="generateChoices" type="checkbox" /><span>Suggest replies<small>Shown above the reply box when the reply offers no choices of its own.</small></span></label>
             `)}
             ${group("Starting", `
               <label data-check ${find("Open automatically", "auto enter open novel view chat start")}><input name="autoEnter" type="checkbox" /><span>Open the novel view automatically when a chat opens</span></label>
@@ -1419,7 +1418,6 @@ export class VisualNovelSettingsPanel {
     const name = target.name;
     const checked = target instanceof HTMLInputElement && target.checked;
     switch (name) {
-      case "mode": return { mode: target.value === "cyoa" ? "cyoa" : "standard" };
       case "skipMode": return { skipMode: target.value === "all" ? "all" : "read" };
       case "generateChoices": return { generateChoices: checked };
       case "autoEnter": return { autoEnter: checked };
@@ -1845,7 +1843,6 @@ export class VisualNovelSettingsPanel {
   }
 
   private syncEveryday(config: VisualNovelConfig): void {
-    this.control<HTMLSelectElement>("mode").value = config.mode;
     this.control<HTMLSelectElement>("skipMode").value = config.skipMode;
     this.control<HTMLInputElement>("generateChoices").checked = config.generateChoices;
     this.control<HTMLInputElement>("autoEnter").checked = config.autoEnter;
@@ -2070,7 +2067,7 @@ export class VisualNovelSettingsPanel {
       const element = this.root.querySelector<HTMLElement>(`[data-tab="${section}"] [data-tab-summary]`);
       if (element) element.textContent = text;
     };
-    summary("reading", `${describeTextSpeed(config.textSpeed)} · ${config.mode === "cyoa" ? "Choices" : "Write your own"}`);
+    summary("reading", `${describeTextSpeed(config.textSpeed)} · ${config.generateChoices ? "Suggested replies" : "Your own replies"}`);
     summary("look", `${THEME_PRESET_LABELS[config.themePreset].replace(/ \(.*\)$/, "")} · ${describeTextScale(config.textScale)} text`);
     const source = imageSourceFromConfig(config);
     const sourceLabel = IMAGE_SOURCE_OPTIONS.find((option) => option.value === source)?.label ?? source;

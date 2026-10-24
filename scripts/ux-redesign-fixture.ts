@@ -124,7 +124,6 @@ if (searchParams.has("setup")) {
   });
 
   const turn = {
-    mode: "standard" as const,
     chatId: "test-chat-nav",
     messageId: "msg-nav-1",
     swipeId: 0,

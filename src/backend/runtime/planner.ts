@@ -308,7 +308,7 @@ function plannerInstruction(config: VisualNovelConfig, visualContext?: VisualCon
   const personaName = knownPersona || "the user";
   const cardName = visualContext?.characterIdentity?.name?.trim();
   const companionName = cardName || "the Companion";
-  const choices = config.mode === "cyoa" && config.generateChoices;
+  const choices = config.generateChoices;
   const cueLimit = config.maxImagesPerTurn > 0 ? `up to ${config.maxImagesPerTurn}` : "any number of";
 
   return [
@@ -2495,11 +2495,12 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
   let lastError: unknown = null;
   planner = fallbackPlanner(input, narrative.paragraphs.length);
   usedFallback = true;
+  // A continued turn skips the story reader, so it brings no suggested replies
+  // (only the reply's own choices); the reply box is always there at Your turn.
   const useContinuation = input.config.systemOneMode === "on" && systemOne !== null && input.previousScene !== null
     && !systemOne.sceneChange && !systemOne.needsDescription
     && narrative.paragraphs.length <= 7
-    && (Boolean(input.previousScene.identityPrompt) || isUsableIdentity(input.singleCharacter.protagonist.name, input.singleCharacter.protagonist.tags))
-    && (input.config.mode !== "cyoa" || narrative.choices.length > 0);
+    && (Boolean(input.previousScene.identityPrompt) || isUsableIdentity(input.singleCharacter.protagonist.name, input.singleCharacter.protagonist.tags));
   if (useContinuation) usedFallback = false;
   for (let attempt = 1; !useContinuation && attempt <= PLANNER_ATTEMPTS; attempt += 1) {
     try {

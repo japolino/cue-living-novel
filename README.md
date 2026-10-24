@@ -12,7 +12,7 @@ Under Advanced, NovelAI has toggles for model-specific quality tags and default 
 
 - paragraph-by-paragraph reveal with a final acknowledgement gate
 - Previous button and Left Arrow to reread earlier paragraphs in the current reply. Going back pauses Auto and Skip, keeps your response draft, and does not rewind the chat. Skip still uses your selected mode.
-- Standard typed-response and CYOA choice modes
+- One **Your turn** for everyone: the reply box is always there (Enter sends, Shift+Enter adds a line; on phones Send sits beside it), with suggested replies above it when the reply offers choices or **Suggest replies** is on
 - a single native image pipeline — planner → asset scheduler — with per-provider bounded concurrency and progressive delivery
 - previous-image retention and decode-before-swap so a late image never blanks the stage
 - exactly one centered protagonist per frame: no second character, crowd, or bystander
@@ -219,8 +219,8 @@ bun install --frozen-lockfile
 bun run serve:demo
 ```
 
-Open `http://localhost:4173` for CYOA mode or `http://localhost:4173/?mode=standard` for typed input.
-Open `http://localhost:4173/?sprites` for a short sprite-mode scene with the fixture sprites (also takes `&preset=<theme preset id>` and `&mode=standard`).
+Open `http://localhost:4173` for the scene demo (Your turn with suggested replies; `?suggestions=off` shows the reply box alone).
+Open `http://localhost:4173/?sprites` for a short sprite-mode scene with the fixture sprites (also takes `&preset=<theme preset id>` and `&suggestions=off`).
 
 ## Install into a local Lumiverse staging checkout
 
@@ -266,7 +266,7 @@ For stock SimTracker, let its card render in normal chat, open VN, then choose *
 
 A rules engine such as Warp can play alongside VN mode:
 
-- **Moves on the stage.** Its choices (with success odds) appear as chips at **Your turn**, above your own reply options, in both standard and CYOA mode. Picking one shows it as your line and hands it back to the engine, which rolls and sends the message. The contract lives in [src/frontend/host/game-bridge.ts](./src/frontend/host/game-bridge.ts): the engine sends `vn-game-state-v1` (`{ version: 1, provider, chatId, choices: [{ id, label, group?, detail?, odds? }], busy? }`), VN answers picks with `vn-game-pick-v1` and asks for a fresh state with `vn-game-request-v1`. Up to 12 moves are shown.
+- **Moves on the stage.** Its choices (with success odds) appear as chips at **Your turn**, above the suggested replies and the reply box. Picking one shows it as your line and hands it back to the engine, which rolls and sends the message. The contract lives in [src/frontend/host/game-bridge.ts](./src/frontend/host/game-bridge.ts): the engine sends `vn-game-state-v1` (`{ version: 1, provider, chatId, choices: [{ id, label, group?, detail?, odds? }], busy? }`), VN answers picks with `vn-game-pick-v1` and asks for a fresh state with `vn-game-request-v1`. Up to 12 moves are shown.
 - **Live status cards.** Providers named `warp` (as well as `simtracker`) may publish **Keep it updated** cards over the panel bridge above.
 - **Moods for expressions.** An engine may leave `metadata.vn_hints = { moods: { Name: "flustered" }, notes: [...] }` on a reply or on the player message it answers. The planner reads it as data and prefers expressions that match.
 

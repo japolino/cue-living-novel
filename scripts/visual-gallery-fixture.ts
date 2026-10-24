@@ -50,7 +50,7 @@ if (view === "settings") {
   Object.assign(window, { gallery: { panel } });
 } else {
   Object.assign(mount.style, { position: "fixed", inset: "0", background: "#08090d" });
-  const mode = q.get("mode") === "standard" ? "standard" : "cyoa";
+  const suggestions = q.get("suggestions") !== "off";
   const stage = new VnStage({
     mount, textSpeed: 0,
     themePreset: (q.get("preset") as never) ?? "lumiverse",
@@ -58,13 +58,12 @@ if (view === "settings") {
   });
   const text = q.get("text") ?? "The last sunlight spills across the valley. *For a moment, neither of us says anything.* She turns, **eyes bright**, and whispers your name.";
   stage.loadTurn({
-    mode,
     paragraphs: [
       { id: "p0", speaker: "Mira", text },
       { id: "p1", speaker: "", text: "By the time she turns toward you, the first stars have appeared over the ridge." },
       { id: "p2", speaker: "Mira", text: "\u201cSo,\u201d she asks quietly, \u201cwhere do we go from here?\u201d" },
     ],
-    choices: [
+    choices: !suggestions ? [] : [
       { id: "stay", label: "Stay until sunrise", value: "stay" },
       { id: "return", label: "Head back together", value: "return" },
       { id: "ask", label: "Ask what she wants", value: "ask" },

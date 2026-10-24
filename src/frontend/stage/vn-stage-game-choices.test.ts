@@ -22,7 +22,7 @@ describe("game-engine moves on the stage", () => {
     stage.setGameChoices(moves);
     const list = q(stage, "[data-vn-game-choices]");
     expect(list.hidden).toBe(true); // still reading
-    stage.loadTurn({ mode: "standard", paragraphs: [{ id: "p0", text: "Hello.", speaker: "Mira" }] });
+    stage.loadTurn({ paragraphs: [{ id: "p0", text: "Hello.", speaker: "Mira" }] });
     advance(stage);
     expect(list.hidden).toBe(false);
     const buttons = root(stage).querySelectorAll("[data-vn-game-choice]");
@@ -35,7 +35,7 @@ describe("game-engine moves on the stage", () => {
   test("picking a move calls the host once; busy providers disable the buttons", async () => {
     const picked: string[] = [];
     stage = new VnStage({ mount: new FakeNode("div") as unknown as HTMLElement, textSpeed: 0, onGameChoice: (c) => { picked.push(c.id); } });
-    stage.loadTurn({ mode: "cyoa", paragraphs: [{ id: "p0", text: "Hello.", speaker: "Mira" }], choices: [{ id: "a", label: "A", value: "a" }] });
+    stage.loadTurn({ paragraphs: [{ id: "p0", text: "Hello.", speaker: "Mira" }], choices: [{ id: "a", label: "A", value: "a" }] });
     advance(stage);
     stage.setGameChoices(moves);
     root(stage).querySelectorAll("[data-vn-game-choice]")[0]!.click();

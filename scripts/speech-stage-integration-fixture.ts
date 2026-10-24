@@ -113,7 +113,6 @@ speech.setSettings(initialConfig);
 speechDock.setEnabled(true);
 
 const turn: VnTurnInput = {
-  mode: "standard",
   paragraphs: [
     { id: "p-0", text: "Paragraph 0 story text." },
     { id: "p-1", text: "Paragraph 1 story text." },

@@ -145,7 +145,6 @@ function load(paragraphs: FixtureParagraph[], options: { sets?: Partial<SpriteTu
   current = view;
   turnCounter += 1;
   stage.loadTurn({
-    mode: "standard",
     preserveImage: true,
     paragraphs: paragraphs.map((p, index) => ({
       id: `fixture-${turnCounter}:${index}`,

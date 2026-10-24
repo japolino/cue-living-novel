@@ -308,13 +308,39 @@ Considering options...
       previousScene: null,
       previousContinuity: null,
       recentMessages: [],
-      config: { ...DEFAULT_CONFIG, mode: "cyoa", generateChoices: true, parserConnectionId: "conn" },
+      config: { ...DEFAULT_CONFIG, generateChoices: true, parserConnectionId: "conn" },
       singleCharacter: emptySingleCharacter(),
       characterAppearance: {},
     });
     expect(usedFallback()).toBe(false);
     expect(result.plan.choices[0]?.submission).toBe("Option 1 label");
     expect(result.plan.choices[1]?.submission).toBe("Option 2 label");
+  });
+
+  test("the story reader is asked for suggested replies whenever generateChoices is on", async () => {
+    const asked = async (generateChoices: boolean): Promise<boolean> => {
+      const { spindle } = spindleWith({ scenes: [], cues: [{ paragraphIndex: 0, expression: "smirk" }], choices: [] });
+      const prompts: string[] = [];
+      const raw = spindle.generate.raw;
+      (spindle.generate as { raw: unknown }).raw = async (request: unknown) => {
+        prompts.push(JSON.stringify(request));
+        return raw(request as never);
+      };
+      await planTurn(spindle, {
+        chatId: "chat-1",
+        message,
+        content: "Sandra speaks.",
+        previousScene: null,
+        previousContinuity: null,
+        recentMessages: [],
+        config: { ...DEFAULT_CONFIG, generateChoices, parserConnectionId: "conn" },
+        singleCharacter: emptySingleCharacter(),
+        characterAppearance: {},
+      });
+      return prompts.some((prompt) => prompt.includes("choices: unless the response has authored Choice tags"));
+    };
+    expect(await asked(true)).toBe(true);
+    expect(await asked(false)).toBe(false);
   });
 
 test("planner tolerant parse recovers choices in alternate (choice/option/text) shapes", async () => {
@@ -334,7 +360,7 @@ test("planner tolerant parse recovers choices in alternate (choice/option/text) 
     previousScene: null,
     previousContinuity: null,
     recentMessages: [],
-    config: { ...DEFAULT_CONFIG, mode: "cyoa", generateChoices: true, parserConnectionId: "conn" },
+    config: { ...DEFAULT_CONFIG, generateChoices: true, parserConnectionId: "conn" },
     singleCharacter: emptySingleCharacter(),
     characterAppearance: {},
   });
@@ -356,7 +382,7 @@ test("planner tolerant parse recovers choices in alternate (choice/option/text) 
       previousScene: null,
       previousContinuity: null,
       recentMessages: [],
-      config: { ...DEFAULT_CONFIG, mode: "cyoa", generateChoices: true, maxImagesPerTurn: 1, parserConnectionId: "conn" },
+      config: { ...DEFAULT_CONFIG, generateChoices: true, maxImagesPerTurn: 1, parserConnectionId: "conn" },
       singleCharacter: emptySingleCharacter(),
       characterAppearance: {}
     });

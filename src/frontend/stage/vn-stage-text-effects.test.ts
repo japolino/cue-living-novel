@@ -61,7 +61,7 @@ describe("stage text effects", () => {
 
   test("instant render turns tags into decorated effect spans", () => {
     const s = create();
-    s.loadTurn({ mode: "standard", paragraphs: [{ id: "p0", speaker: "Mira", text: "Oh <rainbow>magic</rainbow> and <glow>light</glow>!" }] });
+    s.loadTurn({ paragraphs: [{ id: "p0", speaker: "Mira", text: "Oh <rainbow>magic</rainbow> and <glow>light</glow>!" }] });
     const text = dialogue(s);
     expect(text.textContent).toBe("Oh magic and light!");
     const rainbow = text.querySelector('[data-vn-text-fx="rainbow"]')!;
@@ -73,7 +73,7 @@ describe("stage text effects", () => {
     const undoWalker = installTreeWalker();
     try {
       const s = create({ textSpeed: 5 });
-      s.loadTurn({ mode: "standard", paragraphs: [{ id: "p0", speaker: "Mira", text: "Hi <wave>la la</wave> 👋" }] });
+      s.loadTurn({ paragraphs: [{ id: "p0", speaker: "Mira", text: "Hi <wave>la la</wave> 👋" }] });
       const text = dialogue(s);
       const letters = () => text.querySelectorAll("[data-vn-text-fx-ch]");
       // Decorated before typing starts: letters exist, keep their text for
@@ -105,7 +105,7 @@ describe("stage text effects", () => {
     const undoWalker = installTreeWalker();
     try {
       const s = create({ textSpeed: 1000 });
-      s.loadTurn({ mode: "standard", paragraphs: [
+      s.loadTurn({ paragraphs: [
         { id: "p0", speaker: "Mira", text: "<shout>STOP!</shout> now" },
         { id: "p1", speaker: "Mira", text: "next" },
       ] });
@@ -124,7 +124,7 @@ describe("stage text effects", () => {
 
   test("history shows effects static (or off) and decorated", () => {
     const s = create();
-    s.loadTurn({ mode: "standard", paragraphs: [{ id: "p0", speaker: "Mira", text: "<wave>la la</wave>" }] });
+    s.loadTurn({ paragraphs: [{ id: "p0", speaker: "Mira", text: "<wave>la la</wave>" }] });
     s.openBacklog();
     const content = q(s, "[data-vn-backlog-content]");
     expect(content.dataset.vnTextEffects).toBe("static");
@@ -148,14 +148,14 @@ describe("stage text effects", () => {
 
   test("the *thud* screen-shake heuristic still fires next to effect tags", () => {
     const s = create();
-    s.loadTurn({ mode: "standard", paragraphs: [{ id: "p0", speaker: "Mira", text: "*thud* <shake>Ow!</shake>" }] });
+    s.loadTurn({ paragraphs: [{ id: "p0", speaker: "Mira", text: "*thud* <shake>Ow!</shake>" }] });
     expect(root(s).classList.contains("vn-shake")).toBe(true);
     expect(dialogue(s).querySelector('[data-vn-text-fx="shake"]')).toBeTruthy();
   });
 
   test("an effect tag alone does not shake the screen", () => {
     const s = create();
-    s.loadTurn({ mode: "standard", paragraphs: [{ id: "p0", speaker: "Mira", text: "<shake>Ow!</shake>" }] });
+    s.loadTurn({ paragraphs: [{ id: "p0", speaker: "Mira", text: "<shake>Ow!</shake>" }] });
     expect(root(s).classList.contains("vn-shake")).toBe(false);
   });
 });

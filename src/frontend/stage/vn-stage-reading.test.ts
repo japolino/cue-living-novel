@@ -77,7 +77,7 @@ describe("reading UX", () => {
 
   test("Previous never leaves the reading toolbar, even at Your turn", () => {
     const s = create();
-    s.loadTurn({ mode: "cyoa", paragraphs: paragraphs(2), choices: [{ id: "a", label: "A", value: "a" }] });
+    s.loadTurn({ paragraphs: paragraphs(2), choices: [{ id: "a", label: "A", value: "a" }] });
     const controls = q(s, "[data-vn-controls]");
     const previous = q(s, "[data-vn-control='previous']");
     expect(previous.parentNode).toBe(controls);
@@ -93,7 +93,7 @@ describe("reading UX", () => {
     const s = create();
     const next = q(s, "[data-vn-continue]");
     expect(next.hidden).toBe(true);
-    s.loadTurn({ mode: "standard", paragraphs: paragraphs(2) });
+    s.loadTurn({ paragraphs: paragraphs(2) });
     expect(next.hidden).toBe(false);
     expect(next.disabled).toBe(false);
     expect(next.dataset.vnReady).toBe("true");
@@ -108,25 +108,76 @@ describe("reading UX", () => {
     expect(next.disabled).toBe(true);
   });
 
-  test("Your turn heading and hint name the hand-off for choices and free text", () => {
+  test("Your turn is the same for everyone: suggestions above an always-present reply box", () => {
     const s = create();
     const interaction = q(s, "[data-vn-interaction]");
     expect(interaction.getAttribute("aria-labelledby")).toBe(q(s, "[data-vn-interaction-title]").id);
     expect(q(s, "[data-vn-interaction-title]").textContent).toBe("Your turn");
-    s.loadTurn({ mode: "cyoa", paragraphs: paragraphs(1), choices: [{ id: "a", label: "A", value: "a" }] });
+    s.loadTurn({ paragraphs: paragraphs(1), choices: [{ id: "a", label: "A", value: "a" }] });
     advance(s);
     expect(interaction.hidden).toBe(false);
-    expect(q(s, "[data-vn-interaction-hint]").textContent).toBe("Choose a reply.");
-    s.loadTurn({ mode: "standard", paragraphs: paragraphs(1) });
+    expect(q(s, "[data-vn-choice-list]").hidden).toBe(false);
+    expect(q(s, "[data-vn-choice-list]").getAttribute("aria-label")).toBe("Suggested replies");
+    expect(q(s, "[data-vn-input-form]").hidden).toBe(false);
+    expect(q(s, "[data-vn-interaction-hint]").textContent).toBe("Pick a suggestion, or write your own reply. Enter sends, Shift+Enter adds a line.");
+    s.loadTurn({ paragraphs: paragraphs(1) });
     expect(interaction.hidden).toBe(true);
     advance(s);
-    expect(q(s, "[data-vn-interaction-hint]").textContent).toContain("Write your reply");
+    expect(q(s, "[data-vn-choice-list]").hidden).toBe(true);
+    expect(q(s, "[data-vn-input-form]").hidden).toBe(false);
+    expect(q(s, "[data-vn-interaction-hint]").textContent).toBe("Write your reply. Enter sends, Shift+Enter adds a line.");
+    expect(q(s, "[data-vn-interaction-hint]").textContent).not.toContain("Ctrl+Enter");
     expect(q(s, "[data-vn-input]").getAttribute("aria-label")).toBe("Your reply");
+  });
+
+  test("Enter sends the reply, Shift+Enter adds a line, Ctrl+Enter still sends", async () => {
+    const sent: string[] = [];
+    const s = create({ onSubmit: async (text) => { sent.push(text); } });
+    s.loadTurn({ paragraphs: paragraphs(1), choices: [{ id: "a", label: "A", value: "a" }] });
+    advance(s);
+    const input = q(s, "[data-vn-input]");
+    const type = (draft: string) => { (input as unknown as { value: string }).value = draft; input.dispatchEvent(new FakeEvent("input")); };
+    const key = (init: Partial<FakeEvent>) => { const event = new FakeEvent("keydown", { key: "Enter", ...init }); input.dispatchEvent(event); return event; };
+    type("First line");
+    expect(key({ shiftKey: true }).defaultPrevented).toBe(false);
+    expect(key({ isComposing: true }).defaultPrevented).toBe(false);
+    expect(sent).toEqual([]);
+    expect(key({}).defaultPrevented).toBe(true);
+    await wait(0);
+    expect(sent).toEqual(["First line"]);
+    s.loadTurn({ paragraphs: paragraphs(1) });
+    advance(s);
+    type("Second");
+    key({ ctrlKey: true });
+    await wait(0);
+    expect(sent).toEqual(["First line", "Second"]);
+  });
+
+  test("on a touch-only device Enter adds a line and the hint names no keys", () => {
+    const g = globalThis as Record<string, unknown>;
+    const previous = g.matchMedia;
+    g.matchMedia = (query: string) => ({ matches: query.includes("pointer: coarse") });
+    try {
+      const sent: string[] = [];
+      const s = create({ onSubmit: async (text) => { sent.push(text); } });
+      s.loadTurn({ paragraphs: paragraphs(1) });
+      advance(s);
+      expect(q(s, "[data-vn-interaction-hint]").textContent).toBe("Write your reply.");
+      const input = q(s, "[data-vn-input]");
+      (input as unknown as { value: string }).value = "Hi";
+      input.dispatchEvent(new FakeEvent("input"));
+      const enter = new FakeEvent("keydown", { key: "Enter" });
+      input.dispatchEvent(enter);
+      expect(enter.defaultPrevented).toBe(false);
+      expect(sent).toEqual([]);
+    } finally {
+      g.matchMedia = previous;
+    }
   });
 
   test("Auto shows Pause while on and the footer names the playback state", () => {
     const s = create({ autoPlayDelay: 5000 });
-    s.loadTurn({ mode: "standard", paragraphs: paragraphs(3) });
+    s.loadTurn({ paragraphs: paragraphs(3) });
     const auto = q(s, "[data-vn-control='auto']");
     const state = q(s, "[data-vn-reading-state]");
     expect(state.hidden).toBe(true);
@@ -144,7 +195,7 @@ describe("reading UX", () => {
 
   test("read-only Skip stops at new text and says so", async () => {
     const s = create();
-    s.loadTurn({ mode: "standard", paragraphs: paragraphs(4) });
+    s.loadTurn({ paragraphs: paragraphs(4) });
     advance(s);
     advance(s); // p0..p2 are now read
     s.previous();
@@ -166,7 +217,7 @@ describe("reading UX", () => {
   test("Skip all mode runs to Your turn and pauses there without submitting", async () => {
     const s = create({ skipMode: "all" });
     let submitted = 0;
-    s.loadTurn({ mode: "cyoa", paragraphs: paragraphs(3), choices: [{ id: "a", label: "A", value: "a" }] });
+    s.loadTurn({ paragraphs: paragraphs(3), choices: [{ id: "a", label: "A", value: "a" }] });
     (s as unknown as { callbacks: { onChoice: () => void } }).callbacks.onChoice = () => { submitted++; };
     s.toggleSkip();
     expect(q(s, "[data-vn-reading-state]").textContent).toBe("Skipping all text");
@@ -178,7 +229,7 @@ describe("reading UX", () => {
 
   test("Previous pauses Auto and Skip", () => {
     const s = create({ autoPlayDelay: 5000 });
-    s.loadTurn({ mode: "standard", paragraphs: paragraphs(3) });
+    s.loadTurn({ paragraphs: paragraphs(3) });
     advance(s);
     s.toggleAutoPlay();
     s.previous();
@@ -190,7 +241,7 @@ describe("reading UX", () => {
 
   test("a draft survives Previous and Left Arrow inside the reply field only moves the caret", () => {
     const s = create();
-    s.loadTurn({ mode: "standard", paragraphs: paragraphs(2) });
+    s.loadTurn({ paragraphs: paragraphs(2) });
     advance(s);
     advance(s);
     const input = q(s, "[data-vn-input]");
@@ -210,7 +261,7 @@ describe("reading UX", () => {
 
   test("waiting states use plain words and real counts, never percentages", () => {
     const s = create();
-    s.loadTurn({ mode: "standard", paragraphs: paragraphs(1) });
+    s.loadTurn({ paragraphs: paragraphs(1) });
     s.setPhase("waiting-for-response");
     expect(badgeTexts(s)).toEqual(["Waiting for the reply\u2026"]);
     s.setPhase("planning");
@@ -225,7 +276,7 @@ describe("reading UX", () => {
 
   test("plain-string errors render as a card without a retry action", () => {
     const s = create({ onReroll: () => {} });
-    s.loadTurn({ mode: "standard", paragraphs: paragraphs(1) });
+    s.loadTurn({ paragraphs: paragraphs(1) });
     s.setError("Visual planning failed.");
     const card = q(s, "[data-vn-badge-kind='error']");
     expect(card.getAttribute("role")).toBe("alert");
@@ -240,7 +291,7 @@ describe("reading UX", () => {
   test("structured errors show a title, technical details, and a user-initiated Try again", () => {
     let rerolls = 0;
     const s = create({ onReroll: () => { rerolls++; } });
-    s.loadTurn({ mode: "standard", paragraphs: paragraphs(1) });
+    s.loadTurn({ paragraphs: paragraphs(1) });
     s.setError({
       source: "image",
       message: "This scene image could not be made.",
@@ -274,7 +325,7 @@ describe("reading UX", () => {
 
   test("image error body explains what the reader can do instead of restating the title", () => {
     const s = create({ onReroll: () => {} });
-    s.loadTurn({ mode: "standard", paragraphs: paragraphs(1) });
+    s.loadTurn({ paragraphs: paragraphs(1) });
     s.setError({ source: "image", message: "This scene image could not be made.", retryable: true });
     expect(q(s, "[data-vn-badge-kind='error'] [data-vn-badge-text]").textContent).toBe("You can keep reading. Try again remakes only the unfinished image.");
     s.setError({ source: "image", message: "The image provider rejected the prompt.", retryable: false });
@@ -286,7 +337,7 @@ describe("reading UX", () => {
     s.setError("The request failed.");
     expect(q(s, "[data-vn-badge-kind='error'] [data-vn-badge-text]").textContent).toBe("The request failed.");
     s.setError(null);
-    s.loadTurn({ mode: "standard", paragraphs: paragraphs(2) });
+    s.loadTurn({ paragraphs: paragraphs(2) });
     s.setError({ source: "generation", message: "The reply stopped early.", retryable: false });
     expect(q(s, "[data-vn-badge-kind='error'] [data-vn-badge-text]").textContent).toBe("The reply stopped early. You can reread what has already been shown.");
     expect(q(s, "[data-vn-narrative]").hidden).toBe(false);
@@ -294,7 +345,7 @@ describe("reading UX", () => {
 
   test("planner errors still enter the error phase and keep their details", () => {
     const s = create({ onReroll: () => {} });
-    s.loadTurn({ mode: "standard", paragraphs: paragraphs(1) });
+    s.loadTurn({ paragraphs: paragraphs(1) });
     s.setError({ source: "planner", message: "The scene could not be planned.", detail: "planner: 429 rate limited", retryable: true, retryScope: "Try again plans this reply again." });
     expect(s.getState().phase).toBe("error");
     expect(s.getState().error).toBe("The scene could not be planned.");
@@ -306,14 +357,14 @@ describe("reading UX", () => {
 
   test("Try again is hidden when the host says the error is not retryable or no retry exists", () => {
     const s = create({ onReroll: () => {} });
-    s.loadTurn({ mode: "standard", paragraphs: paragraphs(1) });
+    s.loadTurn({ paragraphs: paragraphs(1) });
     s.setError({ source: "permission", message: "Image generation permission is off.", retryable: false });
     let card = q(s, "[data-vn-badge-kind='error']");
     expect(card.querySelector("[data-vn-badge-title]")!.textContent).toBe("Permission needed");
     expect(card.querySelector("[data-vn-badge-action]")).toBeNull();
     s.destroy();
     const s2 = create();
-    s2.loadTurn({ mode: "standard", paragraphs: paragraphs(1) });
+    s2.loadTurn({ paragraphs: paragraphs(1) });
     s2.setError({ source: "planner", message: "The scene could not be planned.", retryable: true });
     card = q(s2, "[data-vn-badge-kind='error']");
     expect(card.querySelector("[data-vn-badge-title]")!.textContent).toBe("Scene planning failed");
@@ -322,7 +373,7 @@ describe("reading UX", () => {
 
   test("a failed submission keeps the reply field usable and names the problem", async () => {
     const s = create({ onSubmit: async () => { throw new Error("Network unreachable"); } });
-    s.loadTurn({ mode: "standard", paragraphs: paragraphs(1) });
+    s.loadTurn({ paragraphs: paragraphs(1) });
     advance(s);
     const input = q(s, "[data-vn-input]");
     input.value = "Hello";
@@ -337,13 +388,13 @@ describe("reading UX", () => {
 
   test("end of turn offers Regenerate reply only when a reroll exists", () => {
     const s = create();
-    s.loadTurn({ mode: "standard", paragraphs: paragraphs(1) });
+    s.loadTurn({ paragraphs: paragraphs(1) });
     advance(s);
     expect(badgeTexts(s)).toEqual([]);
     s.destroy();
     let rerolls = 0;
     const s2 = create({ onSwipe: () => { rerolls++; } });
-    s2.loadTurn({ mode: "standard", paragraphs: paragraphs(1) });
+    s2.loadTurn({ paragraphs: paragraphs(1) });
     advance(s2);
     const badge = q(s2, "[data-vn-badge-kind='reroll']");
     expect(badge.tagName).toBe("BUTTON");
@@ -356,7 +407,7 @@ describe("reading UX", () => {
 
   test("History opens on its Close control and returns focus to the History button", () => {
     const s = create();
-    s.loadTurn({ mode: "standard", paragraphs: paragraphs(2) });
+    s.loadTurn({ paragraphs: paragraphs(2) });
     const history = q(s, "[data-vn-control='log']");
     history.click();
     expect(q(s, "[data-vn-backlog]").hidden).toBe(false);
@@ -371,11 +422,11 @@ describe("reading UX", () => {
 
   test("History starts empty after a reset (another chat)", () => {
     const s = create();
-    s.loadTurn({ mode: "standard", paragraphs: paragraphs(3) });
+    s.loadTurn({ paragraphs: paragraphs(3) });
     advance(s);
     advance(s);
     s.reset();
-    s.loadTurn({ mode: "standard", paragraphs: [{ id: "p0", text: "Other chat.", speaker: "Kai" }] });
+    s.loadTurn({ paragraphs: [{ id: "p0", text: "Other chat.", speaker: "Kai" }] });
     q(s, "[data-vn-control='log']").click();
     const items = q(s, "[data-vn-backlog-content]").querySelectorAll("[data-vn-backlog-item]");
     expect(items.length).toBe(1);
@@ -384,7 +435,7 @@ describe("reading UX", () => {
 
   test("a retry that keeps the turn resumes reading where the reader was", () => {
     const s = create();
-    s.loadTurn({ mode: "standard", paragraphs: paragraphs(2) });
+    s.loadTurn({ paragraphs: paragraphs(2) });
     advance(s);
     advance(s);
     expect(s.getState().phase).toBe("awaiting-input");
@@ -413,7 +464,7 @@ describe("reading UX", () => {
     const s = create();
     s.setEffectIntensity("off");
     expect(root(s).dataset.vnEffectIntensity).toBe("off");
-    s.loadTurn({ mode: "standard", paragraphs: [{ id: "p0", text: "A violent *CRASH* rings out.", effect: "flash_white" }], ambient: "rain" });
+    s.loadTurn({ paragraphs: [{ id: "p0", text: "A violent *CRASH* rings out.", effect: "flash_white" }], ambient: "rain" });
     expect(root(s).classList.contains("vn-shake")).toBe(false);
     expect((s.getFlashOverlay() as unknown as FakeNode).dataset.vnFlash).toBeFalsy();
     expect(s.getCurrentAmbient()).toBe("rain");

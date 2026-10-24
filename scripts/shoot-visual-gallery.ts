@@ -24,7 +24,7 @@ try {
     for (let i = 0; i < 3; i++) { await page.keyboard.press("Space"); await page.waitForTimeout(150); }
     await page.waitForTimeout(500);
     await page.screenshot({ path: `${outDir}/stage-${p}-choices.png` });
-    await page.goto(`${base}?preset=${p}&mode=standard`);
+    await page.goto(`${base}?preset=${p}&suggestions=off`);
     await page.waitForTimeout(500);
     for (let i = 0; i < 3; i++) { await page.keyboard.press("Space"); await page.waitForTimeout(150); }
     await page.waitForTimeout(500);

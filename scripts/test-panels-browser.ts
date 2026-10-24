@@ -80,7 +80,7 @@ try {
   // Settings smoke check only: the full settings flow lives in scripts/test-settings-browser.ts.
   await page.goto(`http://127.0.0.1:${server.port}/?settings`);
   const settings = page.locator("[data-vn-settings]");
-  assert.equal(await settings.locator('[name="mode"]').isVisible(), true);
+  assert.equal(await settings.locator('[name="generateChoices"]').isVisible(), true);
   for (const name of ["parserParameters", "imageParameters", "customCss", "ignoredTags", "debugLogging", "imageModel"]) {
     assert.equal(await settings.locator(`[name="${name}"]`).isVisible(), false, name + " should be advanced");
   }

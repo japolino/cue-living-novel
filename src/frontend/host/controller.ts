@@ -267,12 +267,10 @@ export function firstAmbient(view: TurnView, intensity: VisualNovelEffectIntensi
 /** Build the stage input without turning absent ambient data into a clear. */
 export function stageTurnInput(
   next: TurnView,
-  mode: VnTurnInput["mode"],
   preserveImage: boolean,
   intensity: VisualNovelEffectIntensity = "full",
 ): VnTurnInput {
   return {
-    mode,
     paragraphs: next.paragraphs.map((text, index) => ({
       id: `${next.sourceFingerprint}:${index}`,
       text,
@@ -1162,12 +1160,10 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       return;
     }
     retryResumePhase = null;
-    const requestedMode = configRef.current?.mode ?? "standard";
     panels.setTurn(next, 0);
-    const mode = requestedMode === "cyoa" && next.choices.length > 0 ? "cyoa" : "standard";
     const preserveImage = shouldPreserveImage(previous, next);
     turnOpeningBgm = preserveImage ? packSound.currentMusic : null;
-    stage.loadTurn(stageTurnInput(next, mode, preserveImage, configRef.current?.effectIntensity ?? "full"));
+    stage.loadTurn(stageTurnInput(next, preserveImage, configRef.current?.effectIntensity ?? "full"));
     syncSpeechCursor(next, 0);
     void syncImageForParagraph(0);
     syncAudioForParagraph(next, 0);

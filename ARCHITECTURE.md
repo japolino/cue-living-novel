@@ -194,9 +194,9 @@ If an image is late, the previous decoded image remains visible. If an obsolete 
 
 ## Reveal and input state
 
-The current paragraph is readable before any response control appears. Each click or supported key advances one paragraph. The final paragraph needs its own acknowledgement. Only then does the stage reveal either generated/authored choices or the typed composer.
+The current paragraph is readable before any response control appears. Each click or supported key advances one paragraph. The final paragraph needs its own acknowledgement. Only then does the stage reveal Your turn: the reply box, always, with the authored or suggested choices above it when the turn has any (Reading → Suggest replies, `generateChoices`, asks the story reader for 2–4 when the reply has none; a turn System One continues without the story reader brings none).
 
-Choices are presentation metadata. Selecting one submits its configured value as a normal user message. Standard input does the same with typed text. Both routes attach a unique request ID. If Lumiverse writes the user message but fails while starting generation, the backend checks chat history before reporting the failure and never retries the same request blindly.
+Choices are presentation metadata. Selecting one submits its configured value as a normal user message. The reply box does the same with typed text. Both routes attach a unique request ID. If Lumiverse writes the user message but fails while starting generation, the backend checks chat history before reporting the failure and never retries the same request blindly.
 
 ## Scene image fit
 
