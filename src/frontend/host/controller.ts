@@ -17,6 +17,7 @@ import {
   prepareCutoutModel,
   prepareFaceModel,
   prepareStudioCutoutModel,
+  syncStudioCutout,
 } from "../sprites/cutout/index.js";
 import type { VnChoice, VnTurnInput } from "../store/index.js";
 import { createVnHeaderLauncher } from "./manual-launcher.js";
@@ -829,6 +830,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   let cachedModelUrl = "";
   function refreshCachedCutoutModel(bestUrl: string): void {
     const config = configRef.current;
+    // The Studio model (about 3 GB of graphics memory) leaves when the settings no longer want it.
+    if (config) syncStudioCutout(config.spriteCutout, config.spriteStudioModelUrl);
     const url = config?.spriteCutout === "studio" && config.spriteStudioModelUrl ? config.spriteStudioModelUrl : bestUrl;
     if (!settingsPanel || url === cachedModelUrl) return;
     cachedModelUrl = url;

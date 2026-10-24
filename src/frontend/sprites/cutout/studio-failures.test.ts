@@ -402,3 +402,71 @@ describe("provisional Best cuts (one Studio re-cut later)", () => {
     expect((await cutout.cutSprite(new Blob(["image"]), { quality: "best", modelUrl: BEST, studioModelUrl: url })).provisional).toBeUndefined();
   });
 });
+
+describe("the Studio model leaves when it is no longer wanted", () => {
+  const sync = (quality: "studio" | "best" | "basic", url = ""): void => (cutout as unknown as { syncStudioCutout: (q: string, u: string) => void }).syncStudioCutout(quality, url);
+
+  test("another quality or another URL: the Studio model leaves the worker, the device lock and its marker go", async () => {
+    cached(STUDIO);
+    expect((await cut(STUDIO)).studio).toBe(true);
+    sync("best", STUDIO);
+    await tick();
+    expect(runners[0]!.calls.at(-1)).toBe("unload");
+    expect(held.size).toBe(0);
+    expect(cutout.getCutoutModelState()).toEqual({ state: "absent" });
+    // A basic cut also lets it go (hosts that never call the sync).
+    expect((await cut(STUDIO)).studio).toBe(true);
+    await cutout.cutSprite(new Blob(["image"]), { quality: "basic", modelUrl: BEST, studioModelUrl: STUDIO });
+    expect(runners[0]!.calls.slice(-2)).toEqual(["unload", "cut basic"]);
+    // A loaded Studio model that has not cut yet: not a crash, the marker goes.
+    await cutout.prepareStudioCutoutModel(STUDIO);
+    expect(marker()).toMatchObject({ url: STUDIO });
+    sync("studio", studioUrl("other"));
+    await tick();
+    expect(marker()).toBeNull();
+    expect(held.size).toBe(0);
+  });
+
+  test("a Studio load that ends after Studio was deselected is unloaded; the cut uses Best", async () => {
+    cached(STUDIO);
+    hooks.onLoad = (name) => { if (name === "STUDIO") sync("best"); };
+    const result = await cut(STUDIO);
+    expect(result.studio).toBeUndefined();
+    expect(result.quality).toBe("best");
+    expect(calls()).toContain("unload");
+    expect(held.size).toBe(0);
+  });
+
+  test("the background download stops when the URL changes or Studio is deselected", async () => {
+    const url = studioUrl("slow");
+    await cut(url);
+    sync("studio", studioUrl("other"));
+    expect(cutout.getCutoutModelState().state).not.toBe("downloading");
+    releaseSlow();
+    await tick(5);
+    expect(cacheStore.has(url)).toBe(false);
+  });
+
+  test("clearing the Studio URL drops its note and its error", async () => {
+    const url = studioUrl("session");
+    cached(url);
+    await cut(url);
+    expect(note()).toMatch(/failed to allocate/);
+    sync("studio", "");
+    expect(note()).toBe("");
+    expect(cutout.getCutoutModelState()).toMatchObject({ state: "ready" });
+    cutout.resetCutoutRuntime();
+    await expect(cutout.prepareStudioCutoutModel(url)).rejects.toThrow(/failed to allocate/);
+    expect(cutout.getCutoutModelState()).toMatchObject({ state: "unsupported", studio: true });
+    sync("best");
+    expect(cutout.getCutoutModelState()).toEqual({ state: "absent" });
+  });
+
+  test("Remove downloaded model unloads the worker's models even when the page lost track of them", async () => {
+    const bestErr = "https://models.test/isnet-modelerr.onnx";
+    const result = await cutout.cutSprite(new Blob(["image"]), { quality: "best", modelUrl: bestErr, faceModelUrl: "https://models.test/face.onnx" });
+    expect(result.quality).toBe("basic"); // the run failed: the page forgot the model, the worker still holds it
+    await cutout.clearCutoutModel();
+    expect(runners[0]!.calls.slice(-2)).toEqual(["unload", "unloadFace"]);
+  });
+});

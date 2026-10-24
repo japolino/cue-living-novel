@@ -184,6 +184,8 @@ let studioDownload: { url: string; promise: Promise<boolean>; controller: AbortC
 let studioDownloadFailures: { url: string; count: number; at: number; message: string } | null = null;
 /** A downloaded Studio file the browser would not store: kept until it loads (the load takes it). */
 let studioMemory: { url: string; bytes: ArrayBuffer } | null = null;
+/** The Studio model the settings want (`syncStudioCutout`; null: none); undefined until told. */
+let studioWanted: string | null | undefined;
 let generation = 0;
 let runnerMode: CutoutRunnerMode | null = null;
 
@@ -311,6 +313,7 @@ async function ensureModel(url: string, force: boolean, spec: ModelSpec = BEST_S
   promise = (async () => {
     let size = 0;
     let stage: "download" | "load" = "download";
+    let deselected = false;
     try {
       let bytes: ArrayBuffer | null;
       if (spec.studio && studioMemory?.url === url) {
@@ -336,12 +339,21 @@ async function ensureModel(url: string, force: boolean, spec: ModelSpec = BEST_S
       if (spec.studio) markStudioAttempt(url);
       const info = await runner.load(bytes, { ortBaseUrl: runtime.ortBaseUrl, backend: spec.backend ?? runtime.backend, numThreads: threads, fit: spec.fit });
       if (stale()) throw abortError();
+      if (spec.studio && studioWanted !== undefined && studioWanted !== url) {
+        // Deselected while it loaded: it leaves again (not a failure).
+        deselected = true;
+        void runner.unload().catch(() => {});
+        studioAttemptDone(url);
+        releaseStudioLock();
+        setState({ state: "absent" });
+        throw abortError();
+      }
       setLoaded({ url, runner, info, bytes: size, studio: spec.studio });
       if (spec.studio) { studioFailure = null; studioNote = null; } else failure = null;
       // Best loaded while "studio" cannot run: its ready state says why.
       setState({ state: "ready", backend: info.backend, bytes: size, ...tag, ...(!spec.studio && studioNote ? { note: studioNote } : {}) });
     } catch (error) {
-      if (stale()) throw error;
+      if (stale() || deselected) throw error;
       const code = (error as { code?: string } | null)?.code;
       const text = errorText(error);
       if (spec.studio && stage === "load") {
@@ -674,6 +686,7 @@ async function studioForCut(url: string): Promise<"load" | "later" | "no"> {
 export async function cutSprite(image: Blob, options: CutoutOptions): Promise<CutoutResult> {
   const started = performance.now();
   throwIfAborted(options.signal);
+  syncStudioCutout(options.quality, options.studioModelUrl);
   const wantsModel = options.quality !== "basic";
   let useModel = false;
   let studio = false;
@@ -700,7 +713,8 @@ export async function cutSprite(image: Blob, options: CutoutOptions): Promise<Cu
         modelUrl = url;
         useModel = studio = true;
       } catch (error) {
-        studioNote = studioReason(errorText(error));
+        // Deselected while it loaded: no note (the cut uses Best as asked).
+        if ((error as { name?: string } | null)?.name !== "AbortError") studioNote = studioReason(errorText(error));
         later = studioNote === STUDIO_BUSY;
       }
     }
@@ -861,6 +875,7 @@ export async function prepareCutoutModel(modelUrl: string, modelUrlF16?: string)
  * (see `getStudioCutoutSupport`).
  */
 export async function prepareStudioCutoutModel(studioModelUrl: string): Promise<void> {
+  studioWanted = studioModelUrl;
   if (studioFailure?.url === studioModelUrl) studioFailure = null;
   if (studioDownloadFailures?.url === studioModelUrl) studioDownloadFailures = null;
   studioNote = null;
@@ -887,6 +902,32 @@ export function getStudioCutoutSupport(): Promise<string | null> {
   return studioCannotRun();
 }
 
+/**
+ * The cut-out settings changed (cuts call it too): when the Studio model is
+ * no longer wanted (another quality, another or no Studio URL) it leaves the
+ * worker and the device-wide lock (about 3 GB of graphics memory), its
+ * background download stops, and its note and failure state go.
+ */
+export function syncStudioCutout(quality: CutoutQuality, studioModelUrl = ""): void {
+  const wanted = quality === "studio" && studioModelUrl ? studioModelUrl : null;
+  const changed = wanted !== studioWanted;
+  studioWanted = wanted;
+  if (studioDownload && studioDownload.url !== wanted) stopStudioDownload();
+  if (studioMemory && studioMemory.url !== wanted) studioMemory = null;
+  if (loaded?.studio && loaded.url !== wanted) {
+    const current = loaded;
+    setLoaded(null);
+    if (!current.runner.isClosed()) void current.runner.unload().catch(() => {});
+    studioAttemptDone(current.url);
+    setState({ state: "absent" });
+  }
+  if (!changed) return;
+  if (studioAttempt && studioAttempt.url !== wanted) studioAttemptDone(studioAttempt.url);
+  studioNote = null;
+  if ("studio" in state && state.studio && state.state !== "loading") setState({ state: "absent" });
+  else if (state.state === "ready" && state.note && loaded && !loaded.studio) setState({ state: "ready", backend: loaded.info.backend, bytes: loaded.bytes });
+}
+
 /** Forget the cached models, the face model too (settings "Remove downloaded model"). */
 export async function clearCutoutModel(): Promise<void> {
   generation++;
@@ -899,15 +940,17 @@ export async function clearCutoutModel(): Promise<void> {
   stopStudioDownload();
   studioDownloadFailures = null;
   studioMemory = null;
-  const current = loaded;
   setLoaded(null);
   releaseStudioLock();
-  if (current && !current.runner.isClosed()) await current.runner.unload().catch(() => {});
   faceLoading = null;
   faceFailure = null;
-  const face = faceLoaded;
   faceLoaded = null;
-  if (face && !face.runner.isClosed()) await face.runner.unloadFace().catch(() => {});
+  // Whatever the worker holds goes, also a model this page no longer tracks.
+  const live = runnerPromise ? await runnerPromise.catch(() => null) : null;
+  if (live && !live.isClosed()) {
+    await live.unload().catch(() => {});
+    await live.unloadFace().catch(() => {});
+  }
   chosenUrls.clear();
   await deleteCachedModels();
   if (state.state !== "unsupported" || typeof WebAssembly === "object") setState({ state: "absent" });
@@ -959,6 +1002,7 @@ export function resetCutoutRuntime(): void {
   studioDownload = null;
   studioDownloadFailures = null;
   studioMemory = null;
+  studioWanted = undefined;
   overlay = null;
   loaded = null;
   releaseStudioLock();
