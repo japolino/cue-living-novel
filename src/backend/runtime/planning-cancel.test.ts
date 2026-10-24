@@ -3,6 +3,7 @@ import type { SpindleAPI } from "lumiverse-spindle-types";
 import { seedSingleCharacter } from "../core/visual-state.js";
 import { registerVisualNovelBackend } from "./controller.js";
 import { characterRegistryPath, chatStatePath, singleCharacterStatePath, turnPath, type StoredTurnRecord } from "./storage.js";
+import { storyCheckReply } from "./__fixtures__/story-check";
 
 /**
  * Cancelled planning frees the chat's planning queue at once: the planner
@@ -88,6 +89,9 @@ function fixture(options: FixtureOptions = {}) {
     chat: { getMessages: async (chatId: string) => messages.filter((m) => m.chat_id === chatId).map((m) => ({ ...m })) },
     generate: {
       raw: (request: { messages: Array<{ content: string }>; signal?: AbortSignal }) => new Promise((resolve) => {
+        // Skip non-story blocks (on by default) answers its line check at once: only planner calls park.
+        const check = storyCheckReply(request);
+        if (check) return resolve(check);
         const content = request.messages.at(-1)?.content ?? "";
         const release = () => resolve({ content: JSON.stringify(plannerPayload(content)) });
         planner.push({ content, ...(request.signal ? { signal: request.signal } : {}), release });

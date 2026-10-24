@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { SpindleAPI } from "lumiverse-spindle-types";
 import { contextBeforeReply, registerVisualNovelBackend } from "./controller.js";
+import { storyCheckReply } from "./__fixtures__/story-check";
 
 const REPLY = "The lantern flickers.\n\nMira laughs softly.";
 
@@ -33,6 +34,8 @@ describe("planner recent chat", () => {
       chat: { getMessages: async () => messages },
       generate: {
         raw: async (request: { messages: Array<{ content: string }> }) => {
+          const check = storyCheckReply(request);
+          if (check) return check;
           prompts.push(request.messages.at(-1)!.content);
           return { content: "not json" };
         }

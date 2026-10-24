@@ -7,6 +7,7 @@ import { emptySingleCharacter } from "../core/visual-state";
 import { gameHintsForTurn, parseIgnoredTags, planTurn, remapPlannerParagraphs } from "./planner";
 import { applyStoryLabels, storyCheckKey } from "../core/non-story";
 import { forgetStoryCheckFailures } from "./story-check";
+import { storyCheckReply } from "./__fixtures__/story-check";
 
 const message: ChatMessageDTO & { role: "assistant" } = {
   id: "assistant-1",
@@ -1266,7 +1267,13 @@ test("a cancelled plan tears down the sidecar request and neither retries nor fa
   const requests: Array<{ signal?: AbortSignal }> = [];
   const spindle = {
     // A host that ignores the signal: the request never settles on its own.
-    generate: { raw: async (request: { signal?: AbortSignal }) => { requests.push(request); return new Promise(() => undefined); } },
+    // The non-story line check (on by default) answers at once.
+    generate: { raw: async (request: { signal?: AbortSignal }) => {
+      const check = storyCheckReply(request);
+      if (check) return check;
+      requests.push(request);
+      return new Promise(() => undefined);
+    } },
     log: { warn() {}, info() {} }
   } as unknown as SpindleAPI;
   const controller = new AbortController();
@@ -1455,4 +1462,70 @@ test("skip non-story blocks: references in removed paragraphs move to the next s
   assert.deepEqual(moved.scenes.map((entry) => [entry.startParagraph, entry.environment.location]), [[0, "Inn"], [1, "Stable"]]);
   assert.equal(moved.effects[0]?.effect, "shake");
   assert.deepEqual(moved.cues.map((cue) => [cue.paragraphIndex, cue.expression, "effect" in cue]), [[1, "sad", false]]);
+});
+
+test("a cancelled plan does not wait on a non-story line check that never answers", async () => {
+  // Earlier tests' mocks fail every request; their connection backoff would skip the check.
+  forgetStoryCheckFailures();
+  let checks = 0;
+  const spindle = {
+    generate: { raw: async (request: { messages: Array<{ content: string }> }) => {
+      // The line check's host call never settles; the planner answers at once.
+      if (storyCheckReply(request)) { checks += 1; return new Promise(() => undefined); }
+      return { content: JSON.stringify({ speakers: { "0": "Narrator", "1": "Narrator" }, scenes: [], cues: [], effects: [], characters: [] }) };
+    } },
+    log: { warn() {}, info() {} }
+  } as unknown as SpindleAPI;
+  const controller = new AbortController();
+  const planned = planTurn(spindle, {
+    chatId: "chat-1",
+    message,
+    content: message.content,
+    previousScene: null,
+    previousContinuity: null,
+    recentMessages: [],
+    config: { ...DEFAULT_CONFIG, skipNonStory: true, includeCharacterContext: false, includePersonaContext: false, includeLorebookContext: false },
+    singleCharacter: emptySingleCharacter(),
+    characterAppearance: {},
+    signal: controller.signal
+  });
+  const outcome = (wait: number) => Promise.race([
+    planned.then(() => "planned", (error: unknown) => (error instanceof Error ? error.name : "error")),
+    new Promise((resolve) => setTimeout(() => resolve("still waiting"), wait))
+  ]);
+  // The plan is parked on the check after the planner answered.
+  assert.equal(await outcome(20), "still waiting");
+  assert.equal(checks, 1);
+  controller.abort("superseded");
+  assert.equal(await outcome(200), "AbortError");
+});
+
+test("skip non-story blocks: the compact speaker map is remapped, and only kept lines make nameplate-only speakers", async () => {
+  forgetStoryCheckFailures();
+  const content = "Rain hammered the shutters.\n\nOkay, plan: Kestrel answers next.\n\n\"Another round,\" Dorran said.\n\n\"Make it two,\" said Mira.";
+  const spindle = {
+    generate: { raw: async (request: { messages: Array<{ content: string }> }) => {
+      if (storyCheckReply(request)) return { content: "0 K\n1 S\n2 K\n3 K" };
+      // wt/planner's compact shape: speakers as an index map, by the paragraphs the planner saw.
+      return { content: JSON.stringify({
+        speakers: { "0": "Narrator", "1": "Kestrel", "2": "Dorran", "3": "Mira" },
+        scenes: [{ startParagraph: 0, boundary: { reason: "initial" }, environment: { location: "Harbor Inn", timeOfDay: "night" }, cast: ["Mira"], character: "Mira" }],
+        cues: [{ paragraphIndex: 0, expression: "idle", character: "Mira" }, { paragraphIndex: 3, expression: "smile", character: "Mira" }],
+        effects: [],
+        characters: [{ name: "Mira", description: "silver hair, green eyes" }]
+      }) };
+    } },
+    log: { warn() {}, info() {} }
+  } as unknown as SpindleAPI;
+  const result = await planTurn(spindle, {
+    chatId: "chat", message: { ...message, content }, content, previousScene: null, previousContinuity: null, recentMessages: [],
+    config: { ...DEFAULT_CONFIG, skipNonStory: true }, singleCharacter: emptySingleCharacter(), characterAppearance: {}
+  });
+  assert.deepEqual(result.plan.paragraphs.map((paragraph) => paragraph.text), ["Rain hammered the shutters.", "\"Another round,\" Dorran said.", "\"Make it two,\" said Mira."]);
+  // Speakers move with their paragraphs; the removed planning line's speaker goes with it.
+  assert.deepEqual(result.plan.paragraphSpeakers, ["", "Dorran", "Mira"]);
+  // Nameplate-only speakers are names, not paragraph indexes: Dorran, named in a kept line, stays one;
+  // Kestrel, named only in the removed line, never becomes one.
+  assert.deepEqual(result.plan.nameplateOnlySpeakers, ["Dorran"]);
+  assert.deepEqual(result.plan.visualCues.map((cue) => cue.paragraphIndex), [0, 2]);
 });
