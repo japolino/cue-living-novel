@@ -84,8 +84,17 @@ function setup(options: MockSpindleOptions & {
     const set = (await library()).sets[setKey];
     return Boolean(set) && ["idle", "smile", "sad", "angry"].every((expression) => ["ready", "failed"].includes(set!.images[expression]?.status ?? ""));
   };
+  /** Play the browser until `done` holds, without waiting for the queue to settle (gated renders). */
+  const until = async (done: () => boolean | Promise<boolean>, timeoutMs = 4000) => {
+    const started = Date.now();
+    while (!(await done())) {
+      if (Date.now() - started > timeoutMs) throw new Error("Timed out playing the browser");
+      answerPending();
+      await new Promise<void>((resolve) => setTimeout(resolve, 3));
+    }
+  };
   return {
-    ...mock, service, log, setKey, insets, cuts, drive, library, image, allSettled,
+    ...mock, service, log, setKey, insets, cuts, drive, until, library, image, allSettled,
     get config() { return config; },
     setConfig: (patch: Partial<VisualNovelConfig>) => { config = { ...config, ...patch }; },
     setInset: (mode: "ok" | "error" | "silent") => { insetMode = mode; },
@@ -377,6 +386,83 @@ describe("NovelAI V5 inset: a new idle", () => {
     const set = (await f.library()).sets[f.setKey]!;
     expect(set.seed).not.toBe(spriteSeedFor(f.setKey));
     expect(f.calls.slice(-3).every((call) => call.parameters.seed === set.seed)).toBe(true);
+  });
+
+  test("an expression still composing from the old idle when a new idle is stored is drawn again from the new one", async () => {
+    const f = setup({ gated: true, inset: "silent", config: { imageConcurrency: 2 }, deps: { insetTimeoutMs: 10_000, idleCheckWaitMs: 50 } });
+    await f.service.prepareCast("u1", [MIRA], f.config);
+    await waitFor(() => f.gates.length === 1);
+    f.gates[0]!.release(); // idle A
+    await f.until(() => f.insets().length === 2);
+    const oldIdle = (await f.image("idle")).rawImageId!;
+    const [first, second] = f.insets();
+    f.answerInset(second!.requestId); // the second expression renders; the first keeps composing
+    await waitFor(() => f.gates.length === 2);
+    await f.service.action("u1", { type: "vn_sprite_action", action: "regenerate", setKey: f.setKey, expression: "idle" }, { config: f.config });
+    f.gates[1]!.release(); // its render frees a slot for the new idle
+    await waitFor(() => f.gates.length === 3);
+    f.gates[2]!.release(); // idle B
+    await f.until(async () => {
+      const idle = await f.image("idle");
+      return idle.rawImageId !== null && idle.rawImageId !== oldIdle;
+    });
+    f.answerInset(first!.requestId); // the old idle's canvas arrives after the new idle was stored
+    f.setInset("ok");
+    await f.drive(async () => {
+      for (const gate of f.gates) gate.release();
+      return f.allSettled();
+    });
+    const set = (await f.library()).sets[f.setKey]!;
+    const newIdle = set.images.idle!.rawImageId!;
+    for (const expression of ["smile", "sad", "angry"]) {
+      expect(set.images[expression]!.status).toBe("ready");
+      expect(set.images[expression]!.insetReference).toBe(newIdle);
+    }
+  });
+
+  test("an inset render that ends while its idle renders again is queued at once; one still rendering is requeued by the new idle", async () => {
+    const f = setup({ gated: true, config: { imageConcurrency: 2 }, deps: { idleCheckWaitMs: 50 } });
+    await f.service.prepareCast("u1", [MIRA], f.config);
+    await waitFor(() => f.gates.length === 1);
+    f.gates[0]!.release(); // idle A
+    await f.until(() => f.gates.length === 3); // two expressions render as insets of idle A
+    const [renderA, renderB] = [f.gates[1]!, f.gates[2]!];
+    await f.service.action("u1", { type: "vn_sprite_action", action: "regenerate", setKey: f.setKey, expression: "idle" }, { config: f.config });
+    expect((await f.image("idle")).rawImageId).toBeNull();
+    const cutsBefore = f.cuts().length;
+    renderA.release(); // ends while the idle has no render: never cut, queued again
+    await waitFor(() => f.gates.length === 4); // the slot goes to the new idle
+    await f.service.settle("u1", 50);
+    expect(f.cuts().length).toBe(cutsBefore);
+    f.gates[3]!.release(); // idle B; renderB (from idle A) is still rendering
+    await f.until(async () => (await f.image("idle")).status === "ready");
+    expect(f.log.some((line) => line.includes("requeued inset expressions made from the old one"))).toBe(true);
+    renderB.release();
+    await f.drive(async () => {
+      for (const gate of f.gates) gate.release();
+      return f.allSettled();
+    });
+    const set = (await f.library()).sets[f.setKey]!;
+    for (const expression of ["smile", "sad", "angry"]) expect(set.images[expression]!.insetReference).toBe(set.images.idle!.rawImageId!);
+    // Only renders of the new idle were cut (one cut per expression after the idle's).
+    expect(f.cuts().filter((cut) => cut.expression !== "idle")).toHaveLength(3);
+  });
+
+  test("an inset expression whose cut failed is also drawn again from a new idle", async () => {
+    const f = setup({ echoCrop: false });
+    await f.service.prepareCast("u1", [MIRA], f.config);
+    await f.drive(f.allSettled);
+    const oldIdle = (await f.image("idle")).rawImageId!;
+    expect((await f.image("smile")).status).toBe("failed");
+    expect((await f.image("smile")).insetReference).toBe(oldIdle);
+    f.setEchoCrop(true);
+    await f.service.action("u1", { type: "vn_sprite_action", action: "regenerate", setKey: f.setKey, expression: "idle" }, { config: f.config });
+    await f.drive(async () => {
+      const set = (await f.library()).sets[f.setKey]!;
+      return set.images.idle!.rawImageId !== oldIdle && ["idle", "smile", "sad", "angry"].every((expression) => set.images[expression]!.status === "ready");
+    });
+    const set = (await f.library()).sets[f.setKey]!;
+    for (const expression of ["smile", "sad", "angry"]) expect(set.images[expression]!.insetReference).toBe(set.images.idle!.rawImageId!);
   });
 
   test("a plain expression (fallback) is not requeued by a new idle", async () => {

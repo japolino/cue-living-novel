@@ -334,9 +334,11 @@ wanted: it keeps one pose across the expressions.
   anchoring nothing waits; a flagged idle then re-queues the expressions
   made with the old seed.
 - **User regenerate.** Regenerating the idle (alone or with the whole set)
-  draws a new set seed: expressions not made yet use it, existing ones stay;
-  a whole-set regenerate gives every expression the new seed. One other
-  expression alone gets its own new seed, as before.
+  draws a new set seed: expressions not made yet use it, existing ones stay
+  (except NovelAI V5 reference insets: those drawn from the old idle are
+  rendered again from the new one, up to 11 renders, see "NovelAI V5
+  reference inset"); a whole-set regenerate gives every expression the new
+  seed. One other expression alone gets its own new seed, as before.
 
 ### NovelAI V5 reference inset
 
@@ -415,10 +417,14 @@ one table, so a scene layout can be added). Request:
   expression, and that idle is not offered to the browser again for 5
   minutes.
 - **A new idle.** Each inset render records the idle render it was drawn
-  from (`insetReference`). When the set gets a new idle render (flagged
-  idle, Regenerate, a failed idle rendered again), inset expressions drawn
-  from another idle are queued again (rendered, being cut or still
-  rendering) and drawn from the new one. Plain renders are left alone.
+  from (`insetReference`, set before the canvas is asked for). When the set
+  gets a new idle render (flagged idle, Regenerate, a failed idle rendered
+  again), inset expressions drawn from another idle are queued again
+  (rendered, being cut, cut failed, or still composing or rendering) and
+  drawn from the new one. An inset render that ends while its idle is no
+  longer the set's idle (for example the idle is rendering again) is not
+  cut: it is queued again and waits for the new idle. Plain renders are
+  left alone.
 - **Keys.** The sprite style key does not change: a set can hold inset and
   plain (fallback) renders side by side, as it always could hold anchored
   and unanchored ones; the per-image `insetReference` is what ties a render

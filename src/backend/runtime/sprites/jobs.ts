@@ -1214,9 +1214,12 @@ export class SpriteService {
     const missKey = `${userKey(userId)}\u0000${reference}`;
     if ((this.insetMisses.get(missKey) ?? 0) > Date.now()) return plain();
     const layout = NOVELAI_INSET_LAYOUTS.sprite;
+    // Set before the canvas is asked for: a new idle stored meanwhile re-queues this work.
+    work.insetReference = reference;
     const composed = await this.insetBridge.compose(userId, { layout: layout.id, imageId: reference }, { signal });
     if (signal.aborted) throw abortError(signal);
     if (!composed.ok) {
+      delete work.insetReference;
       this.insetMisses.set(missKey, Date.now() + 5 * 60_000);
       while (this.insetMisses.size > 64) {
         const oldest = this.insetMisses.keys().next().value;
@@ -1231,11 +1234,11 @@ export class SpriteService {
       const overrides = [await connectionRawOverride(this.spindle, config, userId), config.imageParameters.rawRequestOverride];
       insetRequest = compileNovelAiInsetRequest({ request, layout, canvas: composed.canvas, userOverrides: overrides });
     } catch (error) {
+      delete work.insetReference;
       this.deps.log?.(`${label}: reference inset skipped (rawRequestOverride: ${errorText(error)}) -> unanchored`, userId);
       return plain();
     }
     this.deps.log?.(`${label}: NovelAI V5 reference inset on ${inset.model}${inset.verified ? "" : " (unverified model name)"}, idle ${reference}`, userId);
-    work.insetReference = reference;
     try {
       const result = await this.generate(userId, work, signal, { ...config, imageModel: inset.model }, insetRequest, base, null);
       work.crop = { ...layout.repaint };
@@ -1346,6 +1349,8 @@ export class SpriteService {
 
   private async onJobSettled(userId: string | undefined, state: UserState, work: InflightWork, job: AssetJob | null, error: unknown): Promise<void> {
     const current = state.inflight.get(work.key)?.jobId === work.jobId;
+    // A render queued again as it was stored keeps what it was asked for.
+    let keepExplicit = false;
     if (current) state.inflight.delete(work.key);
     state.byJobId.delete(work.jobId);
     try {
@@ -1357,7 +1362,7 @@ export class SpriteService {
         return;
       }
       if (imageId && imageUrl) {
-        await this.storeGenerated(userId, work, imageId, imageUrl);
+        keepExplicit = await this.storeGenerated(userId, work, imageId, imageUrl);
         return;
       }
       if (job?.status === "cancelled") {
@@ -1407,13 +1412,19 @@ export class SpriteService {
       });
       broadcast?.();
     } finally {
-      if (current) state.explicit.delete(work.key);
+      if (current && !keepExplicit) state.explicit.delete(work.key);
       void this.pump(userId);
     }
   }
 
-  private async storeGenerated(userId: string | undefined, work: InflightWork, imageId: string, imageUrl: string): Promise<void> {
+  /**
+   * Store a finished render (a sprite goes on to its cut-out). Returns true
+   * when an inset render was queued again instead: its idle changed while it
+   * rendered (a new idle render, or the idle rendering again).
+   */
+  private async storeGenerated(userId: string | undefined, work: InflightWork, imageId: string, imageUrl: string): Promise<boolean> {
     let orphan = false;
+    let stale = false;
     const doomed: string[] = [];
     let requeued: string[] = [];
     const broadcast = await this.library.update(userId, (library, now) => {
@@ -1423,6 +1434,15 @@ export class SpriteService {
         if (!set || !image || (image.status !== "queued" && image.status !== "generating")) {
           orphan = true;
           return null;
+        }
+        if (work.insetReference && work.expression !== "idle" && work.insetReference !== set.images.idle?.rawImageId) {
+          stale = true;
+          orphan = true;
+          this.resetImage(image, "queued", now);
+          const state = this.state(userId);
+          state.wanted.set(work.key, higher(state.wanted.get(work.key), work.priority));
+          state.explicit.add(work.key);
+          return () => this.broadcastImage(userId, work.setKey, image);
         }
         image.status = "cutting";
         image.rawImageId = imageId;
@@ -1458,16 +1478,19 @@ export class SpriteService {
       return () => this.broadcastPlate(userId, plate);
     });
     if (orphan) await this.deleteImage(userId, imageId);
+    if (stale && work.kind === "sprite") this.deps.log?.(`sprite ${work.setKey}/${work.expression}: its idle changed while it rendered -> requeued as an inset of the current idle`, userId);
     if (requeued.length && work.kind === "sprite") this.deps.log?.(`sprite ${work.setKey}/idle: new idle render -> requeued inset expressions made from the old one: ${requeued.join(", ")}`, userId);
     broadcast?.();
     for (const id of doomed) await this.deleteImage(userId, id);
+    return stale;
   }
 
   /**
    * A set got a new idle render: NovelAI V5 inset expressions drawn from
-   * another idle (rendered, being cut or still rendering) no longer match it
-   * and are queued again, as the idle's references. Plain renders (other
-   * providers, fallbacks) are left alone. Returns the requeued expressions.
+   * another idle (rendered, being cut, cut failed, or still composing or
+   * rendering) no longer match it and are queued again, as the idle's
+   * references. Plain renders (other providers, fallbacks) are left alone.
+   * Returns the requeued expressions.
    */
   private requeueStaleInsets(
     userId: string | undefined,
@@ -1484,7 +1507,8 @@ export class SpriteService {
       const key = spriteWorkKey(set.setKey, image.expression);
       const work = state.inflight.get(key);
       const running = work?.kind === "sprite" && work.insetReference !== undefined && work.insetReference !== idleImageId;
-      const rendered = image.insetReference !== undefined && image.insetReference !== idleImageId && (image.status === "cutting" || image.status === "ready");
+      const rendered = image.insetReference !== undefined && image.insetReference !== idleImageId
+        && (image.status === "cutting" || image.status === "ready" || (image.status === "failed" && image.rawImageId !== null));
       if (!running && !rendered) continue;
       this.forget(userId, state, key, set.setKey, image.expression);
       if (image.rawImageId) doomed.push(image.rawImageId);
