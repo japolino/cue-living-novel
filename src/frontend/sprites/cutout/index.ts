@@ -441,7 +441,7 @@ let studioCheck: Promise<string | null> | null = null;
  * Phones, devices that report under 8 GB of memory and software adapters are
  * not offered it (about 3 GB of graphics memory). WebGPU's limits are no
  * gate: the model ran with the default limits, masks identical to those with
- * the adapter's maximum limits.
+ * the adapter's maximum buffer sizes.
  */
 function studioCannotRun(): Promise<string | null> {
   if (runtime.backend === "wasm") return Promise.resolve("The Studio cut-out needs WebGPU; the cut-out is set to WebAssembly.");

@@ -473,8 +473,11 @@ scene pictures use the landscape size); expressions per character (4 / 8 / 12, s
 downloading / ready / unsupported) with Download and Remove; a sprite library
 gallery (sets with their expressions on a checkerboard, plates) with Prepare
 for this chat, Regenerate, Re-cut, and Delete; the model URL and the Studio
-model URL under Advanced. With Studio quality the model status is the Studio
-model's (or says why Best cuts instead).
+model URL under Advanced. With Studio quality the model status covers both
+models: whether the Studio model is downloaded (else **Download Studio
+model**), its background download, and why Best cuts instead (**Try Studio
+again**); a device that cannot run it gets Best's status, never the Studio
+download. A model the browser did not store says it downloads again.
 
 ## Cut-out (frontend)
 
@@ -566,13 +569,59 @@ do not run on WebGPU (Edge: "Too many storage buffers in shader. Current: 17,
 Max is 16", also through transformers.js 4.3.1).
 
 Where it runs: WebGPU with `shader-f16` only, checked before the download
-(`getStudioCutoutSupport`). Otherwise, or when the session cannot be built or
-a run fails (GPU memory), the cut uses the Best model and the model state's
-`note` says why; the failure is sticky for the page, and a sprite whose run
-failed is cut again with Best. WASM is never used for it (23 s per sprite at
-512 px; at 1024 px the browser passed 4.5 GB of RAM and was stopped). One
-cut-out model is loaded at a time, so switching between Studio and Best
-reloads.
+(`getStudioCutoutSupport`), and not on phones (`navigator.userAgentData.mobile`),
+on devices that report under 8 GB of memory (`navigator.deviceMemory`; a
+judgement from the +3.1 GB of graphics memory measured below, integrated
+graphics take theirs from RAM; browsers that do not report it are allowed) or
+on a software WebGPU adapter. WebGPU's limits are no gate: the export ran with
+the default limits (128 MiB storage binding, 256 MiB buffer, 8 storage buffers
+per stage) with the same output as with the adapter's maximum buffer sizes (one
+1024 px input: mean 0.50405 and 528613 foreground pixels in both, 612-616 ms warm).
+Settings ask the same check and do not offer the Studio download where it
+fails. WASM is never used for it (23 s per sprite at 512 px; at 1024 px the
+browser passed 4.5 GB of RAM and was stopped). One cut-out model is loaded at
+a time, so switching between Studio and Best reloads.
+
+The download never runs inside a cut (the backend gives a cut 5 minutes, sized
+for Best's 88 MB): a "studio" cut while the Studio model is not in the browser
+starts its download in the background and cuts with Best; its progress shows
+in settings over the loaded model's state. The cut after the download loads
+the Studio model (seconds). Best cuts made meanwhile are marked `provisional`
+(also when another tab holds the Studio model, see below) and get one silent
+Studio re-cut the next time a Cue view opens, the same one-shot upgrade basic
+cuts get: the re-cut replaces the cut only when the Studio model made it,
+otherwise the old cut stays and the try is spent (a basic cut whose upgrade
+came back provisional keeps one Studio try). Re-cut in the library does it at
+once. A failed download is tried again after 1, 2 and 4 minutes, then not on
+that page; settings' **Try Studio again** retries it.
+
+When it fails: any Studio failure (the worker dies loading or running it, the
+session cannot be built, onnxruntime cannot start, a run fails) stands for the
+page, the worker that held it is stopped so Best loads on a fresh worker and
+GPU device, the sprite is cut again with Best (and without a model on another
+fresh worker if that dies too), and the model state's `note` says why. A
+failure that kills the tab is caught per device: a localStorage marker
+(`cue-sprite-cutout-studio-attempt`) goes up before the Studio model loads and
+comes down after its first good cut or on a normal page close (`pagehide`);
+a marker found on the next visit (holding the Studio lock, so not another
+tab's load) means that visit uses Best and says so, and a failure the page saw
+is kept there with its reason. **Try Studio again** in settings clears it.
+
+One Studio session per device: a tab takes a Web Lock
+(`cue-sprite-cutout-studio`) before loading the model and lets it go when the
+model leaves; another Cue tab cuts with Best meanwhile. The model leaves the
+worker as soon as it is not wanted: another quality, another or no Studio URL
+(`syncStudioCutout`, on every config and every cut), and **Remove downloaded
+model** unloads whatever the worker holds.
+
+Storage: one Studio file in the browser. After a Studio download is stored,
+the files of earlier Studio URLs are deleted (Best's is kept). When the
+browser will not store it (storage full, private mode), the model loads from
+memory for that page and its ready state carries `notStored`; settings say it
+downloads again on the next visit (the same for Best). The browser keeps the
+first file it downloaded from a URL: to switch to a new export behind the same
+address, change the URL (for example add `?v=2`) or remove the downloaded
+model.
 
 Measured (October 2026, Edge 156, RTX 5060 8 GB, ComfyUI idle but resident):
 
@@ -588,7 +637,8 @@ Measured (October 2026, Edge 156, RTX 5060 8 GB, ComfyUI idle but resident):
 
 Best (ISNet + kernel) on the same 6 / 10 sprites: IoU 0.946 / 0.957. Download:
 499 MB (fp16), 995 MB (fp32). The Cue path itself (Worker, `cutSprite`, 12
-synthetic + 19 bake-off sprites, general model): first cut 8.6 s (download
+synthetic + 19 bake-off sprites, general model; measured while the download still
+ran inside the first cut): first cut 8.6 s (download
 from localhost, session 4.0 s, first run 2.0 s), with an on-disk profile
 17.6 s (the 499 MB cache write); after a reload, read from Cache Storage,
 5.0 s; then 0.70 s model and 0.79 s per sprite (median); GPU +3.1 GB; the
@@ -605,10 +655,11 @@ Serving it locally: a static server on this machine. Lumiverse's page is on
 another origin, so the server has to send CORS headers, for example
 `bun -e "Bun.serve({ port: 8790, fetch: () => new Response(Bun.file('birefnet_general_1024_fp16.onnx'), { headers: { 'Access-Control-Allow-Origin': '*' } }) })"`,
 then set the Studio model URL to `http://localhost:8790/birefnet_general_1024_fp16.onnx`.
-Checked with the page on 127.0.0.1 and the model on localhost (another port):
-with the header the Studio model loads; without it the download fails ("Failed
-to fetch"), Best cuts, the settings note says the Studio model is not
-available, and the download is tried again after 60 s.
+Checked with the page on 127.0.0.1 and the model on localhost (another port),
+before the download moved to the background: with the header the Studio model
+loads; without it the download fails ("Failed to fetch"), Best cuts, the
+settings note says the Studio model is not available, and the download was
+tried again after 60 s (now 1, 2, then 4 minutes).
 
 Hosting it (not done): a 499 MB file per model on an https host with CORS
 (Hugging Face works like the ISNet default), plus attribution. BiRefNet code
@@ -620,8 +671,11 @@ and need a note that they were converted.
 
 `bun run test:sprite-cutout` checks the tier when `CUE_SPRITE_STUDIO_MODEL`
 points at an exported file: the fallback in headless Chromium (no Studio
-fetch), and the Studio cuts in `CUE_SPRITE_STUDIO_CHANNEL` (for example
-`msedge`).
+fetch), and in `CUE_SPRITE_STUDIO_CHANNEL` (for example `msedge`) a first
+"studio" cut by Best that does not wait for the download, one download, then
+the Studio cuts. How the tier fails (crashes, markers, the lock, backoff,
+unloading, storage) is unit-tested with a fake runner
+(`src/frontend/sprites/cutout/studio-failures.test.ts`).
 
 ### Face boxes
 
