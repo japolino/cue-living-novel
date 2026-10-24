@@ -201,8 +201,8 @@ try {
     (window as any).settingsFixture.fixture.simulateError = true;
   });
 
-  // Click Apply in the unapplied-changes bar
-  await page.locator("[data-draft-bar] [data-apply]").click();
+  // Commit the field (Ctrl+S saves the focused Advanced field)
+  await page.keyboard.press("Control+s");
 
   // Verify error state is shown
   const statusEl = page.locator("[data-status]");

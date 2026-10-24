@@ -55,7 +55,7 @@ Lumiverse staging host
 | `src/frontend/host` | staging API feature detection, activation, overrides, chat switching, frontend/backend routing |
 | `src/frontend/stage` | framework-free full-screen VN renderer, accessibility, keyboard input, image swaps |
 | `src/frontend/store` | deterministic paragraph, acknowledgement, choice, and input gating |
-| `src/frontend/settings` | Lumiverse settings surface: tabbed sections (Reading, Look, Pictures, Sound, Voice, Connections, Advanced), setting search, auto-save for everyday controls, explicit Apply/Discard for advanced drafts |
+| `src/frontend/settings` | Lumiverse settings surface: tabbed sections (Reading, Look, Pictures, Sound, Voice, Connections, Advanced), setting search, auto-save for every control (Advanced text fields on commit, only when valid, with an Undo toast) |
 | `src/frontend/sprites` | sprite mode cut-out (ISNet-anime via lazily loaded onnxruntime-web, flood-fill kernel), the cut request service (with the inset crop), and the NovelAI V5 inset canvas service |
 | `src/backend/runtime/sprites` | sprite mode library, prompts, generation jobs, cut bridge, NovelAI V5 inset request and bridge, views |
 | `src/shared/novelai-inset.ts` | NovelAI V5 reference inset geometry (canvas, reference box, repaint box, 8-px mask rule) |

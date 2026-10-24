@@ -14,6 +14,7 @@ import {
   selectCurrentImage,
   shouldPreserveImage,
   stageTurnInput,
+  systemOneKeyMessage,
   viewStateMessages,
   type VisualStageThemeTarget,
 } from "./controller";
@@ -98,6 +99,20 @@ const baseConfig: VisualNovelConfig = {
   bgmVolume: 0.7,
   sfxVolume: 0.8,
 };
+
+describe("systemOneKeyMessage", () => {
+  test("a passed test says System One is on (or comparing); a failed one says why and that it stayed off", () => {
+    expect(systemOneKeyMessage({ saved: true, test: "passed" }, "on")).toBe("Key saved and tested. System One is on.");
+    expect(systemOneKeyMessage({ saved: true, test: "passed" }, "compare")).toBe("Key saved and tested. System One compares with the story reader.");
+    expect(systemOneKeyMessage({ saved: true, test: "failed", error: "System One request failed (401)" }, "off"))
+      .toBe("Key saved, but the test call failed: System One request failed (401). System One was not turned on.");
+  });
+
+  test("a plain status keeps the panel's own saved / not saved line", () => {
+    expect(systemOneKeyMessage({ saved: true }, "on")).toBeUndefined();
+    expect(systemOneKeyMessage({ saved: false }, "off")).toBeUndefined();
+  });
+});
 
 describe("applyVisualConfigToStage (live controller config application)", () => {
   test("applies the theme preset, scene-image fit, custom CSS, and display regex from the config", () => {

@@ -39,7 +39,7 @@ import {
   type MessageResolutionCache
 } from "./message-text.js";
 import { loadConnectionCatalog } from "./connections.js";
-import { SYSTEM_ONE_KEY } from "./system-one.js";
+import { SYSTEM_ONE_KEY, testSystemOneKey } from "./system-one.js";
 import {
   clearAudioCatalogCache,
   normalizeAudioStoragePrefix,
@@ -1704,16 +1704,38 @@ async function handleFrontendMessage(spindle: SpindleAPI, request: FrontendReque
       spindle.sendToFrontend({ type: "vn_system_one_key_status", saved: await spindle.enclave.has(SYSTEM_ONE_KEY, userId) }, userId);
       return;
     case "vn_set_system_one_key": {
+      // Saving a key is turning System One on: one test call, then mode On.
       const key = request.key.trim();
       if (!key || key.length > 8192) throw new Error("Enter a valid System One API key");
       await spindle.enclave.put(SYSTEM_ONE_KEY, key, userId);
-      spindle.sendToFrontend({ type: "vn_system_one_key_status", saved: true }, userId);
+      const config = await loadConfig(spindle, userId);
+      try {
+        await testSystemOneKey(spindle, { key, config });
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        dbg(spindle, userId, `System One key test failed: ${reason}`);
+        spindle.sendToFrontend({ type: "vn_system_one_key_status", saved: true, test: "failed", error: reason }, userId);
+        return;
+      }
+      // An explicit Compare stays Compare; only Off turns On.
+      if (config.systemOneMode === "off") {
+        const next = await updateConfig(spindle, { systemOneMode: "on" }, userId);
+        spindle.sendToFrontend({ type: "vn_config", config: next }, userId);
+      }
+      spindle.sendToFrontend({ type: "vn_system_one_key_status", saved: true, test: "passed" }, userId);
       return;
     }
-    case "vn_clear_system_one_key":
+    case "vn_clear_system_one_key": {
+      // Without a key System One cannot answer, so it turns off with it.
       await spindle.enclave.delete(SYSTEM_ONE_KEY, userId);
+      const config = await loadConfig(spindle, userId);
+      if (config.systemOneMode !== "off") {
+        const next = await updateConfig(spindle, { systemOneMode: "off" }, userId);
+        spindle.sendToFrontend({ type: "vn_config", config: next }, userId);
+      }
       spindle.sendToFrontend({ type: "vn_system_one_key_status", saved: false }, userId);
       return;
+    }
     case "vn_set_config": {
       const config = await updateConfig(spindle, request.patch, userId);
       rememberDebugFlag(userId, config);

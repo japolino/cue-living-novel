@@ -175,7 +175,8 @@ export type BackendResponse =
   | { type: "vn_panel_template"; requestId: string; chatId: string; template?: string; error?: string }
   | { type: "vn_state"; chatId: string; config: VisualNovelConfig; turn: TurnView | null }
   | { type: "vn_config"; config: VisualNovelConfig }
-  | { type: "vn_system_one_key_status"; saved: boolean }
+  /** `test` is set after a save: the one test call passed (System One turned on) or failed (`error` says why). */
+  | { type: "vn_system_one_key_status"; saved: boolean; test?: "passed" | "failed"; error?: string }
   | {
     type: "vn_connection_catalog";
     planner: ConnectionCatalogOption[];

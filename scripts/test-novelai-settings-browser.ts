@@ -298,58 +298,51 @@ try {
     "Custom sampler not overwritten when changing other parameters"
   );
 
-  // --- Test 10: Advanced JSON draft safety: valid draft seed remains unapplied; invalid draft retained ---
-  // The JSON editor lives in Advanced and the NovelAI controls in Pictures: the
-  // draft must survive switching between the two sections.
+  // --- Test 10: Advanced JSON editor and NovelAI controls: valid JSON saves when left; invalid JSON is kept and never sent ---
+  // The JSON editor lives in Advanced and the NovelAI controls in Pictures.
   await settings.getByRole("tab", { name: "Advanced" }).click();
   const jsonTextarea = settings.locator('[name="imageParameters"]');
 
-  // Subtest 10A: Valid draft with seed change must NOT be silently saved by everyday NovelAI controls
+  // Subtest 10A: valid JSON saves when the field is left (here: switching to Pictures).
   await jsonTextarea.fill('{"steps": 28, "seed": 777888}');
-  assert.match(await settings.locator("[data-status]").innerText(), /not applied/);
-  assert.equal(await settings.locator("[data-apply-bar]").isVisible(), true);
-
-  // User changes everyday control: novelAiSteps to 22
   await settings.getByRole("tab", { name: "Pictures" }).click();
+  patch = await lastPatch(page);
+  assert.deepEqual(patch?.imageParameters, { steps: 28, seed: 777888 }, "leaving the editor saves valid JSON");
+
+  // User changes everyday control: novelAiSteps to 22; the saved seed stays.
   await stepsInput.fill("22");
   await stepsInput.press("Tab");
   patch = await lastPatch(page);
-
-  // Acknowledged patch submitted to host MUST NOT contain the unapplied seed draft!
   assert.equal((patch?.imageParameters as any)?.steps, 22, "everyday steps saved");
-  assert.equal("seed" in (patch?.imageParameters as any), false, "unapplied seed draft MUST NOT be submitted by everyday controls");
-
-  // In the Advanced editor, draft is rebased (steps: 22) and seed is retained, still marked dirty
+  assert.equal((patch?.imageParameters as any)?.seed, 777888, "the saved seed is kept by everyday controls");
   await settings.getByRole("tab", { name: "Advanced" }).click();
-  const rebasedEditorDraft = JSON.parse(await jsonTextarea.inputValue());
-  assert.equal(rebasedEditorDraft.seed, 777888, "unapplied seed preserved in editor draft");
-  assert.equal(rebasedEditorDraft.steps, 22, "steps rebased in editor draft");
-  assert.equal(await settings.locator("[data-apply-bar]").isVisible(), true, "apply bar remains visible for dirty draft");
+  const syncedEditor = JSON.parse(await jsonTextarea.inputValue());
+  assert.equal(syncedEditor.steps, 22, "the editor shows the everyday change");
+  assert.equal(syncedEditor.seed, 777888);
 
-  // Subtest 10B: Invalid draft is retained completely untouched in editor
+  // Subtest 10B: invalid JSON is retained untouched and never sent, while everyday controls keep saving.
   await jsonTextarea.fill('{"seed": 777888, INVALID_JSON');
   await settings.getByRole("tab", { name: "Pictures" }).click();
+  assert.match(await settings.locator("[data-status]").innerText(), /Image parameters/, "the invalid JSON is reported");
+  assert.equal(await settings.getByRole("tab", { name: "Advanced" }).locator("[data-tab-badge]").innerText(), "1", "Advanced shows one field not saved");
   await stepsInput.fill("20");
   await stepsInput.press("Tab");
   patch = await lastPatch(page);
-
-  // Everyday save still went to host with acknowledged config + steps
   assert.equal((patch?.imageParameters as any)?.steps, 20);
-  assert.equal("seed" in (patch?.imageParameters as any), false);
+  assert.equal((patch?.imageParameters as any)?.seed, 777888, "the last saved JSON is the base, never the invalid text");
 
-  // Invalid draft in editor is retained untouched
+  // Invalid text in the editor is retained untouched
   await settings.getByRole("tab", { name: "Advanced" }).click();
   assert.equal(
     await jsonTextarea.inputValue(),
     '{"seed": 777888, INVALID_JSON',
     "invalid draft is retained completely untouched in editor"
   );
-  assert.equal(await settings.locator("[data-apply-bar]").isVisible(), true);
 
-  // Clean up: restore valid json and apply
+  // Clean up: restore valid json and save it
   await jsonTextarea.fill('{"steps": 20, "guidance": 5, "sampler": "k_euler_ancestral", "resolution": "1216x832"}');
-  await settings.locator("[data-apply]").click();
-  assert.equal(await settings.locator("[data-status]").innerText(), "Advanced settings applied.");
+  await page.keyboard.press("Control+s");
+  assert.deepEqual((await lastPatch(page))?.imageParameters, { steps: 20, guidance: 5, sampler: "k_euler_ancestral", resolution: "1216x832" });
   await settings.getByRole("tab", { name: "Pictures" }).click();
 
   // --- Test 11: Switch imageSource to "text" -> NovelAI controls hidden ---

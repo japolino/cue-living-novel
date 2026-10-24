@@ -29,8 +29,8 @@ own expression and there is no picture cap.
 |---|---|---|---|
 | `presentationMode` | `"scene"` \| `"sprites"` | `"scene"` | at once (everyday) |
 | `spriteCutout` | `"studio"` (BiRefNet, experimental) \| `"best"` (model) \| `"basic"` (no download) | `"best"` | at once (everyday) |
-| `spriteModelUrl` | https URL | ISNet-anime on Hugging Face (its float16 copy downloads where it runs) | Advanced (Apply) |
-| `spriteStudioModelUrl` | https URL, or http on this machine; `""` = none | `""` ("studio" cuts like "best") | Advanced (Apply) |
+| `spriteModelUrl` | https URL | ISNet-anime on Hugging Face (its float16 copy downloads where it runs) | Advanced (saved when valid) |
+| `spriteStudioModelUrl` | https URL, or http on this machine; `""` = none | `""` ("studio" cuts like "best") | Advanced (saved when valid) |
 | `keyIllustrations` | `"off"` \| `"few"` (≤ 1 per reply) | `"off"` | at once (everyday, sprite mode only) |
 | `spriteImageSize` | `"standard"` \| `"upscaled"` | `"standard"` | at once (everyday, both modes) |
 | `spriteExpressionCount` | `4` \| `8` \| `12` | `4` | at once (everyday, sprite mode only) |

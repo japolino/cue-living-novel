@@ -69,6 +69,20 @@ export function choirPlaysSound(speech: SpeechSettings | undefined, choir: Pick<
 }
 
 /**
+ * The status line under the System One key after a save: the one test call
+ * passed (and the mode the backend left, normally On) or failed and why.
+ * Undefined keeps the panel's plain saved / not saved line.
+ */
+export function systemOneKeyMessage(
+  status: { saved: boolean; test?: "passed" | "failed"; error?: string },
+  mode: "off" | "compare" | "on" | undefined,
+): string | undefined {
+  if (status.test === "passed") return mode === "compare" ? "Key saved and tested. System One compares with the story reader." : "Key saved and tested. System One is on.";
+  if (status.test === "failed") return `Key saved, but the test call failed: ${status.error ?? "no answer"}. System One was not turned on.`;
+  return undefined;
+}
+
+/**
  * Answer a backend `vn_reference_fetch`: fetch the card asset from the
  * logged-in origin and relay it as a base64 data URL (the backend cannot
  * read image bytes itself). Always replies exactly once, with `dataUrl` or
@@ -1187,7 +1201,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       return;
     }
     if (type === "vn_system_one_key_status" && message.type === "vn_system_one_key_status") {
-      settingsPanel?.setSystemOneKeyStatus(message.saved);
+      settingsPanel?.setSystemOneKeyStatus(message.saved, systemOneKeyMessage(message, configRef.current?.systemOneMode));
       return;
     }
     if (type === "vn_sprite_library" && message.type === "vn_sprite_library") {

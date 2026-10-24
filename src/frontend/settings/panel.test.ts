@@ -63,14 +63,24 @@ describe("settings panel markup", () => {
     expect(TEXT_EFFECT_CATALOGUE.length).toBeGreaterThan(0);
   });
 
-  test("sprite mode: presentation and cut-out quality save at once, the model URL waits for Apply", () => {
+  test("sprite mode: presentation and cut-out quality save at once, the model URL saves when committed and valid", () => {
     expect(source).toContain('optionList("presentationMode", PRESENTATION_MODE_OPTIONS)');
     expect(source).toContain('case "presentationMode": return { presentationMode: normalizePresentationMode(target.value) };');
     expect(source).toContain('case "spriteCutout": return { spriteCutout: normalizeSpriteCutout(target.value) };');
     expect(advancedKeys).toContain("spriteModelUrl");
     expect(advancedKeys).not.toContain("presentationMode");
     expect(advancedKeys).not.toContain("spriteCutout");
-    expect(source).toContain('spriteModelUrl: parseSpriteModelUrl(');
+    expect(source).toContain('case "spriteModelUrl": return parseSpriteModelUrl(text());');
+  });
+
+  test("System One mode, URL and model save live; no Apply or Discard remains", () => {
+    expect(advancedKeys).not.toContain("systemOneMode");
+    expect(advancedKeys).not.toContain("systemOneApiUrl");
+    expect(advancedKeys).not.toContain("systemOneModel");
+    expect(source).toContain('case "systemOneMode": return');
+    expect(source).not.toContain("data-apply");
+    expect(source).not.toContain("data-discard");
+    expect(source).toContain("data-undo-toast");
   });
 
   test("image size: one everyday control for both modes, before the sprite-only block", () => {

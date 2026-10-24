@@ -108,7 +108,7 @@ export type SaveStatus = { kind: "saved" } | { kind: "error"; error: string };
 
 export type SettingsPanelOptions = {
   mount: HTMLElement;
-  /** Receives partial patches. Everyday controls call this on every change; Advanced calls it on Apply. */
+  /** Receives partial patches. Every control calls this when it changes; Advanced text fields when committed and valid. */
   onSave: (patch: Partial<VisualNovelConfig>) => void;
   onOpenPreview: () => void;
   onRefreshConnections: () => void;
@@ -132,13 +132,18 @@ export type SettingsPanelOptions = {
 /** Keys the Advanced section owns. Everything else saves as soon as it changes. */
 const ADVANCED_KEYS = [
   "novelAiQualityTags", "novelAiUseDefaultNegative",
-  "imageModel", "imageConcurrency", "parserParameters", "imageParameters", "audioDirectory", "systemOneMode", "systemOneApiUrl", "systemOneModel",
+  "imageModel", "imageConcurrency", "parserParameters", "imageParameters", "audioDirectory",
   "spriteStudioModelUrl",
   "includeRecentMessages", "includeCharacterContext", "includePersonaContext", "includeLorebookContext", "debugLogging",
   "promptPrefix", "promptSuffix", "negativePrompt", "originalReference", "originalCreationName", "customPlannerInstructions",
   "ignoredTags", "skipNonStory", "displayRegexRules", "customCss", "spriteModelUrl",
 ] as const;
 type AdvancedKey = (typeof ADVANCED_KEYS)[number];
+/** How long Undo stays offered after an Advanced save. */
+const UNDO_MS = 10_000;
+function notSavedMessage(count: number): string {
+  return `${count} field${count === 1 ? "" : "s"} not saved: fix the highlighted value.`;
+}
 
 const SAMPLE_LINES: ReadonlyArray<{ speaker: string; text: string }> = [
   { speaker: "Mira", text: "The wind picks up as the first stars come out over the valley." },
@@ -210,7 +215,6 @@ code { font-family: var(--lumiverse-font-mono, ui-monospace, "Cascadia Mono", Co
 [data-group-head] { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .65rem; }
 [data-group-head] h3 { flex: 1 1 auto; }
 [data-group-head] > small { flex-basis: 100%; }
-[data-apply-chip] { display: inline-flex; align-items: center; gap: .3rem; padding: .05rem .55rem; border: 1px solid color-mix(in srgb, var(--set-warning) 55%, transparent); border-radius: 999px; color: var(--set-warning); font-size: .72rem; font-weight: 650; letter-spacing: .02em; white-space: nowrap; }
 [data-field] { display: grid; gap: .35rem; min-width: 0; }
 [data-field] > span:first-child, legend { font-weight: 600; font-size: .93rem; }
 [data-field] > span:first-child small { display: inline; }
@@ -309,12 +313,11 @@ label[data-check] small { margin-top: .1rem; }
 [data-jump] { display: flex; flex-wrap: wrap; gap: .35rem; }
 [data-jump] button { min-height: 2.25rem; padding: .2rem .8rem; font-size: .82rem; font-weight: 550; background: transparent; }
 
-/* Unapplied changes bar */
-[data-draft-bar] { position: sticky; bottom: .75rem; z-index: 10; display: flex; flex-wrap: wrap; align-items: center; gap: .55rem .75rem; padding: .6rem .7rem .6rem 1rem; border: 1px solid color-mix(in srgb, var(--set-warning) 50%, var(--set-border)); border-radius: var(--set-radius); background: color-mix(in srgb, var(--set-warning) 9%, var(--set-field)); box-shadow: 0 12px 32px rgba(0,0,0,.35); }
-[data-draft-bar] > div:first-child { flex: 1 1 13rem; display: grid; }
-[data-draft-count] { font-weight: 650; }
-[data-draft-bar] small { font-size: .8rem; }
-[data-draft-bar] [data-actions] { flex: none; }
+/* Undo toast after an Advanced save */
+[data-undo-toast] { position: sticky; bottom: .75rem; z-index: 10; display: flex; flex-wrap: wrap; align-items: center; gap: .55rem .75rem; padding: .5rem .6rem .5rem 1rem; border: 1px solid var(--set-border); border-radius: var(--set-radius); background: var(--set-field); box-shadow: 0 12px 32px rgba(0,0,0,.35); }
+[data-undo-toast][hidden] { display: none; }
+[data-undo-text] { flex: 1 1 12rem; font-weight: 600; }
+[data-undo-toast] button { flex: none; }
 
 [data-preset-row] { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto auto; gap: .5rem; align-items: center; }
 [data-preset-row] button { white-space: nowrap; }
@@ -410,10 +413,9 @@ function more(html: string): string {
 /** Shown on scene-only controls while character sprites are on. */
 const SCENE_NOTE = `<p data-scene-note hidden>Used only with scene pictures. Your choice is kept for when you switch back.</p>`;
 
-function group(title: string, body: string, options: { id?: string; apply?: boolean; help?: string; find?: string; sceneOnly?: boolean } = {}): string {
-  const chip = options.apply ? `<span data-apply-chip title="Changes here wait for the Apply button">Applies with Apply</span>` : "";
+function group(title: string, body: string, options: { id?: string; help?: string; find?: string; sceneOnly?: boolean } = {}): string {
   const help = options.help ? `<small>${options.help}</small>` : "";
-  return `<section data-group${options.id ? ` data-group-id="${options.id}"` : ""}${options.apply ? " data-apply-group" : ""}${options.sceneOnly ? " data-scene-only" : ""} ${options.find ?? find(title)}><header data-group-head><h3>${esc(title)}</h3>${chip}${help}</header>${options.sceneOnly ? SCENE_NOTE : ""}${body}</section>`;
+  return `<section data-group${options.id ? ` data-group-id="${options.id}"` : ""}${options.sceneOnly ? " data-scene-only" : ""} ${options.find ?? find(title)}><header data-group-head><h3>${esc(title)}</h3>${help}</header>${options.sceneOnly ? SCENE_NOTE : ""}${body}</section>`;
 }
 
 function optionList(name: string, options: ReadonlyArray<{ value: string; label: string; help: string }>): string {
@@ -760,12 +762,12 @@ export class VisualNovelSettingsPanel {
                 <label data-field ${find("System One API URL", "jev endpoint url")}><span>API URL</span><input name="systemOneApiUrl" type="url" placeholder="https://api.typesafe.ai" /><small>Requests go through Lumiverse's HTTP proxy.</small></label>
                 <label data-field ${find("System One model", "jev model")}><span>Model</span><input name="systemOneModel" type="text" placeholder="jev-latest" /></label>
               </div>
-              <div data-field ${find("System One API key", "jev key secret password")}><span>API key</span><input name="systemOneApiKey" type="password" autocomplete="new-password" placeholder="Enter key" /><div data-actions><button type="button" data-save-system-one-key>Save key</button><button type="button" data-clear-system-one-key>Remove key</button><small data-system-one-key-status>Checking saved key…</small></div><small>The key saves at once, encrypted for this extension. It is never part of Cue settings.</small></div>
-            `, { apply: true, help: "Optional. Mode, URL and model wait for Apply; the key saves on its own.", find: find("System One", "jev") })}
+              <div data-field ${find("System One API key", "jev key secret password")}><span>API key</span><input name="systemOneApiKey" type="password" autocomplete="new-password" placeholder="Enter key" /><div data-actions><button type="button" data-save-system-one-key>Save key</button><button type="button" data-clear-system-one-key>Remove key</button><small data-system-one-key-status>Checking saved key…</small></div><small>The key saves at once, encrypted for this extension. It is never part of Cue settings. Saving it makes one small test call and turns System One on; removing it turns System One off.</small></div>
+            `, { help: "Optional. Saves as you change it.", find: find("System One", "jev") })}
           `)}
 
           ${pane("advanced", `
-            <p class="muted">Changes in this section wait until you choose <b>Apply</b>. Everything else saves on its own.</p>
+            <p class="muted">Changes save when you leave a field, with <b>Undo</b> for a few seconds. JSON and URL fields save only when they are valid.</p>
             <div data-jump aria-label="Jump to">
               <button type="button" data-jump-to="prompts">Image prompts</button>
               <button type="button" data-jump-to="context">Story reader</button>
@@ -797,19 +799,19 @@ export class VisualNovelSettingsPanel {
               </div>
               <label data-check ${find("Series reference tag", "creation series original reference")}><input name="originalReference" type="checkbox" /><span>Include character creation / series reference tag</span></label>
               <label data-field ${find("Creation / series name", "series franchise original")}><span>Creation / series name</span><input name="originalCreationName" type="text" placeholder="e.g. doki doki literature club" />${more("When enabled, NovelAI uses: Character, series name. Other profiles use: Character \\(Creation\\). Appearance tags follow as usual.")}</label>
-            `, { id: "prompts", apply: true })}
+            `, { id: "prompts" })}
             ${group("What the story reader sees", `
               <label data-field ${find("Recent messages", "context history messages story reader")}><span>Recent messages</span><input name="includeRecentMessages" type="number" min="0" max="30" step="1" /></label>
               <label data-check ${find("Character-card context", "character card context")}><input name="includeCharacterContext" type="checkbox" /><span>Include character-card context</span></label>
               <label data-check ${find("Persona context", "persona user context")}><input name="includePersonaContext" type="checkbox" /><span>Include active persona context</span></label>
               <label data-check ${find("Lorebook context", "lorebook world info context")}><input name="includeLorebookContext" type="checkbox" /><span>Include activated lorebook context</span></label>
               <label data-field ${find("Story reader instructions", "planner custom instructions prompt")}><span>Story reader instructions</span><textarea name="customPlannerInstructions"></textarea></label>
-            `, { id: "context", apply: true })}
+            `, { id: "context" })}
             ${group("Text filtering", `
               <label data-check ${find("Skip non-story blocks", "skip reasoning tracker status recap menu ooc meta filter")}><input name="skipNonStory" type="checkbox" /><span>Skip non-story blocks<small>Keeps reasoning, trackers, recaps, choice menus and notes out of the dialogue.</small>${more("One short check per reply with the story reader connection labels each line as story or not; the result is cached per message. Removed lines stay readable in a Not story card in Panels. If the check fails or the provider refuses, every line is shown as before.")}</span></label>
               <label data-field ${find("Ignored tags", "status inventory hide strip blocks filter")}><span>Ignored tags</span><input name="ignoredTags" type="text" placeholder="status, stats, system, inventory" /><small>Comma-separated tag names. Removes the whole matching block from dialogue and image planning.</small>${more("For example status, inventory, WORLD_VOICE. Multiline blocks are removed too. Recognized status blocks stay available as plain-text cards in Panels. The chat message is not edited.")}</label>
               <label data-field ${find("Display regex rules", "regex replace formatting dialogue pattern")}><span>Display regex rules</span><textarea name="displayRegexRules" spellcheck="false" placeholder="/§([^§]+)§/g => <em class=&quot;vn-transmission&quot;>$1</em>"></textarea><small>One rule per line: <code>/pattern/flags =&gt; replacement</code>. Dialogue formatting only.</small>${more("<code>pattern =&gt; replacement</code> also works. An empty replacement hides a match from dialogue, not from image planning. Only safe inline formatting renders here. For full HTML/SVG cards, open Panels in the novel view.")}</label>
-            `, { id: "filtering", apply: true })}
+            `, { id: "filtering" })}
             ${group("Models and parameters", `
               <div data-row>
                 <label data-field ${find("Image model override", "image model checkpoint")}><span>Image model override</span><input name="imageModel" type="text" placeholder="Use the selected connection model" /><small data-image-model-hint>Leave blank to use the model configured on the selected image connection.</small></label>
@@ -821,14 +823,14 @@ export class VisualNovelSettingsPanel {
               </div>
               <label data-field ${find("Sprite cut-out model URL", "sprites cutout cut-out background removal model onnx isnet download url huggingface")}><span>Sprite cut-out model URL</span><input name="spriteModelUrl" type="url" spellcheck="false" placeholder="${esc(DEFAULT_SPRITE_MODEL_URL)}" /><small>Where the Best cut-out model downloads from, once. Must start with https://. Leave empty for the default.</small></label>
               <label data-field ${find("Studio cut-out model URL", "sprites cutout cut-out background removal model onnx birefnet studio download url localhost")}><span>Studio cut-out model URL</span><input name="spriteStudioModelUrl" type="url" spellcheck="false" placeholder="http://localhost:8790/birefnet_general_1024_fp16.onnx" /><small>Studio cut-out quality only (experimental): where its BiRefNet model (about 500 MB) downloads from, once. https://, or http://localhost for a file served on this computer. Leave empty to cut with Best.</small></label>
-            `, { id: "models", apply: true })}
+            `, { id: "models" })}
             ${group("Custom CSS", `
               <label data-field ${find("Theme CSS", "custom css style stylesheet")}><span>Theme CSS</span><textarea name="customCss" spellcheck="false"></textarea><small>Selectors beginning with data-vn are stable. Remote imports and URL fetches are removed.</small></label>
-            `, { id: "css", apply: true, find: find("Custom CSS", "style stylesheet") })}
+            `, { id: "css", find: find("Custom CSS", "style stylesheet") })}
             ${group("Storage and logs", `
               <label data-field ${find("Music storage folder", "audio directory folder scoped storage")}><span>Music storage folder</span><input name="audioDirectory" type="text" placeholder="audio" /><small>Folder inside the extension's scoped Lumiverse storage, scanned for music and sound effects.</small></label>
               <label data-check ${find("Verbose debug logging", "debug log console verbose")}><input name="debugLogging" type="checkbox" /><span>Verbose debug logging<small>Writes host events, planning, assets and anchoring to the Lumiverse log and browser console.</small>${more("While on, story text, the raw planner response and resolved character, wardrobe and environment state are written to the log.")}</span></label>
-            `, { id: "storage", apply: true, find: "" })}
+            `, { id: "storage", find: "" })}
             ${group("Reset and setup", `
               <div data-actions>
                 <button type="button" data-reset>Reset defaults</button>
@@ -838,12 +840,9 @@ export class VisualNovelSettingsPanel {
             `, { id: "maintenance", find: find("Reset defaults", "reset defaults setup guide onboarding start over") })}
           `, " data-advanced-settings")}
 
-          <div data-draft-bar hidden>
-            <div><span data-draft-count></span><small>Advanced changes are applied together.</small></div>
-            <div data-actions>
-              <button type="button" data-discard>Discard</button>
-              <button type="submit" data-primary data-apply data-apply-bar>Apply</button>
-            </div>
+          <div data-undo-toast role="status" hidden>
+            <span data-undo-text></span>
+            <button type="button" data-undo>Undo</button>
           </div>
         </form>
       </div>
@@ -1217,11 +1216,11 @@ export class VisualNovelSettingsPanel {
   }
 
   private wire(): void {
-    // Everyday controls save the moment they change; Advanced keys become drafts until Apply.
+    // Every control saves when it changes; an Advanced field while typed is kept from host syncs until committed.
     this.form.addEventListener("change", (event) => {
       const target = event.target;
       if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement)) return;
-      if (this.isAdvanced(target.name)) { this.markDraft(target.name); return; }
+      if (this.isAdvanced(target.name)) { this.commitAdvanced([target.name]); return; }
       this.handleLiveChange(target);
     });
     this.form.addEventListener("input", (event) => {
@@ -1247,13 +1246,14 @@ export class VisualNovelSettingsPanel {
 
     this.form.addEventListener("submit", (event) => {
       event.preventDefault();
-      this.applyAdvanced();
+      this.commitFocused();
     });
+    this.root.querySelector("[data-undo]")?.addEventListener("click", () => this.undo());
     this.root.querySelector<HTMLButtonElement>("[data-save-system-one-key]")?.addEventListener("click", () => {
       const field = this.control<HTMLInputElement>("systemOneApiKey");
       const key = field.value.trim();
       if (!key) { this.setSystemOneKeyStatus(false, "Enter a key first."); return; }
-      this.setSystemOneKeyStatus(false, "Saving key…");
+      this.setSystemOneKeyStatus(false, "Saving and testing the key…");
       this.options.onSaveSystemOneKey?.(key);
       field.value = "";
     });
@@ -1265,7 +1265,7 @@ export class VisualNovelSettingsPanel {
     this.form.addEventListener("keydown", (event) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
-        this.applyAdvanced();
+        this.commitFocused();
       }
     });
 
@@ -1340,12 +1340,14 @@ export class VisualNovelSettingsPanel {
       this.pendingEverydayFields = {};
       const patch = resetPatch(this.config);
       this.drafts.clear();
+      this.invalid.clear();
+      this.hideUndo();
       this.refreshStatus();
       this.save(patch, "Defaults restored.");
       this.syncFromConfig(patch);
     });
 
-    // Prompt presets keep their immediate save: they are a small library, not a draft.
+    // Prompt presets: choosing one fills and saves both prompt fields; the library saves at once.
     const presetSelect = this.control<HTMLSelectElement>("promptPresetSelect");
     const presetName = this.control<HTMLInputElement>("promptPresetName");
     presetSelect.addEventListener("change", () => {
@@ -1354,8 +1356,7 @@ export class VisualNovelSettingsPanel {
       this.control<HTMLInputElement>("promptPrefix").value = preset.positive;
       this.control<HTMLInputElement>("negativePrompt").value = preset.negative;
       presetName.value = preset.name;
-      this.markDraft("promptPrefix");
-      this.markDraft("negativePrompt");
+      this.commitAdvanced(["promptPrefix", "negativePrompt"], `Preset “${preset.name}”`);
     });
     this.root.querySelector("[data-preset-save]")?.addEventListener("click", () => {
       const name = presetName.value.trim();
@@ -1390,9 +1391,6 @@ export class VisualNovelSettingsPanel {
       presetName.value = "";
       this.save({ promptPresets: this.promptPresets.map((preset) => ({ ...preset })) }, `Preset “${selected.name}” deleted.`);
     });
-
-    // Discard puts every Advanced control back to the last value the host gave us.
-    this.root.querySelector("[data-discard]")?.addEventListener("click", () => this.discardAdvanced());
 
     // A failed validation inside a hidden section must open that section.
     this.form.addEventListener("invalid", (event) => {
@@ -1464,6 +1462,9 @@ export class VisualNovelSettingsPanel {
         return preset ? { maxImagesPerTurn: preset.value } : null;
       }
       case "maxImagesPerTurn": return { maxImagesPerTurn: clamp(Math.round(Number(target.value)), 0, 12, DEFAULT_CONFIG.maxImagesPerTurn) };
+      case "systemOneMode": return { systemOneMode: target.value === "compare" || target.value === "on" ? target.value : "off" };
+      case "systemOneApiUrl": return { systemOneApiUrl: target.value.trim() || DEFAULT_CONFIG.systemOneApiUrl };
+      case "systemOneModel": return { systemOneModel: target.value.trim() || DEFAULT_CONFIG.systemOneModel };
       case "novelAiSteps":
       case "novelAiGuidance":
       case "novelAiSampler":
@@ -1647,46 +1648,52 @@ export class VisualNovelSettingsPanel {
         this.setStatus(this.pendingSavedMessage, "saved", 3000);
       }
     } else {
-      // Save error: clear pending fields so rejected edits never become phantom state
+      // Save error: clear pending fields so rejected edits never become phantom state,
+      // and withdraw Undo: there is no saved change to take back.
       this.pendingEverydayFields = {};
+      this.hideUndo();
       this.setStatus(`Could not save: ${status.error}`, "error");
     }
   }
 
   /* ---------------------------------------------------------------------- */
-  /* Advanced (draft + Apply)                                                */
+  /* Advanced (saves on commit, with Undo)                                   */
   /* ---------------------------------------------------------------------- */
 
   private markDraft(name: AdvancedKey): void {
-    // A control that reads exactly what the host last gave us is not a draft. This also
+    // A control that reads exactly what the host last gave us is not being edited. This also
     // absorbs the blur-time change event browsers fire after a programmatic value sync.
-    if (this.advancedValue(name) === this.synced.get(name)) this.drafts.delete(name);
-    else this.drafts.add(name);
-    this.refreshStatus();
+    if (this.advancedValue(name) === this.synced.get(name)) {
+      this.drafts.delete(name);
+      this.invalid.delete(name);
+    } else {
+      this.drafts.add(name);
+    }
   }
 
   /** Last value written by a host sync, per Advanced control, in the control's own string form. */
   private readonly synced = new Map<AdvancedKey, string>();
+  /** Advanced fields whose text does not parse (JSON, URL): kept on screen, marked, not saved. */
+  private readonly invalid = new Set<AdvancedKey>();
+  private undoPatch: Partial<VisualNovelConfig> | null = null;
+  private undoTimer: ReturnType<typeof setTimeout> | null = null;
 
   private advancedValue(name: AdvancedKey): string {
     const element = this.control<HTMLInputElement | HTMLTextAreaElement>(name);
     return element instanceof HTMLInputElement && element.type === "checkbox" ? String(element.checked) : element.value;
   }
 
+  /** Marks fields that do not parse and counts them per section for the nav badges. */
   private refreshStatus(): void {
-    const dirty = this.drafts.size > 0;
-    const bar = this.root.querySelector<HTMLElement>("[data-draft-bar]")!;
-    bar.hidden = !dirty;
-    this.root.querySelector<HTMLElement>("[data-draft-count]")!.textContent =
-      `${this.drafts.size} change${this.drafts.size === 1 ? "" : "s"} not applied yet`;
-    // Mark each changed field, and count changes per section for the nav badges.
     const perSection = new Map<string, number>();
     for (const name of ADVANCED_KEYS) {
       const element = this.root.querySelector<HTMLElement>(`[name="${name}"]`);
       const field = element?.closest<HTMLElement>("[data-field], label[data-check], fieldset") ?? null;
-      const changed = this.drafts.has(name);
-      field?.toggleAttribute("data-dirty", changed);
-      if (changed && element) {
+      const bad = this.invalid.has(name);
+      field?.toggleAttribute("data-dirty", bad);
+      if (bad) element?.setAttribute("aria-invalid", "true");
+      else element?.removeAttribute("aria-invalid");
+      if (bad && element) {
         const section = element.closest<HTMLElement>("[data-pane]")?.dataset.pane ?? "advanced";
         perSection.set(section, (perSection.get(section) ?? 0) + 1);
       }
@@ -1696,83 +1703,121 @@ export class VisualNovelSettingsPanel {
       const count = perSection.get(tab.dataset.tab!) ?? 0;
       badge.hidden = count === 0;
       badge.textContent = String(count);
-      badge.setAttribute("aria-label", `${count} unapplied`);
+      badge.setAttribute("aria-label", `${count} not saved`);
     }
-    if (dirty) this.setStatus("Advanced changes are not applied yet.", "dirty");
-    else if (this.status.dataset.kind === "dirty") this.setStatus("", "idle");
+    if (this.invalid.size === 0 && this.status.dataset.kind === "dirty") this.setStatus("", "idle");
   }
 
-  private applyAdvanced(): void {
-    if (this.drafts.size === 0) {
-      this.setStatus("Nothing to apply. Everyday settings save on their own.", "saved", 3000);
-      return;
+  /**
+   * Saves the named Advanced fields that changed, at once, and offers Undo.
+   * A field that does not parse keeps its text, is marked, and is not saved.
+   */
+  private commitAdvanced(names: readonly AdvancedKey[], label?: string): void {
+    const patch: Record<string, unknown> = {};
+    const previous: Record<string, unknown> = {};
+    let error: string | null = null;
+    for (const name of names) {
+      this.markDraft(name);
+      if (!this.drafts.has(name)) continue;
+      try {
+        patch[name] = this.readAdvancedKey(name);
+        previous[name] = structuredClone(this.config[name]);
+        this.invalid.delete(name);
+      } catch (caught) {
+        this.invalid.add(name);
+        error ??= caught instanceof Error ? caught.message : String(caught);
+      }
     }
-    let patch: Partial<VisualNovelConfig>;
-    try {
-      patch = this.readAdvanced();
-    } catch (error) {
-      // Show the field that failed, wherever the user is.
-      let revealed = false;
-      for (const [name, label] of [["parserParameters", "Story reader parameters"], ["imageParameters", "Image parameters"]] as const) {
-        try { jsonObject(this.control<HTMLTextAreaElement>(name).value, label); }
-        catch { this.reveal(this.control<HTMLTextAreaElement>(name)); revealed = true; break; }
+    this.refreshStatus();
+    const saved = Object.keys(patch) as AdvancedKey[];
+    if (saved.length > 0) {
+      this.pendingEverydayFields = {};
+      this.config = { ...this.config, ...patch };
+      for (const name of saved) {
+        this.drafts.delete(name);
+        this.synced.set(name, this.advancedValue(name));
       }
-      if (!revealed) {
-        try { parseSpriteModelUrl(this.control<HTMLInputElement>("spriteModelUrl").value); }
-        catch { this.reveal(this.control<HTMLInputElement>("spriteModelUrl")); revealed = true; }
-      }
-      if (!revealed) {
-        try { parseStudioModelUrl(this.control<HTMLInputElement>("spriteStudioModelUrl").value); }
-        catch { this.reveal(this.control<HTMLInputElement>("spriteStudioModelUrl")); }
-      }
-      this.setStatus(error instanceof Error ? error.message : String(error), "error");
-      return;
+      const what = label ?? this.fieldLabel(saved[0]!);
+      this.save(patch as Partial<VisualNovelConfig>, `${what} saved.`);
+      this.offerUndo(`${what} saved.`, previous as Partial<VisualNovelConfig>);
+    }
+    if (error) this.setStatus(error, "error");
+  }
+
+  /** Enter in a field or Ctrl+S commits the focused Advanced field at once. */
+  private commitFocused(): void {
+    const active = this.root.activeElement;
+    const name = active instanceof HTMLElement ? active.getAttribute("name") : null;
+    if (name && this.isAdvanced(name)) this.commitAdvanced([name]);
+  }
+
+  private fieldLabel(name: AdvancedKey): string {
+    return this.root.querySelector<HTMLElement>(`[name="${name}"]`)?.closest<HTMLElement>("[data-find-label]")?.dataset.findLabel ?? name;
+  }
+
+  private offerUndo(text: string, previous: Partial<VisualNovelConfig>): void {
+    const toast = this.root.querySelector<HTMLElement>("[data-undo-toast]")!;
+    this.undoPatch = previous;
+    toast.querySelector<HTMLElement>("[data-undo-text]")!.textContent = text;
+    toast.hidden = false;
+    if (this.undoTimer) clearTimeout(this.undoTimer);
+    this.undoTimer = setTimeout(() => this.hideUndo(), UNDO_MS);
+  }
+
+  private hideUndo(): void {
+    if (this.undoTimer) { clearTimeout(this.undoTimer); this.undoTimer = null; }
+    this.undoPatch = null;
+    const toast = this.root.querySelector<HTMLElement>("[data-undo-toast]");
+    if (toast) toast.hidden = true;
+  }
+
+  /** Puts the last Advanced save back and saves that. */
+  private undo(): void {
+    const previous = this.undoPatch;
+    if (!previous) return;
+    this.hideUndo();
+    for (const name of Object.keys(previous) as AdvancedKey[]) {
+      this.drafts.delete(name);
+      this.invalid.delete(name);
     }
     this.pendingEverydayFields = {};
-    this.config = { ...this.config, ...patch };
-    this.drafts.clear();
-    this.refreshStatus();
-    this.save(patch, "Advanced settings applied.");
-  }
-
-  private discardAdvanced(): void {
-    const count = this.drafts.size;
-    this.drafts.clear();
+    this.config = { ...this.config, ...previous };
     this.syncFromConfig(this.config);
     this.refreshStatus();
-    if (count > 0) this.setStatus(`Discarded ${count} change${count === 1 ? "" : "s"}.`, "saved", 3000);
+    this.save(previous, "Change undone.");
   }
 
-  private readAdvanced(): Partial<VisualNovelConfig> {
-    return {
-      imageModel: this.control<HTMLInputElement>("imageModel").value.trim(),
-      imageConcurrency: clamp(Math.round(Number(this.control<HTMLInputElement>("imageConcurrency").value)), 1, 6, DEFAULT_CONFIG.imageConcurrency),
-      parserParameters: jsonObject(this.control<HTMLTextAreaElement>("parserParameters").value, "Story reader parameters"),
-      systemOneMode: this.control<HTMLSelectElement>("systemOneMode").value as VisualNovelConfig["systemOneMode"],
-      systemOneApiUrl: this.control<HTMLInputElement>("systemOneApiUrl").value.trim() || DEFAULT_CONFIG.systemOneApiUrl,
-      systemOneModel: this.control<HTMLInputElement>("systemOneModel").value.trim() || DEFAULT_CONFIG.systemOneModel,
-      imageParameters: jsonObject(this.control<HTMLTextAreaElement>("imageParameters").value, "Image parameters"),
-      audioDirectory: this.control<HTMLInputElement>("audioDirectory").value.trim(),
-      includeRecentMessages: clamp(Math.round(Number(this.control<HTMLInputElement>("includeRecentMessages").value)), 0, 30, DEFAULT_CONFIG.includeRecentMessages),
-      includeCharacterContext: this.control<HTMLInputElement>("includeCharacterContext").checked,
-      includePersonaContext: this.control<HTMLInputElement>("includePersonaContext").checked,
-      includeLorebookContext: this.control<HTMLInputElement>("includeLorebookContext").checked,
-      debugLogging: this.control<HTMLInputElement>("debugLogging").checked,
-      promptPrefix: this.control<HTMLInputElement>("promptPrefix").value,
-      promptSuffix: this.control<HTMLInputElement>("promptSuffix").value,
-      negativePrompt: this.control<HTMLInputElement>("negativePrompt").value,
-      novelAiQualityTags: this.control<HTMLInputElement>("novelAiQualityTags").checked,
-      novelAiUseDefaultNegative: this.control<HTMLInputElement>("novelAiUseDefaultNegative").checked,
-      originalReference: this.control<HTMLInputElement>("originalReference").checked,
-      originalCreationName: this.control<HTMLInputElement>("originalCreationName").value.trim(),
-      customPlannerInstructions: this.control<HTMLTextAreaElement>("customPlannerInstructions").value,
-      ignoredTags: this.control<HTMLInputElement>("ignoredTags").value,
-      skipNonStory: this.control<HTMLInputElement>("skipNonStory").checked,
-      displayRegexRules: this.control<HTMLTextAreaElement>("displayRegexRules").value,
-      customCss: this.control<HTMLTextAreaElement>("customCss").value,
-      spriteModelUrl: parseSpriteModelUrl(this.control<HTMLInputElement>("spriteModelUrl").value),
-      spriteStudioModelUrl: parseStudioModelUrl(this.control<HTMLInputElement>("spriteStudioModelUrl").value),
-    };
+  private readAdvancedKey(name: AdvancedKey): unknown {
+    const text = (): string => this.control<HTMLInputElement | HTMLTextAreaElement>(name).value;
+    switch (name) {
+      case "imageModel":
+      case "audioDirectory":
+      case "originalCreationName":
+        return text().trim();
+      case "imageConcurrency": return clamp(Math.round(Number(text())), 1, 6, DEFAULT_CONFIG.imageConcurrency);
+      case "includeRecentMessages": return clamp(Math.round(Number(text())), 0, 30, DEFAULT_CONFIG.includeRecentMessages);
+      case "parserParameters": return jsonObject(text(), "Story reader parameters");
+      case "imageParameters": return jsonObject(text(), "Image parameters");
+      case "spriteModelUrl": return parseSpriteModelUrl(text());
+      case "spriteStudioModelUrl": return parseStudioModelUrl(text());
+      case "includeCharacterContext":
+      case "includePersonaContext":
+      case "includeLorebookContext":
+      case "debugLogging":
+      case "novelAiQualityTags":
+      case "novelAiUseDefaultNegative":
+      case "originalReference":
+      case "skipNonStory":
+        return this.control<HTMLInputElement>(name).checked;
+      case "promptPrefix":
+      case "promptSuffix":
+      case "negativePrompt":
+      case "customPlannerInstructions":
+      case "ignoredTags":
+      case "displayRegexRules":
+      case "customCss":
+        return text();
+    }
   }
 
   /* ---------------------------------------------------------------------- */
@@ -1811,9 +1856,6 @@ export class VisualNovelSettingsPanel {
     set("imageModel", () => { this.control<HTMLInputElement>("imageModel").value = config.imageModel; });
     set("imageConcurrency", () => { this.control<HTMLInputElement>("imageConcurrency").value = String(config.imageConcurrency); });
     set("parserParameters", () => { this.control<HTMLTextAreaElement>("parserParameters").value = JSON.stringify(config.parserParameters, null, 2); });
-    set("systemOneMode", () => { this.control<HTMLSelectElement>("systemOneMode").value = config.systemOneMode; });
-    set("systemOneApiUrl", () => { this.control<HTMLInputElement>("systemOneApiUrl").value = config.systemOneApiUrl; });
-    set("systemOneModel", () => { this.control<HTMLInputElement>("systemOneModel").value = config.systemOneModel; });
     set("imageParameters", () => { this.control<HTMLTextAreaElement>("imageParameters").value = JSON.stringify(config.imageParameters, null, 2); });
     set("audioDirectory", () => { this.control<HTMLInputElement>("audioDirectory").value = config.audioDirectory; });
     set("includeRecentMessages", () => { this.control<HTMLInputElement>("includeRecentMessages").value = String(config.includeRecentMessages); });
@@ -1841,6 +1883,11 @@ export class VisualNovelSettingsPanel {
   }
 
   private syncEveryday(config: VisualNovelConfig): void {
+    this.control<HTMLSelectElement>("systemOneMode").value = config.systemOneMode;
+    for (const name of ["systemOneApiUrl", "systemOneModel"] as const) {
+      const input = this.control<HTMLInputElement>(name);
+      if (this.root.activeElement !== input) input.value = config[name];
+    }
     this.control<HTMLInputElement>("generateChoices").checked = config.generateChoices;
     this.control<HTMLInputElement>("autoEnter").checked = config.autoEnter;
     this.control<HTMLInputElement>("referenceAnchoring").checked = config.referenceAnchoring;
@@ -2074,7 +2121,7 @@ export class VisualNovelSettingsPanel {
     const library = this.audioLibrary ? `${this.audioLibrary.bgmCount} track${this.audioLibrary.bgmCount === 1 ? "" : "s"}` : "No music yet";
     summary("sound", `${library} · ${Math.round(config.bgmVolume * 100)}%`);
     summary("voice", config.speech?.enabled ? "On" : "Off");
-    summary("advanced", "Applies with Apply");
+    summary("advanced", "Saves as you change");
   }
 
   /* ---------------------------------------------------------------------- */
@@ -2254,7 +2301,7 @@ export class VisualNovelSettingsPanel {
     if (clearAfterMs) {
       this.statusTimer = setTimeout(() => {
         if (this.status.dataset.kind !== kind) return;
-        if (this.drafts.size > 0) this.setStatus("Advanced changes are not applied yet.", "dirty");
+        if (this.invalid.size > 0) this.setStatus(notSavedMessage(this.invalid.size), "dirty");
         else this.setStatus("", "idle");
       }, clearAfterMs);
     }
