@@ -106,14 +106,19 @@ function unsafeKey(key: string): boolean {
   return key === "__proto__" || key === "constructor" || key === "prototype";
 }
 
-/** Deep merge as Lumiverse's `applyRawOverride` does it: objects merge, arrays and scalars replace. */
+/**
+ * Deep merge as Lumiverse's `applyRawOverride` does it: objects merge,
+ * arrays and scalars replace, and a nested `null` is written (only a
+ * top-level null or undefined source changes nothing).
+ */
 function deepMerge(target: unknown, source: unknown): unknown {
   if (source === null || source === undefined) return target;
   if (!isObject(source) || !isObject(target)) return source;
   const result: JsonObject = { ...target };
   for (const key of Object.keys(source)) {
     if (unsafeKey(key)) continue;
-    result[key] = deepMerge(result[key], source[key]);
+    const value = source[key];
+    result[key] = isObject(result[key]) && isObject(value) ? deepMerge(result[key], value) : value;
   }
   return result;
 }
@@ -135,16 +140,21 @@ export function parseRawOverride(value: unknown): JsonObject | null {
 
 /**
  * The inset's `rawRequestOverride`: `noise: 0` (the user's value wins), then
- * the user's overrides in order (connection defaults, then Cue's Image
- * parameters: Lumiverse would use the later one), then the inset itself,
- * which wins for `action`, `parameters.image` and `parameters.mask`.
- * Lumiverse deep-merges the result into the NovelAI body (`model` is a
- * protected key there, so the model goes in the request's `model` field).
+ * the user's overrides in order (see `compileNovelAiInsetRequest`), then the
+ * inset itself, which wins for `action`, `parameters.image`,
+ * `parameters.mask` and the canvas size (`parameters.width`/`height`: a user
+ * size would not match the canvas and mask). Lumiverse deep-merges the
+ * result into the NovelAI body (`model` is a protected key there, so the
+ * model goes in the request's `model` field).
  */
-export function mergeNovelAiRawOverride(userOverrides: readonly unknown[], canvas: { image: string; mask: string }): string {
+export function mergeNovelAiRawOverride(
+  userOverrides: readonly unknown[],
+  canvas: { image: string; mask: string },
+  size: { width: number; height: number },
+): string {
   let merged: unknown = { parameters: { noise: 0 } };
   for (const override of userOverrides) merged = deepMerge(merged, parseRawOverride(override));
-  merged = deepMerge(merged, { action: "infill", parameters: { image: canvas.image, mask: canvas.mask } });
+  merged = deepMerge(merged, { action: "infill", parameters: { width: size.width, height: size.height, image: canvas.image, mask: canvas.mask } });
   return JSON.stringify(merged);
 }
 
@@ -160,7 +170,12 @@ export function compileNovelAiInsetRequest(input: {
   request: SpriteImageRequest;
   layout: NovelAiInsetLayout;
   canvas: { image: string; mask: string };
-  /** The user's raw overrides, lowest priority first (connection defaults, Cue's Image parameters). */
+  /**
+   * The user's raw override, as the plain request would carry it: Cue's
+   * Image parameters `rawRequestOverride` when set, else the connection's
+   * own (Lumiverse merges extension parameters over the connection's
+   * defaults one level deep, so the inset's override would hide it).
+   */
   userOverrides?: readonly unknown[];
 }): SpriteImageRequest {
   const { request, layout } = input;
@@ -169,7 +184,7 @@ export function compileNovelAiInsetRequest(input: {
     ...request.parameters,
     negativePrompt,
     resolution: `${layout.canvas.width}x${layout.canvas.height}`,
-    rawRequestOverride: mergeNovelAiRawOverride(input.userOverrides ?? [], input.canvas),
+    rawRequestOverride: mergeNovelAiRawOverride(input.userOverrides ?? [], input.canvas, layout.canvas),
   };
   delete parameters.resolvedReferenceImages;
   return { prompt: insetPrompt(request.prompt), negativePrompt, parameters };
@@ -177,9 +192,10 @@ export function compileNovelAiInsetRequest(input: {
 
 /**
  * The image connection's own `rawRequestOverride` (connection default
- * parameters), which the extension's parameters would otherwise replace:
- * Lumiverse merges extension parameters over the defaults one level deep.
- * Null when there is none or the connection cannot be read.
+ * parameters). The plain request leaves it to Lumiverse, which uses it
+ * unless Cue's Image parameters set one; the inset always sends its own, so
+ * it passes this one on in that case. Null when there is none or the
+ * connection cannot be read.
  */
 export async function connectionRawOverride(spindle: SpindleAPI, config: Pick<VisualNovelConfig, "imageConnectionId">, userId?: string): Promise<unknown> {
   try {

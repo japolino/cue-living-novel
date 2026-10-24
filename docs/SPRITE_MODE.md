@@ -382,7 +382,7 @@ one table, so a scene layout can be added). Request:
               caption unchanged, coords off, qualityToggle false,
               negativePrompt as above) and
               resolution: "1216x832"
-              rawRequestOverride: '{"parameters":{"noise":0,"image":"<png>","mask":"<png>"},"action":"infill"}'
+              rawRequestOverride: '{"parameters":{"noise":0,"width":1216,"height":832,"image":"<png>","mask":"<png>"},"action":"infill"}'
   ```
 
   No `resolvedReferenceImages`. Steps, guidance and sampler stay the
@@ -392,10 +392,14 @@ one table, so a scene layout can be added). Request:
   deep-merges `rawRequestOverride` into the NovelAI body, where `action` and
   `parameters.*` are not protected (`model` is, hence the model field).
   Lumiverse merges extension parameters over the connection's defaults one
-  level deep, so Cue merges the user's own `rawRequestOverride` itself:
-  `noise: 0` < connection default < Cue's Image parameters < the inset's
-  `action`, `image` and `mask`. An override that is not valid JSON skips
-  the inset (plain expression).
+  level deep, so the inset's override would hide the user's: Cue merges in
+  the one the plain request would use, Cue's Image parameters
+  `rawRequestOverride` when set, else the connection's own (never both, as
+  on the plain request). Order: `noise: 0` < the user's override < the
+  inset's `action`, `image`, `mask` and canvas size (`width`, `height`: a
+  user size would not match the canvas). The merge is Lumiverse's (objects
+  merge, a nested `null` is written). An override that is not valid JSON
+  skips the inset (plain expression).
 - **Crop.** The raw render is the whole canvas. The cut request carries
   `crop` (608, 0, 608×832); the frontend crops before the cut-out and echoes
   the crop in the cut meta, so the face box and the two-figure check run on

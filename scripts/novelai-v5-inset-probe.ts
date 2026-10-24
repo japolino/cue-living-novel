@@ -33,7 +33,7 @@
  *   --model <id>         V5 model (default nai-diffusion-5-full -> nai-diffusion-5-full-inpainting)
  *   --steps <n> --scale <n> --sampler <id> --seed <n>   as the Lumiverse connection would send them
  *                        (defaults 28, 5, k_euler_ancestral, random; the author used 14 and 6.7)
- *   --raw <json>         a user rawRequestOverride to merge (like a connection's)
+ *   --raw <json>         a user rawRequestOverride to merge (Cue's Image parameters one, else the connection's)
  *   --route plain|stream|both   /ai/generate-image, /ai/generate-image-stream, or both (default plain)
  *   --canvas <WxH> --strip <px>   an untested layout instead of Cue's sprite one (1216x832, 608):
  *                        reference in the left <strip> px, the rest repainted, e.g. the scene-mode
@@ -305,12 +305,16 @@ function largestEmbeddedPng(bytes: Uint8Array): Uint8Array | null {
 
 /* ---------------------------------------------------------------- body */
 
+/** Lumiverse's applyRawOverride merge: objects merge, arrays and scalars replace, a nested null is written. */
 function deepMerge(target: unknown, source: unknown): unknown {
   if (source === null || source === undefined) return target;
   const isObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
   if (!isObject(source) || !isObject(target)) return source;
   const out: Record<string, unknown> = { ...target };
-  for (const key of Object.keys(source)) if (key !== "__proto__" && key !== "constructor" && key !== "prototype") out[key] = deepMerge(out[key], source[key]);
+  for (const key of Object.keys(source)) {
+    if (key === "__proto__" || key === "constructor" || key === "prototype") continue;
+    out[key] = isObject(out[key]) && isObject(source[key]) ? deepMerge(out[key], source[key]) : source[key];
+  }
   return out;
 }
 

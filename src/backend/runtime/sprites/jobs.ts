@@ -1231,7 +1231,9 @@ export class SpriteService {
     }
     let insetRequest: SpriteImageRequest;
     try {
-      const overrides = [await connectionRawOverride(this.spindle, config, userId), config.imageParameters.rawRequestOverride];
+      // The override the plain request would carry: Cue's own replaces the connection's (Lumiverse merges one level deep).
+      const own = config.imageParameters.rawRequestOverride;
+      const overrides = [own !== undefined ? own : await connectionRawOverride(this.spindle, config, userId)];
       insetRequest = compileNovelAiInsetRequest({ request, layout, canvas: composed.canvas, userOverrides: overrides });
     } catch (error) {
       delete work.insetReference;

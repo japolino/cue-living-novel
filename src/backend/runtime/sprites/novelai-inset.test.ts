@@ -15,6 +15,7 @@ import {
 import { compileSpriteRequest, SPRITE_NEGATIVE_TAGS } from "./prompts.js";
 
 const CANVAS = { image: "SU1BR0U=", mask: "TUFTSw==" };
+const SIZE = { width: 1216, height: 832 };
 const layout = NOVELAI_INSET_LAYOUTS.sprite;
 
 function v5Request(expression = "smile") {
@@ -88,18 +89,31 @@ describe("NovelAI V5 inset: prompt and negative", () => {
 });
 
 describe("NovelAI V5 inset: raw request override", () => {
-  test("action infill, image and mask, noise 0", () => {
-    expect(JSON.parse(mergeNovelAiRawOverride([], CANVAS))).toEqual({ action: "infill", parameters: { noise: 0, image: CANVAS.image, mask: CANVAS.mask } });
+  test("action infill, image and mask, the canvas size, noise 0", () => {
+    expect(JSON.parse(mergeNovelAiRawOverride([], CANVAS, SIZE))).toEqual({ action: "infill", parameters: { noise: 0, width: 1216, height: 832, image: CANVAS.image, mask: CANVAS.mask } });
+  });
+
+  test("a user size cannot change the canvas size (it would not match the image and mask)", () => {
+    const merged = JSON.parse(mergeNovelAiRawOverride(['{"parameters":{"width":832,"height":1216,"steps":20}}'], CANVAS, SIZE));
+    expect(merged.parameters).toMatchObject({ width: 1216, height: 832, steps: 20 });
+  });
+
+  test("a nested null is written, as Lumiverse merges it; a top-level null changes nothing", () => {
+    const merged = JSON.parse(mergeNovelAiRawOverride(['{"parameters":{"noise":null,"sm":null},"extra":null}', null], CANVAS, SIZE));
+    expect(merged.parameters.noise).toBeNull();
+    expect(merged.parameters.sm).toBeNull();
+    expect(merged.extra).toBeNull();
+    expect(merged.parameters.image).toBe(CANVAS.image);
   });
 
   test("the user's overrides are merged, not replaced; the inset wins for action, image and mask", () => {
     const connection = JSON.stringify({ parameters: { steps: 14, scale: 6.7, noise: 0.1, image: "user-image" }, action: "generate", extra: { a: 1 } });
     const cue = { parameters: { sampler: "k_euler_ancestral", scale: 7 }, extra: { b: 2 } };
-    const merged = JSON.parse(mergeNovelAiRawOverride([connection, cue], CANVAS));
+    const merged = JSON.parse(mergeNovelAiRawOverride([connection, cue], CANVAS, SIZE));
     expect(merged).toEqual({
       action: "infill",
       extra: { a: 1, b: 2 },
-      parameters: { noise: 0.1, steps: 14, scale: 7, sampler: "k_euler_ancestral", image: CANVAS.image, mask: CANVAS.mask },
+      parameters: { noise: 0.1, steps: 14, scale: 7, sampler: "k_euler_ancestral", width: 1216, height: 832, image: CANVAS.image, mask: CANVAS.mask },
     });
   });
 
@@ -110,11 +124,11 @@ describe("NovelAI V5 inset: raw request override", () => {
     expect(() => parseRawOverride("{steps:20}")).toThrow();
     expect(() => parseRawOverride("[1]")).toThrow();
     expect(() => parseRawOverride(5)).toThrow();
-    expect(() => mergeNovelAiRawOverride(["not json"], CANVAS)).toThrow();
+    expect(() => mergeNovelAiRawOverride(["not json"], CANVAS, SIZE)).toThrow();
   });
 
   test("prototype keys in a user override never reach the merge", () => {
-    const merged = JSON.parse(mergeNovelAiRawOverride(['{"__proto__":{"polluted":true},"parameters":{"steps":20}}'], CANVAS));
+    const merged = JSON.parse(mergeNovelAiRawOverride(['{"__proto__":{"polluted":true},"parameters":{"steps":20}}'], CANVAS, SIZE));
     expect(merged.parameters.steps).toBe(20);
     expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
   });
@@ -134,7 +148,7 @@ describe("NovelAI V5 inset: request transform", () => {
     expect(inset.negativePrompt).toBe(insetNegative(plain.negativePrompt));
     expect(inset.parameters.negativePrompt).toBe(inset.negativePrompt);
     expect(inset.parameters.resolvedReferenceImages).toBeUndefined();
-    expect(JSON.parse(inset.parameters.rawRequestOverride as string)).toEqual({ action: "infill", parameters: { noise: 0, image: CANVAS.image, mask: CANVAS.mask } });
+    expect(JSON.parse(inset.parameters.rawRequestOverride as string)).toEqual({ action: "infill", parameters: { noise: 0, width: 1216, height: 832, image: CANVAS.image, mask: CANVAS.mask } });
     // Steps, guidance and sampler are the user's: the inset adds none.
     for (const key of ["steps", "guidance", "scale", "sampler"]) expect(inset.parameters[key]).toBeUndefined();
     // The plain request is not changed.

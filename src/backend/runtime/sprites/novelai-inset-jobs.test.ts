@@ -138,7 +138,7 @@ describe("NovelAI V5 inset: sprite expressions", () => {
       // The set's shared seed (one pose across the set).
       expect(call.parameters.seed).toBe((await f.library()).sets[f.setKey]!.seed);
       const override = JSON.parse(call.parameters.rawRequestOverride as string);
-      expect(override).toEqual({ action: "infill", parameters: { noise: 0, image: toBase64(fakePng(1216, 832, 90)), mask: toBase64(fakePng(1216, 832, 5)) } });
+      expect(override).toEqual({ action: "infill", parameters: { noise: 0, width: 1216, height: 832, image: toBase64(fakePng(1216, 832, 90)), mask: toBase64(fakePng(1216, 832, 5)) } });
     }
     // The cut-out is made from the right half, and the crop is stored for re-cuts.
     for (const expression of ["smile", "sad", "angry"]) {
@@ -178,20 +178,28 @@ describe("NovelAI V5 inset: sprite expressions", () => {
     expect(smile.crop).toEqual(CROP);
   });
 
-  test("the user's raw request override (connection defaults and Image parameters) is merged in", async () => {
-    const f = setup({
-      defaultParameters: { rawRequestOverride: JSON.stringify({ parameters: { steps: 14, scale: 6.7 } }) },
-      config: { imageConnectionId: "conn-1", imageParameters: { rawRequestOverride: JSON.stringify({ parameters: { scale: 5.5, cfg_rescale: 0 } }) } },
+  test("the user's raw request override is merged in: Cue's Image parameters when set, else the connection's", async () => {
+    const connection = { rawRequestOverride: JSON.stringify({ parameters: { steps: 14, scale: 6.7 } }) };
+    // Cue's own override set: as on the plain request, the connection's does not apply.
+    const own = setup({
+      defaultParameters: connection,
+      config: { imageConnectionId: "conn-1", imageParameters: { rawRequestOverride: JSON.stringify({ parameters: { scale: 5.5, cfg_rescale: 0, width: 832, height: 1216 } }) } },
     });
-    await f.service.prepareCast("u1", [MIRA], f.config);
-    await f.drive(f.allSettled);
-    const call = f.calls.find(inpainting)!;
-    expect(JSON.parse(call.parameters.rawRequestOverride as string)).toMatchObject({
-      action: "infill",
-      parameters: { noise: 0, steps: 14, scale: 5.5, cfg_rescale: 0 },
-    });
+    await own.service.prepareCast("u1", [MIRA], own.config);
+    await own.drive(own.allSettled);
+    const merged = JSON.parse(own.calls.find(inpainting)!.parameters.rawRequestOverride as string);
+    expect(merged).toMatchObject({ action: "infill", parameters: { noise: 0, scale: 5.5, cfg_rescale: 0, width: 1216, height: 832 } });
+    expect(merged.parameters.steps).toBeUndefined();
     // The idle keeps the user's own override untouched.
-    expect(f.calls[0]!.parameters.rawRequestOverride).toBe(JSON.stringify({ parameters: { scale: 5.5, cfg_rescale: 0 } }));
+    expect(own.calls[0]!.parameters.rawRequestOverride).toBe(JSON.stringify({ parameters: { scale: 5.5, cfg_rescale: 0, width: 832, height: 1216 } }));
+    // No override of Cue's own: the connection's, which the inset's override would otherwise hide.
+    const defaults = setup({ defaultParameters: connection, config: { imageConnectionId: "conn-1" } });
+    await defaults.service.prepareCast("u1", [MIRA], defaults.config);
+    await defaults.drive(defaults.allSettled);
+    expect(JSON.parse(defaults.calls.find(inpainting)!.parameters.rawRequestOverride as string)).toMatchObject({
+      action: "infill",
+      parameters: { noise: 0, steps: 14, scale: 6.7, width: 1216, height: 832 },
+    });
   });
 
   test("an invalid user override skips the inset (plain expression)", async () => {
