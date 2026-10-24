@@ -199,7 +199,7 @@ A scene owns:
 
 - structured location, time, weather, lighting, and persistent environment elements
 - a `cast` list, an optional active `character` and `attire`, and the identity/tag block (`identityPrompt`)
-- a reusable base prompt and a declared composition lock (planner metadata; the current compiler does not forward `basePrompt`, the composition lock, or a 16:9 requirement to the provider)
+- a base prompt synthesized from the environment and a declared composition lock (stored metadata the planner is no longer asked for; the compiler does not forward `basePrompt`, the composition lock, or a 16:9 requirement to the provider)
 - prior-scene lineage
 - a scene-scoped `ambient` effect id (weather/mood layer; persists until the next scene boundary)
 - zero or more paragraph cues, each carrying an expression id, an optional one-shot `effect` id, and optional per-cue character, attire, BGM, and SFX
@@ -299,11 +299,21 @@ Compilation goes through the vendored Inlay compiler (`src/backend/inlay-prompt`
 
 ```text
 prefix + subject (1girl|1boy|1other, solo) + identity tags (with any attire override applied)
-       + expression/pose suffix + environment (location, time+weather, lighting, background elements)
+       + expression/pose suffix + environment (location, time+weather, lighting, background elements, description)
        + camera (upper body, eye level, straight-on) + suffix
 ```
 
-`PROMPT_PREFIX`, `PROMPT_SUFFIX`, and the negative prompt come from `config.ts`; the subject line comes from the cue's persisted `subjectCategory`, falling back to explicit gender words in the identity text; the pose suffix comes from the closed catalogue. The scene's `basePrompt`, composition lock, environment `description`, and declared aspect ratio are planner metadata that the current compiler does not forward to the provider.
+`PROMPT_PREFIX`, `PROMPT_SUFFIX`, and the negative prompt come from `config.ts`; the subject line comes from the cue's persisted `subjectCategory`, falling back to explicit gender words in the identity text; the pose suffix comes from the closed catalogue. The environment `description` is forwarded: `images.ts` compiles with `supplement: true`, so one or two of its phrases close the environment section (unless it only repeats the location). The scene's `basePrompt`, composition lock, and declared aspect ratio are stored metadata that the compiler does not forward to the provider.
+
+### Story reader request and output
+
+The story reader (`planTurn` → `requestPlannerOutput`) sends one system and one user message. The system message holds the instruction (`plannerInstruction`), the card/persona/lore reference context, and `KNOWN CHARACTERS` (registry ids and recorded tags; a card-derived or empty entry is marked `describe`). The user message holds `PREVIOUS SCENE`, `RECENT CHAT`, and the numbered `TARGET ASSISTANT RESPONSE`:
+
+- `PREVIOUS SCENE` is JSON of the previous environment, ambient, cast, on-screen character, and the current `outfits` (continuity wardrobe, else the scene attire). Scene id, the fixed camera, the composition lock, and the stored base prompt are not sent.
+- `RECENT CHAT` is the controller's window (`includeRecentMessages`) without the target reply, which the window ends with and which is sent once as the target: the message with the target's id and anything after it are dropped (by text when ids are absent). Reasoning blocks (`<think>`, `<thinking>`, …), markup, text-effect tags, and long inline data are stripped, user lines are labelled with the persona name, and messages are clipped from the front to `RECENT_CONTEXT_LIMITS` (2,000 characters for the newest message, 900 for each older one, 6,000 in total), keeping each message's end.
+- The card context leaves out creator notes and resolves `{{char}}`/`{{user}}` to the real names.
+
+The instruction asks for one minified JSON object (no fence) holding only fields the pipeline reads: `speakers` as a `{"<index>":"<name>"}` map; `scenes` with a `boundary.reason` only (the boundary flags are derived from it) and, for a continuing scene, no environment; `cues` with an expression id from `PLANNER_EXPRESSION_IDS`, the character, and attire only where an outfit changes; `effects`; and `characters` only for characters without recorded tags. `basePrompt`, the composition lock, and the camera are not requested. Normalization stays tolerant of the earlier, fuller shape and of common slips: speaker arrays, explicit boundary flags, a full environment on every scene, an environment nested inside `boundary`, attire as a tag list or a `{name: outfit}` map, and alias-only character entries without a description. A scene that omits its environment continues the place before it (the previous turn's for the first scene, the plan's previous scene for a later one). A speaker the reader names is accepted when it is a known character or when the reply spells that name (`namedInReply`; pronouns and role words never qualify), so a one-line barkeep keeps a nameplate.
 
 Where the extension owns the data, behavior is deterministic: a byte-identical content fingerprint keyed by message, swipe, and content makes generation events, reconnects, and edits idempotent; stale asset results are rejected by ownership guards; previous visual state is reused so the scene prompt stays stable until a justified boundary; and the pipeline never mutates the canonical chat message.
 
