@@ -24,6 +24,30 @@ import { NOVELAI_NEGATIVE_DEFAULT, novelAiCapabilities, novelAiCaption, novelAiQ
  */
 export const SPRITE_FRAMING_TAGS = "solo, standing, centered, front view, straight-on, facing viewer, looking at viewer, cowboy shot, simple background, white background, no shadow";
 export const SPRITE_NEGATIVE_TAGS = "scenery, background, shadow, drop shadow, gradient background, multiple people, text, multiple girls, 2girls, multiple views, split screen, border, from below, from above, dutch angle, cropped, out of frame";
+/**
+ * Sprite faces of the 4 set, in place of the shared pose catalogue's suffix
+ * (scene prompts keep the catalogue). The catalogue's "gentle smile", "sad
+ * expression" and "angry expression" are not Danbooru tags; these are
+ * (smile 4.3M posts, open mouth 3.6M, happy 142k, sad 18k, frown 157k,
+ * tearing up 76k, angry 64k, v-shaped eyebrows 272k, clenched teeth 109k,
+ * arms at sides 40k). Anima 2.9B, October 2026: 4 characters × 2 seeds,
+ * each expression made from the set's idle at reference strength 0.5 and
+ * judged blind from shuffled face crops. Clearly readable: smile 5/8 -> 8/8,
+ * sad 4/8 -> 8/8, angry 5/8 -> 7/8. Without `arms at sides`, 3 of 8 angry
+ * sprites put their hands on their hips (0 of 8 with it, 0 of 8 today).
+ */
+export const SPRITE_EXPRESSION_TAGS: Readonly<Record<string, string>> = {
+  smile: "smile, open mouth, happy",
+  sad: "sad, frown, tearing up",
+  angry: "angry, v-shaped eyebrows, frown, clenched teeth, arms at sides",
+};
+
+/** The catalogue pose for a sprite expression, with the sprite face tags where there are some. */
+export function spritePose(expression: string): { id: string; suffix: string } {
+  const pose = poseById(POSE_EXPRESSION_CATALOGUE, expression);
+  return { id: pose.id, suffix: SPRITE_EXPRESSION_TAGS[pose.id] ?? pose.suffix };
+}
+
 /** Plate framing: an empty place. */
 export const PLATE_TAGS = "scenery, no humans, detailed background, wide shot";
 export const PLATE_NEGATIVE_TAGS = "1girl, 1boy, people, person, character, text";
@@ -191,7 +215,7 @@ export function compileSpriteRequest(input: {
   const plainIdentity = spriteIdentityTags(member);
   const [label, subject] = classifySubject(plainIdentity, member.subjectCategory ?? "unknown");
   const identity = weightSkinColourTags(plainIdentity);
-  const pose = poseById(POSE_EXPRESSION_CATALOGUE, input.expression);
+  const pose = spritePose(input.expression);
   const extra = { ...sizeParameters(provider, "sprite", config), ...seedParameters(provider, input.seed) };
   if (provider === "novelai") {
     const model = config.imageModel || "nai-diffusion-4-5-full";
@@ -223,7 +247,24 @@ export function compileSpriteRequest(input: {
   return { prompt: renderComfy(sections), negativePrompt: comfyNegative(config, SPRITE_NEGATIVE_TAGS), parameters: extra };
 }
 
-/** Plate request: style prefix + place, time, weather, description + "scenery, no humans" + style suffix. */
+/**
+ * Two plain-language sentences that close a ComfyUI / SwarmUI plate prompt:
+ * "An empty library, night, drawn as a detailed anime background. Nobody is
+ * in the picture." (plus the description when it says more than the place).
+ * The Anima 2.9B card says short prompts give bland, simple backgrounds and
+ * that natural language should be at least two sentences. Anima 2.9B,
+ * October 2026, 4 places x 4 seeds: night library plates that were black or
+ * nearly black 3/4 -> 0/4 (judged by eye), dark-pixel share 0.43 -> 0.36,
+ * no people in either arm (0/16); the day scenes looked about the same.
+ * Not sent to NovelAI (untested there).
+ */
+export function plateSentence(plate: Pick<SpritePlateRef, "location" | "timeOfDay" | "weather">, description: string): string {
+  const when = [plate.timeOfDay ?? "", plate.weather ?? ""].map((part) => part.trim()).filter(Boolean).join(", ");
+  const detail = description ? ` ${/[.!?]$/.test(description) ? description : `${description}.`}` : "";
+  return `An empty ${plate.location.trim().toLowerCase()}${when ? `, ${when}` : ""}, drawn as a detailed anime background.${detail} Nobody is in the picture.`;
+}
+
+/** Plate request: style prefix + place, time, weather, description + "scenery, no humans" + style suffix (+ plateSentence off NovelAI). */
 export function compilePlateRequest(input: {
   config: VisualNovelConfig;
   provider: string | null;
@@ -246,5 +287,7 @@ export function compilePlateRequest(input: {
     return { prompt, negativePrompt, parameters: { qualityToggle: false, negativePrompt, characterTags: [], ...extra } };
   }
   const sections = dedupeSections([stylePrefix(config, false), place, redundant ? "" : description, PLATE_TAGS, config.promptSuffix]);
-  return { prompt: renderComfy(sections), negativePrompt: comfyNegative(config, PLATE_NEGATIVE_TAGS), parameters: extra };
+  // The sentence is not deduplicated: its commas are prose, not tag separators.
+  const prompt = renderComfy([...sections, plateSentence(plate, redundant ? "" : description)]);
+  return { prompt, negativePrompt: comfyNegative(config, PLATE_NEGATIVE_TAGS), parameters: extra };
 }

@@ -232,7 +232,8 @@ prints one `wardrobe` line per decision and one `scene:` line with the scores.
 
 - Sprite: style prefix + subject + character creation / series reference tag
   (when enabled) + identity tags + attire + expression suffix
-  (`POSE_EXPRESSION_CATALOGUE`) + sprite framing (`SPRITE_FRAMING_TAGS`) +
+  (`SPRITE_EXPRESSION_TAGS` for smile, sad and angry, otherwise
+  `POSE_EXPRESSION_CATALOGUE`) + sprite framing (`SPRITE_FRAMING_TAGS`) +
   style suffix. Negative: style negative + `SPRITE_NEGATIVE_TAGS`. Portrait
   size where the provider takes a size (`spriteImageSize`; NovelAI always
   832×1216). One shared seed per set where the provider takes a seed, and
@@ -271,6 +272,21 @@ prints one `wardrobe` line per decision and one `scene:` line with the scores.
     today's framing, so it is unchanged. The model card's quality tags also
     changed the drawing style (softer, more rendered), turned one white
     blouse pink and gave one idle crossed arms.
+  - Faces of the 4 set (`SPRITE_EXPRESSION_TAGS`): smile `smile, open mouth,
+    happy`; sad `sad, frown, tearing up`; angry `angry, v-shaped eyebrows,
+    frown, clenched teeth, arms at sides`. The catalogue's `gentle smile,
+    eyes relaxed`, `sad expression, downcast eyes` and `furrowed brow, angry
+    expression` are mostly not Danbooru tags. Scene prompts and key moments
+    keep the catalogue. Anima 2.9B, October 2026: 4 characters × 2 seeds,
+    expressions made from the set's idle at reference strength 0.5, judged
+    blind from shuffled face crops. Clearly readable (rest weak or misread):
+    smile 5/8 → 8/8, sad 4/8 → 8/8, angry 5/8 → 7/8. Without `arms at sides`
+    the angry face put the hands on the hips in 3 of 8 sets (4 of 8 without
+    the `angry` tag as well); with it 0 of 8, as today. Silhouette overlap
+    with the idle (ISNet mask IoU) stayed close: smile 0.86 → 0.84, sad 0.88
+    → 0.87, angry 0.86 → 0.85. Not tested on NovelAI; the tags are common
+    Danbooru tags. Existing sets keep their images; only newly made
+    expressions use the new tags.
   - Skin colour: in sprite identities a non-natural skin colour tag (`blue
     skin`, `light green skin`, `purple_skin`…) not already weighted gets
     weight 1.15 (`weightSkinColourTags`); natural tones (pale, fair, dark, tan,
@@ -279,8 +295,23 @@ prints one `wardrobe` line per decision and one `scene:` line with the scores.
     163° to blue 191°.
 - Plate: style prefix + location, time of day, weather, description +
   `scenery, no humans, detailed background, wide shot` + style suffix.
-  Negative: style negative + `1girl, 1boy, people, person, character,
-  text`. Landscape size (`spriteImageSize`; NovelAI always 1216×832).
+  ComfyUI / SwarmUI then add two plain-language sentences
+  (`plateSentence`): "An empty library, night, drawn as a detailed anime
+  background. Nobody is in the picture." (with the description in between
+  when it says more than the place). Negative: style negative + `1girl,
+  1boy, people, person, character, text`. Landscape size
+  (`spriteImageSize`; NovelAI always 1216×832).
+  - Why the sentences: the Anima 2.9B card says short prompts give bland,
+    simple backgrounds and natural language should be at least two
+    sentences. Anima 2.9B, October 2026, 4 places (classroom afternoon,
+    shopping street in evening rain, library at night, bedroom morning) × 4
+    seeds: the night library came out black or nearly black in 3 of 4
+    seeds without the sentences and 0 of 4 with them; over all 16 pairs the
+    dark-pixel share fell from 0.43 to 0.36 and the sentence version had
+    more edge detail in 10 of 16; daytime places looked about the same; no
+    plate drew a person in either version (posters on a bedroom wall, which
+    the description asks for, sometimes show characters). NovelAI plates
+    are unchanged (not tested there). Existing plates are kept.
 
 ### Seeds, reference strength and the duplicate check
 

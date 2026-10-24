@@ -3,6 +3,7 @@ import { SPRITE_HOT_SET, plateKeyFor, spriteSetKeyFor, type SpriteStaging } from
 import { CUT_META, KAI, MIRA, fakePng, mockSpindle, sampleStaging, spriteConfig, toBase64, waitFor, type MockSpindleOptions } from "./__fixtures__/sprite-fixtures.js";
 import { SPRITE_LIBRARY_PATH, type SpriteLibrary } from "./library.js";
 import { SpriteService } from "./jobs.js";
+import { SPRITE_EXPRESSION_TAGS } from "./prompts.js";
 import { spriteStyleKey } from "./style.js";
 import type { VisualNovelConfig } from "../../../config.js";
 
@@ -151,7 +152,7 @@ describe("sprite jobs: ensure, priorities, dedupe", () => {
   });
 
   test("a generation failure marks the image failed with the provider's message", async () => {
-    const f = setup({ failGenerate: (call) => (call.prompt.includes("gentle smile") ? "NovelAI is busy" : null) });
+    const f = setup({ failGenerate: (call) => (call.prompt.includes(SPRITE_EXPRESSION_TAGS.smile!) ? "NovelAI is busy" : null) });
     await f.service.ensureForStaging("u1", sampleStaging(f.styleKey), spriteConfig());
     await f.service.settle("u1");
     const image = (await f.library()).sets[spriteSetKeyFor(MIRA, f.styleKey)]!.images.smile!;
