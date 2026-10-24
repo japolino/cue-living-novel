@@ -65,15 +65,24 @@ describe("story check", () => {
     expect(prose.store.size).toBe(0);
   });
 
-  test("a connection whose both attempts error is not asked again for a while", async () => {
+  test("a connection whose both attempts error on three replies in a row is not asked again for a while", async () => {
     const failing = harness(() => { throw new Error("Connection refused"); });
     const connection = { ...google, id: "backoff" };
-    expect(await checkStoryLines(failing.spindle, { lines, chatId: "c", connection })).toMatchObject({ source: "failed", calls: 2 });
-    expect(await checkStoryLines(failing.spindle, { lines: ["Other."], chatId: "c", connection })).toMatchObject({ source: "failed", calls: 0 });
-    expect(failing.requests).toHaveLength(2);
+    for (const reply of ["One.", "Two.", "Three."]) {
+      expect(await checkStoryLines(failing.spindle, { lines: [reply], chatId: "c", connection })).toMatchObject({ source: "failed", calls: 2 });
+    }
+    expect(await checkStoryLines(failing.spindle, { lines: ["Four."], chatId: "c", connection })).toMatchObject({ source: "failed", calls: 0 });
+    expect(failing.requests).toHaveLength(6);
+    // One reply a provider rejects does not stop the check for the next one; a success resets the count.
+    let call = 0;
+    const flaky = harness(() => { call += 1; if (call <= 4) throw new Error("PROHIBITED_CONTENT"); return { content: "0 K" }; });
+    const other = { ...google, id: "flaky" };
+    await checkStoryLines(flaky.spindle, { lines: ["One."], chatId: "c", connection: other });
+    await checkStoryLines(flaky.spindle, { lines: ["Two."], chatId: "c", connection: other });
+    expect(await checkStoryLines(flaky.spindle, { lines: ["Three."], chatId: "c", connection: other })).toMatchObject({ labels: "K", calls: 1 });
     // Answers without rows are not connection failures.
     const prose = harness(() => ({ content: "No." }));
-    await checkStoryLines(prose.spindle, { lines, chatId: "c", connection: { ...google, id: "rows" } });
+    for (let index = 0; index < 3; index += 1) await checkStoryLines(prose.spindle, { lines: [`${index}`], chatId: "c", connection: { ...google, id: "rows" } });
     expect(await checkStoryLines(prose.spindle, { lines, chatId: "c", connection: { ...google, id: "rows" } })).toMatchObject({ calls: 2 });
   });
 

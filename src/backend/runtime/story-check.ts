@@ -22,9 +22,14 @@ export type StoryCheckResult = {
 type CacheEntry = { key: string; labels: string | null; model?: string };
 type CacheFile = { version: 1; entries: CacheEntry[] };
 const CACHE_LIMIT = 64;
-/** After both attempts fail with errors, the connection is not asked again for a while. */
+/**
+ * A connection whose both attempts error on STORY_CHECK_FAILURE_LIMIT replies
+ * in a row (a broken connection, a model that rejects the request, not one
+ * reply a provider dislikes) is not asked again for a while.
+ */
+export const STORY_CHECK_FAILURE_LIMIT = 3;
 export const STORY_CHECK_BACKOFF_MS = 5 * 60_000;
-const failedConnections = new Map<string, number>();
+const failedConnections = new Map<string, { count: number; at: number }>();
 
 /** Forget connection failures (tests; a connection that changed). */
 export function forgetStoryCheckFailures(): void {
@@ -95,7 +100,8 @@ function responseText(response: unknown): string {
  * nothing for adult replies: one retry sends 60-character line heads (and no
  * temperature of Cue's own after an error), then the reply is shown whole. A
  * refusal is cached for the same model; errors are not cached, but a connection
- * that failed both attempts is skipped for STORY_CHECK_BACKOFF_MS.
+ * that errored on both attempts for STORY_CHECK_FAILURE_LIMIT replies in a row
+ * is skipped for STORY_CHECK_BACKOFF_MS.
  */
 export async function checkStoryLines(spindle: SpindleAPI, input: {
   lines: readonly string[];
@@ -114,7 +120,8 @@ export async function checkStoryLines(spindle: SpindleAPI, input: {
     return done(cached.labels, "cache", 0);
   }
   const connectionKey = `${input.userId ?? ""}\0${input.connection?.id ?? ""}\0${model}`;
-  if (Date.now() - (failedConnections.get(connectionKey) ?? -Infinity) < STORY_CHECK_BACKOFF_MS) return done(null, "failed", 0);
+  const failures = failedConnections.get(connectionKey);
+  if (failures && failures.count >= STORY_CHECK_FAILURE_LIMIT && Date.now() - failures.at < STORY_CHECK_BACKOFF_MS) return done(null, "failed", 0);
   let calls = 0;
   let refused = 0;
   let errors = 0;
@@ -146,6 +153,7 @@ export async function checkStoryLines(spindle: SpindleAPI, input: {
     await writeCache(spindle, input.chatId, { key, labels: null, model }, input.userId);
     return done(null, "blocked", calls);
   }
-  if (errors === calls) failedConnections.set(connectionKey, Date.now());
+  // After a backoff, one more failing reply starts the next backoff.
+  if (errors === calls) failedConnections.set(connectionKey, { count: (failures?.count ?? 0) + 1, at: Date.now() });
   return done(null, "failed", calls);
 }
