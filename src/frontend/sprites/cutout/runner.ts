@@ -4,7 +4,7 @@
  * on the main thread behind a MessageChannel.
  */
 import { createFaceKernel } from "./face-kernel.js";
-import { createCutoutKernel } from "./kernel.js";
+import { createCutoutKernel, type CutoutInputFit } from "./kernel.js";
 import {
   cutoutWorkerMain,
   type CutoutBackendPreference,
@@ -22,7 +22,7 @@ export type CutoutRunner = {
   readonly mode: CutoutRunnerMode;
   /** True once the worker crashed or was terminated; start a new runner. */
   isClosed(): boolean;
-  load(model: ArrayBuffer, options: { ortBaseUrl: string; backend: CutoutBackendPreference; numThreads: number }): Promise<CutoutLoadResult>;
+  load(model: ArrayBuffer, options: { ortBaseUrl: string; backend: CutoutBackendPreference; numThreads: number; fit?: CutoutInputFit }): Promise<CutoutLoadResult>;
   cut(image: Blob, useModel: boolean, detectFace?: boolean): Promise<CutoutWorkerCutResult>;
   unload(): Promise<void>;
   loadFace(model: ArrayBuffer, options: { ortBaseUrl: string; numThreads: number; threshold: number }): Promise<FaceLoadResult>;

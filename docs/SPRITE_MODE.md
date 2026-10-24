@@ -28,8 +28,9 @@ own expression and there is no picture cap.
 | Key | Values | Default | Saves |
 |---|---|---|---|
 | `presentationMode` | `"scene"` \| `"sprites"` | `"scene"` | at once (everyday) |
-| `spriteCutout` | `"best"` (model) \| `"basic"` (no download) | `"best"` | at once (everyday) |
+| `spriteCutout` | `"studio"` (BiRefNet, experimental) \| `"best"` (model) \| `"basic"` (no download) | `"best"` | at once (everyday) |
 | `spriteModelUrl` | https URL | ISNet-anime on Hugging Face (its float16 copy downloads where it runs) | Advanced (Apply) |
+| `spriteStudioModelUrl` | https URL, or http on this machine; `""` = none | `""` ("studio" cuts like "best") | Advanced (Apply) |
 | `keyIllustrations` | `"off"` \| `"few"` (≤ 1 per reply) | `"off"` | at once (everyday, sprite mode only) |
 | `spriteImageSize` | `"standard"` \| `"upscaled"` | `"standard"` | at once (everyday, both modes) |
 | `spriteExpressionCount` | `4` \| `8` \| `12` | `4` | at once (everyday, sprite mode only) |
@@ -661,7 +662,9 @@ Presentation mode control; image size (Standard / Upscaled, both modes:
 scene pictures use the landscape size); expressions per character (4 / 8 / 12, sprite mode only); cut-out quality; model status (absent /
 downloading / ready / unsupported) with Download and Remove; a sprite library
 gallery (sets with their expressions on a checkerboard, plates) with Prepare
-for this chat, Regenerate, Re-cut, and Delete; the model URL under Advanced.
+for this chat, Regenerate, Re-cut, and Delete; the model URL and the Studio
+model URL under Advanced. With Studio quality the model status is the Studio
+model's (or says why Best cuts instead).
 
 ## Cut-out (frontend)
 
@@ -733,6 +736,86 @@ sprites rendered on black, composited on flat backgrounds):
   another, ToonOut never below 0.903). On mid grey both reach 0.994.
 - ~0.7–1.4 s per image in batches on a GPU that was generating at the same
   time (no idle-GPU timing).
+
+### Studio cut-out (opt-in, experimental)
+
+`spriteCutout: "studio"` cuts with BiRefNet Swin-L, the model ComfyUI's
+`RemoveBackground` node uses, in the browser: masks within IoU 0.997 of the
+ComfyUI node's, at about 0.8 s per sprite on WebGPU. Nothing is hosted: the model file
+comes from `spriteStudioModelUrl` (empty by default, then "studio" cuts like
+"best"). Best stays the default.
+
+The model is an export for onnxruntime-web's WebGPU backend, made outside the
+repo (`.cache/improve/bgremoval/scripts/birefnet_export.py`, from the official
+BiRefNet code): fp16 weights with fp32 inputs and outputs, a 1024×1024 input
+stretched from the image (`fit: "stretch"` in `modelInput`; ISNet
+letterboxes), RGB 0..1 in, with the ImageNet normalisation and the sigmoid in
+the graph. Two rewrites make it run on WebGPU: the deformable convolutions
+(ASPPDeformable) become exact GridSample + Conv (onnxruntime-web has no
+DeformConv kernel), and the decoder's last concat of a 1024×1024 feature map
+is split into two convolutions (the concat took about 1 GB and pushed an 8 GB
+GPU into paging: 11 s per sprite before, 0.6 s after). The published
+onnx-community exports (BiRefNet-ONNX fp16, BiRefNet_lite-ONNX fp16 and fp32)
+do not run on WebGPU (Edge: "Too many storage buffers in shader. Current: 17,
+Max is 16", also through transformers.js 4.3.1).
+
+Where it runs: WebGPU with `shader-f16` only, checked before the download
+(`getStudioCutoutSupport`). Otherwise, or when the session cannot be built or
+a run fails (GPU memory), the cut uses the Best model and the model state's
+`note` says why; the failure is sticky for the page, and a sprite whose run
+failed is cut again with Best. WASM is never used for it (23 s per sprite at
+512 px; at 1024 px the browser passed 4.5 GB of RAM and was stopped). One
+cut-out model is loaded at a time, so switching between Studio and Best
+reloads.
+
+Measured (October 2026, Edge 156, RTX 5060 8 GB, ComfyUI idle but resident):
+
+| | general (birefnet) | ToonOut | Lucida |
+|---|---|---|---|
+| Synthetic white, 6 sprites: IoU / SAD through Cue's kernel | 0.9756 / 10.3 | 0.9594 / 19.1 | 0.9792 / 8.7 |
+| The ComfyUI node on them (normalisation folded), same kernel | 0.9739 / 11.1 | 0.9604 / 18.5 | — |
+| Synthetic white, 10 sprites: IoU through Cue's kernel | 0.9774 | 0.9645 | 0.9807 |
+| Mask IoU vs the ComfyUI node, 19 bake-off sprites (mean / min) | 0.9975 / 0.988 | 0.9949 / 0.964 | — |
+| Mask IoU vs PyTorch fp32 with the original ops, 9 sprites | 0.9990 | 0.9984 | — |
+| Warm inference, 1024 px (one session, 103 images) | 614 ms | 609 ms | 614 ms |
+| GPU memory while running | +2.9 GB | +3.0 GB | +3.3 GB |
+
+Best (ISNet + kernel) on the same 6 / 10 sprites: IoU 0.946 / 0.957. Download:
+499 MB (fp16), 995 MB (fp32). The Cue path itself (Worker, `cutSprite`, 12
+synthetic + 19 bake-off sprites, general model): first cut 8.6 s (download
+from localhost, session 4.0 s, first run 2.0 s), with an on-disk profile
+17.6 s (the 499 MB cache write); after a reload, read from Cache Storage,
+5.0 s; then 0.70 s model and 0.79 s per sprite (median); GPU +3.1 GB; the
+machine's free RAM fell by 2.3 GB during the run. Its cut-outs match the
+bench path (same model, mask resized in Python, Cue kernel): alpha IoU 0.9993
+on the bake-off, 0.998 on the synthetic set. Smaller inputs are faster but
+lose the quality: 768 px 333 ms (IoU 0.974), 512 px 183 ms (0.958). Headless
+Chromium has no `shader-f16`: the fp16 session fails ("Program Transpose
+requires f16"); the fp32 export runs there at 1.12 s warm (masks IoU 0.9992
+against fp16) but is not wired up. A newer onnxruntime-web
+(1.31.0-dev.20260914) ran the same export at 601 ms with identical masks.
+
+Serving it locally: a static server on this machine. Lumiverse's page is on
+another origin, so the server has to send CORS headers, for example
+`bun -e "Bun.serve({ port: 8790, fetch: () => new Response(Bun.file('birefnet_general_1024_fp16.onnx'), { headers: { 'Access-Control-Allow-Origin': '*' } }) })"`,
+then set the Studio model URL to `http://localhost:8790/birefnet_general_1024_fp16.onnx`.
+Checked with the page on 127.0.0.1 and the model on localhost (another port):
+with the header the Studio model loads; without it the download fails ("Failed
+to fetch"), Best cuts, the settings note says the Studio model is not
+available, and the download is tried again after 60 s.
+
+Hosting it (not done): a 499 MB file per model on an https host with CORS
+(Hugging Face works like the ISNet default), plus attribution. BiRefNet code
+and weights: MIT (ZhengPeng7/BiRefNet; Comfy-Org/BiRefNet repackages them
+under MIT). ToonOut (joelseytre/toonout) and Lucida (egeorcun/lucida) weights:
+MIT, fine-tuned on the joelseytre/toonout dataset, which is CC-BY-4.0, so the
+model card has to credit the dataset. Converted weights carry the same terms
+and need a note that they were converted.
+
+`bun run test:sprite-cutout` checks the tier when `CUE_SPRITE_STUDIO_MODEL`
+points at an exported file: the fallback in headless Chromium (no Studio
+fetch), and the Studio cuts in `CUE_SPRITE_STUDIO_CHANNEL` (for example
+`msedge`).
 
 ### Face boxes
 
@@ -876,8 +959,8 @@ Library and generation:
   out); see "NovelAI V5 reference inset".
 - Cut bridge: ≤ 2 cuts in flight per user, chunks in any order, PNG signature
   and IHDR checked, 5-minute inactivity timeout, failed after 3 timeouts.
-  A "basic" cut made while "best" is selected is re-cut once on the next view
-  open.
+  A "basic" cut made while "best" or "studio" is selected is re-cut once on
+  the next view open.
 
 Cut-out runtime:
 

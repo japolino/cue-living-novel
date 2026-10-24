@@ -72,6 +72,17 @@ describe("sprite cut service", () => {
     expect(sent[0]!.meta && "face" in sent[0]!.meta).toBe(false);
   });
 
+  test("studio quality passes the Studio model URL; none is passed when it is empty", async () => {
+    const studio = setup({ config: { spriteCutout: "studio", spriteStudioModelUrl: "http://localhost:8790/s.onnx" } });
+    await studio.service.handle(request("s"));
+    expect(studio.cuts[0]!.options.quality).toBe("studio");
+    expect(studio.cuts[0]!.options.studioModelUrl).toBe("http://localhost:8790/s.onnx");
+    expect(studio.cuts[0]!.options.modelUrl).toBe(DEFAULT_CONFIG.spriteModelUrl);
+    const none = setup({ config: { spriteCutout: "studio" } });
+    await none.service.handle(request("n"));
+    expect("studioModelUrl" in none.cuts[0]!.options).toBe(false);
+  });
+
   test("without config: best quality and the default model", async () => {
     const { service, cuts } = setup({ config: null });
     await service.handle(request("a"));

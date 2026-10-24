@@ -94,6 +94,7 @@ const baseConfig: VisualNovelConfig = {
   spriteImageSize: "standard",
   spriteExpressionCount: 4,
   spriteModelUrl: DEFAULT_CONFIG.spriteModelUrl,
+  spriteStudioModelUrl: "",
   textScale: 1,
   audioDirectory: "",
   bgmVolume: 0.7,

@@ -43,6 +43,13 @@ export type CutoutFigureCheck = {
   splitShare: number;
 };
 
+/**
+ * How the image becomes the square model input: "letterbox" keeps the aspect
+ * ratio and pads with zeros (ISNet-anime); "stretch" resizes to the square
+ * (BiRefNet, which was trained on stretched inputs).
+ */
+export type CutoutInputFit = "letterbox" | "stretch";
+
 export type CutoutModelInput = {
   /** 1x3xSxS CHW float tensor data, RGB / 255, zero padded. */
   tensor: Float32Array;
@@ -74,7 +81,7 @@ export type CutoutKernel = {
   figureCheck(rgba: Uint8ClampedArray, width: number, height: number): CutoutFigureCheck;
   /** PIL-style separable bilinear resize (antialiased when shrinking) of interleaved float channels. */
   resizeBilinear(src: Float32Array, sw: number, sh: number, channels: number, dw: number, dh: number): Float32Array;
-  modelInput(rgba: Uint8ClampedArray, width: number, height: number, size: number): CutoutModelInput;
+  modelInput(rgba: Uint8ClampedArray, width: number, height: number, size: number, fit?: CutoutInputFit): CutoutModelInput;
   /** Model output (SxS, 0..1) -> mask at the image size (crop padding, resize, 8-bit steps like the reference). */
   modelMask(output: Float32Array, input: CutoutModelInput, width: number, height: number): Float32Array;
 };
@@ -467,9 +474,10 @@ export function createCutoutKernel(): CutoutKernel {
     return out;
   }
 
-  function modelInput(rgba: Uint8ClampedArray, width: number, height: number, size: number): CutoutModelInput {
-    const h = height > width ? size : Math.trunc(size * height / width);
-    const w = height > width ? Math.trunc(size * width / height) : size;
+  function modelInput(rgba: Uint8ClampedArray, width: number, height: number, size: number, fit: CutoutInputFit = "letterbox"): CutoutModelInput {
+    const stretch = fit === "stretch";
+    const h = stretch || height > width ? size : Math.trunc(size * height / width);
+    const w = stretch ? size : height > width ? Math.trunc(size * width / height) : size;
     const x0 = Math.floor((size - w) / 2), y0 = Math.floor((size - h) / 2);
     const n = width * height;
     const rgb = new Float32Array(n * 3);

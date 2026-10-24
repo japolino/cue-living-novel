@@ -674,6 +674,7 @@ export function normalizePresentationMode(value: string): VisualNovelPresentatio
 }
 
 export const SPRITE_CUTOUT_OPTIONS: ReadonlyArray<{ value: VisualNovelSpriteCutout; label: string; help: string }> = [
+  { value: "studio", label: "Studio (experimental, downloads about 500 MB once)", help: "The BiRefNet model ComfyUI uses to remove backgrounds, run in this browser: cut-outs as close as ComfyUI's. Needs a graphics card with WebGPU half-precision support and about 3 GB of its memory, and a Studio model URL (Advanced). Where it cannot run, sprites are cut with Best." },
   { value: "best", label: "Best (downloads an 88 MB model once)", help: "Clean edges, also on white clothes and hair. The model stays in this browser (176 MB on GPUs without half-precision support)." },
   { value: "basic", label: "Basic (no download)", help: "Removes the plain background without a model. Edges can be rougher." },
 ];
@@ -742,57 +743,78 @@ export type CutoutModelSummary = {
   progress: number | null;
 };
 
-/** Plain-words status of the cut-out model for the settings row. */
-export function describeCutoutModel(state: CutoutModelState, quality: VisualNovelSpriteCutout, modelUrl = "", cachedBytes: number | null = null): CutoutModelSummary {
+/**
+ * Plain-words status of the cut-out model for the settings row. With
+ * "studio" quality `cachedBytes` is the Studio model's (when its URL is set),
+ * and a state tagged `studio` is about the Studio model.
+ */
+export function describeCutoutModel(state: CutoutModelState, quality: VisualNovelSpriteCutout, modelUrl = "", cachedBytes: number | null = null, studioModelUrl = ""): CutoutModelSummary {
+  const studioState = "studio" in state && state.studio === true;
+  const studioActive = quality === "studio" && Boolean(studioModelUrl);
+  const aboutStudio = studioState || (studioActive && state.state === "absent");
   let host = "";
-  try { host = modelUrl ? new URL(modelUrl).hostname : ""; } catch { host = ""; }
+  try { const url = aboutStudio ? studioModelUrl : modelUrl; host = url ? new URL(url).hostname : ""; } catch { host = ""; }
   const from = host ? ` from ${host}` : "";
+  const name = aboutStudio ? "Studio model" : "Model";
   const basicNote = quality === "basic" ? " Not used while cut-out quality is Basic." : "";
+  const noStudioUrl = quality === "studio" && !studioModelUrl ? " No Studio model URL is set (Advanced), so sprites are cut with Best." : "";
   switch (state.state) {
     case "absent":
       if (cachedBytes && cachedBytes > 0) {
         return {
           level: "ready",
-          title: "Model downloaded",
-          detail: `${formatBytes(cachedBytes)} stored in this browser. It starts when the next sprite is cut.${basicNote}`,
+          title: `${name} downloaded`,
+          detail: `${formatBytes(cachedBytes)} stored in this browser. It starts when the next sprite is cut.${basicNote}${noStudioUrl}`,
           action: "remove",
           progress: null,
         };
       }
       return {
         level: quality === "basic" ? "ready" : "attention",
-        title: "Model not downloaded",
+        title: `${name} not downloaded`,
         detail: quality === "basic"
           ? "Basic quality needs no model."
-          : `It downloads once${from} when the first sprite is cut. You can download it now instead.`,
+          : `It downloads once${studioActive ? " (about 500 MB)" : ""}${from} when the first sprite is cut. You can download it now instead.${noStudioUrl}`,
         action: quality === "basic" ? null : "download",
         progress: null,
       };
     case "downloading": {
       const total = state.totalBytes && state.totalBytes > 0 ? state.totalBytes : null;
       const progress = total ? Math.min(1, Math.max(0, state.receivedBytes / total)) : null;
+      const what = studioState ? "the Studio model" : "the model";
       return {
         level: "loading",
-        title: total ? `Downloading the model… ${Math.round(progress! * 100)}%` : "Downloading the model…",
+        title: total ? `Downloading ${what}… ${Math.round(progress! * 100)}%` : `Downloading ${what}…`,
         detail: total ? `${formatBytes(state.receivedBytes)} of ${formatBytes(total)}${from}.` : `${formatBytes(state.receivedBytes)} so far${from}.`,
         action: null,
         progress,
       };
     }
     case "loading":
-      return { level: "loading", title: "Loading the model…", detail: "Starting the cut-out model in this browser.", action: null, progress: null };
-    case "ready":
+      return studioState
+        ? { level: "loading", title: "Loading the Studio model…", detail: "Starting the Studio cut-out model on the graphics card.", action: null, progress: null }
+        : { level: "loading", title: "Loading the model…", detail: "Starting the cut-out model in this browser.", action: null, progress: null };
+    case "ready": {
+      const runs = `${formatBytes(state.bytes)} stored in this browser · runs on ${state.backend === "webgpu" ? "the graphics card (WebGPU)" : "the processor (WebAssembly)"}.`;
+      if (quality === "studio" && !state.studio && state.note) {
+        return { level: "attention", title: "Best model ready (Studio unavailable)", detail: `${state.note} Sprites are cut with Best: ${runs}`, action: "remove", progress: null };
+      }
       return {
         level: "ready",
-        title: "Model ready",
-        detail: `${formatBytes(state.bytes)} stored in this browser · runs on ${state.backend === "webgpu" ? "the graphics card (WebGPU)" : "the processor (WebAssembly)"}.${basicNote}`,
+        title: state.studio ? "Studio model ready" : "Model ready",
+        detail: `${runs}${basicNote}${noStudioUrl}`,
         action: "remove",
         progress: null,
       };
+    }
     case "unsupported":
-      return { level: "blocked", title: "This browser cannot run the model", detail: `${state.reason} Basic cut-out is used instead.`, action: null, progress: null };
+      return studioState
+        ? { level: "attention", title: "This browser cannot run the Studio model", detail: `${state.reason} Sprites are cut with Best instead.`, action: null, progress: null }
+        : { level: "blocked", title: "This browser cannot run the model", detail: `${state.reason} Basic cut-out is used instead.`, action: null, progress: null };
     case "error":
-      return { level: "blocked", title: "The model could not be prepared", detail: `${state.error} Basic cut-out is used until this works.`, action: "retry", progress: null };
+      return studioState
+        ? { level: "attention", title: "The Studio model could not be prepared", detail: `${state.error} Sprites are cut with Best until this works.`, action: "retry", progress: null }
+        : { level: "blocked", title: "The model could not be prepared", detail: `${state.error} Basic cut-out is used until this works.`, action: "retry", progress: null };
   }
 }
 
@@ -831,6 +853,17 @@ export function parseSpriteModelUrl(value: string): string {
   try { url = new URL(trimmed); } catch { throw new Error("Sprite model URL is not a valid web address. Fix it in Advanced before applying."); }
   const local = url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
   if (url.protocol !== "https:" && !local) throw new Error("Sprite model URL must start with https://. Fix it in Advanced before applying.");
+  return url.toString();
+}
+
+/** Studio cut-out model URL for Advanced: https (or http on this computer). Empty: none ("studio" cuts like "best"). */
+export function parseStudioModelUrl(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  let url: URL;
+  try { url = new URL(trimmed); } catch { throw new Error("Studio cut-out model URL is not a valid web address. Fix it in Advanced before applying."); }
+  const local = url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  if (url.protocol !== "https:" && !local) throw new Error("Studio cut-out model URL must start with https:// (or http://localhost). Fix it in Advanced before applying.");
   return url.toString();
 }
 

@@ -30,8 +30,13 @@ export const TEXT_EFFECT_MODES = ["animated", "static", "off"] as const;
  */
 export const PRESENTATION_MODES = ["scene", "sprites"] as const;
 export type VisualNovelPresentationMode = (typeof PRESENTATION_MODES)[number];
-/** Sprite cut-out quality: "best" downloads and runs the segmentation model, "basic" never downloads anything. */
-export const SPRITE_CUTOUT_QUALITIES = ["best", "basic"] as const;
+/**
+ * Sprite cut-out quality: "best" downloads and runs the segmentation model,
+ * "basic" never downloads anything. "studio" (experimental, opt-in) runs a
+ * larger BiRefNet model from `spriteStudioModelUrl` on WebGPU and cuts like
+ * "best" where that cannot run (docs/SPRITE_MODE.md, "Studio cut-out").
+ */
+export const SPRITE_CUTOUT_QUALITIES = ["studio", "best", "basic"] as const;
 export type VisualNovelSpriteCutout = (typeof SPRITE_CUTOUT_QUALITIES)[number];
 /**
  * Sprite mode only: full scene illustrations for key moments (sitting,
@@ -166,6 +171,8 @@ export type VisualNovelConfig = {
   spriteExpressionCount: VisualNovelSpriteExpressionCount;
   /** Where the sprite cut-out model is downloaded from (once, then cached in the browser). */
   spriteModelUrl: string;
+  /** Where the Studio cut-out model is downloaded from; "" (default): none, "studio" cuts like "best". */
+  spriteStudioModelUrl: string;
   /** Dialogue text size multiplier, 1 = the theme's own size. */
   textScale: number;
   audioDirectory: string;
@@ -225,6 +232,7 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   spriteImageSize: "standard",
   spriteExpressionCount: DEFAULT_SPRITE_EXPRESSION_COUNT,
   spriteModelUrl: DEFAULT_SPRITE_MODEL_URL,
+  spriteStudioModelUrl: "",
   textScale: 1,
   audioDirectory: "",
   bgmVolume: 0.7,
@@ -330,18 +338,23 @@ function spriteImageSize(value: unknown): VisualNovelSpriteImageSize {
     : DEFAULT_CONFIG.spriteImageSize;
 }
 
-function spriteModelUrl(value: unknown): string {
-  if (typeof value !== "string") return DEFAULT_CONFIG.spriteModelUrl;
+/** A model URL: https, or http on this machine; anything else is `fallback`. */
+function modelUrl(value: unknown, fallback: string): string {
+  if (typeof value !== "string") return fallback;
   const trimmed = value.trim();
-  if (!trimmed) return DEFAULT_CONFIG.spriteModelUrl;
+  if (!trimmed) return fallback;
   try {
     const url = new URL(trimmed);
     return url.protocol === "https:" || (url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))
       ? url.toString()
-      : DEFAULT_CONFIG.spriteModelUrl;
+      : fallback;
   } catch {
-    return DEFAULT_CONFIG.spriteModelUrl;
+    return fallback;
   }
+}
+
+function spriteModelUrl(value: unknown): string {
+  return modelUrl(value, DEFAULT_CONFIG.spriteModelUrl);
 }
 
 function textScale(value: unknown): number {
@@ -422,6 +435,7 @@ export function normalizeConfig(value: unknown): VisualNovelConfig {
     spriteImageSize: spriteImageSize(input.spriteImageSize),
     spriteExpressionCount: normalizeSpriteExpressionCount(input.spriteExpressionCount),
     spriteModelUrl: spriteModelUrl(input.spriteModelUrl),
+    spriteStudioModelUrl: modelUrl(input.spriteStudioModelUrl, DEFAULT_CONFIG.spriteStudioModelUrl),
     textScale: textScale(input.textScale),
     audioDirectory: stringValue(input.audioDirectory, DEFAULT_CONFIG.audioDirectory).trim(),
     bgmVolume: floatBetween(input.bgmVolume, 0, 1, DEFAULT_CONFIG.bgmVolume),

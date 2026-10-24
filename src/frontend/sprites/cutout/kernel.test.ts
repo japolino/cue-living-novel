@@ -182,6 +182,23 @@ describe("sprite cut-out kernel", () => {
     expect(m[40 * 40 + 37]).toBe(0);
   });
 
+  test("model input, stretch (Studio / BiRefNet): the image fills the square, no padding; mask maps back", () => {
+    const img = image(40, 80, [10, 20, 30]);
+    const input = k.modelInput(img.rgba, 40, 80, 64, "stretch");
+    expect(input.box).toEqual({ x: 0, y: 0, width: 64, height: 64 });
+    expect(input.tensor[0]).toBeCloseTo(10 / 255, 6); // no padding
+    expect(input.tensor[64 * 64 - 1]).toBeCloseTo(10 / 255, 6);
+    expect(input.tensor[2 * 64 * 64]).toBeCloseTo(30 / 255, 6);
+    expect(k.modelInput(img.rgba, 40, 80, 64).box).toEqual({ x: 16, y: 0, width: 32, height: 64 }); // default: letterbox
+    // Left half foreground in the square -> left half of the 40x80 image.
+    const output = new Float32Array(64 * 64);
+    for (let y = 0; y < 64; y++) for (let x = 0; x < 32; x++) output[y * 64 + x] = 1;
+    const m = k.modelMask(output, input, 40, 80);
+    expect(m.length).toBe(40 * 80);
+    expect(m[40 * 40 + 2]).toBe(1);
+    expect(m[40 * 40 + 37]).toBe(0);
+  });
+
   test("bilinear resize keeps flat colour and averages when shrinking", () => {
     const src = new Float32Array(8 * 8).fill(100);
     expect([...k.resizeBilinear(src, 8, 8, 1, 3, 5)].every((v) => Math.abs(v - 100) < 1e-4)).toBe(true);
