@@ -54,6 +54,10 @@ export type MockSpindleOptions = {
   failUpload?: boolean;
   /** Connection metadata (ComfyUI workflow config); a function that throws simulates a failed read. */
   metadata?: Record<string, unknown> | (() => Record<string, unknown>);
+  /** Connection model (default: NovelAI V4.5 Full for "novelai", else "sdxl"). */
+  model?: string;
+  /** Connection default parameters (e.g. a raw request override). */
+  defaultParameters?: Record<string, unknown>;
 };
 
 /** A spindle double for the sprite service: storage, image generation, upload/delete and frontend messages. */
@@ -83,7 +87,11 @@ export function mockSpindle(options: MockSpindleOptions = {}) {
       },
     },
     imageGen: {
-      getConnection: async () => withMetadata({ provider: options.provider ?? "comfyui", model: options.provider === "novelai" ? "nai-diffusion-4-5-full" : "sdxl" }),
+      getConnection: async () => withMetadata({
+        provider: options.provider ?? "comfyui",
+        model: options.model ?? (options.provider === "novelai" ? "nai-diffusion-4-5-full" : "sdxl"),
+        ...(options.defaultParameters ? { default_parameters: options.defaultParameters } : {}),
+      }),
       listConnections: async () => [withMetadata({ provider: options.provider ?? "comfyui", model: "m", is_default: true })],
       generate: async (input: GenerateCall) => {
         calls.push(input);

@@ -17,6 +17,7 @@
  * tests share one definition.
  */
 import { z } from "zod";
+import type { PixelRect } from "./novelai-inset.js";
 
 /* ------------------------------------------------------------------------ */
 /* Expressions                                                               */
@@ -692,6 +693,8 @@ export type SpriteCutMeta = {
   twoFigures?: boolean;
   /** Detected face (see SpriteImageView.face). Absent: not detected (unknown). */
   face?: SpriteFaceBox | null;
+  /** The crop the browser applied before cutting (echo of the request's `crop`). Absent: none. */
+  crop?: PixelRect;
   durationMs: number;
 };
 

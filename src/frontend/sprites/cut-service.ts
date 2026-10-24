@@ -1,6 +1,8 @@
 import type { VisualNovelConfig } from "../../config.js";
 import type { BackendResponse, FrontendRequest } from "../../protocol.js";
+import { normalizePixelRect, type PixelRect } from "../../shared/novelai-inset.js";
 import { DEFAULT_SPRITE_FACE_MODEL_URL, DEFAULT_SPRITE_MODEL_URL, SPRITE_CUT_CHUNK_CHARS, SPRITE_CUT_MAX_BYTES } from "../../shared/sprites.js";
+import { cropImageBlob } from "./canvas-tools.js";
 import { cutSprite, type CutoutOptions, type CutoutResult } from "./cutout/index.js";
 
 export type SpriteCutRequest = Extract<BackendResponse, { type: "vn_sprite_cut" }>;
@@ -12,6 +14,8 @@ export type SpriteCutServiceDeps = {
   getConfig: () => VisualNovelConfig | null;
   /** The cut-out to use (tests); defaults to `cutSprite`. */
   cut?: (image: Blob, options: CutoutOptions) => Promise<CutoutResult>;
+  /** The crop to use (tests); defaults to `cropImageBlob`. */
+  crop?: (image: Blob, rect: PixelRect) => Promise<Blob>;
 };
 
 export type SpriteCutService = {
@@ -48,6 +52,7 @@ export function chunkBase64(data: string, size = SPRITE_CUT_CHUNK_CHARS): string
  */
 export function createSpriteCutService(deps: SpriteCutServiceDeps): SpriteCutService {
   const cut = deps.cut ?? cutSprite;
+  const crop = deps.crop ?? cropImageBlob;
   const controller = new AbortController();
   const inFlight = new Set<string>();
   let queue: Promise<void> = Promise.resolve();
@@ -56,7 +61,12 @@ export function createSpriteCutService(deps: SpriteCutServiceDeps): SpriteCutSer
     if (controller.signal.aborted) return;
     try {
       const config = deps.getConfig();
-      const image = await deps.fetchImage(request.imageId);
+      const fetched = await deps.fetchImage(request.imageId);
+      if (controller.signal.aborted) return;
+      // A NovelAI V5 inset render is the whole canvas: cut only its repainted part.
+      const cropRect = request.crop === undefined ? null : normalizePixelRect(request.crop);
+      if (request.crop !== undefined && !cropRect) throw new Error("The cut request has an invalid crop.");
+      const image = cropRect ? await crop(fetched, cropRect) : fetched;
       if (controller.signal.aborted) return;
       const result = await cut(image, {
         quality: config?.spriteCutout ?? "best",
@@ -76,7 +86,7 @@ export function createSpriteCutService(deps: SpriteCutServiceDeps): SpriteCutSer
           chunkCount: chunks.length,
           dataBase64,
           ...(chunkIndex === 0
-            ? { meta: { width: result.width, height: result.height, bbox: result.bbox, quality: result.quality, twoFigures: result.twoFigures === true, ...(result.face !== undefined ? { face: result.face } : {}), durationMs: Math.round(result.durationMs) } }
+            ? { meta: { width: result.width, height: result.height, bbox: result.bbox, quality: result.quality, twoFigures: result.twoFigures === true, ...(result.face !== undefined ? { face: result.face } : {}), ...(cropRect ? { crop: cropRect } : {}), durationMs: Math.round(result.durationMs) } }
             : {}),
         });
       });

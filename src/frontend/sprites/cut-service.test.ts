@@ -4,6 +4,7 @@ import type { FrontendRequest } from "../../protocol.js";
 import { DEFAULT_SPRITE_FACE_MODEL_URL, SPRITE_CUT_CHUNK_CHARS } from "../../shared/sprites.js";
 import { blobToBase64, chunkBase64, createSpriteCutService, type SpriteCutRequest } from "./cut-service.js";
 import type { CutoutOptions, CutoutResult } from "./cutout/index.js";
+import type { PixelRect } from "../../shared/novelai-inset.js";
 
 type Sent = Extract<FrontendRequest, { type: "vn_sprite_cut_result" }>;
 
@@ -20,7 +21,12 @@ function setup(options: {
 } = {}) {
   const sent: Sent[] = [];
   const cuts: Array<{ image: Blob; options: CutoutOptions }> = [];
+  const crops: PixelRect[] = [];
   const service = createSpriteCutService({
+    crop: async (image, rect) => {
+      crops.push(rect);
+      return new Blob([`${await image.text()}@${rect.x},${rect.y},${rect.width}x${rect.height}`]);
+    },
     sendToBackend: (message) => sent.push(message as Sent),
     fetchImage: options.fetchImage ?? (async (id) => new Blob([id])),
     getConfig: () => (options.config === null ? null : { ...DEFAULT_CONFIG, ...(options.config ?? {}) }),
@@ -29,7 +35,7 @@ function setup(options: {
       return (options.cut ?? (async () => result(new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" }))))(image, cutOptions);
     },
   });
-  return { service, sent, cuts };
+  return { service, sent, cuts, crops };
 }
 
 describe("sprite cut service", () => {
@@ -149,6 +155,27 @@ describe("sprite cut service", () => {
     await Promise.all([running, queued, service.handle(request("c"))]);
     expect(sent).toEqual([]);
     expect(cuts).toHaveLength(1);
+  });
+
+  test("a crop (NovelAI V5 inset render) is applied before the cut and echoed in the meta", async () => {
+    const { service, sent, cuts, crops } = setup({ cut: async () => result(new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" }), { width: 608, height: 832 }) });
+    const crop = { x: 608, y: 0, width: 608, height: 832 };
+    await service.handle({ ...request("inset"), crop });
+    expect(crops).toEqual([crop]);
+    expect(await cuts[0]!.image.text()).toBe("img-inset@608,0,608x832");
+    expect(sent[0]!.meta).toMatchObject({ width: 608, height: 832, crop });
+    // Without a crop nothing is cropped and the meta has none.
+    const plain = setup();
+    await plain.service.handle(request("plain"));
+    expect(plain.crops).toEqual([]);
+    expect(plain.sent[0]!.meta && "crop" in plain.sent[0]!.meta).toBe(false);
+  });
+
+  test("an invalid crop fails the cut instead of cutting the whole canvas", async () => {
+    const { service, sent, cuts } = setup();
+    await service.handle({ ...request("bad"), crop: { x: -1, y: 0, width: 608, height: 832 } });
+    expect(cuts).toHaveLength(0);
+    expect(sent).toEqual([{ type: "vn_sprite_cut_result", requestId: "bad", chunkIndex: 0, chunkCount: 1, error: "The cut request has an invalid crop." }]);
   });
 
   test("base64 helpers", async () => {
