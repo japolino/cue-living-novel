@@ -24,7 +24,11 @@
  * "studio" quality (opt-in, experimental) runs a BiRefNet model exported for
  * onnxruntime-web's WebGPU backend instead (docs/SPRITE_MODE.md, "Studio
  * cut-out"): ComfyUI-grade masks, about 0.8 s per sprite once loaded on the
- * GPU it was measured on, a 500 MB download from a URL the user sets. It
+ * GPU it was measured on, a 500 MB download from a URL the user sets. The
+ * download runs in the background, never inside a cut (the backend times a
+ * cut out after 5 minutes): "studio" cuts use Best until it is in the
+ * browser, and a failed download is tried again after 1, 2 and 4 minutes,
+ * then not on that page. It
  * needs WebGPU with half-precision shaders; where it cannot run, the cut uses
  * the "best" model and the model state says why. A Studio failure is not
  * tried again on the page, and is remembered on the device (studio-device.ts):
@@ -120,6 +124,10 @@ export const ORT_VERSION = "1.30.0";
 export const ORT_CDN_BASE = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VERSION}/dist/`;
 /** After a failed download, "best" cuts use "basic" for this long before trying again. */
 export const CUTOUT_RETRY_MS = 60_000;
+/** A failed background Studio download is tried again after this, doubling each time. */
+export const STUDIO_DOWNLOAD_RETRY_MS = 60_000;
+/** Studio download tries on one page before it gives up (settings retry). */
+export const STUDIO_DOWNLOAD_ATTEMPTS = 4;
 
 export type CutoutRuntimeOptions = {
   /** Directory URL with ort.*.min.mjs and ort-wasm-*.wasm (trailing slash). */
@@ -139,6 +147,8 @@ const defaultThreads = (): number => {
 
 let runtime: CutoutRuntimeOptions = { ortBaseUrl: ORT_CDN_BASE, backend: "auto", numThreads: 0, preferWorker: true };
 let state: CutoutModelState = { state: "absent" };
+/** The background Studio download's progress, shown over `state` unless that is a download or load of its own. */
+let overlay: CutoutModelState | null = null;
 const listeners = new Set<(state: CutoutModelState) => void>();
 let runnerPromise: Promise<CutoutRunner> | null = null;
 type ModelFailure = { url: string; at: number; sticky: boolean; message: string };
@@ -161,6 +171,12 @@ let studioNote: string | null = null;
  */
 let studioAttempt: { url: string; failed: boolean } | null = null;
 let pageHideWatched = false;
+/** The Studio model's background download (one at a time). */
+let studioDownload: { url: string; promise: Promise<boolean>; controller: AbortController } | null = null;
+/** Failed Studio downloads on this page, for the backoff. */
+let studioDownloadFailures: { url: string; count: number; at: number; message: string } | null = null;
+/** A downloaded Studio file the browser would not store: kept until it loads (the load takes it). */
+let studioMemory: { url: string; bytes: ArrayBuffer } | null = null;
 let generation = 0;
 let runnerMode: CutoutRunnerMode | null = null;
 
@@ -185,11 +201,23 @@ function setLoaded(next: typeof loaded): void {
   loaded = next;
 }
 
-function setState(next: CutoutModelState): void {
-  state = next;
+const visibleState = (): CutoutModelState => (overlay && state.state !== "downloading" && state.state !== "loading" ? overlay : state);
+
+function publish(): void {
+  const next = visibleState();
   for (const listener of [...listeners]) {
     try { listener(next); } catch { /* a listener must not break the cut-out */ }
   }
+}
+
+function setState(next: CutoutModelState): void {
+  state = next;
+  publish();
+}
+
+function setOverlay(next: CutoutModelState | null): void {
+  overlay = next;
+  publish();
 }
 
 const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error)) || "unknown error";
@@ -258,6 +286,8 @@ async function ensureModel(url: string, force: boolean, spec: ModelSpec = BEST_S
       setFailure({ url, at: Date.now(), sticky: true, message: reason });
       throw new Error(reason);
     }
+    // Never downloaded here (500 MB, inside a cut): `downloadStudio` runs in the background.
+    if (studioMemory?.url !== url && !(await isCached(url))) throw new Error("The Studio model is not downloaded yet.");
     // One Studio session per device (about 3 GB of graphics memory each): another tab's comes first.
     if (!(await takeStudioLock())) throw new Error(STUDIO_BUSY);
     // Holding the lock, a marker this page did not write is from a visit that never finished.
@@ -275,11 +305,16 @@ async function ensureModel(url: string, force: boolean, spec: ModelSpec = BEST_S
     let size = 0;
     let stage: "download" | "load" = "download";
     try {
-      let bytes = await readCachedModel(url);
+      let bytes: ArrayBuffer | null;
+      if (spec.studio && studioMemory?.url === url) {
+        bytes = studioMemory.bytes;
+        studioMemory = null;
+      } else bytes = await readCachedModel(url);
       if (stale()) throw abortError();
+      if (!bytes && spec.studio) throw new Error("The Studio model is no longer in this browser's storage.");
       if (!bytes) {
-        setState({ state: "downloading", receivedBytes: 0, totalBytes: null, ...tag });
-        bytes = await downloadModel(url, (receivedBytes, totalBytes) => { if (!stale()) setState({ state: "downloading", receivedBytes, totalBytes, ...tag }); });
+        setState({ state: "downloading", receivedBytes: 0, totalBytes: null });
+        bytes = await downloadModel(url, (receivedBytes, totalBytes) => { if (!stale()) setState({ state: "downloading", receivedBytes, totalBytes }); });
         if (stale()) throw abortError();
         if (bytes.byteLength < 1024) throw new Error("The downloaded model file is too small to be a model.");
         await writeCachedModel(url, bytes);
@@ -534,6 +569,94 @@ function showStudioNote(note: string | null): void {
   setState({ state: "ready", backend: loaded.info.backend, bytes: loaded.bytes, note });
 }
 
+const studioRetryMs = (failures: number): number => STUDIO_DOWNLOAD_RETRY_MS * 2 ** (failures - 1);
+
+/**
+ * Download the Studio model in the background and store it in the browser
+ * (or keep it in memory when the browser will not store it). Resolves true
+ * when its bytes are ready, false when the download failed (counted for the
+ * backoff, and given up for the page after STUDIO_DOWNLOAD_ATTEMPTS) or was
+ * stopped. One download at a time; a second call for the same URL joins it.
+ */
+function downloadStudio(url: string): Promise<boolean> {
+  if (studioDownload?.url === url) return studioDownload.promise;
+  studioDownload?.controller.abort();
+  const controller = new AbortController();
+  const stopped = (): boolean => controller.signal.aborted;
+  let promise: Promise<boolean> | null = null;
+  promise = (async () => {
+    setOverlay({ state: "downloading", receivedBytes: 0, totalBytes: null, studio: true });
+    try {
+      const bytes = await downloadModel(url, (receivedBytes, totalBytes) => { if (!stopped()) setOverlay({ state: "downloading", receivedBytes, totalBytes, studio: true }); }, controller.signal);
+      if (stopped()) return false;
+      if (bytes.byteLength < 1024) throw new Error("The downloaded model file is too small to be a model.");
+      const stored = await writeCachedModel(url, bytes);
+      if (stopped()) return false;
+      studioMemory = stored ? null : { url, bytes };
+      studioDownloadFailures = null;
+      if (!studioFailure) studioNote = null;
+      return true;
+    } catch (error) {
+      if (stopped()) return false;
+      const count = (studioDownloadFailures?.url === url ? studioDownloadFailures.count : 0) + 1;
+      const message = studioReason(errorText(error));
+      studioDownloadFailures = { url, count, at: Date.now(), message };
+      if (count >= STUDIO_DOWNLOAD_ATTEMPTS) {
+        const text = `${message} Gave up after ${count} tries on this page; Try Studio again in Settings to retry.`;
+        studioFailure = { url, at: Date.now(), sticky: true, message: text };
+        studioNote = text;
+      } else {
+        studioNote = `${message} Trying again in ${Math.round(studioRetryMs(count) / 60_000)} min; sprites are cut with Best meanwhile.`;
+      }
+      return false;
+    } finally {
+      if (studioDownload?.promise === promise) studioDownload = null;
+      if (!studioDownload) overlay = null;
+      // Best's ready state carries the outcome (no note: the Studio model loads with the next sprite).
+      if (loaded && !loaded.studio && state.state === "ready") setState({ state: "ready", backend: loaded.info.backend, bytes: loaded.bytes, ...(studioNote ? { note: studioNote } : {}) });
+      else publish();
+    }
+  })();
+  studioDownload = { url, promise, controller };
+  return promise;
+}
+
+/** Stop the background Studio download (nothing is counted against it). */
+function stopStudioDownload(): void {
+  const current = studioDownload;
+  studioDownload = null;
+  current?.controller.abort();
+  if (overlay) setOverlay(null);
+}
+
+/**
+ * How a "studio" cut gets the Studio model: "load" (loaded, or its file is in
+ * the browser or in memory: loading takes seconds), "later" (cut with Best
+ * now: the download runs in the background, or waits for its next try), or
+ * "no" (Best for this page; `studioNote` says why).
+ */
+async function studioForCut(url: string): Promise<"load" | "later" | "no"> {
+  if (loaded?.studio && loaded.url === url && !loaded.runner.isClosed()) return "load";
+  if (studioFailure?.url === url && studioFailure.sticky) {
+    studioNote = studioReason(studioFailure.message);
+    return "no";
+  }
+  const reason = await studioCannotRun();
+  if (reason) {
+    studioFailure = { url, at: Date.now(), sticky: true, message: reason };
+    studioNote = reason;
+    return "no";
+  }
+  if (studioMemory?.url === url || (await isCached(url))) return "load";
+  if (studioDownload?.url === url) return "later";
+  const failures = studioDownloadFailures?.url === url ? studioDownloadFailures : null;
+  if (!failures || Date.now() - failures.at >= studioRetryMs(failures.count)) {
+    studioNote = "The Studio model is downloading (about 500 MB); sprites are cut with Best until it is ready.";
+    void downloadStudio(url);
+  }
+  return "later";
+}
+
 /**
  * Cut one sprite. "best" downloads/loads the model on first use; when the
  * model cannot run the cut falls back to "basic" and says so in `quality`
@@ -559,12 +682,15 @@ export async function cutSprite(image: Blob, options: CutoutOptions): Promise<Cu
     }
   };
   if (options.quality === "studio" && options.studioModelUrl) {
-    try {
-      await ensureModel(options.studioModelUrl, false, STUDIO_SPEC);
-      modelUrl = options.studioModelUrl;
-      useModel = studio = true;
-    } catch (error) {
-      studioNote = studioReason(errorText(error));
+    const url = options.studioModelUrl;
+    if ((await studioForCut(url)) === "load") {
+      try {
+        await ensureModel(url, false, STUDIO_SPEC);
+        modelUrl = url;
+        useModel = studio = true;
+      } catch (error) {
+        studioNote = studioReason(errorText(error));
+      }
     }
   }
   if (wantsModel && !useModel) useModel = await useBest();
@@ -701,7 +827,7 @@ export async function getCachedFaceModelBytes(modelUrl: string): Promise<number 
 }
 
 export function getCutoutModelState(): CutoutModelState {
-  return state;
+  return visibleState();
 }
 
 /** Subscribe to model state changes; returns an unsubscribe function. */
@@ -723,12 +849,18 @@ export async function prepareCutoutModel(modelUrl: string, modelUrlF16?: string)
  */
 export async function prepareStudioCutoutModel(studioModelUrl: string): Promise<void> {
   if (studioFailure?.url === studioModelUrl) studioFailure = null;
+  if (studioDownloadFailures?.url === studioModelUrl) studioDownloadFailures = null;
   studioNote = null;
   if (!studioAttempt || studioAttempt.url !== studioModelUrl || studioAttempt.failed) {
     studioAttempt = null;
     clearStudioAttempt();
   }
   try {
+    const reason = await studioCannotRun();
+    if (reason) throw new Error(reason);
+    if (studioMemory?.url !== studioModelUrl && !(await isCached(studioModelUrl)) && !(await downloadStudio(studioModelUrl))) {
+      throw studioDownloadFailures?.url === studioModelUrl ? new Error(studioDownloadFailures.message) : abortError();
+    }
     await ensureModel(studioModelUrl, true, STUDIO_SPEC);
   } catch (error) {
     studioNote = studioReason(errorText(error));
@@ -751,6 +883,9 @@ export async function clearCutoutModel(): Promise<void> {
   studioNote = null;
   studioAttempt = null;
   clearStudioAttempt();
+  stopStudioDownload();
+  studioDownloadFailures = null;
+  studioMemory = null;
   const current = loaded;
   setLoaded(null);
   releaseStudioLock();
@@ -807,6 +942,11 @@ export function resetCutoutRuntime(): void {
   studioFailure = null;
   studioNote = null;
   studioAttempt = null;
+  studioDownload?.controller.abort();
+  studioDownload = null;
+  studioDownloadFailures = null;
+  studioMemory = null;
+  overlay = null;
   loaded = null;
   releaseStudioLock();
   faceLoading = null;

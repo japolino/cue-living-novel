@@ -79,6 +79,9 @@ const saved: Record<string, unknown> = {};
 const realNow = Date.now;
 let clock = 0;
 let fetches: string[] = [];
+/** "slow" URLs answer once `releaseSlow` runs. */
+let releaseSlow: () => void = () => {};
+let slowGate = new Promise<void>((resolve) => { releaseSlow = resolve; });
 const cacheStore = new Map<string, string>();
 const local = new Map<string, string>();
 type LockCallback = (lock: unknown) => Promise<void> | undefined;
@@ -98,6 +101,7 @@ beforeAll(() => {
     const url = String(input instanceof Request ? input.url : input);
     fetches.push(url);
     if (url.includes("missing")) return new Response("nope", { status: 404 });
+    if (url.includes("slow")) await slowGate;
     const body = bodyFor(url);
     return new Response(body, { headers: { "Content-Length": String(body.length) } });
   };
@@ -151,6 +155,8 @@ afterEach(() => {
   heldElsewhere = false;
   clock = 0;
   delete hooks.onLoad;
+  releaseSlow();
+  slowGate = new Promise<void>((resolve) => { releaseSlow = resolve; });
 });
 
 const cut = (studioModelUrl?: string, extra: Record<string, unknown> = {}) =>
@@ -163,6 +169,17 @@ const note = (): string => {
   return state.state === "ready" && state.note ? state.note : "";
 };
 const marker = (): { url: string; reason?: string } | null => (local.has(KEY) ? JSON.parse(local.get(KEY)!) : null);
+const tick = (ms = 1): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+/** Wait for a background Studio download to finish (the visible state stops showing it). */
+const downloaded = async (): Promise<void> => {
+  for (let i = 0; i < 500; i++) {
+    const state = cutout.getCutoutModelState();
+    if (!(state.state === "downloading" && state.studio)) return;
+    await tick();
+  }
+  throw new Error("The Studio download did not finish.");
+};
+const fetchesOf = (url: string): number => fetches.filter((item) => item === url).length;
 
 describe("Studio failures that stop the worker or the tab", () => {
   test("the worker dies loading the Studio model: not tried again on this page, Best cuts on a fresh worker", async () => {
@@ -306,5 +323,57 @@ describe("cutting again after a Studio failure", () => {
     const next = await cutout.cutSprite(new Blob(["image"]), { quality: "best", modelUrl: bestCrash });
     expect(next.quality).toBe("basic");
     expect(calls().filter((call) => call.startsWith("load BEST"))).toHaveLength(1);
+  });
+});
+
+describe("the Studio download runs in the background", () => {
+  test("cuts never wait for it: Best cuts while it downloads, the next cut after it loads the Studio model", async () => {
+    const url = studioUrl("slow");
+    const first = await Promise.race([cut(url), tick(500).then(() => null)]);
+    expect(first).not.toBeNull();
+    expect(first!.quality).toBe("best");
+    expect(first!.studio).toBeUndefined();
+    expect(cutout.getCutoutModelState()).toEqual({ state: "downloading", receivedBytes: 0, totalBytes: null, studio: true });
+    // More cuts while it downloads: Best, one download.
+    expect((await cut(url)).studio).toBeUndefined();
+    releaseSlow();
+    await downloaded();
+    expect(cacheStore.has(url)).toBe(true);
+    expect(cutout.getCutoutModelState()).toMatchObject({ state: "ready", backend: "webgpu" });
+    const after = await cut(url);
+    expect(after.studio).toBe(true);
+    expect(fetchesOf(url)).toBe(1);
+  });
+
+  test("a failed download is tried again after 1, 2, then 4 minutes, then not on this page; Settings retries", async () => {
+    const url = studioUrl("missing");
+    const step = async (advance: number, expected: number): Promise<void> => {
+      clock += advance;
+      expect((await cut(url)).studio).toBeUndefined();
+      await downloaded();
+      expect(fetchesOf(url)).toBe(expected);
+    };
+    await step(0, 1);
+    expect(note()).toMatch(/^The Studio model is not available: .*HTTP 404.*Trying again in 1 min/);
+    await step(30_000, 1);
+    await step(31_000, 2);
+    expect(note()).toMatch(/Trying again in 2 min/);
+    await step(61_000, 2);
+    await step(60_000, 3);
+    await step(4 * 60_000, 4);
+    expect(note()).toMatch(/Gave up after 4 tries on this page.*Try Studio again/);
+    await step(60 * 60_000, 4);
+    await expect(cutout.prepareStudioCutoutModel(url)).rejects.toThrow(/404/);
+    expect(fetchesOf(url)).toBe(5);
+  });
+
+  test("Settings' download waits for the background download instead of starting another", async () => {
+    const url = studioUrl("slow");
+    await cut(url);
+    const prepared = cutout.prepareStudioCutoutModel(url);
+    releaseSlow();
+    await prepared;
+    expect(fetchesOf(url)).toBe(1);
+    expect(cutout.getCutoutModelState()).toMatchObject({ state: "ready", studio: true });
   });
 });
