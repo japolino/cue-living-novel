@@ -5,7 +5,7 @@ import type { AssetView, BackendResponse, ConnectionCatalogOption, FrontendReque
 import { AudioEngine, VnStage, isAmbientEffect, isStageEffect } from "../stage/index.js";
 import type { AmbientEffect, StageEffect } from "../store/index.js";
 import { VisualNovelSettingsPanel } from "../settings/panel.js";
-import { DEFAULT_SPRITE_FACE_MODEL_URL, DEFAULT_SPRITE_MODEL_URL } from "../../shared/sprites.js";
+import { DEFAULT_SPRITE_FACE_MODEL_URL, DEFAULT_SPRITE_MODEL_URL, spriteModelF16Url } from "../../shared/sprites.js";
 import {
   clearCutoutModel,
   getCachedCutoutModelBytes,
@@ -794,7 +794,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     },
     onRequestSpriteLibrary: () => ctx.sendToBackend({ type: "vn_get_sprite_library" }),
     onPrepareCutoutModel: () => {
-      prepareCutoutModel(configRef.current?.spriteModelUrl ?? DEFAULT_SPRITE_MODEL_URL).catch((error: unknown) => {
+      const modelUrl = configRef.current?.spriteModelUrl ?? DEFAULT_SPRITE_MODEL_URL;
+      prepareCutoutModel(modelUrl, spriteModelF16Url(modelUrl)).catch((error: unknown) => {
         settingsPanel?.setCutoutModelState({ state: "error", error: error instanceof Error ? error.message : String(error) });
       });
       // The face finder (emote placement) comes along; its state shows its own errors.
@@ -823,7 +824,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   function refreshCachedCutoutModel(url: string): void {
     if (!settingsPanel || url === cachedModelUrl) return;
     cachedModelUrl = url;
-    getCachedCutoutModelBytes(url)
+    getCachedCutoutModelBytes(url, spriteModelF16Url(url))
       .then((bytes) => { if (cachedModelUrl === url) settingsPanel.setCutoutModelCachedBytes(bytes); })
       .catch(() => {});
   }

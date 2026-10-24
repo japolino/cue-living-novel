@@ -4,12 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  chooseCutoutModelUrl,
   clearCutoutModel,
   configureCutoutRuntime,
   cutSprite,
   detectSpriteFace,
   getFaceModelState,
   getCutoutModelState,
+  getCachedCutoutModelBytes,
   getCutoutRunnerMode,
   onCutoutModelState,
   ORT_CDN_BASE,
@@ -187,6 +189,68 @@ describe("cut-out runtime", () => {
     // A different URL loads a different model.
     await prepareCutoutModel("https://models.test/other.onnx");
     expect(fetches).toHaveLength(2);
+  });
+
+  describe("half-precision copy", () => {
+    const FULL = "https://models.test/isnet.onnx";
+    const HALF = "https://models.test/isnet_fp16.onnx";
+    const nav = (globalThis as unknown as { navigator?: Record<string, unknown> }).navigator;
+    const setGpu = (gpu: unknown): void => {
+      if (nav) Object.defineProperty(nav, "gpu", { value: gpu, configurable: true, writable: true });
+    };
+    afterEach(() => {
+      if (nav) delete nav.gpu;
+      delete (globalThis as { caches?: unknown }).caches;
+    });
+    const adapter = (features: string[]) => ({ requestAdapter: async () => ({ features: new Set(features) }) });
+
+    test("WASM runs either: the half-size copy downloads", async () => {
+      configure();
+      const result = await cutSprite(sprite(), { quality: "best", modelUrl: FULL, modelUrlF16: HALF });
+      expect(result.quality).toBe("best");
+      expect(fetches).toEqual([HALF]);
+      expect(await chooseCutoutModelUrl(FULL, HALF)).toBe(HALF);
+      await prepareCutoutModel(FULL, HALF);
+      expect(fetches).toEqual([HALF]); // already loaded
+    });
+
+    test("WebGPU with shader-f16: the copy; without it: the full model keeps WebGPU", async () => {
+      if (!nav) return;
+      configure();
+      configureCutoutRuntime({ backend: "auto" });
+      setGpu(adapter(["shader-f16"]));
+      expect(await chooseCutoutModelUrl(FULL, HALF)).toBe(HALF);
+      resetCutoutRuntime();
+      setGpu(adapter([]));
+      const result = await cutSprite(sprite(), { quality: "best", modelUrl: FULL, modelUrlF16: HALF });
+      expect(result.quality).toBe("best");
+      expect(fetches).toEqual([FULL]);
+      expect(getCutoutModelState()).toMatchObject({ state: "ready", backend: "webgpu" });
+      resetCutoutRuntime();
+      setGpu({ requestAdapter: async () => null }); // no adapter: WASM, so the copy
+      expect(await chooseCutoutModelUrl(FULL, HALF)).toBe(HALF);
+    });
+
+    test("a full model already in the cache stays in use; cached bytes fall back to the copy", async () => {
+      configure();
+      const store = new Map<string, Response>();
+      (globalThis as { caches?: unknown }).caches = {
+        open: async () => ({
+          match: async (url: string) => store.get(url)?.clone(),
+          put: async (url: string, response: Response) => { store.set(url, response); },
+        }),
+        delete: async () => { store.clear(); return true; },
+      };
+      store.set(FULL, new Response(modelBody, { headers: { "Content-Length": String(modelBody.length) } }));
+      expect(await chooseCutoutModelUrl(FULL, HALF)).toBe(FULL);
+      expect(await getCachedCutoutModelBytes(FULL, HALF)).toBe(4096);
+      await clearCutoutModel();
+      store.set(HALF, new Response("x".repeat(2048), { headers: { "Content-Length": "2048" } }));
+      expect(await getCachedCutoutModelBytes(FULL, HALF)).toBe(2048);
+      expect(await chooseCutoutModelUrl(FULL, HALF)).toBe(HALF);
+      expect(await chooseCutoutModelUrl("https://models.test/custom.onnx")).toBe("https://models.test/custom.onnx");
+      expect(fetches).toEqual([]);
+    });
   });
 
   test("download blocked: best falls back to basic, state says why, retry waits", async () => {

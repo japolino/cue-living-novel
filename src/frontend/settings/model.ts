@@ -674,7 +674,7 @@ export function normalizePresentationMode(value: string): VisualNovelPresentatio
 }
 
 export const SPRITE_CUTOUT_OPTIONS: ReadonlyArray<{ value: VisualNovelSpriteCutout; label: string; help: string }> = [
-  { value: "best", label: "Best (downloads a 176 MB model once)", help: "Clean edges, also on white clothes and hair. The model stays in this browser." },
+  { value: "best", label: "Best (downloads an 88 MB model once)", help: "Clean edges, also on white clothes and hair. The model stays in this browser (176 MB on GPUs without half-precision support)." },
   { value: "basic", label: "Basic (no download)", help: "Removes the plain background without a model. Edges can be rougher." },
 ];
 

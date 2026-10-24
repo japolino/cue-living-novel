@@ -29,7 +29,7 @@ own expression and there is no picture cap.
 |---|---|---|---|
 | `presentationMode` | `"scene"` \| `"sprites"` | `"scene"` | at once (everyday) |
 | `spriteCutout` | `"best"` (model) \| `"basic"` (no download) | `"best"` | at once (everyday) |
-| `spriteModelUrl` | https URL | ISNet-anime on Hugging Face | Advanced (Apply) |
+| `spriteModelUrl` | https URL | ISNet-anime on Hugging Face (its float16 copy downloads where it runs) | Advanced (Apply) |
 | `keyIllustrations` | `"off"` \| `"few"` (≤ 1 per reply) | `"off"` | at once (everyday, sprite mode only) |
 | `spriteImageSize` | `"standard"` \| `"upscaled"` | `"standard"` | at once (everyday, both modes) |
 | `spriteExpressionCount` | `4` \| `8` \| `12` | `4` | at once (everyday, sprite mode only) |
@@ -487,6 +487,20 @@ median of the image border.
 `spriteModelUrl` and cached in the browser; onnxruntime-web is loaded lazily
 (WebGPU, else WASM) so the frontend bundle stays small.
 
+Half-precision download: for the default `spriteModelUrl` the browser
+downloads `DEFAULT_SPRITE_MODEL_F16_URL` instead (the same ISNet-anime in
+float16, onnx-community/anime-seg-ONNX, 88 MB instead of 176 MB;
+`chooseCutoutModelUrl`). Exceptions: the float32 model is already cached
+(kept, no second download), or WebGPU is there without the `shader-f16`
+feature (onnxruntime-web cannot build the f16 session on that GPU and would
+drop to WASM, so the float32 model downloads and keeps WebGPU speed). Without
+WebGPU both run on WASM at the same speed. A custom `spriteModelUrl` is used
+as it is. Measured (October 2026): cut alpha against float32 on 58 sprites
+(bake-off, reply test, white-character set; ORT CPU) mean abs. difference
+0.00001, IoU 0.99998 (min 0.9991); Edge WebGPU on an RTX 5060 106 ms vs 119
+ms per inference, GPU memory +0.78 GB vs +1.47 GB; WASM 18 s vs 17 s (one
+thread).
+
 ### Face boxes
 
 A small face detector (`DEFAULT_SPRITE_FACE_MODEL_URL`: deepghs
@@ -632,6 +646,7 @@ Cut-out runtime:
 - onnxruntime-web 1.30.0, imported lazily from jsDelivr into a blob-URL
   module Worker (inline fallback); WebGPU first, then WASM. The model is
   cached in Cache Storage (IndexedDB on http origins).
+- Model file: float16 copy by default (see "Half-precision download").
 - Measured on the bake-off set (19 sprites, Chromium): fp32 + WebGPU ≈ 0.35–0.4 s
   per sprite (IoU 0.995 vs. the reference); fp32 + WASM ≈ 14–16 s; int8 runs
   on both but is not faster (ConvInteger falls back to the CPU on WebGPU);

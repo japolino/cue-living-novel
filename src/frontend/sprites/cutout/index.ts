@@ -15,6 +15,8 @@
  * onnxruntime-web (pinned, from ORT_CDN_BASE) plus the model load only when
  * "best" quality or a model download is requested. The model is cached in
  * the browser (Cache Storage, or IndexedDB on insecure origins), keyed by URL.
+ * For the default model a half-precision copy (half the download) is used
+ * where it runs at full speed (`chooseCutoutModelUrl`).
  *
  * A small face detector (YOLOv8, see DEFAULT_SPRITE_FACE_MODEL_URL) runs in
  * the same worker, on WASM, to place emotes on the face. It loads on its own,
@@ -60,6 +62,13 @@ export type CutoutResult = {
 export type CutoutOptions = {
   quality: CutoutQuality;
   modelUrl: string;
+  /**
+   * Half-precision copy of the same model (half the download, same masks).
+   * Used instead of `modelUrl` unless `modelUrl` is already cached or the GPU
+   * runs WebGPU without half-precision shaders (there the full model keeps
+   * WebGPU speed). See `chooseCutoutModelUrl`.
+   */
+  modelUrlF16?: string;
   /** Also detect the face ("best" only). Failures leave `face` absent. */
   faceModelUrl?: string;
   signal?: AbortSignal;
@@ -218,6 +227,52 @@ async function ensureModel(url: string, force: boolean): Promise<void> {
   return promise;
 }
 
+type GpuLike = { requestAdapter(): Promise<{ features: { has(name: string): boolean } } | null> };
+let gpuF16: Promise<boolean> | null = null;
+const chosenUrls = new Map<string, string>();
+
+/**
+ * Can this browser run a half-precision model at full speed? False only when
+ * WebGPU is there but lacks "shader-f16": onnxruntime-web then cannot build
+ * the f16 session on the GPU and would fall back to WASM (about 100x slower),
+ * while the full-precision model runs on WebGPU. Without WebGPU both models
+ * run on WASM at the same speed.
+ */
+function halfPrecisionRuns(): Promise<boolean> {
+  if (runtime.backend === "wasm") return Promise.resolve(true);
+  gpuF16 ??= (async () => {
+    const gpu = (globalThis as { navigator?: { gpu?: GpuLike } }).navigator?.gpu;
+    if (!gpu) return true;
+    try {
+      const adapter = await gpu.requestAdapter();
+      return !adapter || adapter.features.has("shader-f16");
+    } catch {
+      return true;
+    }
+  })();
+  return gpuF16;
+}
+
+async function isCached(url: string): Promise<boolean> {
+  try { return (await cachedModelBytes(url)) !== null; } catch { return false; }
+}
+
+/**
+ * The model file to use: `url`, or its half-precision copy `f16Url` (half the
+ * download, the same masks: cut alpha IoU 0.9999 on 58 sprites). A model
+ * already in the browser cache stays in use (no second download); otherwise
+ * the copy is picked unless the GPU cannot run it. Remembered per page.
+ */
+export async function chooseCutoutModelUrl(url: string, f16Url?: string): Promise<string> {
+  if (!f16Url || f16Url === url) return url;
+  const key = `${url}\n${f16Url}`;
+  const known = chosenUrls.get(key);
+  if (known) return known;
+  const pick = (await isCached(url)) ? url : (await isCached(f16Url)) ? f16Url : (await halfPrecisionRuns()) ? f16Url : url;
+  chosenUrls.set(key, pick);
+  return pick;
+}
+
 async function ensureFaceModel(url: string, force: boolean): Promise<CutoutRunner> {
   if (typeof WebAssembly !== "object") {
     const reason = "This browser has no WebAssembly.";
@@ -286,9 +341,11 @@ export async function cutSprite(image: Blob, options: CutoutOptions): Promise<Cu
   const started = performance.now();
   throwIfAborted(options.signal);
   let useModel = false;
+  let modelUrl = options.modelUrl;
   if (options.quality === "best") {
     try {
-      await ensureModel(options.modelUrl, false);
+      modelUrl = await chooseCutoutModelUrl(options.modelUrl, options.modelUrlF16);
+      await ensureModel(modelUrl, false);
       useModel = true;
     } catch {
       /* fall back to basic */
@@ -313,7 +370,7 @@ export async function cutSprite(image: Blob, options: CutoutOptions): Promise<Cu
     // The worker died mid-cut (most likely out of memory in the model): retry once without it.
     if (useModel) {
       const text = `The cut-out worker stopped while running the model: ${errorText(error)}`;
-      failure = { url: options.modelUrl, at: Date.now(), sticky: true, message: text };
+      failure = { url: modelUrl, at: Date.now(), sticky: true, message: text };
       setState({ state: "unsupported", reason: text });
     }
     throwIfAborted(options.signal);
@@ -321,7 +378,7 @@ export async function cutSprite(image: Blob, options: CutoutOptions): Promise<Cu
     result = await runner.cut(image, false);
   }
   if (result.modelError) {
-    failure = { url: options.modelUrl, at: Date.now(), sticky: false, message: result.modelError };
+    failure = { url: modelUrl, at: Date.now(), sticky: false, message: result.modelError };
     loaded = null;
     setState({ state: "error", error: result.modelError });
   }
@@ -400,9 +457,9 @@ export function onCutoutModelState(listener: (state: CutoutModelState) => void):
   return () => { listeners.delete(listener); };
 }
 
-/** Download (once, cached in the browser) and load the model ahead of time. */
-export async function prepareCutoutModel(modelUrl: string): Promise<void> {
-  await ensureModel(modelUrl, true);
+/** Download (once, cached in the browser) and load the model ahead of time (`modelUrlF16`: see CutoutOptions). */
+export async function prepareCutoutModel(modelUrl: string, modelUrlF16?: string): Promise<void> {
+  await ensureModel(await chooseCutoutModelUrl(modelUrl, modelUrlF16), true);
 }
 
 /** Forget the cached models, the face model too (settings "Remove downloaded model"). */
@@ -418,17 +475,21 @@ export async function clearCutoutModel(): Promise<void> {
   const face = faceLoaded;
   faceLoaded = null;
   if (face && !face.runner.isClosed()) await face.runner.unloadFace().catch(() => {});
+  chosenUrls.clear();
   await deleteCachedModels();
   if (state.state !== "unsupported" || typeof WebAssembly === "object") setState({ state: "absent" });
   if (faceState.state !== "unsupported" || typeof WebAssembly === "object") setFaceState({ state: "absent" });
 }
 
 /**
- * Size in bytes of the model cached for `modelUrl`, or null. Lets settings
- * show "downloaded" before the model is loaded in this page.
+ * Size in bytes of the model cached for `modelUrl` (or its half-precision
+ * copy `modelUrlF16`), or null. Lets settings show "downloaded" before the
+ * model is loaded in this page.
  */
-export async function getCachedCutoutModelBytes(modelUrl: string): Promise<number | null> {
-  return cachedModelBytes(modelUrl);
+export async function getCachedCutoutModelBytes(modelUrl: string, modelUrlF16?: string): Promise<number | null> {
+  const bytes = await cachedModelBytes(modelUrl);
+  if (bytes !== null || !modelUrlF16 || modelUrlF16 === modelUrl) return bytes;
+  return cachedModelBytes(modelUrlF16);
 }
 
 /** Override runtime options (tests, self-hosted onnxruntime-web). */
@@ -453,6 +514,8 @@ export async function getCutoutRunnerMode(): Promise<CutoutRunnerMode> {
 /** Stop the worker and forget the loaded model (keeps the cache). For tests and teardown. */
 export function resetCutoutRuntime(): void {
   generation++;
+  gpuF16 = null;
+  chosenUrls.clear();
   loading = null;
   failure = null;
   loaded = null;

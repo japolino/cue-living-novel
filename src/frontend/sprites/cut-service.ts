@@ -1,6 +1,6 @@
 import type { VisualNovelConfig } from "../../config.js";
 import type { BackendResponse, FrontendRequest } from "../../protocol.js";
-import { DEFAULT_SPRITE_FACE_MODEL_URL, DEFAULT_SPRITE_MODEL_URL, SPRITE_CUT_CHUNK_CHARS, SPRITE_CUT_MAX_BYTES } from "../../shared/sprites.js";
+import { DEFAULT_SPRITE_FACE_MODEL_URL, DEFAULT_SPRITE_MODEL_URL, SPRITE_CUT_CHUNK_CHARS, SPRITE_CUT_MAX_BYTES, spriteModelF16Url } from "../../shared/sprites.js";
 import { cutSprite, type CutoutOptions, type CutoutResult } from "./cutout/index.js";
 
 export type SpriteCutRequest = Extract<BackendResponse, { type: "vn_sprite_cut" }>;
@@ -58,9 +58,12 @@ export function createSpriteCutService(deps: SpriteCutServiceDeps): SpriteCutSer
       const config = deps.getConfig();
       const image = await deps.fetchImage(request.imageId);
       if (controller.signal.aborted) return;
+      const modelUrl = config?.spriteModelUrl || DEFAULT_SPRITE_MODEL_URL;
+      const modelUrlF16 = spriteModelF16Url(modelUrl);
       const result = await cut(image, {
         quality: config?.spriteCutout ?? "best",
-        modelUrl: config?.spriteModelUrl || DEFAULT_SPRITE_MODEL_URL,
+        modelUrl,
+        ...(modelUrlF16 ? { modelUrlF16 } : {}),
         faceModelUrl: DEFAULT_SPRITE_FACE_MODEL_URL,
         signal: controller.signal,
       });
