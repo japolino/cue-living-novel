@@ -133,9 +133,10 @@ export type SettingsPanelOptions = {
 const ADVANCED_KEYS = [
   "novelAiQualityTags", "novelAiUseDefaultNegative",
   "imageModel", "imageConcurrency", "parserParameters", "imageParameters", "audioDirectory", "systemOneMode", "systemOneApiUrl", "systemOneModel",
+  "spriteStudioModelUrl",
   "includeRecentMessages", "includeCharacterContext", "includePersonaContext", "includeLorebookContext", "debugLogging",
   "promptPrefix", "promptSuffix", "negativePrompt", "originalReference", "originalCreationName", "customPlannerInstructions",
-  "ignoredTags", "displayRegexRules", "customCss", "spriteModelUrl", "spriteStudioModelUrl",
+  "ignoredTags", "displayRegexRules", "customCss", "spriteModelUrl",
 ] as const;
 type AdvancedKey = (typeof ADVANCED_KEYS)[number];
 

@@ -149,7 +149,9 @@ function startService() {
 
 (window as unknown as { cutout: unknown }).cutout = {
   cutSprite, configureCutoutRuntime, prepareCutoutModel, clearCutoutModel, getCutoutModelState, getCachedCutoutModelBytes,
-  getCutoutRunnerMode, getCutoutRuntimeInfo, getStudioCutoutSupport, prepareStudioCutoutModel, resetCutoutRuntime, states, fetchBlob, pixels, compareAlpha, composite, startService, scaleCompare,
+  getCutoutRunnerMode, getCutoutRuntimeInfo, resetCutoutRuntime, states, fetchBlob, pixels, compareAlpha, composite, startService, scaleCompare,
   figureCheckUrl, cutFigures, preCutRoundTrip,
 };
+// Studio quality (CUE_SPRITE_STUDIO_MODEL in the browser test).
+Object.assign((window as unknown as { cutout: object }).cutout, { getStudioCutoutSupport, prepareStudioCutoutModel });
 document.title = "sprite-cutout-ready";

@@ -826,10 +826,10 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   }
   // A model cached by an earlier visit is not loaded in this page yet: show it as downloaded.
   // With Studio quality (and its URL set) that is the Studio model.
-  const activeCutoutModelUrl = (config: VisualNovelConfig): string =>
-    config.spriteCutout === "studio" && config.spriteStudioModelUrl ? config.spriteStudioModelUrl : config.spriteModelUrl;
   let cachedModelUrl = "";
-  function refreshCachedCutoutModel(url: string): void {
+  function refreshCachedCutoutModel(bestUrl: string): void {
+    const config = configRef.current;
+    const url = config?.spriteCutout === "studio" && config.spriteStudioModelUrl ? config.spriteStudioModelUrl : bestUrl;
     if (!settingsPanel || url === cachedModelUrl) return;
     cachedModelUrl = url;
     getCachedCutoutModelBytes(url, spriteModelF16Url(url))
@@ -1169,7 +1169,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       speechDock.setEnabled(configRef.current.speech.enabled);
       speechSettings?.setConfig(configRef.current.speech);
       settingsPanel?.setConfig(configRef.current);
-      refreshCachedCutoutModel(activeCutoutModelUrl(configRef.current));
+      refreshCachedCutoutModel(configRef.current.spriteModelUrl);
       if (configRef.current?.autoEnter && !active) activate();
       if (bootPending) {
         // The boot request said nothing about the view. Now that the config is
@@ -1203,7 +1203,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       speechDock.setEnabled(configRef.current.speech.enabled);
       speechSettings?.setConfig(configRef.current.speech);
       settingsPanel?.setConfig(configRef.current);
-      refreshCachedCutoutModel(activeCutoutModelUrl(configRef.current));
+      refreshCachedCutoutModel(configRef.current.spriteModelUrl);
       settingsPanel?.setSaveStatus?.({ kind: "saved" });
       return;
     }
