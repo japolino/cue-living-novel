@@ -1,14 +1,21 @@
 import type { Choice, Paragraph } from "../../shared/contracts.js";
 import { escapePanelText, extractPanelSpans, maskPanelSpans, panelHash, MAX_PANELS, MAX_PANEL_HTML, MAX_PANEL_TOTAL, type PanelArtifact, type PanelSpan } from "../../shared/panels.js";
+import { nonStoryCard, nonStoryMarkupRanges, PANELS_ONLY_TEXT, structuralLine, type NonStoryBlock } from "./non-story.js";
 
 export type PrepareNarrativeOptions = {
   ignoredTags?: readonly string[];
+  /** "Skip non-story blocks": structural cleanup of reasoning, status markup and placeholders (no LLM). */
+  skipNonStory?: boolean;
 };
 
 export type PreparedNarrative = {
   paragraphs: Paragraph[];
   choices: Choice[];
   panels: PanelArtifact[];
+  /** Status lines taken out of the story (skipNonStory); they also fill the "Not story" card. */
+  nonStory?: NonStoryBlock[];
+  /** Everything the structural pass carded (status lines, status elements as text): the reader finds it in Panels, the planner still reads it. */
+  status?: string[];
 };
 
 type RawChoice = { id?: string | undefined; label: string; submission: string };
@@ -228,6 +235,22 @@ export function prepareNarrative(content: string, options: PrepareNarrativeOptio
       }
     }
   }
+  const status: Array<{ at: number; text: string }> = [];
+  const removedMarkup: Array<{ start: number; end: number }> = [];
+  if (options.skipNonStory) {
+    for (const range of nonStoryMarkupRanges(content)) {
+      // A complete HTML block is already a Panels card; markup inside it stays there.
+      if (spans.some((span) => span.start <= range.start && range.end <= span.end)) continue;
+      hidden.push(range);
+      removedMarkup.push(range);
+      const nested = spans.filter((span) => span.start < range.end && range.start < span.end);
+      for (const card of nested) spans.splice(spans.indexOf(card), 1);
+      if (range.card) status.push({ at: range.start, text: content.slice(range.start, range.end).replace(/<[^>]*>/g, " ").replace(/[ \t]+/g, " ").replace(/\s*\n\s*/g, "\n").trim() });
+      if (range.card && range.end - range.start < MAX_PANEL_HTML / 6 && spans.length < MAX_PANELS) {
+        spans.push({ ...range, html: nested.length ? nested.map((card) => card.html).join("\n") : `<pre>${escapePanelText(content.slice(range.start, range.end))}</pre>`, title: range.card, followKey: `tag:${range.card}` });
+      }
+    }
+  }
   // Multiple entities using the same marker cannot safely share a following pin.
   for (const span of spans) if (span.followKey && spans.filter((other) => other.followKey === span.followKey).length > 1) {
     const key = span.followKey;
@@ -240,19 +263,39 @@ export function prepareNarrative(content: string, options: PrepareNarrativeOptio
   const paragraphs: Paragraph[] = [];
   const rawChoices: RawChoice[] = [];
   const paragraphEnds: number[] = [];
+  const nonStory: NonStoryBlock[] = [];
+  let inFence = false;
   let offset = 0;
   for (const block of splitBlocks(content)) {
     const start = content.indexOf(block.text, offset);
     offset = start + block.text.length;
     const extracted = extractChoices(masked.slice(start, offset));
     rawChoices.push(...extracted.choices);
-    const text = cleanNarrativeBlock(stripIgnoredTags(extracted.text, options.ignoredTags ?? []));
+    let text = cleanNarrativeBlock(stripIgnoredTags(extracted.text, options.ignoredTags ?? []));
+    if (options.skipNonStory && text) {
+      // Markup removed inside a line leaves masking spaces behind.
+      const touched = removedMarkup.some((range) => range.start < offset && start < range.end);
+      // Code fences (which can span blocks) are shown as written.
+      const lines = text.split("\n").map((line) => {
+        const fence = /^\s*```/.test(line);
+        if (fence) inFence = !inFence;
+        return fence || inFence ? { text: line } : structuralLine(touched ? line.replace(/[ \t]{2,}/g, " ").trim() : line);
+      });
+      const skipped = lines.filter((line) => line.skip === "status").map((line) => line.text);
+      if (skipped.length) {
+        nonStory.push({ at: paragraphs.length, text: skipped.join("\n") });
+        status.push({ at: start, text: skipped.join("\n") });
+      }
+      text = lines.filter((line) => !line.skip).map((line) => line.text).join("\n");
+    }
     if (text) {
       paragraphs.push({ index: paragraphs.length, sourceIndex: block.sourceIndex, text });
       paragraphEnds.push(offset);
     }
   }
-  if (!paragraphs.length && spans.length) paragraphs.push({ index: 0, sourceIndex: 0, text: "A new panel is available in Panels." });
+  // Structural cleanup never leaves a reply unrevealable: with nothing left, plan it as before.
+  if (options.skipNonStory && !paragraphs.length && !spans.length && !nonStory.length) return prepareNarrative(content, { ...options, skipNonStory: false });
+  if (!paragraphs.length && (spans.length || nonStory.length)) paragraphs.push({ index: 0, sourceIndex: 0, text: PANELS_ONLY_TEXT });
   const panels = spans.sort((a, b) => a.start - b.start).slice(0, MAX_PANELS).map((span, index): PanelArtifact => ({
     id: `panel-${index}-${panelHash(span.html)}`,
     title: span.title,
@@ -260,6 +303,8 @@ export function prepareNarrative(content: string, options: PrepareNarrativeOptio
     paragraphIndex: Math.min(Math.max(0, paragraphs.length - 1), paragraphEnds.filter((end) => end <= span.start).length),
     ...(span.followKey ? { followKey: span.followKey } : {}),
   }));
+  const card = nonStoryCard(nonStory, (at) => Math.min(at, Math.max(0, paragraphs.length - 1)));
+  if (card && panels.length < MAX_PANELS) panels.push(card);
   const unlocksAfterParagraph = Math.max(0, paragraphs.length - 1);
   const usedIds = new Set<string>();
   const choices = rawChoices.map((choice, index): Choice => {
@@ -270,5 +315,5 @@ export function prepareNarrative(content: string, options: PrepareNarrativeOptio
     usedIds.add(id);
     return { id, label: choice.label, submission: choice.submission, source: "authored", unlocksAfterParagraph };
   });
-  return { paragraphs, choices, panels };
+  return { paragraphs, choices, panels, ...(options.skipNonStory ? { nonStory, status: status.sort((a, b) => a.at - b.at).map((entry) => entry.text).filter(Boolean) } : {}) };
 }

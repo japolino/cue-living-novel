@@ -91,6 +91,14 @@ Unselected-greeting rule (evidence-based, no bare length heuristic): a message e
 
 When a greeting is re-resolved to a different scene (same stored text, different selection) while it is the chat's only assistant turn, the chat's durable identity state (frozen protagonist visual state, character registry, per-chat appearance roster, scene lineage and scene-image cache scope) is reset to the empty pre-greeting baseline before replanning, so the discarded scene's cast cannot leak into the newly selected one. Mid-chat turns and plain edits of the greeting are never reset. Retry (`vn_retry_turn`) re-resolves macro-bearing messages first and replans when the resolution changed. A cancel, deletion, edit event, or new generation that arrives while a macro resolve is in flight supersedes that intake (per-chat intake epoch), so a stale resolve can never enqueue a plan afterwards.
 
+### Non-story lines
+
+With `skipNonStory` (on by default) `prepareNarrative` runs two structural passes before splitting paragraphs (`src/backend/core/non-story.ts`). `nonStoryMarkupRanges` hides comments, reasoning elements (an orphan closing reasoning tag hides everything before it), interface and form controls (`<input>` and other void elements cover only their tag), and hidden elements; tracker/status elements (by tag, or by a `tracker`, `stats`, `status-panel` or `hud` class or id, as in Choir) become `<pre>` Panels cards with a `tag:` follow key. An unclosed element that starts a line ends at the next blank line; one inside prose covers only its tag. Markup inside fenced or inline code (`codeRanges` in `src/shared/panels.ts`) is never touched. `structuralLine` then judges each line of each block outside code fences by its words (`plainLine`: tags removed, `<br>` as a space): placeholder-only lines (`INLAY[...]`, `{{...}}`), rules and lines with only unrenderable tags are dropped; bracketed lines with field syntax (`:`, `|`, `=`), braced field lines and pipe segments (`[a | b]`, `<a | b>`) are status lines collected into `nonStory`. Bracketed lines without field syntax (`[BANG!]`, `[Phone buzzes]`) and table rows are left to the line check. A story line keeps its own text: only tags the stage cannot render are removed; the stage's tags (`STAGE_INLINE_TAGS` in `src/shared/stage-markup.ts`, shared with `formatDialogueText`), text-effect tags, inline code and a never-closed bare `<Name>` stay byte for byte. If the passes leave nothing, the reply is prepared as before. `status` lists the carded text (status lines and status elements as plain text) for the planner.
+
+`planTurn` then starts one line check (`checkStoryLines`, `src/backend/runtime/story-check.ts`) through the planner connection, as soon as the connection lookup (which runs beside the context reads) returns, so it runs beside context loading, System One and the planner, with Choir's frozen K/S prompt (`STORY_CHECK_SYSTEM`) and one `index K|S` row per line (`storyLines`: tags, emphasis and heading marks removed; Cue's Panels pointer is not sent, and a reply without lines makes no request). There is no JSON mode; temperature is 0 unless `parserParameters` sets one, and Gemini gets the planner's light thinking. An empty answer or an error is retried once with 60-character line heads (after an error, without Cue's temperature); two refusals keep every line. A connection whose two attempts both error on `STORY_CHECK_FAILURE_LIMIT` (3) replies in a row is skipped for `STORY_CHECK_BACKOFF_MS` (5 minutes, in memory), so one reply a provider rejects does not switch the check off. The planner still reads every paragraph, plus the carded status lines in a separate `STATUS LINES` block after the target response. After both finish, `applyStoryLabels` drops S lines inside their paragraphs (lines the check never saw, such as a lone effect tag, stay with a paragraph that keeps a story line), re-indexes paragraphs, remaps panels and choices, and replaces the structural card with one **Not story** card (`followKey: "nonstory"`) holding the structural and checked lines. A reply without story lines becomes one pointer paragraph. `remapPlannerParagraphs` moves scene starts, cues, effects and speakers from removed paragraphs to the next story paragraph; a paragraph's own cue, effect and scene win, and references in removed paragraphs after the last story paragraph are dropped. System One decisions move the same way. The persisted `TurnPlan` holds only the story paragraphs, so reopening needs neither the check nor a replan.
+
+Labels are cached in `chats/<chat>/story-check.json` (user storage, last 64 entries, writes serialized per file; an unreadable cache is not overwritten) by a versioned hash of the exact lines checked. A refusal is cached for that model only; errors are not cached. Earlier assistant replies in the planner's recent context go through the same structural passes and their cached labels (`cachedStoryLabels`, no request), with their carded status lines appended as "not shown to the reader"; replies left empty are omitted. `resolvedSourceText` stays the full resolved reply.
+
 ## Turn flow
 
 ### View gating
@@ -126,8 +134,8 @@ owner (retry, reply, reuse) has claimed the chat's turn meanwhile; a view that
 merely reopened still gets the stamp, plus `vn_asset` updates, because the
 aborted batch never resumes on its own. Cancelling a plan aborts its sidecar
 request (`spindle.generate.raw` gets the operation's signal, and the call
-rejects locally even when the host keeps it running; a System One request it
-waits on is let go the same way), with no retry and no fallback plan, so the
+rejects locally even when the host keeps it running; a System One request or
+a non-story line check it waits on is let go the same way), with no retry and no fallback plan, so the
 chat's next plan starts at once instead of queueing
 behind it; a reopened view never joins a cancelled plan. A newer version of a
 message (another swipe, an edit) cancels every plan of its other versions that
@@ -161,7 +169,8 @@ GENERATION_ENDED
   -> enqueue one planning job for that chat
   -> gather recent and enabled structured context (recent chat: the messages
      before the reply; the reply itself goes once, indexed, as the target)
-  -> ask sidecar for scenes, cues, speakers, and optional choices
+  -> ask sidecar for scenes, cues, speakers, and optional choices (beside it: the non-story line check)
+  -> drop the lines the check labelled non-story and move the plan onto the remaining paragraphs
   -> resolve the protagonist identity (seed once from planner/card/appearance memory, then freeze) and map each cue's expression onto the closed catalogue
   -> attribute each paragraph to a literal speaker nameplate and each cue to its active character, attire, and optional BGM/SFX
   -> validate claimed scene changes against objective evidence

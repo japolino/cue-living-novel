@@ -10,6 +10,7 @@ import {
   RESOLVED_GREETING_S1,
   S1_SCENE_TEXT
 } from "./__fixtures__/greeting-macro.js";
+import { storyCheckReply } from "./__fixtures__/story-check";
 
 type Msg = { id: string; content: string; is_user: boolean; name: string };
 
@@ -88,7 +89,8 @@ function macroRuntime(messages: Msg[], options: { resolveText?: () => string | P
       }
     },
     generate: {
-      raw: async () => {
+      raw: async (request: unknown) => {
+        const check = storyCheckReply(request); if (check) return check;
         plannerCalls += 1;
         return { content: JSON.stringify(plannerPayload()) };
       }
@@ -250,7 +252,8 @@ describe("audit regressions", () => {
     let tags = "blonde hair, golden eyes";
     const otherScene = "Celeste alley scene.\n\nShe lurks in the shadows near the gate.";
     const runtime = macroRuntime([greetingMessage], { resolveText: () => RESOLVED_GREETING_S1 });
-    (runtime.spindle as unknown as { generate: { raw: () => Promise<unknown> } }).generate.raw = async () => {
+    (runtime.spindle as unknown as { generate: { raw: (request: unknown) => Promise<unknown> } }).generate.raw = async (request: unknown) => {
+      const check = storyCheckReply(request); if (check) return check;
       const payload = plannerPayload();
       payload.scenes[0]!.cast = [character];
       payload.cues = [{ paragraphIndex: 0, character } as never];

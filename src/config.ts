@@ -143,6 +143,8 @@ export type VisualNovelConfig = {
   customPlannerInstructions: string;
   customCss: string;
   ignoredTags: string;
+  /** Keep reasoning, trackers, recaps, menus and other non-story lines out of paragraphs (one short LLM check per reply). */
+  skipNonStory: boolean;
   displayRegexRules: string;
   useNativeCardImages: boolean;
   textSpeed: number;
@@ -209,6 +211,7 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   customPlannerInstructions: "",
   customCss: "",
   ignoredTags: "",
+  skipNonStory: true,
   displayRegexRules: "",
   useNativeCardImages: false,
   textSpeed: 20,
@@ -405,6 +408,7 @@ export function normalizeConfig(value: unknown): VisualNovelConfig {
     customPlannerInstructions: stringValue(input.customPlannerInstructions, DEFAULT_CONFIG.customPlannerInstructions),
     customCss: stringValue(input.customCss, DEFAULT_CONFIG.customCss),
     ignoredTags: stringValue(input.ignoredTags, DEFAULT_CONFIG.ignoredTags),
+    skipNonStory: bool(input.skipNonStory, DEFAULT_CONFIG.skipNonStory),
     displayRegexRules: stringValue(input.displayRegexRules, DEFAULT_CONFIG.displayRegexRules),
     useNativeCardImages: bool(input.useNativeCardImages, DEFAULT_CONFIG.useNativeCardImages),
     textSpeed: integer(input.textSpeed, 0, 100, DEFAULT_CONFIG.textSpeed),

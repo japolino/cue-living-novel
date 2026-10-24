@@ -90,6 +90,21 @@ export type ResolvedPlannerConnection = {
   model: string;
 };
 
+/**
+ * The lightest thinking setting for a Google Gemini planner model, or null.
+ * The host's reasoning off-switch has no Google branch: it only deletes
+ * thinkingConfig, which leaves Gemini on DEFAULT dynamic thinking. Thought
+ * tokens count against maxOutputTokens, so a long reply can exhaust the
+ * whole budget and return empty text (finishReason MAX_TOKENS).
+ */
+export function lightGoogleThinking(model: string): Record<string, unknown> | null {
+  // Gemini 3.8 Flash rejects "minimal"; "low" is its lightest level.
+  if (/gemini-3\.8/i.test(model)) return { thinkingLevel: "low" };
+  if (/gemini-3/i.test(model)) return { thinkingLevel: "minimal" };
+  if (/gemini-2\.5/i.test(model)) return { thinkingBudget: 0 };
+  return null;
+}
+
 export async function resolvePlannerConnection(
   spindle: SpindleAPI,
   config: { parserConnectionId: string | null },

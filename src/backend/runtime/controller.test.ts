@@ -5,6 +5,7 @@ import { markAssetReady, registerVisualNovelBackend, sendState, turnView, viewRe
 import { chatStatePath, singleCharacterStatePath, turnPath, type StoredChatState, type StoredTurnRecord } from "./storage.js";
 import { seedSingleCharacter } from "../core/visual-state.js";
 import { SINGLE_CHARACTER_SCHEMA_VERSION } from "../../shared/character.js";
+import { storyCheckReply } from "./__fixtures__/story-check";
 
 const now = new Date().toISOString();
 const key = {
@@ -197,7 +198,8 @@ function planningRuntime(
       }))
     },
     generate: {
-      raw: async () => {
+      raw: async (request: unknown) => {
+        const check = storyCheckReply(request); if (check) return check;
         generateCalls += 1;
         if (options.generateRaw) return { content: JSON.stringify(options.generateRaw()) };
         throw new Error("planner unavailable");
@@ -387,7 +389,7 @@ function generationFixture() {
       }]
     },
     generate: {
-      raw: async () => ({ content: JSON.stringify(generationPayload([0, 1])) })
+      raw: async (request: unknown) => storyCheckReply(request) ?? ({ content: JSON.stringify(generationPayload([0, 1])) })
     },
     imageGen: {
       generate: async () => {
@@ -507,7 +509,8 @@ describe("Finding #3: vn_retry_turn recovery and settings snapshotting", () => {
         setJson: async (path: string, value: unknown) => { data.set(path, value); }
       },
       chat: { getMessages: async () => [message] },
-      generate: { raw: async () => {
+      generate: { raw: async (request: unknown) => {
+        const check = storyCheckReply(request); if (check) return check;
         planningCalls++;
         return { text: JSON.stringify(singleCharacterPayload("silver hair, green eyes")) };
       } },
