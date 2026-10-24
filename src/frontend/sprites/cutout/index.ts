@@ -72,6 +72,13 @@ export type CutoutResult = {
   /** The Studio model made the mask. */
   studio?: true;
   /**
+   * "studio" quality, cut with Best only because the Studio model was not
+   * ready yet (downloading, or busy in another tab): worth one Studio re-cut
+   * later (the backend's one-shot upgrade). Absent once the Studio model
+   * cannot run on this page, without a Studio URL, and for other qualities.
+   */
+  provisional?: true;
+  /**
    * Duplicate check: the mask looks like two figures side by side (see
    * `CutoutFigureCheck`). Precise (1% false positives) but finds only about
    * half of the duplicates.
@@ -670,6 +677,8 @@ export async function cutSprite(image: Blob, options: CutoutOptions): Promise<Cu
   const wantsModel = options.quality !== "basic";
   let useModel = false;
   let studio = false;
+  /** The Studio model may come later (see CutoutResult.provisional). */
+  let later = false;
   let modelUrl = options.modelUrl;
   const useBest = async (): Promise<boolean> => {
     try {
@@ -683,13 +692,16 @@ export async function cutSprite(image: Blob, options: CutoutOptions): Promise<Cu
   };
   if (options.quality === "studio" && options.studioModelUrl) {
     const url = options.studioModelUrl;
-    if ((await studioForCut(url)) === "load") {
+    const plan = await studioForCut(url);
+    later = plan === "later";
+    if (plan === "load") {
       try {
         await ensureModel(url, false, STUDIO_SPEC);
         modelUrl = url;
         useModel = studio = true;
       } catch (error) {
         studioNote = studioReason(errorText(error));
+        later = studioNote === STUDIO_BUSY;
       }
     }
   }
@@ -767,6 +779,7 @@ export async function cutSprite(image: Blob, options: CutoutOptions): Promise<Cu
     bbox: result.bbox,
     quality: result.quality,
     ...(studio && result.quality === "best" && !result.preCut ? { studio: true as const } : {}),
+    ...(later && !studio && result.quality === "best" && !result.preCut ? { provisional: true as const } : {}),
     twoFigures: result.figures?.twoFigures === true,
     splitShare: result.figures?.splitShare ?? 0,
     ...(result.face ? { face: result.face.face ? result.face.face.box : null } : {}),

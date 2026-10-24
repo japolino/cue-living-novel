@@ -77,6 +77,18 @@ describe("sprite cut service", () => {
     expect("studioModelUrl" in none.cuts[0]!.options).toBe(false);
   });
 
+  test("Studio flags travel in the meta: the Studio model cut it, or Best stood in while it downloaded", async () => {
+    const png = () => new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" });
+    const studio = setup({ cut: async () => result(png(), { studio: true }) });
+    await studio.service.handle(request("s"));
+    expect(studio.sent[0]!.meta).toMatchObject({ quality: "best", studio: true });
+    expect("provisional" in studio.sent[0]!.meta!).toBe(false);
+    const provisional = setup({ cut: async () => result(png(), { provisional: true }) });
+    await provisional.service.handle(request("p"));
+    expect(provisional.sent[0]!.meta).toMatchObject({ quality: "best", provisional: true });
+    expect("studio" in provisional.sent[0]!.meta!).toBe(false);
+  });
+
   test("without config: best quality and the default model", async () => {
     const { service, cuts } = setup({ config: null });
     await service.handle(request("a"));

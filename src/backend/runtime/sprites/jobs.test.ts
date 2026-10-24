@@ -331,6 +331,71 @@ describe("sprite jobs: cut bridge", () => {
     expect(await f.service.queueCutUpgrades("u1")).toBe(1);
   });
 
+  /** Answer every pending cut (with `meta`) until none is left. */
+  async function answerPending(f: ReturnType<typeof setup>, meta: Record<string, unknown> = CUT_META): Promise<void> {
+    for (let guard = 0; guard < 30; guard += 1) {
+      const pending = f.cutRequests().filter((request) => !f.answered.has(request.requestId));
+      if (pending.length === 0) return;
+      for (const request of pending) { f.answered.add(request.requestId); f.answerCut(request, meta); }
+      await f.service.settle("u1");
+    }
+  }
+
+  test("a Best cut made while the Studio model downloaded gets one Studio re-cut on the next view open", async () => {
+    const f = setup({ config: { spriteCutout: "studio" } });
+    await f.service.prepareCast("u1", [MIRA], spriteConfig());
+    await f.service.settle("u1");
+    const setKey = spriteSetKeyFor(MIRA, f.styleKey);
+    await answerPending(f, { ...CUT_META, provisional: true });
+    const idle = async () => (await f.library()).sets[setKey]!.images.idle!;
+    expect(await idle()).toMatchObject({ quality: "best", provisional: true, upgrade: null });
+    const bestCut = (await idle()).cutImageId;
+    const before = f.cutRequests().length;
+    await f.service.onViewOpened("u1");
+    await f.service.settle("u1");
+    const upgrades = f.cutRequests().slice(before);
+    expect(upgrades.map((request) => request.expression)).toContain("idle");
+    // Still Best (the Studio model is not ready yet): the old cut stays, and that was the one try.
+    const idleUpgrade = upgrades.find((request) => request.expression === "idle")!;
+    f.answered.add(idleUpgrade.requestId);
+    f.answerCut(idleUpgrade, { ...CUT_META, provisional: true });
+    await f.service.settle("u1");
+    expect(await idle()).toMatchObject({ cutImageId: bestCut, provisional: true, upgrade: "done" });
+    // The others get the Studio model: replaced, no longer provisional.
+    await answerPending(f, { ...CUT_META, studio: true });
+    const others = Object.values((await f.library()).sets[setKey]!.images).filter((image) => image.expression !== "idle" && image.status === "ready");
+    expect(others.length).toBeGreaterThan(0);
+    expect(others.every((image) => image.provisional === undefined && image.upgrade === "done")).toBe(true);
+    const count = f.cutRequests().length;
+    await f.service.onViewOpened("u1");
+    await f.service.settle("u1");
+    expect(f.cutRequests().length).toBe(count);
+  });
+
+  test("provisional cuts are not re-cut while 'best' is selected; a basic cut re-cut by a provisional Best one still gets its Studio try", async () => {
+    const best = setup({ config: { spriteCutout: "best" } });
+    await best.service.prepareCast("u1", [MIRA], spriteConfig());
+    await best.service.settle("u1");
+    await answerPending(best, { ...CUT_META, provisional: true });
+    expect(await best.service.queueCutUpgrades("u1")).toBe(0);
+
+    const f = setup({ config: { spriteCutout: "studio" } });
+    await f.service.prepareCast("u1", [MIRA], spriteConfig());
+    await f.service.settle("u1");
+    const setKey = spriteSetKeyFor(MIRA, f.styleKey);
+    await answerPending(f, { ...CUT_META, quality: "basic" });
+    await f.service.onViewOpened("u1");
+    await f.service.settle("u1");
+    await answerPending(f, { ...CUT_META, provisional: true });
+    const idle = (await f.library()).sets[setKey]!.images.idle!;
+    expect(idle).toMatchObject({ quality: "best", provisional: true, upgrade: null });
+    await f.service.onViewOpened("u1");
+    await f.service.settle("u1");
+    await answerPending(f, { ...CUT_META, studio: true });
+    expect((await f.library()).sets[setKey]!.images.idle!).toMatchObject({ quality: "best", upgrade: "done" });
+    expect((await f.library()).sets[setKey]!.images.idle!.provisional).toBeUndefined();
+  });
+
   test("a basic cut made while 'best' is selected is re-cut once on the next view open, silently", async () => {
     const f = setup({ config: { spriteCutout: "best" } });
     await f.service.prepareCast("u1", [MIRA], spriteConfig());

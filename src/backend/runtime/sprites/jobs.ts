@@ -551,6 +551,7 @@ export class SpriteService {
     image.height = null;
     image.quality = null;
     image.upgrade = null;
+    delete image.provisional;
     image.error = null;
     image.cutAttempts = 0;
     image.updatedAt = now;
@@ -570,19 +571,24 @@ export class SpriteService {
   /**
    * Cut-outs made with the "basic" fallback while "best" or "studio" is
    * selected (the model was not ready yet) are re-cut once from the raw
-   * render. The old cut stays on stage until the new one replaces it.
+   * render, and so are Best cut-outs made while "studio" is selected and the
+   * Studio model was still downloading (`provisional`). The old cut stays on
+   * stage until the new one replaces it.
    */
   async queueCutUpgrades(userId: string | undefined): Promise<number> {
     const config = await this.deps.loadConfig(userId);
     if (config.spriteCutout === "basic") return 0;
+    const studio = config.spriteCutout === "studio";
+    const upgradable = (image: StoredSpriteImage): boolean => image.status === "ready" && Boolean(image.rawImageId) && image.upgrade === null
+      && (image.quality === "basic" || (studio && image.provisional === true));
     const library = await this.library.get(userId);
-    const due = Object.values(library.sets).some((set) => Object.values(set.images).some((image) => image.status === "ready" && image.quality === "basic" && image.rawImageId && image.upgrade === null));
+    const due = Object.values(library.sets).some((set) => Object.values(set.images).some(upgradable));
     if (!due) return 0;
     return this.library.update(userId, (lib, now) => {
       let count = 0;
       for (const set of Object.values(lib.sets)) {
         for (const image of Object.values(set.images)) {
-          if (image.status !== "ready" || image.quality !== "basic" || !image.rawImageId || image.upgrade !== null) continue;
+          if (!upgradable(image)) continue;
           image.upgrade = "pending";
           image.updatedAt = now;
           count += 1;
@@ -1373,8 +1379,11 @@ export class SpriteService {
     const first = current();
     if (!first) return;
     if (first.status === "ready") {
-      // A silent upgrade re-cut: any failure keeps the basic cut; it is tried only once.
-      if (!outcome.ok || outcome.meta.quality !== "best") {
+      // A silent upgrade re-cut, tried only once: it replaces a basic cut with
+      // a model's, or a provisional Best cut with the Studio model's; anything
+      // else (a failure, the same quality again) keeps the old cut.
+      const better = outcome.ok && (first.quality === "basic" ? outcome.meta.quality === "best" : outcome.meta.studio === true);
+      if (!better) {
         await this.library.update(userId, (_library, now) => {
           const image = current();
           if (!image) return;
@@ -1450,11 +1459,14 @@ export class SpriteService {
       image.width = outcome.meta.width;
       image.height = outcome.meta.height;
       image.quality = outcome.meta.quality;
+      if (outcome.meta.provisional) image.provisional = true;
+      else delete image.provisional;
       if (outcome.meta.twoFigures !== undefined) image.twoFigures = outcome.meta.twoFigures;
       if (outcome.meta.face !== undefined) image.face = outcome.meta.face;
       else delete image.face;
-      // A basic cut while "best" is selected gets one silent upgrade later.
-      image.upgrade = image.upgrade === "pending" ? "done" : null;
+      // A basic cut while "best" is selected gets one silent upgrade later; a
+      // provisional Best one (also an upgrade of a basic cut) one Studio try.
+      image.upgrade = image.upgrade === "pending" && !outcome.meta.provisional ? "done" : null;
       image.error = null;
       image.cutAttempts = 0;
       image.updatedAt = now;

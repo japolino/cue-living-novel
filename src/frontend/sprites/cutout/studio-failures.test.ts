@@ -377,3 +377,28 @@ describe("the Studio download runs in the background", () => {
     expect(cutout.getCutoutModelState()).toMatchObject({ state: "ready", studio: true });
   });
 });
+
+describe("provisional Best cuts (one Studio re-cut later)", () => {
+  test("a Best cut made because the Studio model is not ready yet is provisional; Studio cuts and lasting failures are not", async () => {
+    const url = studioUrl("slow");
+    expect((await cut(url)).provisional).toBe(true);
+    releaseSlow();
+    await downloaded();
+    const studioCut = await cut(url);
+    expect(studioCut.studio).toBe(true);
+    expect(studioCut.provisional).toBeUndefined();
+    cutout.resetCutoutRuntime();
+    // Another tab has the Studio model: it may be free later.
+    heldElsewhere = true;
+    expect((await cut(url)).provisional).toBe(true);
+    heldElsewhere = false;
+    cutout.resetCutoutRuntime();
+    // Lasting: the session cannot be built, no Studio URL, Best quality.
+    const broken = studioUrl("session");
+    cached(broken);
+    expect((await cut(broken)).provisional).toBeUndefined();
+    expect((await cut(broken)).provisional).toBeUndefined();
+    expect((await cut()).provisional).toBeUndefined();
+    expect((await cutout.cutSprite(new Blob(["image"]), { quality: "best", modelUrl: BEST, studioModelUrl: url })).provisional).toBeUndefined();
+  });
+});

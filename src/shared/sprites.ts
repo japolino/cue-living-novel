@@ -685,6 +685,10 @@ export type SpriteCutMeta = {
   bbox: [number, number, number, number];
   /** "best" used the segmentation model; "basic" is the model-free fallback. */
   quality: "best" | "basic";
+  /** "studio" quality: the Studio model made the mask. */
+  studio?: true;
+  /** "studio" quality, cut with Best while the Studio model was not ready yet: one Studio re-cut later. */
+  provisional?: true;
   /**
    * Duplicate check of the browser cut-out: two figures side by side. Absent
    * from older frontends (unknown).
