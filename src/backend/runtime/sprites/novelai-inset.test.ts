@@ -86,6 +86,22 @@ describe("NovelAI V5 inset: prompt and negative", () => {
     // Weighted groups are left as they are.
     expect(insetNegative("1.2::text, logo::, lowres")).toBe("1.2::text, logo::, lowres, comic");
   });
+
+  test("a weighted or bracketed `split screen` leaves the negative too; the rest of its group stays", () => {
+    expect(insetNegative("lowres, 1.2::split screen::, text")).toBe("lowres, text, comic");
+    expect(insetNegative("lowres, -1::split_screen::")).toBe("lowres, comic");
+    expect(insetNegative("{split screen}, lowres")).toBe("lowres, comic");
+    expect(insetNegative("[[Split Screen]], lowres")).toBe("lowres, comic");
+    expect(insetNegative("(split screen:1.3), text")).toBe("text, comic");
+    expect(insetNegative("lowres, 1.5::text, split screen, logo::")).toBe("lowres, 1.5::text, logo::, comic");
+    expect(insetNegative("1.2::split screen, multiple views::, lowres")).toBe("1.2::multiple views::, lowres, comic");
+    expect(insetNegative("{text, split screen}, lowres")).toBe("{text}, lowres, comic");
+    // Other tags that only start with it stay; an emphasized `comic` counts.
+    expect(insetNegative("split screen view, lowres")).toBe("split screen view, lowres, comic");
+    expect(insetNegative("lowres, 1.3::comic::")).toBe("lowres, 1.3::comic::");
+    expect(insetPrompt("{split screen}, anime coloring")).toBe("{split screen}, anime coloring");
+    expect(insetPrompt("1.2::split screen::, anime coloring")).toBe("1.2::split screen::, anime coloring");
+  });
 });
 
 describe("NovelAI V5 inset: raw request override", () => {

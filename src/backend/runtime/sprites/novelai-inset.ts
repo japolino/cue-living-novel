@@ -77,22 +77,54 @@ export function novelAiInsetRejected(error: unknown, model: string): boolean {
   return text.includes(model.toLowerCase()) || /\b(?:model|infill|inpaint\w*)\b/.test(text);
 }
 
-/** Base prompt with `split screen` first (once). */
+/**
+ * A tag without NovelAI emphasis, for comparisons: `1.2::split screen::`,
+ * `{split_screen}`, `[[Split Screen]]` and `(split screen:1.2)` all give
+ * `split screen`.
+ */
+export function bareTagKey(tag: string): string {
+  let text = tag.trim();
+  for (let previous = ""; previous !== text;) {
+    previous = text;
+    text = text
+      .replace(/^-?\d+(?:\.\d+)?::/, "")
+      .replace(/::$/, "")
+      .replace(/^[{[(]+/, "")
+      .replace(/[}\])]+$/, "")
+      .replace(/:-?\d+(?:\.\d+)?$/, "")
+      .trim();
+  }
+  return tagKey(text);
+}
+
+/** Base prompt with `split screen` first (once, in any emphasis). */
 export function insetPrompt(prompt: string): string {
   const first = prompt.split(",")[0] ?? "";
-  if (tagKey(first) === NOVELAI_INSET_PROMPT_TAG) return prompt;
+  if (bareTagKey(first) === NOVELAI_INSET_PROMPT_TAG) return prompt;
   return prompt.trim() ? `${NOVELAI_INSET_PROMPT_TAG}, ${prompt}` : NOVELAI_INSET_PROMPT_TAG;
 }
 
+/** `split screen` (or `split_screen`) as a whole tag, in any emphasis; what opens its group stays. */
+const SPLIT_SCREEN_TAG = /(^|,|::|[{[(])\s*split[\s_]+screen\s*(?::-?\d+(?:\.\d+)?)?(?=\s*(?:$|,|::|[}\])]))/gi;
+/** What removing it can leave behind: empty groups. */
+const EMPTY_GROUPS = [/-?\d+(?:\.\d+)?::\s*::/g, /\{\s*\}|\[\s*\]|\(\s*\)/g];
+
 /**
  * Sprite negative for an inset: without `split screen` (the sprite negative
- * forbids it, the inset asks for it) and with `comic`; `multiple views` and
- * every other tag stay as they are.
+ * forbids it, the inset asks for it), also weighted or bracketed (the rest
+ * of its group stays), and with `comic`; `multiple views` and every other
+ * tag stay as they are.
  */
 export function insetNegative(negative: string): string {
-  const tags = negative.split(",").map((tag) => tag.trim()).filter(Boolean);
-  const kept = tags.filter((tag) => tagKey(tag) !== NOVELAI_INSET_PROMPT_TAG);
-  if (!kept.some((tag) => tagKey(tag) === NOVELAI_INSET_NEGATIVE_TAG)) kept.push(NOVELAI_INSET_NEGATIVE_TAG);
+  let text = negative.replace(SPLIT_SCREEN_TAG, "$1");
+  for (let previous = ""; previous !== text;) {
+    previous = text;
+    // A comma left at the start or end of a group, then groups left empty.
+    text = text.replace(/(-?\d+(?:\.\d+)?::|[{[(])\s*,\s*/g, "$1").replace(/\s*,\s*(::|[}\])])/g, "$1");
+    for (const empty of EMPTY_GROUPS) text = text.replace(empty, "");
+  }
+  const kept = text.split(",").map((tag) => tag.trim()).filter(Boolean);
+  if (!kept.some((tag) => bareTagKey(tag) === NOVELAI_INSET_NEGATIVE_TAG)) kept.push(NOVELAI_INSET_NEGATIVE_TAG);
   return kept.join(", ");
 }
 

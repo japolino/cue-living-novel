@@ -376,8 +376,8 @@ one table, so a scene layout can be added). Request:
   ```text
   model:      nai-diffusion-5-full-inpainting   (<model>-inpainting)
   prompt:     "split screen, " + the sprite's base prompt
-  negative:   the sprite negative without "split screen", plus "comic"
-              ("multiple views" stays)
+  negative:   the sprite negative without "split screen" (also weighted or
+              bracketed), plus "comic" ("multiple views" stays)
   parameters: the sprite parameters (seed, characterTags = the character
               caption unchanged, coords off, qualityToggle false,
               negativePrompt as above) and
