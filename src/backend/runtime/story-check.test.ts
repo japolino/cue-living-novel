@@ -58,16 +58,68 @@ describe("story check", () => {
 
   test("errors and answers without rows fall back to every line and are not cached", async () => {
     const failing = harness(() => { throw new Error("Connection refused"); });
-    expect(await checkStoryLines(failing.spindle, { lines, chatId: "c", connection: null })).toMatchObject({ labels: null, source: "failed", calls: 2 });
+    expect(await checkStoryLines(failing.spindle, { lines, chatId: "c", connection: { ...google, id: "down" } })).toMatchObject({ labels: null, source: "failed", calls: 2 });
     expect(failing.store.size).toBe(0);
     const prose = harness(() => ({ content: "I cannot label this reply." }));
-    expect(await checkStoryLines(prose.spindle, { lines, chatId: "c", connection: null })).toMatchObject({ labels: null, source: "failed", calls: 2 });
+    expect(await checkStoryLines(prose.spindle, { lines, chatId: "c", connection: { ...google, id: "prose" } })).toMatchObject({ labels: null, source: "failed", calls: 2 });
     expect(prose.store.size).toBe(0);
+  });
+
+  test("a connection whose both attempts error is not asked again for a while", async () => {
+    const failing = harness(() => { throw new Error("Connection refused"); });
+    const connection = { ...google, id: "backoff" };
+    expect(await checkStoryLines(failing.spindle, { lines, chatId: "c", connection })).toMatchObject({ source: "failed", calls: 2 });
+    expect(await checkStoryLines(failing.spindle, { lines: ["Other."], chatId: "c", connection })).toMatchObject({ source: "failed", calls: 0 });
+    expect(failing.requests).toHaveLength(2);
+    // Answers without rows are not connection failures.
+    const prose = harness(() => ({ content: "No." }));
+    await checkStoryLines(prose.spindle, { lines, chatId: "c", connection: { ...google, id: "rows" } });
+    expect(await checkStoryLines(prose.spindle, { lines, chatId: "c", connection: { ...google, id: "rows" } })).toMatchObject({ calls: 2 });
+  });
+
+  test("the story reader's temperature wins; after an error the retry sends none of Cue's own", async () => {
+    const own = harness(() => ({ content: "0 K\n1 S\n2 K" }));
+    await checkStoryLines(own.spindle, { lines, chatId: "c", connection: { ...google, id: "warm" }, parameters: { temperature: 0.7 } });
+    expect(own.requests[0]!.parameters.temperature).toBe(0.7);
+    // A model that accepts only its default temperature.
+    const strict = harness((request) => { if ("temperature" in request.parameters) throw new Error("temperature is not supported"); return { content: "0 K\n1 S\n2 K" }; });
+    expect(await checkStoryLines(strict.spindle, { lines, chatId: "c", connection: { ...google, id: "strict" } })).toMatchObject({ labels: "KSK", source: "retry", calls: 2 });
+    expect(strict.requests.map((request) => request.parameters.temperature)).toEqual([0, undefined]);
+  });
+
+  test("every response shape the planner reads is read", async () => {
+    const shapes = [{ text: "0 K\n1 S\n2 K" }, { message: { content: "0 K\n1 S\n2 K" } }, { choices: [{ text: "0 K\n1 S\n2 K" }] }, "0 K\n1 S\n2 K"];
+    for (const [index, shape] of shapes.entries()) {
+      const h = harness(() => shape);
+      expect(await checkStoryLines(h.spindle, { lines, chatId: `shape${index}`, connection: { ...google, id: `shape${index}` } })).toMatchObject({ labels: "KSK", source: "llm" });
+    }
+  });
+
+  test("cache writes for one chat do not overwrite each other, and an unreadable cache is not replaced", async () => {
+    const h = harness((request) => ({ content: request.messages[1]!.content.includes("(1 lines)") ? "0 K" : "0 K\n1 S\n2 K" }));
+    // A slow store: the value is read at once and arrives later, so unserialized writes would race.
+    const slow = h.spindle.userStorage as unknown as { getJson: (path: string, options: { fallback: unknown }) => Promise<unknown> };
+    const getJson = slow.getJson;
+    slow.getJson = async (path, options) => { const value = await getJson(path, options); await new Promise((resolve) => setTimeout(resolve, 5)); return value; };
+    await Promise.all([
+      checkStoryLines(h.spindle, { lines, chatId: "same", connection: { ...google, id: "w" } }),
+      checkStoryLines(h.spindle, { lines: ["Alone."], chatId: "same", connection: { ...google, id: "w" } }),
+    ]);
+    expect((h.store.get("chats/same/story-check.json") as { entries: unknown[] }).entries).toHaveLength(2);
+
+    let reads = 0;
+    const writes: unknown[] = [];
+    (h.spindle as unknown as { userStorage: unknown }).userStorage = {
+      getJson: async () => { reads += 1; if (reads > 1) throw new Error("read failed"); return { version: 1, entries: [] }; },
+      setJson: async (_path: string, value: unknown) => { writes.push(value); },
+    };
+    await checkStoryLines(h.spindle, { lines: ["New."], chatId: "same", connection: { ...google, id: "w" } });
+    expect(writes).toEqual([]);
   });
 
   test("storage failures never break the check", async () => {
     const h = harness(() => ({ choices: [{ message: { content: "0 S\n1 S\n2 K" } }] }));
     (h.spindle as unknown as { userStorage: unknown }).userStorage = { getJson: async () => { throw new Error("down"); }, setJson: async () => { throw new Error("down"); } };
-    expect(await checkStoryLines(h.spindle, { lines, chatId: "c", connection: null })).toMatchObject({ labels: "SSK", source: "llm" });
+    expect(await checkStoryLines(h.spindle, { lines, chatId: "c", connection: { ...google, id: "storage" } })).toMatchObject({ labels: "SSK", source: "llm" });
   });
 });

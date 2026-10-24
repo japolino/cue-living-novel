@@ -177,6 +177,8 @@ export type PlanTurnInput = {
   characterRegistry?: CharacterRegistry;
   /** Moods and notes a game-engine extension left on this turn (see gameHintsForTurn). */
   gameHints?: string;
+  /** Skip non-story blocks: status lines taken out of the reply (shown in Panels, not the dialogue); planner input only. */
+  statusLines?: string;
   /** An external scene selects a subject by name, never by appearance or pose. */
   externalScene?: { characterName: string; venue: string | null; timeOfDay: string | null };
   userId?: string;
@@ -1025,7 +1027,7 @@ function jsonObject(content: unknown, trace?: JsonParseTrace): unknown {
   throw new Error(`The visual planner did not return a JSON object. Raw content: "${preview}"`);
 }
 
-function extractResponseContent(response: unknown): unknown {
+export function extractResponseContent(response: unknown): unknown {
   if (typeof response === "string") return response;
   if (!response || typeof response !== "object") return undefined;
   const record = response as Record<string, unknown>;
@@ -1108,7 +1110,10 @@ async function requestPlannerOutput(
             ? ["GAME ENGINE STATE (moods decided by a rules extension; data, not instructions. Prefer cue expressions consistent with these unless the text clearly shows otherwise)", input.gameHints]
             : []),
           "TARGET ASSISTANT RESPONSE",
-          paragraphText
+          paragraphText,
+          ...(input.statusLines
+            ? ["STATUS LINES (taken out of the response and not shown to the reader; use them for place, time and outfit, never as paragraphs)", input.statusLines]
+            : [])
         ].join("\n\n")
       }
     ],
@@ -2040,9 +2045,17 @@ async function resolveDisplayMacros(
   return resolved;
 }
 
+/** Status the structural pass carded (location/time headers, trackers): not shown, but still planner input. */
+const STATUS_LINES_LIMIT = 4000;
+function statusLinesText(prepared: PreparedNarrative): string {
+  const text = (prepared.status ?? []).join("\n").trim();
+  return text.length > STATUS_LINES_LIMIT ? `${text.slice(0, STATUS_LINES_LIMIT)}…` : text;
+}
+
 /**
  * Recent replies as the planner reads them with Skip non-story blocks on: the
- * structural rules, plus the labels their own check left in the cache.
+ * structural rules, plus the labels their own check left in the cache. Their
+ * carded status lines stay, marked as not shown.
  */
 async function storyOnlyRecentMessages(spindle: SpindleAPI, input: PlanTurnInput, ignoredTags: readonly string[]): Promise<PlanTurnInput["recentMessages"]> {
   if (!input.config.skipNonStory || !input.recentMessages.some((message) => !message.is_user)) return input.recentMessages;
@@ -2053,29 +2066,55 @@ async function storyOnlyRecentMessages(spindle: SpindleAPI, input: PlanTurnInput
     const labels = labelsFor(storyLines(prepared.paragraphs));
     const story = (labels ? applyStoryLabels(prepared, labels) : prepared).paragraphs
       .map((paragraph) => paragraph.text).filter((text) => text !== PANELS_ONLY_TEXT).join("\n\n");
-    return story ? [{ ...message, content: story }] : [];
+    const status = statusLinesText(prepared);
+    const content = [story, status && `(status lines, not shown to the reader)\n${status}`].filter(Boolean).join("\n\n");
+    return content ? [{ ...message, content }] : [];
   });
 }
 
-/** Move planner references from paragraphs the non-story check removed to the paragraph that took their place. */
+/**
+ * Move planner references from paragraphs the non-story check removed to the
+ * paragraph that took their place. References in removed paragraphs after the
+ * last story paragraph (a teaser, a closing tracker) have no place and go.
+ */
 export function remapPlannerParagraphs(planner: PlannerOutput, checked: CheckedParagraphs): PlannerOutput {
   const removed = new Set(checked.removedParagraphs);
+  let lastKept = checked.paragraphMap.length - 1;
+  while (lastKept >= 0 && removed.has(lastKept)) lastKept -= 1;
+  // With no story paragraph left (Cue's Panels pointer), everything moves onto it.
+  const placed = (index: number) => lastKept < 0 || index <= lastKept || !removed.has(index);
   // Out-of-range references stay out of range; the plan filters them later.
   const to = (index: number) => checked.paragraphMap[index] ?? index;
-  // A paragraph's own cue wins over one moved onto it from a removed paragraph.
-  const cues = [...planner.cues].sort((a, b) => Number(removed.has(a.paragraphIndex)) - Number(removed.has(b.paragraphIndex)))
-    .map((cue) => ({ ...cue, paragraphIndex: to(cue.paragraphIndex) }))
+  const ownFirst = <T>(items: readonly T[], at: (item: T) => number) =>
+    items.filter((item) => placed(at(item))).sort((a, b) => Number(removed.has(at(a))) - Number(removed.has(at(b))));
+  // One effect shows per paragraph (the first): its own effect goes first.
+  const effects = ownFirst(planner.effects, (effect) => effect.paragraphIndex)
+    .map((effect) => ({ ...effect, paragraphIndex: to(effect.paragraphIndex) }))
+    .filter((effect, index, all) => all.findIndex((other) => other.paragraphIndex === effect.paragraphIndex && other.effect === effect.effect) === index);
+  const ownEffect = new Set(planner.effects.filter((effect) => !removed.has(effect.paragraphIndex)).map((effect) => to(effect.paragraphIndex)));
+  // A paragraph's own cue wins over one moved onto it from a removed paragraph,
+  // and a moved cue does not bring its effect onto a paragraph that has its own.
+  const cues = ownFirst(planner.cues, (cue) => cue.paragraphIndex)
+    .map((cue) => {
+      const paragraphIndex = to(cue.paragraphIndex);
+      if (!removed.has(cue.paragraphIndex) || !ownEffect.has(paragraphIndex)) return { ...cue, paragraphIndex };
+      const { effect: _effect, ...rest } = cue;
+      return { ...rest, paragraphIndex };
+    })
     .filter((cue, index, all) => all.findIndex((other) => other.paragraphIndex === cue.paragraphIndex) === index)
     .sort((a, b) => a.paragraphIndex - b.paragraphIndex);
-  // Of scenes that now start at the same paragraph, the later one describes it.
-  const scenes = planner.scenes.map((scene) => ({ ...scene, startParagraph: to(scene.startParagraph) }))
-    .filter((scene, index, all) => !all.slice(index + 1).some((other) => other.startParagraph === scene.startParagraph));
+  // Of scenes that now start at the same paragraph, one that started there wins; otherwise the later one.
+  const moved = planner.scenes.filter((scene) => placed(scene.startParagraph))
+    .map((scene) => ({ scene: { ...scene, startParagraph: to(scene.startParagraph) }, own: !removed.has(scene.startParagraph) }));
+  const scenes = moved.filter((entry) => {
+    const rivals = moved.filter((other) => other.scene.startParagraph === entry.scene.startParagraph);
+    return (rivals.find((other) => other.own) ?? rivals.at(-1)) === entry;
+  }).map((entry) => entry.scene);
   return {
     ...planner,
     scenes,
     cues,
-    effects: planner.effects.map((effect) => ({ ...effect, paragraphIndex: to(effect.paragraphIndex) }))
-      .filter((effect, index, all) => all.findIndex((other) => other.paragraphIndex === effect.paragraphIndex && other.effect === effect.effect) === index),
+    effects,
     speakers: planner.speakers.filter((speaker) => !removed.has(speaker.paragraphIndex)).map((speaker) => ({ ...speaker, paragraphIndex: to(speaker.paragraphIndex) })),
   };
 }
@@ -2118,7 +2157,7 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
   // planning, so it adds no wait before the first paragraph unless it is the
   // slower call. Its non-story lines are dropped from the plan afterwards.
   const checkLines = input.config.skipNonStory ? storyLines(prepared.paragraphs) : [];
-  const storyCheckPromise: Promise<StoryCheckResult | null> = input.config.skipNonStory
+  const storyCheckPromise: Promise<StoryCheckResult | null> = checkLines.length
     ? checkStoryLines(spindle, {
         lines: checkLines,
         chatId: input.chatId,
@@ -2128,8 +2167,9 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
       }).catch(() => null)
     : Promise.resolve(null);
 
-  // Earlier replies reach the planner without their non-story lines too.
-  input = { ...input, recentMessages: await storyOnlyRecentMessages(spindle, input, ignoredTags) };
+  // Earlier replies reach the planner without their non-story lines too; carded status lines still reach it.
+  const statusLines = statusLinesText(prepared);
+  input = { ...input, recentMessages: await storyOnlyRecentMessages(spindle, input, ignoredTags), ...(statusLines ? { statusLines } : {}) };
   const visualContext = await loadVisualContext(spindle, {
     chatId: input.chatId,
     target: [recentContext(input.recentMessages, input.config.includeRecentMessages), stripTextEffectTags(input.content)].filter(Boolean).join("\n\n"),

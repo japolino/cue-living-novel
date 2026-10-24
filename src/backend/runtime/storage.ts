@@ -81,11 +81,11 @@ function safeSegment(value: string): string {
   return encodeURIComponent(value).replaceAll("%", "_");
 }
 
-function scopedKey(userId: string | undefined, path: string): string {
+export function scopedKey(userId: string | undefined, path: string): string {
   return `${userId ?? "owner"}:${path}`;
 }
 
-async function serializedWrite(taskKey: string, writer: () => Promise<void>): Promise<void> {
+export async function serializedWrite(taskKey: string, writer: () => Promise<void>): Promise<void> {
   const previous = writeTails.get(taskKey) ?? Promise.resolve();
   const current = previous.then(writer, writer);
   const tail = current.then(() => undefined, () => undefined);

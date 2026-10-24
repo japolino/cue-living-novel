@@ -26,19 +26,28 @@ export type PanelSpan = { start: number; end: number; html: string; title: strin
 const ROOTS = new Set(["div", "section", "article", "aside", "table", "svg", "details", "figure"]);
 const VOID = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
 
+/**
+ * Fenced code blocks and inline code spans, where markup is text. ```html and
+ * ```svg fences are left out unless `markupFences` is set (Panels renders them).
+ */
+export function codeRanges(source: string, markupFences = false): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = [];
+  const fences = [...source.matchAll(/^\s*```([^\n]*)/gm)];
+  for (let i = 0; i < fences.length; i += 2) {
+    const open = fences[i]!;
+    if (markupFences || !/^(?:html|svg)\s*$/i.test(open[1]?.trim() ?? "")) ranges.push({ start: open.index, end: fences[i + 1] ? fences[i + 1]!.index + fences[i + 1]![0].length : source.length });
+  }
+  for (const match of source.matchAll(/(?<!`)`(?!`)[^`\n]*`(?!`)/g)) ranges.push({ start: match.index, end: match.index + match[0].length });
+  return ranges;
+}
+
 /** Complete, balanced block roots only. Offsets refer to the untouched source. */
 export function extractPanelSpans(source: string): PanelSpan[] {
   if (source.length > 1_000_000) return [];
   const spans: PanelSpan[] = [];
   let total = 0;
   const token = /<!--[\s\S]*?-->|<\/?([a-z][\w:-]*)\b(?:[^>"']|"[^"]*"|'[^']*')*>/gi;
-  const excluded: Array<{ start: number; end: number }> = [];
-  const fences = [...source.matchAll(/^\s*```([^\n]*)/gm)];
-  for (let i = 0; i < fences.length; i += 2) {
-    const open = fences[i]!;
-    if (!/^(?:html|svg)\s*$/i.test(open[1]?.trim() ?? "")) excluded.push({ start: open.index, end: fences[i + 1] ? fences[i + 1]!.index + fences[i + 1]![0].length : source.length });
-  }
-  for (const match of source.matchAll(/(?<!`)`(?!`)[^`\n]*`(?!`)/g)) excluded.push({ start: match.index, end: match.index + match[0].length });
+  const excluded = codeRanges(source);
   const unclosedComment = source.lastIndexOf("<!--");
   if (unclosedComment > source.lastIndexOf("-->")) excluded.push({ start: unclosedComment, end: source.length });
   excluded.sort((a, b) => a.start - b.start);

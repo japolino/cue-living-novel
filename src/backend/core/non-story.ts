@@ -1,5 +1,6 @@
 import type { Paragraph } from "../../shared/contracts.js";
-import { escapePanelText, MAX_PANEL_HTML, MAX_PANELS, type PanelArtifact } from "../../shared/panels.js";
+import { codeRanges, escapePanelText, MAX_PANEL_HTML, MAX_PANELS, type PanelArtifact } from "../../shared/panels.js";
+import { STAGE_INLINE_TAGS } from "../../shared/stage-markup.js";
 import { TEXT_EFFECT_TAG_PATTERN } from "../../shared/text-effects.js";
 
 /*
@@ -13,6 +14,8 @@ export const NON_STORY_DROP_TAG = /^(?:think|thinking|reasoning|analysis|redacte
 /** Status elements: removed from the story, kept as a plain-text Panels card. */
 export const NON_STORY_CARD_TAG = /^(?:tracker|stats|status|state|ext_tracker(?:[_-][\w-]+)?)$/i;
 const REASONING_TAG = /^(?:think|thinking|reasoning|analysis|redacted_thinking)$/i;
+/** HTML void elements: never open, so `<input>` covers only itself. */
+const VOID_TAG = /^(?:area|base|br|col|embed|hr|img|input|link|meta|source|track|wbr)$/i;
 
 export type MarkupRange = { start: number; end: number; card?: string };
 
@@ -29,21 +32,30 @@ function attributes(source: string): Record<string, string> {
  * interface elements, status elements (with the card title), and elements an
  * author hid or marked as a tracker/HUD (Choir's attribute rules). A closing
  * reasoning tag without an opener ends a reasoning preamble that starts the
- * message. Unclosed elements cover only their own block (up to a blank line).
+ * message. An unclosed element that starts a line covers its block (up to a
+ * blank line); one inside prose covers only its own tag. Markup inside fenced
+ * or inline code is text and stays.
  */
 export function nonStoryMarkupRanges(content: string): MarkupRange[] {
   const ranges: MarkupRange[] = [];
-  for (const match of content.matchAll(/<!--[\s\S]*?(?:-->|$)/g)) ranges.push({ start: match.index, end: match.index + match[0].length });
+  const code = codeRanges(content, true);
+  const inCode = (at: number) => code.some((range) => range.start <= at && at < range.end);
+  for (const match of content.matchAll(/<!--[\s\S]*?(?:-->|$)/g)) if (!inCode(match.index)) ranges.push({ start: match.index, end: match.index + match[0].length });
   const tag = /<(\/?)([a-z][\w:-]*)\b((?:[^>"']|"[^"]*"|'[^']*')*)>/gi;
-  const open: Array<{ name: string; start: number; attrs: string }> = [];
+  const open: Array<{ name: string; start: number; end: number; attrs: string }> = [];
   let match: RegExpExecArray | null;
   let firstOpenReasoning = Infinity;
   while ((match = tag.exec(content))) {
     const [whole, slash, rawName, attrText] = match;
+    if (inCode(match.index)) continue;
     const name = rawName!.toLowerCase();
     if (!slash) {
       if (REASONING_TAG.test(name)) firstOpenReasoning = Math.min(firstOpenReasoning, match.index);
-      if (!/\/\s*$/.test(attrText ?? "")) open.push({ name, start: match.index, attrs: attrText ?? "" });
+      if (VOID_TAG.test(name) || /\/\s*$/.test(attrText ?? "")) {
+        if (NON_STORY_DROP_TAG.test(name)) ranges.push({ start: match.index, end: match.index + whole.length });
+      } else {
+        open.push({ name, start: match.index, end: match.index + whole.length, attrs: attrText ?? "" });
+      }
       continue;
     }
     if (REASONING_TAG.test(name) && match.index < firstOpenReasoning) {
@@ -64,6 +76,11 @@ export function nonStoryMarkupRanges(content: string): MarkupRange[] {
   }
   for (const element of open) {
     if (!NON_STORY_DROP_TAG.test(element.name) && !NON_STORY_CARD_TAG.test(element.name)) continue;
+    const startsLine = !content.slice(content.lastIndexOf("\n", element.start - 1) + 1, element.start).trim();
+    if (!startsLine) {
+      ranges.push({ start: element.start, end: element.end });
+      continue;
+    }
     const blank = content.slice(element.start).search(/\n[ \t]*\n/);
     ranges.push({ start: element.start, end: blank < 0 ? content.length : element.start + blank, ...(NON_STORY_CARD_TAG.test(element.name) ? { card: element.name } : {}) });
   }
@@ -73,34 +90,75 @@ export function nonStoryMarkupRanges(content: string): MarkupRange[] {
 }
 
 const BRACKETED_ONLY = /^[*_]*(?:(?:\[[^\]\n]*\]|【[^】\n]*】|〔[^〕\n]*〕)\s*)+[*_]*$/;
-const PIPE_BRACKET = /\[[^\]\n]*\|[^\]\n]*\]/g;
+/** Field syntax (`Mood: tired`, `a | b`, `HP=3`): a bracketed line without it may be a sound or an action, so the check decides. */
+const FIELD_SYNTAX = /[:|=：]/;
+/** `[Mood: tired | Trust: 40%]` or `<Hero: Jay | Level: 1>` inside a line. */
+const PIPE_BRACKET = /\[[^\]\n]*\|[^\]\n]*\]|<[^<>\n]*\|[^<>\n]*>/g;
 const BRACED_FIELDS = /^[*_]*\{[^{}\n]*[|=:][^{}\n]*\}[*_]*$/;
-const TABLE_ROW = /^\|.*\|$/;
 const PLACEHOLDER_ONLY = /^(?:INLAY\[[^\]\n]*\]|\{\{[^{}\n]*\}\}|\s)+$/i;
 const RULE_ONLY = /^[─│┌┐└┘├┤┬┴┼═║╔╗╚╝╠╣╦╩╬+|=_~*\-\s]{3,}$/;
-const TAG = /<\/?[a-z][^<>\n]*>/gi;
+/** An HTML tag: a name, then attributes in HTML syntax (`<Incoming call: Mom>` is not one). */
+const TAG = /<\/?([a-z][\w:-]*)(?:\s+[a-z_:@][\w:.-]*(?<!:)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?)*\s*\/?>/gi;
+const EFFECT_TAG = new RegExp(`^${TEXT_EFFECT_TAG_PATTERN.source}$`, "i");
+/** `<Kai>`, `<sigh>`: a name alone in angle brackets, no attributes. */
+const BARE_TAG = /^<([a-z][\w-]*)>$/i;
 
-function unwrapTags(line: string): string {
-  // Cue's text-effect tags are story markup; every other tag is shown as raw text on the stage.
-  const effect = new RegExp(`^${TEXT_EFFECT_TAG_PATTERN.source}$`, "i");
-  return line.replace(TAG, (tag) => effect.test(tag) ? tag : "");
+function inlineCode(line: string): Array<{ start: number; end: number }> {
+  return [...line.matchAll(/`[^`\n]*`/g)].map((match) => ({ start: match.index, end: match.index + match[0].length }));
+}
+
+const inside = (ranges: ReadonlyArray<{ start: number; end: number }>, at: number) => ranges.some((range) => range.start <= at && at < range.end);
+
+/** The words of a line, to classify it: every tag removed (`<br>` as a space), inline code kept. */
+export function plainLine(line: string): string {
+  const code = inlineCode(line);
+  return line.replace(TAG, (tag: string, _name: string, offset: number) => inside(code, offset) ? tag : /^<br\b/i.test(tag) ? " " : "")
+    .replace(/\s+/g, " ").trim();
+}
+
+/**
+ * A story line as the stage should get it: markup the stage cannot render is
+ * removed; stage tags (font, span, ruby, br, ...), text-effect tags and inline
+ * code stay byte for byte. In a line with words, a bare `<Name>` that is never
+ * closed is text (a chat speaker `<Kai> are u coming`, an emote `*<sigh>*`).
+ * Unchanged lines come back as they were.
+ */
+function storyText(line: string, words: boolean): string {
+  const code = inlineCode(line);
+  const lower = line.toLowerCase();
+  let removed = false;
+  const text = line.replace(TAG, (tag: string, name: string, offset: number) => {
+    if (inside(code, offset) || EFFECT_TAG.test(tag) || STAGE_INLINE_TAGS.has(name.toLowerCase())) return tag;
+    if (words && BARE_TAG.test(tag) && !lower.includes(`</${name.toLowerCase()}>`)) return tag;
+    removed = true;
+    return "";
+  });
+  return removed ? text.replace(/[ \t]{2,}/g, " ").trim() : line;
 }
 
 export type StructuralLine = { text: string; skip?: "status" | "markup" };
 
 /**
  * One cleaned paragraph line, or why it is not story. `status` lines (bracketed
- * headers, brace fields, table rows) go to the "Not story" card; `markup`
- * lines (placeholders, rules, nothing left after unwrapping tags) are dropped.
+ * or braced fields) go to the "Not story" card; `markup` lines (placeholders,
+ * rules, tags with nothing to show) are dropped. Lines are classified by their
+ * words (`plainLine`); a story line keeps its own text except for markup the
+ * stage cannot render.
  */
 export function structuralLine(line: string): StructuralLine {
-  const original = line.trim();
-  if (PLACEHOLDER_ONLY.test(original) || RULE_ONLY.test(original)) return { skip: "markup", text: original };
-  const unwrapped = unwrapTags(original).trim();
-  if (!unwrapped) return { skip: "markup", text: original };
-  if (BRACKETED_ONLY.test(unwrapped) || BRACED_FIELDS.test(unwrapped) || TABLE_ROW.test(unwrapped)) return { skip: "status", text: unwrapped };
-  const text = unwrapped.replace(PIPE_BRACKET, "").replace(/[ \t]{2,}/g, " ").trim();
-  if (!text || PLACEHOLDER_ONLY.test(text)) return { skip: "status", text: unwrapped };
+  const trimmed = line.trim();
+  if (PLACEHOLDER_ONLY.test(trimmed) || RULE_ONLY.test(trimmed)) return { skip: "markup", text: trimmed };
+  const plain = plainLine(trimmed);
+  if (!plain) {
+    // Tags only: stage markup (an effect or a <font> spanning the next lines) stays.
+    const kept = storyText(line, false);
+    return kept.trim() ? { text: kept } : { skip: "markup", text: trimmed };
+  }
+  if ((BRACKETED_ONLY.test(plain) && FIELD_SYNTAX.test(plain)) || BRACED_FIELDS.test(plain)) return { skip: "status", text: plain };
+  const story = storyText(line, true);
+  const unpiped = story.replace(PIPE_BRACKET, "");
+  const text = unpiped === story ? story : unpiped.replace(/[ \t]{2,}/g, " ").trim();
+  if (!plainLine(text) || PLACEHOLDER_ONLY.test(text)) return { skip: "status", text: plain };
   return { text };
 }
 
@@ -110,7 +168,7 @@ export function structuralLine(line: string): StructuralLine {
  * prompt verbatim, it was measured as is. Bump STORY_CHECK_VERSION whenever the
  * prompt, the line preparation or the structural rules change: it keys the cache.
  */
-export const STORY_CHECK_VERSION = 1;
+export const STORY_CHECK_VERSION = 2;
 export const STORY_CHECK_SYSTEM = `You clean AI roleplay replies for an audiobook that reads only the STORY.
 Label every numbered line of the reply: K = story, S = not story (skip).
 S: model reasoning/planning, checklists, word counts, writing rules, recaps/summaries, setting checks, final reviews,
@@ -153,7 +211,7 @@ Answer with one row per line, nothing else: the line number, a space, then K or 
 
 /** Text the check sees for a line: display markup removed, as in Choir's transcript lines. */
 export function storyCheckText(line: string): string {
-  return line.replace(new RegExp(TEXT_EFFECT_TAG_PATTERN.source, "gi"), "").replace(/[*`]/g, "").replace(/^\s*#{1,6}\s+/, "").replace(/\s+/g, " ").trim();
+  return plainLine(line.replace(new RegExp(TEXT_EFFECT_TAG_PATTERN.source, "gi"), "")).replace(/[*`]/g, "").replace(/^\s*#{1,6}\s+/, "").replace(/\s+/g, " ").trim();
 }
 
 /** `width` shortens every line; a retry with line heads gets past some providers' content blocks. */
@@ -191,9 +249,10 @@ export function storyCheckKey(lines: readonly string[]): string {
   return `${left.toString(16).padStart(8, "0")}${right.toString(16).padStart(8, "0")}`;
 }
 
-/** Every line of every paragraph the check labels, in order, as the check sees it. */
+/** Every line of every paragraph the check labels, in order, as the check sees it (not Cue's Panels pointer). */
 export function storyLines(paragraphs: readonly Paragraph[]): string[] {
-  return paragraphs.flatMap((paragraph) => paragraph.text.split("\n").map(storyCheckText).filter(Boolean));
+  return paragraphs.filter((paragraph) => paragraph.text !== PANELS_ONLY_TEXT)
+    .flatMap((paragraph) => paragraph.text.split("\n").map(storyCheckText).filter(Boolean));
 }
 
 /** The paragraph shown for a reply whose whole text went to Panels. */
@@ -256,19 +315,30 @@ export function applyStoryLabels<T extends CheckedNarrative>(narrative: T, label
   for (const paragraph of narrative.paragraphs) {
     const keep: string[] = [];
     let current: NonStoryBlock | null = null;
-    for (const line of paragraph.text.split("\n")) {
+    let labelled = 0;
+    let story = 0;
+    const lines = paragraph.text === PANELS_ONLY_TEXT ? [] : paragraph.text.split("\n");
+    for (const line of lines) {
       const text = storyCheckText(line);
-      if (!text) continue;
+      // A line the check never saw (a lone effect tag, a code fence) stays with its paragraph.
+      if (!text) {
+        keep.push(line);
+        continue;
+      }
+      labelled += 1;
       if (labels[lineIndex++] === "S") {
         skipped += 1;
         if (current) current.text += `\n${text}`;
         else blocks.push(current = { at: paragraph.index, text });
       } else {
         current = null;
+        story += 1;
         keep.push(line);
       }
     }
-    if (keep.length) {
+    if (!lines.length) keep.push(paragraph.text);
+    // A paragraph survives with at least one story line, or when the check saw none of it.
+    if (story || !labelled) {
       newIndex.set(paragraph.index, kept.length);
       kept.push({ ...paragraph, index: kept.length, text: keep.join("\n") });
     }

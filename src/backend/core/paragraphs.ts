@@ -14,6 +14,8 @@ export type PreparedNarrative = {
   panels: PanelArtifact[];
   /** Status lines taken out of the story (skipNonStory); they also fill the "Not story" card. */
   nonStory?: NonStoryBlock[];
+  /** Everything the structural pass carded (status lines, status elements as text): the reader finds it in Panels, the planner still reads it. */
+  status?: string[];
 };
 
 type RawChoice = { id?: string | undefined; label: string; submission: string };
@@ -233,13 +235,17 @@ export function prepareNarrative(content: string, options: PrepareNarrativeOptio
       }
     }
   }
+  const status: Array<{ at: number; text: string }> = [];
+  const removedMarkup: Array<{ start: number; end: number }> = [];
   if (options.skipNonStory) {
     for (const range of nonStoryMarkupRanges(content)) {
       // A complete HTML block is already a Panels card; markup inside it stays there.
       if (spans.some((span) => span.start <= range.start && range.end <= span.end)) continue;
       hidden.push(range);
+      removedMarkup.push(range);
       const nested = spans.filter((span) => span.start < range.end && range.start < span.end);
       for (const card of nested) spans.splice(spans.indexOf(card), 1);
+      if (range.card) status.push({ at: range.start, text: content.slice(range.start, range.end).replace(/<[^>]*>/g, " ").replace(/[ \t]+/g, " ").replace(/\s*\n\s*/g, "\n").trim() });
       if (range.card && range.end - range.start < MAX_PANEL_HTML / 6 && spans.length < MAX_PANELS) {
         spans.push({ ...range, html: nested.length ? nested.map((card) => card.html).join("\n") : `<pre>${escapePanelText(content.slice(range.start, range.end))}</pre>`, title: range.card, followKey: `tag:${range.card}` });
       }
@@ -258,6 +264,7 @@ export function prepareNarrative(content: string, options: PrepareNarrativeOptio
   const rawChoices: RawChoice[] = [];
   const paragraphEnds: number[] = [];
   const nonStory: NonStoryBlock[] = [];
+  let inFence = false;
   let offset = 0;
   for (const block of splitBlocks(content)) {
     const start = content.indexOf(block.text, offset);
@@ -266,9 +273,19 @@ export function prepareNarrative(content: string, options: PrepareNarrativeOptio
     rawChoices.push(...extracted.choices);
     let text = cleanNarrativeBlock(stripIgnoredTags(extracted.text, options.ignoredTags ?? []));
     if (options.skipNonStory && text) {
-      const lines = text.split("\n").map(structuralLine);
-      const status = lines.filter((line) => line.skip === "status").map((line) => line.text);
-      if (status.length) nonStory.push({ at: paragraphs.length, text: status.join("\n") });
+      // Markup removed inside a line leaves masking spaces behind.
+      const touched = removedMarkup.some((range) => range.start < offset && start < range.end);
+      // Code fences (which can span blocks) are shown as written.
+      const lines = text.split("\n").map((line) => {
+        const fence = /^\s*```/.test(line);
+        if (fence) inFence = !inFence;
+        return fence || inFence ? { text: line } : structuralLine(touched ? line.replace(/[ \t]{2,}/g, " ").trim() : line);
+      });
+      const skipped = lines.filter((line) => line.skip === "status").map((line) => line.text);
+      if (skipped.length) {
+        nonStory.push({ at: paragraphs.length, text: skipped.join("\n") });
+        status.push({ at: start, text: skipped.join("\n") });
+      }
       text = lines.filter((line) => !line.skip).map((line) => line.text).join("\n");
     }
     if (text) {
@@ -298,5 +315,5 @@ export function prepareNarrative(content: string, options: PrepareNarrativeOptio
     usedIds.add(id);
     return { id, label: choice.label, submission: choice.submission, source: "authored", unlocksAfterParagraph };
   });
-  return { paragraphs, choices, panels, ...(options.skipNonStory ? { nonStory } : {}) };
+  return { paragraphs, choices, panels, ...(options.skipNonStory ? { nonStory, status: status.sort((a, b) => a.at - b.at).map((entry) => entry.text).filter(Boolean) } : {}) };
 }

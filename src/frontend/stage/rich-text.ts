@@ -1,4 +1,5 @@
 import { TEXT_EFFECT_IDS, isTextEffectId } from "../../shared/text-effects.js";
+import { STAGE_INLINE_TAGS } from "../../shared/stage-markup.js";
 
 export type CustomRegexRule = {
   pattern: RegExp;
@@ -91,26 +92,7 @@ function parseMarkdown(text: string): string {
   return md;
 }
 
-const ALLOWED_TAGS = new Set([
-  "font",
-  "span",
-  "em",
-  "strong",
-  "b",
-  "i",
-  "del",
-  "s",
-  "u",
-  "mark",
-  "ruby",
-  "rt",
-  "rp",
-  "code",
-  "small",
-  "sub",
-  "sup",
-  "br",
-]);
+const ALLOWED_TAGS = STAGE_INLINE_TAGS;
 
 const ALLOWED_ATTRS: Record<string, Set<string>> = {
   font: new Set(["color", "style", "face", "size"]),
