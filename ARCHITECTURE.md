@@ -149,7 +149,8 @@ GENERATION_ENDED
   -> locate saved assistant message
   -> key by chat + message + swipe + content fingerprint + revision
   -> enqueue one planning job for that chat
-  -> gather recent and enabled structured context
+  -> gather recent and enabled structured context (recent chat: the messages
+     before the reply; the reply itself goes once, indexed, as the target)
   -> ask sidecar for scenes, cues, speakers, and optional choices
   -> resolve the protagonist identity (seed once from planner/card/appearance memory, then freeze) and map each cue's expression onto the closed catalogue
   -> attribute each paragraph to a literal speaker nameplate and each cue to its active character, attire, and optional BGM/SFX

@@ -767,6 +767,18 @@ function selectionFingerprint(message: Pick<NormalizedChatMessage, "id" | "swipe
   return fingerprintForMessage({ id: message.id, swipe_id: message.swipe_id, content: intake.selectionText });
 }
 
+/**
+ * The planner's RECENT CHAT: the last `count` messages up to the reply, without
+ * the reply itself (the planner already gets it, indexed, as the target) and
+ * without anything after it (a retried older turn never sees its future).
+ * When the reply is not in the list, the last `count` messages.
+ */
+export function contextBeforeReply<T extends { id: string }>(messages: readonly T[], replyId: string, count: number): T[] {
+  const index = messages.findIndex((candidate) => candidate.id === replyId);
+  if (index < 0) return messages.slice(-count);
+  return messages.slice(Math.max(0, index - (count - 1)), index);
+}
+
 export async function sendState(
   spindle: SpindleAPI,
   chatId: string,
@@ -1170,7 +1182,7 @@ async function processAssistantMessage(
     const baseline = planned.baseline;
     dbg(spindle, userId, `planning baseline chat=${chatId} message=${message.id} swipe=${message.swipe_id} source=${planned.source} scene=${baseline.previousScene ? `${baseline.previousScene.sceneId} rev${baseline.previousScene.revision}` : "none"} continuity=rev${baseline.previousContinuity?.revision ?? "none"}`);
     const recentMessages = config.includeRecentMessages > 0
-      ? await resolveContextMessages(spindle, chatId, messages.slice(-config.includeRecentMessages), resolutionCache, userId)
+      ? await resolveContextMessages(spindle, chatId, contextBeforeReply(messages, message.id, config.includeRecentMessages), resolutionCache, userId)
       : [];
     const result = await planTurn(spindle, {
       chatId,
