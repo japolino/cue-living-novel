@@ -24,6 +24,30 @@ import { NOVELAI_NEGATIVE_DEFAULT, novelAiCapabilities, novelAiCaption, novelAiQ
  */
 export const SPRITE_FRAMING_TAGS = "solo, standing, centered, front view, straight-on, facing viewer, looking at viewer, cowboy shot, simple background, white background, no shadow";
 export const SPRITE_NEGATIVE_TAGS = "scenery, background, shadow, drop shadow, gradient background, multiple people, text, multiple girls, 2girls, multiple views, split screen, border, from below, from above, dutch angle, cropped, out of frame";
+/**
+ * Sprite faces of the 4 set, in place of the shared pose catalogue's suffix
+ * (scene prompts keep the catalogue). The catalogue's "gentle smile", "sad
+ * expression" and "angry expression" are not Danbooru tags; these are
+ * (smile 4.3M posts, open mouth 3.6M, happy 142k, sad 18k, frown 157k,
+ * tearing up 76k, angry 64k, v-shaped eyebrows 272k, clenched teeth 109k,
+ * arms at sides 40k). Anima 2.9B, October 2026: 4 characters × 2 seeds,
+ * each expression made from the set's idle at reference strength 0.5 and
+ * judged blind from shuffled face crops. Clearly readable: smile 5/8 -> 8/8,
+ * sad 4/8 -> 8/8, angry 5/8 -> 7/8. Without `arms at sides`, 3 of 8 angry
+ * sprites put their hands on their hips (0 of 8 with it, 0 of 8 today).
+ */
+export const SPRITE_EXPRESSION_TAGS: Readonly<Record<string, string>> = {
+  smile: "smile, open mouth, happy",
+  sad: "sad, frown, tearing up",
+  angry: "angry, v-shaped eyebrows, frown, clenched teeth, arms at sides",
+};
+
+/** The catalogue pose for a sprite expression, with the sprite face tags where there are some. */
+export function spritePose(expression: string): { id: string; suffix: string } {
+  const pose = poseById(POSE_EXPRESSION_CATALOGUE, expression);
+  return { id: pose.id, suffix: SPRITE_EXPRESSION_TAGS[pose.id] ?? pose.suffix };
+}
+
 /** Plate framing: an empty place. */
 export const PLATE_TAGS = "scenery, no humans, detailed background, wide shot";
 export const PLATE_NEGATIVE_TAGS = "1girl, 1boy, people, person, character, text";
@@ -191,7 +215,7 @@ export function compileSpriteRequest(input: {
   const plainIdentity = spriteIdentityTags(member);
   const [label, subject] = classifySubject(plainIdentity, member.subjectCategory ?? "unknown");
   const identity = weightSkinColourTags(plainIdentity);
-  const pose = poseById(POSE_EXPRESSION_CATALOGUE, input.expression);
+  const pose = spritePose(input.expression);
   const extra = { ...sizeParameters(provider, "sprite", config), ...seedParameters(provider, input.seed) };
   if (provider === "novelai") {
     const model = config.imageModel || "nai-diffusion-4-5-full";

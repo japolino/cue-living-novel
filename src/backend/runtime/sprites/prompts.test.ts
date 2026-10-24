@@ -9,6 +9,7 @@ import {
   SPRITE_IMAGE_SIZE_PRESETS,
   SPRITE_FRAMING_TAGS,
   SPRITE_NEGATIVE_TAGS,
+  SPRITE_EXPRESSION_TAGS,
   SPRITE_SIZE,
   SPRITE_SKIN_COLOUR_WEIGHT,
   spriteCharacterReferenceTag,
@@ -16,6 +17,7 @@ import {
   weightSkinColourTags,
 } from "./prompts.js";
 import { splitTopLevelCsv } from "../../inlay-prompt/index.js";
+import { POSE_EXPRESSION_CATALOGUE, poseById } from "../../../shared/character.js";
 import { SPRITE_PROMPT_VERSION } from "./style.js";
 import { spriteSeedFor, spriteStyleKey } from "./style.js";
 
@@ -97,6 +99,21 @@ describe("sprite prompts: ComfyUI syntax", () => {
     expect(request.negativePrompt).toContain("watermark");
     // Default "standard" size: 624x912.
     expect(request.parameters).toEqual({ width: 624, height: 912, seed: 42 });
+  });
+
+  test("smile, sad and angry sprites use Danbooru face tags; other expressions keep the catalogue", () => {
+    for (const expression of ["smile", "sad", "angry"]) {
+      const comfy = compileSpriteRequest({ config: config(), provider: "comfyui", member: mira, expression, seed: 1 });
+      for (const tag of splitTopLevelCsv(SPRITE_EXPRESSION_TAGS[expression]!)) expect(splitTopLevelCsv(comfy.prompt)).toContain(tag.trim());
+      expect(comfy.prompt).not.toContain(poseById(POSE_EXPRESSION_CATALOGUE, expression).suffix);
+      const nai = compileSpriteRequest({ config: config({ imageModel: "nai-diffusion-4-5-full" }), provider: "novelai", member: mira, expression, seed: 1 });
+      const caption = (nai.parameters.characterTags as Array<{ tags: string }>)[0]!.tags;
+      expect(caption).toContain(splitTopLevelCsv(SPRITE_EXPRESSION_TAGS[expression]!)[0]!.trim());
+    }
+    // Angry keeps the idle's arms (without it, hands go to the hips).
+    expect(SPRITE_EXPRESSION_TAGS.angry).toContain("arms at sides");
+    const idle = compileSpriteRequest({ config: config(), provider: "comfyui", member: mira, expression: "idle", seed: 1 });
+    expect(idle.prompt).toContain(poseById(POSE_EXPRESSION_CATALOGUE, "idle").suffix);
   });
 
   test("a custom prefix and suffix are kept (they carry the user's style)", () => {
