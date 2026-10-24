@@ -72,6 +72,29 @@ describe("NovelAI V5 inset bridge", () => {
     expect(f.sent).toHaveLength(before);
   });
 
+  test("a reloaded page gets pending requests again under the same id (parts received so far are dropped)", async () => {
+    const f = setup();
+    const pending = f.bridge.compose("u1", { layout: "sprite", imageId: "raw-idle" });
+    const other = f.bridge.compose("u2", { layout: "sprite", imageId: "raw-other" });
+    const requestId = f.sent[0]!.requestId;
+    // Half of the image arrived from the page that went away.
+    const image = canvasPng();
+    expect(f.reply(requestId, "image", image.slice(0, 40), 0, 2)).toBe("buffered");
+    expect(f.bridge.resend("u1")).toBe(1);
+    expect(f.sent).toHaveLength(3);
+    expect(f.sent[2]).toEqual({ type: "vn_novelai_inset", requestId, layout: "sprite", imageId: "raw-idle", userId: "u1" });
+    // The new page answers in one chunk (another chunk count than before).
+    expect(f.reply(requestId, "image", image)).toBe("buffered");
+    expect(f.reply(requestId, "mask", maskPng())).toBe("settled");
+    expect(await pending).toEqual({ ok: true, canvas: { image, mask: maskPng() } });
+    // Nothing settled for the other user; a request still busy is left alone.
+    expect(f.bridge.outstanding("u2")).toHaveLength(1);
+    expect(f.bridge.resend("u2", 60_000)).toBe(0);
+    expect(f.sent).toHaveLength(3);
+    f.bridge.dispose();
+    await other;
+  });
+
   test("an unknown layout is refused without asking the browser", async () => {
     const f = setup();
     expect(await f.bridge.compose("u1", { layout: "scene" as "sprite", imageId: "a" })).toMatchObject({ ok: false });

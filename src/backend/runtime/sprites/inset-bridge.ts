@@ -42,6 +42,8 @@ type Pending = {
   target: NovelAiInsetComposeTarget;
   parts: Record<Part, PartBuffer | null>;
   timer: ReturnType<typeof setTimeout> | null;
+  /** When it was last sent or a chunk last arrived. */
+  activeAt: number;
   resolve: (outcome: NovelAiInsetOutcome) => void;
   cleanup: () => void;
 };
@@ -82,18 +84,42 @@ export class NovelAiInsetBridge {
         target,
         parts: { image: null, mask: null },
         timer: null,
+        activeAt: Date.now(),
         resolve,
         cleanup: () => options.signal?.removeEventListener("abort", onAbort),
       };
       this.pending.set(requestId, entry);
       options.signal?.addEventListener("abort", onAbort, { once: true });
       this.arm(entry);
-      try {
-        this.deps.send({ type: "vn_novelai_inset", requestId, layout: target.layout, imageId: target.imageId }, userId);
-      } catch (error) {
-        this.settle(entry, { ok: false, error: `Could not reach the browser: ${error instanceof Error ? error.message : String(error)}` });
-      }
+      this.dispatch(entry);
     });
+  }
+
+  /**
+   * A (re)loaded page lost the requests sent to the page before it: send
+   * the user's pending ones again under the same id, dropping the parts
+   * received so far. Requests active within `minIdleMs` (a page still
+   * answering) are left alone. Returns how many were sent again.
+   */
+  resend(userId: string | undefined, minIdleMs = 0): number {
+    const key = userKey(userId);
+    let count = 0;
+    for (const entry of [...this.pending.values()]) {
+      if (userKey(entry.userId) !== key || Date.now() - entry.activeAt < minIdleMs) continue;
+      entry.parts = { image: null, mask: null };
+      this.arm(entry);
+      this.dispatch(entry);
+      count += 1;
+    }
+    return count;
+  }
+
+  private dispatch(entry: Pending): void {
+    try {
+      this.deps.send({ type: "vn_novelai_inset", requestId: entry.requestId, layout: entry.target.layout, imageId: entry.target.imageId }, entry.userId);
+    } catch (error) {
+      this.settle(entry, { ok: false, error: `Could not reach the browser: ${error instanceof Error ? error.message : String(error)}` });
+    }
   }
 
   /** Outstanding compositions (tests and diagnostics). */
@@ -172,6 +198,7 @@ export class NovelAiInsetBridge {
 
   /** (Re)start the inactivity timer: any chunk counts as progress. */
   private arm(entry: Pending): void {
+    entry.activeAt = Date.now();
     if (entry.timer) clearTimeout(entry.timer);
     entry.timer = setTimeout(() => {
       if (this.pending.get(entry.requestId) !== entry) return;

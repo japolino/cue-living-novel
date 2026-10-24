@@ -419,7 +419,9 @@ one table, so a scene layout can be added). Request:
   retry, and the inset stays on for the next attempt. No canvas
   (browser error, timeout, a page without the inset service): the plain
   expression, and that idle is not offered to the browser again for 5
-  minutes.
+  minutes after an error or 1 minute after a timeout, or until the page
+  reloads. A reloaded page (`vn_get_state`, view opened) gets the pending
+  canvas requests again under the same id.
 - **A new idle.** Each inset render records the idle render it was drawn
   from (`insetReference`, set before the canvas is asked for). When the set
   gets a new idle render (flagged idle, Regenerate, a failed idle rendered

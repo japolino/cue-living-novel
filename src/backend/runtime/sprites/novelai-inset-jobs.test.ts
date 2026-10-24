@@ -319,6 +319,41 @@ describe("NovelAI V5 inset: fallbacks", () => {
   });
 });
 
+describe("NovelAI V5 inset: page reloads", () => {
+  test("a pending canvas request is sent again under the same id when the page asks for its state", async () => {
+    const f = setup({ inset: "silent", deps: { insetTimeoutMs: 5_000, insetResendAfterMs: 0 } });
+    await f.service.prepareCast("u1", [MIRA], f.config);
+    await f.until(() => f.insets().length === 1);
+    const first = f.insets()[0]!;
+    await f.service.onStateRequested("u1");
+    expect(f.insets()).toHaveLength(2);
+    expect(f.insets()[1]).toMatchObject({ requestId: first.requestId, layout: "sprite", imageId: first.imageId });
+    f.answerInset(first.requestId);
+    f.setInset("ok");
+    await f.drive(f.allSettled);
+    expect(f.calls.filter(inpainting)).toHaveLength(3);
+    expect(f.log.some((line) => line.includes("reference inset unavailable"))).toBe(false);
+  });
+
+  test("after a reload, the page is asked again for a canvas that timed out", async () => {
+    const f = setup({ gated: true, inset: "silent" });
+    await f.service.prepareCast("u1", [MIRA], f.config);
+    await waitFor(() => f.gates.length === 1);
+    f.gates[0]!.release(); // idle
+    await f.until(() => f.gates.length === 2); // the first expression: no canvas in time, plain
+    expect(inpainting(f.gates[1]!.call)).toBe(false);
+    expect(f.insets()).toHaveLength(1);
+    f.setInset("ok");
+    await f.service.onStateRequested("u1");
+    await f.drive(async () => {
+      for (const gate of f.gates) gate.release();
+      return f.allSettled();
+    });
+    expect(f.insets()).toHaveLength(3);
+    expect(f.calls.filter(inpainting)).toHaveLength(2);
+  });
+});
+
 describe("NovelAI V5 inset: when it applies", () => {
   test("V5 without anchoring: plain expressions, nothing waits for the idle, no inset", async () => {
     const f = setup({ gated: true, config: { referenceAnchoring: false } });

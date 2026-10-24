@@ -80,6 +80,8 @@ export type SpriteServiceDeps = {
   idleCheckWaitMs?: number;
   /** Longest wait for the browser's NovelAI V5 inset canvas (default NOVELAI_INSET_TIMEOUT_MS). */
   insetTimeoutMs?: number;
+  /** A state request re-sends inset canvas requests quiet this long (default INSET_RESEND_AFTER_MS). */
+  insetResendAfterMs?: number;
 };
 
 /**
@@ -90,6 +92,12 @@ export type SpriteServiceDeps = {
  * images keep 0.7.
  */
 export const SPRITE_REFERENCE_STRENGTH = 0.5;
+/** A state request (page reload) re-sends inset canvas requests that have been quiet this long. */
+const INSET_RESEND_AFTER_MS = 1_000;
+/** The browser answered with an error for an idle: its later expressions do not ask again for this long. */
+const INSET_ERROR_MISS_MS = 5 * 60_000;
+/** The browser did not answer in time (an older page, a reload): a shorter pause; a reload clears it. */
+const INSET_TIMEOUT_MISS_MS = 60_000;
 /**
  * With anchoring, expressions wait this long at most for the idle's
  * duplicate check (the browser cut-out) before they start with the current
@@ -232,7 +240,7 @@ export class SpriteService {
   readonly insetBridge: NovelAiInsetBridge;
   /** NovelAI V5 insets NovelAI rejected (novelAiInsetKey): plain renders until the backend restarts. */
   private readonly insetOff = new Set<string>();
-  /** Inset canvases the browser could not compose (user + idle render -> until): later expressions do not wait again. */
+  /** Inset canvases the browser could not compose (user + idle render -> until): later expressions do not wait again; a page reload clears them. */
   private readonly insetMisses = new Map<string, number>();
 
   constructor(private readonly spindle: SpindleAPI, private readonly deps: SpriteServiceDeps) {
@@ -587,6 +595,7 @@ export class SpriteService {
   /** A Cue view opened: resume queued work (sprite mode only) and re-send cuts the browser may have lost. */
   async onViewOpened(userId: string | undefined): Promise<void> {
     this.bridge.resend(userId, 10_000);
+    this.resendInsets(userId);
     await this.queueCutUpgrades(userId);
     await this.pump(userId);
   }
@@ -616,10 +625,22 @@ export class SpriteService {
     });
   }
 
-  /** `vn_get_state`: a reloaded frontend lost its cut requests; re-send stale ones. */
+  /** `vn_get_state`: a reloaded frontend lost its cut and inset requests; re-send stale ones. */
   async onStateRequested(userId: string | undefined): Promise<void> {
     this.bridge.resend(userId, 10_000);
+    this.resendInsets(userId);
     await this.pump(userId);
+  }
+
+  /**
+   * A (re)loaded page: pending inset canvas requests go out again (same id),
+   * and idles whose canvas failed or timed out are offered to the browser
+   * again (the new page may compose them).
+   */
+  private resendInsets(userId: string | undefined): void {
+    this.insetBridge.resend(userId, this.deps.insetResendAfterMs ?? INSET_RESEND_AFTER_MS);
+    const prefix = `${userKey(userId)}\u0000`;
+    for (const key of [...this.insetMisses.keys()]) if (key.startsWith(prefix)) this.insetMisses.delete(key);
   }
 
   /**
@@ -1220,7 +1241,7 @@ export class SpriteService {
     if (signal.aborted) throw abortError(signal);
     if (!composed.ok) {
       delete work.insetReference;
-      this.insetMisses.set(missKey, Date.now() + 5 * 60_000);
+      this.insetMisses.set(missKey, Date.now() + (composed.timedOut ? INSET_TIMEOUT_MISS_MS : INSET_ERROR_MISS_MS));
       while (this.insetMisses.size > 64) {
         const oldest = this.insetMisses.keys().next().value;
         if (oldest === undefined) break;
