@@ -101,6 +101,7 @@ describe("ChoirBridge companion", () => {
       deliveryMode: "none",
       deliveryTag: "",
       deliveryAllProviders: false,
+      speakBeforePlan: false,
       choirSound: false,
     });
 
@@ -171,6 +172,7 @@ describe("SpeechController with Choir: stop paths", () => {
       deliveryMode: "none",
       deliveryTag: "",
       deliveryAllProviders: false,
+      speakBeforePlan: false,
       choirSound: false,
     });
     controller.setActive(true);

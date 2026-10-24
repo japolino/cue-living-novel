@@ -5,6 +5,7 @@ import { turnPath, type StoredTurnRecord } from "./storage.js";
 import { SPRITE_LIBRARY_PATH, type SpriteLibrary } from "./sprites/library.js";
 import { waitFor } from "./sprites/__fixtures__/sprite-fixtures.js";
 import type { TurnView } from "../../protocol.js";
+import { isPlannedTurn } from "./__fixtures__/turns.js";
 
 /**
  * Key-moment illustrations in sprite mode (config keyIllustrations): the
@@ -115,7 +116,7 @@ function fixture(config: Record<string, unknown> = {}, options: { gated?: boolea
   const record = (chatId: string, id: string) => data.get(turnPath(chatId, id, 0)) as StoredTurnRecord | undefined;
   const library = () => data.get(SPRITE_LIBRARY_PATH) as SpriteLibrary | undefined;
   const of = (type: string) => sent.filter((message) => message.type === type);
-  const turns = () => of("vn_turn").map((message) => message.turn as TurnView);
+  const turns = () => of("vn_turn").filter(isPlannedTurn).map((message) => message.turn as TurnView);
   registerVisualNovelBackend(spindle);
   const assets = (paragraphIndex: number) => of("vn_asset")
     .map((message) => message.asset as { paragraphIndex: number; status: string; imageUrl?: string | null; jobId: string })

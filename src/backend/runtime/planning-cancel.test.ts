@@ -4,6 +4,7 @@ import { seedSingleCharacter } from "../core/visual-state.js";
 import { registerVisualNovelBackend } from "./controller.js";
 import { characterRegistryPath, chatStatePath, singleCharacterStatePath, turnPath, type StoredTurnRecord } from "./storage.js";
 import { storyCheckReply } from "./__fixtures__/story-check";
+import { isPlannedTurn } from "./__fixtures__/turns.js";
 
 /**
  * Cancelled planning frees the chat's planning queue at once: the planner
@@ -132,7 +133,7 @@ function fixture(options: FixtureOptions = {}) {
     request: (payload: unknown, userId: string) => frontend(payload, userId),
     record: (chatId: string, swipeId = 0) => data.get(turnPath(chatId, "m1", swipeId)) as StoredTurnRecord | undefined,
     activePath: (chatId: string) => (data.get(chatStatePath(chatId)) as { activeTurnPath?: string | null } | undefined)?.activeTurnPath,
-    turns: () => sent.filter((m) => m.type === "vn_turn").map((m) => m.turn as { swipeId: number; paragraphs: string[] })
+    turns: () => sent.filter(isPlannedTurn).map((m) => m.turn as { swipeId: number; paragraphs: string[] })
   };
 }
 

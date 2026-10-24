@@ -160,6 +160,19 @@ plans the latest reply once, and `vn_state` then carries `turn: null` so the
 stale turn is never rendered first. Cancelled jobs stay cancelled; they are never
 resumed on their own — the reader reruns them by hand with `vn_retry_turn`.
 
+The text before the plan (a provisional `vn_turn`, see below) follows the same
+gates. Only a plan that runs for an open view sends it; it is never persisted,
+never the chat's active turn, and `vn_state` never carries it. The backend
+keeps it in memory (`provisionalTurns`, per chat, tied to the plan's operation)
+only while that plan runs: a request that joins the plan in flight (a reloaded
+page whose view stayed open, a repeated event) gets it again right after
+`vn_planning`. A view that closed cancelled its plan, so reopening plans again;
+that plan's line check is a cache hit, so the text comes back after a few host
+reads, well before the planner answers. A cancelled plan never sends it, and
+once a plan has sent its planned turn it sends nothing provisional. Another
+swipe or an edit cancels the plan as above; its own provisional turn (another
+fingerprint) replaces the old one on the stage, so the old swipe never paints.
+
 ```text
 GENERATION_STARTED
   -> stage enters waiting state
@@ -171,12 +184,14 @@ GENERATION_ENDED
   -> gather recent and enabled structured context (recent chat: the messages
      before the reply; the reply itself goes once, indexed, as the target)
   -> ask sidecar for scenes, cues, speakers, and optional choices (beside it: the non-story line check)
+  -> once the check answers (or its cache; at once without skipNonStory): send the text before the plan
   -> drop the lines the check labelled non-story and move the plan onto the remaining paragraphs
   -> resolve the protagonist identity (seed once from planner/card/appearance memory, then freeze) and map each cue's expression onto the closed catalogue
   -> attribute each paragraph to a literal speaker nameplate and each cue to its active character, attire, and optional BGM/SFX
   -> validate claimed scene changes against objective evidence
   -> persist TurnPlan, the visual state, and any new appearance memory
-  -> show paragraph 0 immediately
+  -> send the planned turn: it upgrades the text on the stage where the reader is
+     (or shows paragraph 0)
   -> enqueue all cue images by visible/next/background priority
 
 image result
@@ -192,9 +207,23 @@ Entering VN mode in an existing chat with no stored projection first sends the c
 
 If an image is late, the previous decoded image remains visible. If an obsolete image finishes after an edit, swipe, deletion, or newer turn, the ownership guards reject it.
 
+### Text before the plan
+
+A reply's text reaches the stage before its visual plan. `planTurn` calls `onStory` with the paragraphs the plan will hold, and the controller sends them as a provisional `vn_turn` (`provisionalTurnView`, `src/backend/core/provisional-turn.ts`): `provisional: true`, `status: "planning"`, the planned turn's `sourceFingerprint` (so the same paragraph ids), its panels, the previous scene's ambient when that scene has one, and no cues, effects, choices, staging, assets or sprites. The previous scene image stays.
+
+`onStory` fires from the same promise the plan joins the line check on, so with `skipNonStory` the text waits for the check's answer (or its cache) and is exactly the plan's paragraphs. The check is the only step that changes paragraphs; text sent before it would show lines (word counts, out-of-character notes) that then vanish and move the paragraph ids under the reader. The check runs beside the planner and answers first, so the wait is short. Without `skipNonStory` the text goes out right after `prepareNarrative`. A refused or failed check keeps every line, for the text as for the plan.
+
+Speakers: `settledSpeakers` names a paragraph only when its text settles who speaks: `Name:` script lines that all name one character, or speech tags outside the quotes (`"…," Mira says`, `"…," says Mira`, `Kai asks, "…"`) that all name one known character, with no other known name outside the quotes. Known names are registry names and aliases, the previous scene's cast and character, the frozen protagonist, the message's name, the persona, and unique first names of multi-word names. A tag whose subject is a pronoun, "I", "you", several people or anyone unknown, words inside a quote ("Mira said you wouldn't"), and quotes given only by action beats leave the paragraph as narration until the plan names its speaker. A wrong nameplate that the plan then changes reads worse than none, so the rule gives up coverage for precision.
+
+The frontend loads a provisional turn like a turn although its status is `planning` (`decideTurnApplication`); the same one again is a cursor sync, and a late one never replaces its planned turn (`keepsPlannedTurn`). The planned turn for the provisional one on screen is an `upgrade`: the `upgrade-turn` reducer (`vn-store.ts`) keeps the cursor and the furthest read paragraph and takes the plan's paragraphs, choices, mode and ambient, provided `canUpgradeTurn` (ids and text equal through the furthest read paragraph); otherwise the planned turn loads from the start. `VnStage.upgradeTurn` gives paragraphs the reader has not reached everything from the plan; the paragraph on screen gets its nameplate, portrait or sprites, scene image and music, but not its effect or sound effect (that moment has passed), and its typewriter keeps going; read paragraphs only update their History entries.
+
+How far the reader can get ahead of the plan is `planHold` (`PROVISIONAL_PLAN_HOLD` in `src/frontend/host/controller.ts`; Infinity, so they read on). At the hold the stage shows **Preparing the scene…**, sets `data-vn-plan-pending` and disables Continue; auto play and skip stop there and resume after the upgrade. The final paragraph's acknowledgement always waits for the plan, which brings the choices.
+
+Speech waits for the plan by default: a provisional turn has no speech cursor, and with speech auto play on, auto play waits too, so no paragraph goes unspoken. With `speakBeforePlan` (Speech settings, "Read before the scene is ready", off by default) provisional paragraphs are read with their settled speaker's voice, the narrator's otherwise, and the upgrade does not read the paragraph on screen again.
+
 ## Reveal and input state
 
-The current paragraph is readable before any response control appears. Each click or supported key advances one paragraph. The final paragraph needs its own acknowledgement. Only then does the stage reveal either generated/authored choices or the typed composer.
+The current paragraph is readable before any response control appears. Each click or supported key advances one paragraph. The final paragraph needs its own acknowledgement. Only then does the stage reveal either generated/authored choices or the typed composer. While the text waits for its plan, that acknowledgement waits for the plan too (see Text before the plan).
 
 Choices are presentation metadata. Selecting one submits its configured value as a normal user message. Standard input does the same with typed text. Both routes attach a unique request ID. If Lumiverse writes the user message but fails while starting generation, the backend checks chat history before reporting the failure and never retries the same request blindly.
 

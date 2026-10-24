@@ -29,6 +29,7 @@ import {
 } from "./images.js";
 import { markAssetReady, turnView, sceneImageCache, registerVisualNovelBackend, sendState, viewRegistry } from "./controller.js";
 import { chatStatePath, turnPath, type StoredChatState, type StoredTurnRecord } from "./storage.js";
+import { isPlannedTurn } from "./__fixtures__/turns.js";
 
 // ---------------------------------------------------------------------------
 // Deterministic deferred gate helper (zero setTimeout polling)
@@ -1330,7 +1331,7 @@ describe("Scene Image Cache Integration", () => {
         viewRegistry().open("user-1", chatId);
         fire("GENERATION_ENDED", { chatId, messageId: id, content: CONTENT }, "user-1");
         const start = Date.now();
-        while (!sent.slice(before).some((m) => m.type === "vn_turn" && (m.turn as { messageId: string }).messageId === id)) {
+        while (!sent.slice(before).some((m) => isPlannedTurn(m) && (m.turn as { messageId: string }).messageId === id)) {
           if (Date.now() - start > 3000) throw new Error("Timed out waiting for vn_turn");
           await new Promise<void>((resolve) => setTimeout(resolve, 5));
         }
@@ -1399,7 +1400,7 @@ describe("Scene Image Cache Integration", () => {
         cues: [[0, "smile"], [1, "angry"], [2, "smile"]]
       });
       expect(f.providerCalls.length).toBe(4);
-      const firstTurnView = t3.find((m) => m.type === "vn_turn") as {
+      const firstTurnView = t3.find(isPlannedTurn) as {
         turn: { assets: Array<{ paragraphIndex: number; status: string; source?: string; imageId?: string }> };
       };
       const assets3 = firstTurnView.turn.assets;
@@ -1421,7 +1422,7 @@ describe("Scene Image Cache Integration", () => {
       const beforeRetry = f.sent.length;
       f.request({ type: "vn_retry_turn", chatId: "chat-A", messageId: "m3" });
       const startRetry = Date.now();
-      while (!f.sent.slice(beforeRetry).some((m) => m.type === "vn_turn")) {
+      while (!f.sent.slice(beforeRetry).some(isPlannedTurn)) {
         if (Date.now() - startRetry > 3000) throw new Error("Timed out waiting for retry vn_turn");
         await new Promise<void>((resolve) => setTimeout(resolve, 5));
       }

@@ -155,6 +155,13 @@ export type TurnView = {
   sprites?: SpriteTurnView;
   status: "planning" | "ready" | "failed" | "cancelled";
   error?: string;
+  /**
+   * The reply's text before its visual plan (status "planning"): paragraphs,
+   * panels and the speakers the text settles, no cues, effects, choices or
+   * staging. The planned turn with the same `sourceFingerprint` upgrades it in
+   * place. Never stored; a reopened view gets it again while the plan runs.
+   */
+  provisional?: boolean;
 };
 
 export type ConnectionCatalogOption = {

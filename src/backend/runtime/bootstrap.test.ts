@@ -3,6 +3,7 @@ import type { ChatMessageDTO, SpindleAPI } from "lumiverse-spindle-types";
 import { chatStatePath } from "./storage.js";
 import { sendState } from "./controller.js";
 import { storyCheckReply } from "./__fixtures__/story-check";
+import { isPlannedTurn, isProvisionalTurn } from "./__fixtures__/turns.js";
 
 function message(input: { id: string; content: string; isUser?: boolean }): ChatMessageDTO & { role: "user" | "assistant" } {
   const isUser = input.isUser ?? false;
@@ -137,7 +138,10 @@ describe("existing-chat bootstrap", () => {
 
     await sendState(runtime.spindle, "chat-bootstrap", "user-1", { viewOpen: true });
 
-    expect(runtime.sent.map(({ type }) => type)).toEqual(["vn_state", "vn_planning", "vn_turn"]);
+    // The text first (provisional), then the planned turn.
+    expect(runtime.sent.map(({ type }) => type)).toEqual(["vn_state", "vn_planning", "vn_turn", "vn_turn"]);
+    expect(runtime.sent.filter(isProvisionalTurn)).toHaveLength(1);
+    expect(runtime.sent.filter(isPlannedTurn)).toHaveLength(1);
     // One warning for the broken record, one for the audible planner fallback.
     expect(runtime.warnings).toHaveLength(2);
     expect(runtime.warnings[0]).toContain("rebuilding it from chat");
@@ -169,6 +173,6 @@ describe("existing-chat bootstrap", () => {
     await Promise.all([first, second]);
 
     expect(runtime.sent.filter(({ type }) => type === "vn_state")).toHaveLength(2);
-    expect(runtime.sent.filter(({ type }) => type === "vn_turn")).toHaveLength(1);
+    expect(runtime.sent.filter(isPlannedTurn)).toHaveLength(1);
   });
 });

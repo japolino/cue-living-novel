@@ -38,6 +38,12 @@ export type SpeechSettings = {
   volume: number;
   /** Mute narrator speech (dialogue only). */
   muteNarrator: boolean;
+  /**
+   * Read a reply's text while its visual plan is still running (the speakers
+   * the text settles, else the narrator voice). Off by default: speech waits
+   * for the plan, which knows every paragraph's speaker.
+   */
+  speakBeforePlan: boolean;
   /** Use Choir's sound effects, ambience and music; Cue's own pack audio stays quiet while Choir's sound is on. */
   choirSound: boolean;
   /** Narration voice. Null means "not configured" (silence + settings hint). */
@@ -65,6 +71,7 @@ export const DEFAULT_SPEECH_SETTINGS: SpeechSettings = {
   autoplay: false,
   volume: 0.8,
   muteNarrator: false,
+  speakBeforePlan: false,
   choirSound: false,
   narrator: null,
   characterDefault: null,
@@ -119,6 +126,7 @@ export function normalizeSpeechSettings(value: unknown): SpeechSettings {
     autoplay: raw.autoplay === true,
     volume: Number.isFinite(volume) ? Math.min(1, Math.max(0, volume)) : DEFAULT_SPEECH_SETTINGS.volume,
     muteNarrator: raw.muteNarrator === true,
+    speakBeforePlan: raw.speakBeforePlan === true,
     choirSound: raw.choirSound === true,
     narrator: normalizeVoiceRef(raw.narrator),
     characterDefault: normalizeVoiceRef(raw.characterDefault),

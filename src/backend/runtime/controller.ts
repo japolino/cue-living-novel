@@ -28,7 +28,8 @@ import { resolveNativeCardJobs } from "./native-assets.js";
 import { handleReferenceImageResponse } from "./reference-source.js";
 import { CACHE_JOB_PROVIDER, createAssetJobs, prepareAssetJobs, generateAssets, resolveCacheCues, retainPlanEpisodes } from "./images.js";
 import { SceneImageCache, sceneImageScope } from "../core/scene-image-cache.js";
-import { fingerprintForMessage, gameHintsForTurn, planTurn } from "./planner.js";
+import { fingerprintForMessage, gameHintsForTurn, planTurn, type StoryParagraphs } from "./planner.js";
+import { provisionalTurnView } from "../core/provisional-turn.js";
 import {
   isUnselectedGreeting,
   needsResolution,
@@ -118,6 +119,12 @@ function bumpIntakeEpoch(userId: string | undefined, chatId: string): void {
   intakeEpochs.set(key, (intakeEpochs.get(key) ?? 0) + 1);
 }
 const activeTurnKeys = new Map<string, StoredTurnRecord["plan"]["key"]>();
+/**
+ * The provisional turn (text before the plan) of the plan running per chat,
+ * kept so a view that reopens and joins that plan shows the text again. Only
+ * in memory; never the chat's active turn.
+ */
+const provisionalTurns = new Map<string, { operationId: string; view: TurnView }>();
 
 /**
  * Temporary scene-image cache (one per backend worker). See
@@ -1199,6 +1206,45 @@ async function processAssistantMessage(
     const recentMessages = config.includeRecentMessages > 0
       ? await resolveContextMessages(spindle, chatId, contextBeforeReply(messages, message.id, config.includeRecentMessages), resolutionCache, userId)
       : [];
+    // Runs during planning and the identity writes below (it never throws).
+    const personaLookup = activePersonaName(spindle, userId);
+    // A cancel can land at any await from here on: a cancelled plan never paints or persists.
+    const cancelled = () => operation.controller.signal.aborted;
+    // Text before the plan: once the paragraphs are final (after the non-story
+    // check), the stage shows them; the planned turn upgrades them in place.
+    const provisionalKey = runtimeKey(userId, chatId);
+    let plannedTurnSent = false;
+    const sendProvisional = (story: StoryParagraphs) => {
+      void personaLookup.then((persona) => {
+        if (cancelled() || plannedTurnSent) return;
+        const previous = baseline.previousScene;
+        const lastUser = [...messages].reverse().find((candidate) => candidate.role === "user" || Boolean(candidate.is_user));
+        const view = provisionalTurnView({
+          chatId,
+          messageId: message.id,
+          swipeId: typeof message.swipe_id === "number" ? message.swipe_id : Number(message.swipe_id ?? 0) || 0,
+          sourceFingerprint: fingerprint,
+          revision: (previous?.revision ?? 0) + 1,
+          speaker: message.name || "Narrator",
+          userSpeaker: persona || lastUser?.name?.trim() || "You",
+          paragraphs: story.paragraphs.map((paragraph) => paragraph.text),
+          panels: story.panels,
+          panelSource: story.panelSource,
+          names: {
+            // Registry first: its canonical names win over a cast label.
+            characters: [
+              ...Object.values(characterRegistry).map((entry) => ({ name: entry.name, aliases: entry.aliases })),
+              ...[...(previous?.cast ?? []), previous?.character, singleCharacter.protagonist.name, message.name].map((name) => ({ name: name ?? "" })),
+            ],
+            persona,
+          },
+          previousAmbient: previous?.ambient,
+        });
+        provisionalTurns.set(provisionalKey, { operationId: operation.id, view });
+        spindle.sendToFrontend({ type: "vn_turn", turn: view }, userId);
+        dbg(spindle, userId, `provisional turn sent chat=${chatId} message=${message.id} after ${Date.now() - planningStartedAt}ms paragraphs=${view.paragraphs.length} speakers=[${view.paragraphSpeakers?.map((name, index) => name ? `p${index}:${name}` : "").filter(Boolean).join(", ") ?? ""}]`);
+      });
+    };
     const result = await planTurn(spindle, {
       chatId,
       message,
@@ -1213,7 +1259,8 @@ async function processAssistantMessage(
       characterRegistry,
       gameHints: gameHintsForTurn(messages, message.id),
       ...(userId ? { userId } : {}),
-      signal: operation.controller.signal
+      signal: operation.controller.signal,
+      onStory: sendProvisional
     });
     if (operation.controller.signal.aborted) return;
     dbg(spindle, userId, [
@@ -1233,12 +1280,9 @@ async function processAssistantMessage(
       ...(result.rejectedSubjects.length ? [`rejectedSubjects=[${result.rejectedSubjects.map((item) => `${item.name}: ${item.requested} kept ${item.durable}`).join("; ")}]`] : []),
       `context: ${summarizeDiagnostics(result.contextDiagnostics)}`
     ].join(" | "));
-    // Runs during the identity writes below (it never throws).
-    const personaLookup = activePersonaName(spindle, userId);
     // A cancel can land during any of these writes: stop before the next one, so
     // a discarded swipe never seeds the chat's identity (the protagonist freezes
     // on its first save, and the plan that replaces this one reads it).
-    const cancelled = () => operation.controller.signal.aborted;
     await mergeCharacterAppearanceFromState(spindle, singleCharacter, userId, chatId);
     if (cancelled()) return;
     await saveSingleCharacterState(spindle, chatId, result.singleCharacter, userId);
@@ -1364,6 +1408,8 @@ async function processAssistantMessage(
     activeTurnKeys.set(key, record.plan.key);
     await persistActiveTurn(spindle, record, path, userId);
     if (cancelled()) return;
+    plannedTurnSent = true;
+    if (provisionalTurns.get(provisionalKey)?.operationId === operation.id) provisionalTurns.delete(provisionalKey);
     spindle.sendToFrontend({ type: "vn_turn", turn: view }, userId);
     if ((!spriteMode || jobs.length > 0) && !config.useNativeCardImages && config.generateImages) {
       void startAssets(spindle, record, path, userId).catch((error) => {
@@ -1374,6 +1420,16 @@ async function processAssistantMessage(
       });
     }
   }, dedupeId);
+  const provisionalKey = runtimeKey(userId, chatId);
+  if (scheduled.reused) {
+    // A reopened view (or a repeated event) joined the plan in flight: show its text again.
+    const pending = provisionalTurns.get(provisionalKey);
+    if (pending?.operationId === scheduled.operation.id) spindle.sendToFrontend({ type: "vn_turn", turn: pending.view }, userId);
+  } else {
+    void scheduled.promise.catch(() => undefined).finally(() => {
+      if (provisionalTurns.get(provisionalKey)?.operationId === scheduled.operation.id) provisionalTurns.delete(provisionalKey);
+    });
+  }
 
   try {
     await scheduled.promise;

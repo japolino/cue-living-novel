@@ -11,6 +11,7 @@ import type { SpindleAPI } from "lumiverse-spindle-types";
 import { registerVisualNovelBackend, sceneImageCache, viewRegistry } from "./controller.js";
 import { sceneImageScope } from "../core/scene-image-cache.js";
 import { turnPath, type StoredTurnRecord } from "./storage.js";
+import { isPlannedTurn } from "./__fixtures__/turns.js";
 
 async function waitFor(condition: () => boolean, timeoutMs = 3000): Promise<void> {
   const start = Date.now();
@@ -84,7 +85,7 @@ function fixture() {
     const before = sent.length;
     viewRegistry().open("user-1", chatId);
     fire("GENERATION_ENDED", { chatId, messageId: id, content: CONTENT }, "user-1");
-    await waitFor(() => sent.slice(before).some((m) => m.type === "vn_turn" && (m.turn as { messageId: string }).messageId === id));
+    await waitFor(() => sent.slice(before).some((m) => isPlannedTurn(m) && (m.turn as { messageId: string }).messageId === id));
     await settle();
     return sent.slice(before);
   };
@@ -123,7 +124,7 @@ describe("probe: real controller lifecycle with the scene cache", () => {
     // T3: Mira again, cues p0..p2: zero calls; the FIRST vn_turn already carries the cache swap for p2.
     const t3 = await f.say("chat-A", "m3", { speaker: "Mira", location: "Observatory", claimNew: false, reason: "none", cues: [[0, "smile"], [1, "angry"], [2, "smile"]] });
     expect(f.providerCalls.length).toBe(4);
-    const firstTurnView = t3.find((m) => m.type === "vn_turn") as { turn: { assets: Array<{ paragraphIndex: number; status: string; source?: string; imageId?: string }> } };
+    const firstTurnView = t3.find(isPlannedTurn) as { turn: { assets: Array<{ paragraphIndex: number; status: string; source?: string; imageId?: string }> } };
     const assets3 = firstTurnView.turn.assets;
     expect(assets3.filter((a) => a.source === "cache").map((a) => a.paragraphIndex)).toEqual([2]);
     expect(assets3.find((a) => a.source === "cache")!.status).toBe("generated");
@@ -136,7 +137,7 @@ describe("probe: real controller lifecycle with the scene cache", () => {
     // Retry T3: everything is generated -> kept, no provider call, cache job untouched.
     const beforeRetry = f.sent.length;
     f.request({ type: "vn_retry_turn", chatId: "chat-A", messageId: "m3" });
-    await waitFor(() => f.sent.slice(beforeRetry).some((m) => m.type === "vn_turn"));
+    await waitFor(() => f.sent.slice(beforeRetry).some(isPlannedTurn));
     await settle();
     expect(f.providerCalls.length).toBe(4);
     expect(f.record("chat-A", "m3").jobs.filter((j) => j.provider === "cache").length).toBe(1);

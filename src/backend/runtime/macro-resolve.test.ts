@@ -11,6 +11,7 @@ import {
   S1_SCENE_TEXT
 } from "./__fixtures__/greeting-macro.js";
 import { storyCheckReply } from "./__fixtures__/story-check";
+import { isPlannedTurn } from "./__fixtures__/turns.js";
 
 type Msg = { id: string; content: string; is_user: boolean; name: string };
 
@@ -304,10 +305,13 @@ describe("audit regressions", () => {
     const state = runtime.sent.find((message) => message.type === "vn_state") as { turn: unknown };
     expect(state.turn).toBeNull();
     expect(types.indexOf("vn_planning")).toBeGreaterThan(types.indexOf("vn_state"));
+    // The text before the plan and the planned turn both show the new scene.
     const turns = runtime.sent.filter((message) => message.type === "vn_turn") as Array<{ turn: { paragraphs: string[] } }>;
-    expect(turns.length).toBe(1);
-    expect(turns[0]!.turn.paragraphs[0]).toBe("A different opening.");
-    expect(turns[0]!.turn.paragraphs.join(" ")).not.toContain("The cradle of humanity");
+    expect(runtime.sent.filter(isPlannedTurn)).toHaveLength(1);
+    for (const sent of turns) {
+      expect(sent.turn.paragraphs[0]).toBe("A different opening.");
+      expect(sent.turn.paragraphs.join(" ")).not.toContain("The cradle of humanity");
+    }
   });
 
   test("audit F8: Try again (vn_retry_turn) picks up a changed scene selection", async () => {

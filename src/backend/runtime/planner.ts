@@ -199,6 +199,19 @@ export type PlanTurnInput = {
    * no retry or fallback runs, and planTurn rejects with an AbortError.
    */
   signal?: AbortSignal;
+  /**
+   * Called once, while the planner still runs, with the paragraphs the plan
+   * will hold: right away, or with Skip non-story blocks once the line check
+   * (or its cache) has dropped its lines. Not called for a cancelled plan.
+   */
+  onStory?: (story: StoryParagraphs) => void;
+};
+
+/** The reader's text of a turn before its plan: what `TurnPlan.paragraphs`, `panels` and `panelSource` will hold. */
+export type StoryParagraphs = {
+  paragraphs: PreparedNarrative["paragraphs"];
+  panels: PreparedNarrative["panels"];
+  panelSource: string;
 };
 
 type HintMessage = { id: string; is_user: boolean; metadata?: Record<string, unknown> };
@@ -2434,6 +2447,21 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
         ...(input.userId ? { userId: input.userId } : {})
       })).catch(() => null)
     : Promise.resolve(null);
+  // The paragraphs the plan will hold, once the check has dropped its lines.
+  const storyPromise = storyCheckPromise.then((storyCheck) => {
+    const checked = storyCheck?.labels ? applyStoryLabels(prepared, storyCheck.labels) : null;
+    return { storyCheck, checked, narrative: checked?.skipped ? checked : prepared };
+  });
+  // Awaited after the planner; a failure surfaces there, not as an unhandled rejection now.
+  storyPromise.catch(() => undefined);
+  if (input.onStory) {
+    const onStory = input.onStory;
+    // Registered before the planner's own join, so the text goes out first.
+    void storyPromise.then(({ narrative }) => {
+      if (input.signal?.aborted) return;
+      onStory({ paragraphs: narrative.paragraphs, panels: narrative.panels, panelSource: resolvedContent.slice(0, 200_000) });
+    }).catch((error: unknown) => spindle.log.warn(`Turn text before the plan could not be sent: ${debugErrorSummary(error)}`));
+  }
 
   // Earlier replies reach the planner without their non-story lines too; carded status lines still reach it.
   const statusLines = statusLinesText(prepared);
@@ -2553,8 +2581,7 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
   // of the plan (and System One's answers) to the paragraphs that remain. Like
   // System One, a cancelled plan lets the check go instead of waiting on it (the
   // check still caches its labels for a swipe back to the same text).
-  const storyCheck = await abortable(storyCheckPromise, input.signal);
-  const checked = storyCheck?.labels ? applyStoryLabels(prepared, storyCheck.labels) : null;
+  const { storyCheck, checked } = await abortable(storyPromise, input.signal);
   if (storyCheck) debug.line(`story check source=${storyCheck.source} calls=${storyCheck.calls} durationMs=${storyCheck.durationMs} lines=${checkLines.length} skipped=${checked?.skipped ?? 0} removedParagraphs=[${checked?.removedParagraphs.join(",") ?? ""}]`);
   if (checked?.skipped) {
     narrative = checked;
