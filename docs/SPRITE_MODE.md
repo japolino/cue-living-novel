@@ -452,8 +452,10 @@ without it, or with `--dry-run`, nothing is sent. It writes `canvas.png`,
 route, `<route>-full.png` and `<route>-right.png` (the 608×832 half Cue cuts
 out) to `.cache/improve/v5inset/`. Other options: `--negative`, `--model`
 (e.g. `nai-diffusion-5-curated`), `--steps`, `--scale`, `--sampler`, `--raw`
-(a user override to merge), `--route plain|stream|both`, `--out`. The script
-composes the canvas with a tiny PNG codec; the extension draws it in the
+(a user override to merge), `--route plain|stream|both`, `--out`, and
+`--canvas WxH --strip N` to try an untested layout (reference in the left N
+px, the rest repainted; e.g. a scene-mode candidate `--canvas 1472x704
+--strip 448` with a scene `--negative`). The script composes the canvas with a tiny PNG codec; the extension draws it in the
 browser, so resampling differs slightly.
 
 ## Order of work (backend, `sprites/jobs.ts`)

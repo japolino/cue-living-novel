@@ -16,7 +16,7 @@
  *   canvas.png, mask.png          what the request carries
  *   request.redacted.json         the body, image/mask/key redacted
  *   <route>-full.png              the generated canvas
- *   <route>-right.png             its right half (608x832), what Cue cuts out
+ *   <route>-right.png             the repainted part (608x832), what Cue cuts out
  *
  * The extension composes the canvas in the browser (canvas drawImage, see
  * src/frontend/sprites/canvas-tools.ts); this script does the same geometry
@@ -35,6 +35,9 @@
  *                        (defaults 28, 5, k_euler_ancestral, random; the author used 14 and 6.7)
  *   --raw <json>         a user rawRequestOverride to merge (like a connection's)
  *   --route plain|stream|both   /ai/generate-image, /ai/generate-image-stream, or both (default plain)
+ *   --canvas <WxH> --strip <px>   an untested layout instead of Cue's sprite one (1216x832, 608):
+ *                        reference in the left <strip> px, the rest repainted, e.g. the scene-mode
+ *                        candidate --canvas 1472x704 --strip 448 (pass a scene --negative too)
  *   --out <dir>          output directory (default .cache/improve/v5inset)
  *   --dry-run            write the canvas, mask and request; send nothing
  */
@@ -42,7 +45,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { deflateSync, inflateRawSync, inflateSync } from "node:zlib";
 import { DEFAULT_CONFIG } from "../src/config.js";
-import { fitContain, NOVELAI_INSET_LAYOUTS } from "../src/shared/novelai-inset.js";
+import { fitContain, insetLayoutProblems, NOVELAI_INSET_LAYOUTS, type NovelAiInsetLayout } from "../src/shared/novelai-inset.js";
 import { compileNovelAiInsetRequest, novelAiInsetModelFor } from "../src/backend/runtime/sprites/novelai-inset.js";
 import { novelAiNegative, SPRITE_NEGATIVE_TAGS } from "../src/backend/runtime/sprites/prompts.js";
 
@@ -344,6 +347,24 @@ function redacted(body: Record<string, unknown> & { parameters: Record<string, u
 
 /* ---------------------------------------------------------------- main */
 
+/** Cue's sprite layout, or a left-strip layout from --canvas WxH --strip N (for untested candidates). */
+function probeLayout(args: Record<string, string | true>): NovelAiInsetLayout {
+  if (typeof args.canvas !== "string") return NOVELAI_INSET_LAYOUTS.sprite;
+  const [width, height] = args.canvas.split("x").map(Number) as [number, number];
+  const strip = Number(typeof args.strip === "string" ? args.strip : width / 2);
+  const layout: NovelAiInsetLayout = {
+    ...NOVELAI_INSET_LAYOUTS.sprite,
+    canvas: { width, height },
+    reference: { x: 0, y: 0, width: strip, height },
+    repaint: { x: strip, y: 0, width: width - strip, height },
+  };
+  const problems = insetLayoutProblems(layout);
+  if (!(strip > 0 && strip < width)) problems.push("--strip must be inside the canvas");
+  if (problems.length) throw new Error(`--canvas ${args.canvas} --strip ${strip}: ${problems.join("; ")}.`);
+  if (width * height > 1024 * 1024) console.log(`note: ${width}x${height} is larger than 1024x1024 (Opus free generation is limited to that area).`);
+  return layout;
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   if (typeof args.reference !== "string" || typeof args.prompt !== "string") {
@@ -355,7 +376,7 @@ async function main(): Promise<void> {
   const model = typeof args.model === "string" ? args.model : "nai-diffusion-5-full";
   const inset = novelAiInsetModelFor("novelai", model);
   if (!inset) throw new Error(`${model} is not a NovelAI V5 model.`);
-  const layout = NOVELAI_INSET_LAYOUTS.sprite;
+  const layout = probeLayout(args);
 
   // The canvas and the mask (the extension draws these in the browser).
   const reference = decodePng(new Uint8Array(readFileSync(args.reference)));
