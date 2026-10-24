@@ -9,7 +9,7 @@
  * MessageChannel, so both paths share one implementation.
  */
 import type { FaceCandidate, FaceKernel } from "./face-kernel.js";
-import type { CutoutBBox, CutoutFigureCheck, CutoutInputFit, CutoutKernel } from "./kernel.js";
+import type { CutoutBBox, CutoutFigureCheck, CutoutInputFit, CutoutKernel, CutoutSceneryCheck } from "./kernel.js";
 
 export type CutoutBackend = "webgpu" | "wasm";
 export type CutoutBackendPreference = "auto" | CutoutBackend;
@@ -64,6 +64,12 @@ export type CutoutWorkerCutResult = {
   preCut?: true;
   /** Duplicate check on the cut-out alpha. */
   figures: CutoutFigureCheck;
+  /**
+   * Scenery check of the cut-out against the model's mask. Absent without a
+   * mask: a "basic" cut, and a pre-cut source (its alpha is the workflow
+   * model's mask, so there is nothing to check it against).
+   */
+  scenery?: CutoutSceneryCheck;
   /** Set when the model was requested but could not run (the result is "basic"). */
   modelError: string | null;
   /** Face detection on the source image; absent when it was not asked for or could not run. */
@@ -327,7 +333,7 @@ export function cutoutWorkerMain(port: CutoutPort, createKernel: () => CutoutKer
     t = performance.now();
     const png = await encode(result.rgba, width, height);
     const encodeMs = performance.now() - t;
-    return { png, width, height, bbox: result.bbox, quality: mask ? "best" : "basic", figures: result.figures, modelError, ...(face ? { face } : {}), timings: { decodeMs, modelMs, cutMs, encodeMs } };
+    return { png, width, height, bbox: result.bbox, quality: mask ? "best" : "basic", figures: result.figures, ...(result.scenery ? { scenery: result.scenery } : {}), modelError, ...(face ? { face } : {}), timings: { decodeMs, modelMs, cutMs, encodeMs } };
   }
 
   async function face(image: Blob): Promise<FaceDetectResult> {

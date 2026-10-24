@@ -59,6 +59,19 @@ describe("sprite cut service", () => {
     expect(sent[0]!.meta?.twoFigures).toBe(true);
   });
 
+  test("the scenery check travels in the meta; absent when the cut could not check it", async () => {
+    const png = () => new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" });
+    for (const scenery of [true, false]) {
+      const { service, sent } = setup({ cut: async () => result(png(), { scenery, sceneryShare: scenery ? 0.2 : 0 }) });
+      await service.handle(request("s"));
+      expect(sent[0]!.meta?.scenery).toBe(scenery);
+      expect(sent[0]!.meta && "sceneryShare" in sent[0]!.meta).toBe(false);
+    }
+    const { service, sent } = setup({ cut: async () => result(png(), { preCut: true }) });
+    await service.handle(request("pre"));
+    expect(sent[0]!.meta && "scenery" in sent[0]!.meta).toBe(false);
+  });
+
   test("the face box travels in the meta (also null); absent when it was not detected", async () => {
     const png = () => new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" });
     for (const face of [[0.4, 0.1, 0.2, 0.15] as [number, number, number, number], null]) {

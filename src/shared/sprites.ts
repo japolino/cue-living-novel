@@ -579,6 +579,8 @@ export type SpriteImageView = {
   error?: string;
   /** Ready, but the duplicate check found what looks like two figures (kept after one automatic retry). */
   twoFigures?: true;
+  /** Ready, but the scenery check found scenery drawn behind the character (kept after one automatic retry). */
+  scenery?: true;
   /**
    * Detected face, normalized 0..1 to the whole image: [x, y, width, height].
    * null: the detector found no face. Absent: not detected yet (older data).
@@ -695,6 +697,13 @@ export type SpriteCutMeta = {
    * from older frontends (unknown).
    */
   twoFigures?: boolean;
+  /**
+   * Scenery check of the browser cut-out: the cut kept a wall, disc, ring or
+   * floor band the model's mask calls background. Absent when it was not
+   * checked: a cut without a model, a source the workflow already cut out,
+   * or an older frontend.
+   */
+  scenery?: boolean;
   /** Detected face (see SpriteImageView.face). Absent: not detected (unknown). */
   face?: SpriteFaceBox | null;
   /** The crop the browser applied before cutting (echo of the request's `crop`). Absent: none. */

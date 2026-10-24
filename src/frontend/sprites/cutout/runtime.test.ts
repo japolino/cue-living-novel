@@ -171,6 +171,8 @@ describe("cut-out runtime", () => {
     expect(png.data[3]).toBe(0);
     expect(png.data[(6 * 16 + 7) * 4 + 3]).toBe(255);
     expect(getCutoutModelState()).toEqual({ state: "absent" });
+    // No mask, no scenery check.
+    expect(result.scenery).toBeUndefined();
   });
 
   test("best: download with progress, load, ready, model used", async () => {
@@ -181,6 +183,9 @@ describe("cut-out runtime", () => {
     off();
     expect(result.quality).toBe("best");
     expect(fetches).toEqual(["https://models.test/isnet.onnx"]);
+    // The cut was checked against the model's mask: nothing opaque outside the figure.
+    expect(result.scenery).toBe(false);
+    expect(result.sceneryShare).toBe(0);
     expect(states[0]).toEqual({ state: "downloading", receivedBytes: 0, totalBytes: null });
     expect(states.some((s) => s.state === "downloading" && s.receivedBytes === 4096 && s.totalBytes === 4096)).toBe(true);
     expect(states.at(-2)).toEqual({ state: "loading" });
@@ -455,6 +460,8 @@ describe("cut-out runtime", () => {
       expect(result.quality).toBe("best");
       expect(result.preCut).toBe(true);
       expect(result.timings?.modelMs).toBe(0);
+      // Its alpha is the workflow model's mask: nothing to check it against.
+      expect(result.scenery).toBeUndefined();
     }
   });
 

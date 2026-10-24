@@ -6,8 +6,11 @@ import anima from "./__fixtures__/anima29b-connection.json";
 import {
   REFERENCE_SWITCH_TTL_MS,
   comfyWorkflowConfigFor,
+  cutoutSwitchParameters,
+  findCutoutSwitch,
   findReferenceSwitch,
   referenceSwitchParameters,
+  resolveComfySwitches,
   resolveReferenceSwitch
 } from "./comfy-reference-switch.js";
 import { createAssetJobs, generateAssets } from "./images.js";
@@ -284,5 +287,102 @@ describe("scene images: ComfyUI reference switch", () => {
       expect(calls[1]!.parameters.denoise).toBe(0.7);
       expect(calls[1]!.parameters.comfyui_custom_fields).toBeUndefined();
     }
+  });
+});
+
+/* ---- sprite cut-out switch ---- */
+
+/** The Anima 2.9b connection with a background-removal branch behind a mapped Boolean (900:value). */
+function withCutout(title = "Cue sprite cut-out"): typeof anima.metadata {
+  const metadata = clone(anima.metadata);
+  const comfy = metadata.comfyui as unknown as { workflow_api_json: Record<string, unknown>; field_mappings: Array<Record<string, unknown>> };
+  comfy.workflow_api_json["900"] = { class_type: "PrimitiveBoolean", inputs: { value: false }, _meta: { title } };
+  comfy.field_mappings.push({ nodeId: "900", fieldName: "value", mappedAs: "custom" });
+  return metadata;
+}
+
+describe("findCutoutSwitch", () => {
+  test("finds a Boolean titled for the cut-out, background removal or transparency", () => {
+    for (const title of ["Cue sprite cut-out", "Cutout", "cut out sprite", "Remove background", "RemoveBackground", "Remove the BG", "Background removal", "BG remover", "Transparent PNG", "transparency"]) {
+      expect(findCutoutSwitch(single({ class_type: "PrimitiveBoolean", inputs: { value: true }, _meta: { title } }))).toBe("9:value");
+    }
+    expect(findCutoutSwitch(single({ class_type: "RemoveBackgroundToggle", inputs: { on: false } }, "on"))).toBe("9:on");
+  });
+
+  test("no match for a non-boolean field, an unrelated title, or the Anima workflow as shipped", () => {
+    expect(findCutoutSwitch(single({ class_type: "LoadBackgroundRemovalModel", inputs: { bg_removal_name: "x.safetensors" }, _meta: { title: "Background removal model" } }, "bg_removal_name"))).toBeNull();
+    expect(findCutoutSwitch(single({ class_type: "PrimitiveBoolean", inputs: { value: true }, _meta: { title: "Background colour" } }))).toBeNull();
+    expect(findCutoutSwitch(single({ class_type: "PrimitiveBoolean", inputs: { value: true }, _meta: { title: "Enable upscale" } }))).toBeNull();
+    expect(findCutoutSwitch(animaConfig)).toBeNull();
+  });
+
+  test("next to the IP-Adapter switch each finds its own; a cut-out title is never the reference switch", () => {
+    const both = withCutout().comfyui as unknown as Record<string, unknown>;
+    expect(findReferenceSwitch(both)).toBe("804:value");
+    expect(findCutoutSwitch(both)).toBe("900:value");
+    const ambiguous = single({ class_type: "PrimitiveBoolean", inputs: { value: true }, _meta: { title: "Transparent reference" } });
+    expect(findReferenceSwitch(ambiguous)).toBeNull();
+    expect(findCutoutSwitch(ambiguous)).toBe("9:value");
+  });
+});
+
+describe("resolveComfySwitches", () => {
+  test("one read finds both switches; the reference lookup shares it", async () => {
+    const reads: string[] = [];
+    const spindle = { imageGen: { getConnection: async (id: string) => { reads.push(id); return { provider: "comfyui", metadata: withCutout() }; }, listConnections: async () => [] } } as unknown as SpindleAPI;
+    const config = { ...DEFAULT_CONFIG, imageConnectionId: "conn" } as VisualNovelConfig;
+    expect(await resolveComfySwitches(spindle, config, "u1", 1000)).toEqual({ reference: "804:value", cutout: "900:value" });
+    expect(await resolveReferenceSwitch(spindle, config, "u1", 1001)).toBe("804:value");
+    expect(reads).toEqual(["conn"]);
+  });
+
+  test("a failed lookup has neither switch", async () => {
+    const spindle = { imageGen: { getConnection: async () => { throw new Error("host down"); }, listConnections: async () => [] } } as unknown as SpindleAPI;
+    expect(await resolveComfySwitches(spindle, { ...DEFAULT_CONFIG, imageConnectionId: "conn" } as VisualNovelConfig, "u1")).toEqual({ reference: null, cutout: null });
+  });
+});
+
+describe("cutoutSwitchParameters", () => {
+  test("on for a sprite, off otherwise, merged over the reference switch's fields", () => {
+    const base = referenceSwitchParameters("comfyui", { steps: 20, custom: { "7:text": "x" } }, null, "804:value").parameters;
+    const on = cutoutSwitchParameters("comfyui", { steps: 20, custom: { "7:text": "x" } }, base, true, "900:value");
+    expect(on.parameters.comfyui_custom_fields).toEqual({ "7:text": "x", "804:value": false, "900:value": true });
+    expect(on.parameters.steps).toBe(20);
+    expect(on.note).toBe("cut-out switch 900:value -> on");
+    const off = cutoutSwitchParameters("comfyui", {}, { steps: 20 }, false, "900:value");
+    expect(off.parameters).toEqual({ steps: 20, comfyui_custom_fields: { "900:value": false } });
+    expect(off.note).toBe("cut-out switch 900:value -> off");
+  });
+
+  test("the user's custom fields are kept (custom when there are no comfyui_custom_fields)", () => {
+    const result = cutoutSwitchParameters("comfyui", { custom: { "7:text": "y" } }, { custom: { "7:text": "y" } }, true, "900:value");
+    expect(result.parameters.comfyui_custom_fields).toEqual({ "7:text": "y", "900:value": true });
+    expect(result.parameters.custom).toEqual({ "7:text": "y" });
+  });
+
+  test("a value the user set for the switch wins", () => {
+    const user = { comfyui_custom_fields: { "900:value": false } };
+    const result = cutoutSwitchParameters("comfyui", user, { ...user }, true, "900:value");
+    expect(result.parameters.comfyui_custom_fields).toEqual({ "900:value": false });
+    expect(result.note).toBe("cut-out switch 900:value -> user value false");
+  });
+
+  test("no switch, or not ComfyUI: unchanged and no note", () => {
+    const parameters = { steps: 20 };
+    expect(cutoutSwitchParameters("comfyui", {}, parameters, true, null)).toEqual({ parameters, note: null });
+    expect(cutoutSwitchParameters("novelai", {}, parameters, true, "900:value")).toEqual({ parameters, note: null });
+  });
+});
+
+describe("scene images: ComfyUI cut-out switch", () => {
+  test("every scene picture turns a mapped cut-out switch off", async () => {
+    const { calls, logs } = await sceneCalls(withCutout());
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.parameters.comfyui_custom_fields).toEqual({ "804:value": false, "900:value": false });
+    expect(calls[1]!.parameters.comfyui_custom_fields).toEqual({ "804:value": true, "900:value": false });
+    expect(logs.filter((line) => line.includes("cut-out switch"))).toEqual([
+      "[VN] cue p0: cut-out switch 900:value -> off",
+      "[VN] cue p1: cut-out switch 900:value -> off"
+    ]);
   });
 });

@@ -26,6 +26,8 @@ export type CutoutPixelsResult = {
   background: [number, number, number];
   /** Duplicate check on the cut-out alpha (see `figureCheck`). */
   figures: CutoutFigureCheck;
+  /** Scenery check of the cut-out against the mask (see `sceneryCheck`); null without a mask. */
+  scenery: CutoutSceneryCheck | null;
 };
 
 /**
@@ -41,6 +43,20 @@ export type CutoutFigureCheck = {
   twoFigures: boolean;
   /** Share of the checked rows that are split (0..1). */
   splitShare: number;
+};
+
+/**
+ * "Scenery drawn behind the character" check: walls, discs, rings or floor
+ * bands the render put behind a light-themed character, which the cut keeps
+ * because they are far from the background colour and touch the figure.
+ * Measured: the share of the cut-out's opaque pixels (alpha > 127) that the
+ * mask scores below 0.1 and that lie more than 8 px (L1) from every pixel it
+ * scores 0.5 or more. Flagged at 0.03 or more.
+ */
+export type CutoutSceneryCheck = {
+  scenery: boolean;
+  /** Share of the opaque pixels that are stray (0..1). */
+  share: number;
 };
 
 /**
@@ -65,6 +81,7 @@ export type CutoutKernel = {
     bgMask: number; lightMin: number; lightSpread: number; bgMinPixels: number; bgMinShare: number;
     splitAlpha: number; splitTop: number; splitBottom: number; splitRun: number; splitShare: number;
     cutAlpha: number; cutBorder: number;
+    sceneryLow: number; sceneryFg: number; sceneryGap: number; sceneryShare: number;
   };
   backgroundColor(rgba: Uint8ClampedArray, width: number, height: number, mask?: Float32Array | null): [number, number, number];
   colorDistance(rgba: Uint8ClampedArray, width: number, height: number, bg: [number, number, number]): Float32Array;
@@ -79,6 +96,8 @@ export type CutoutKernel = {
   isPreCut(rgba: Uint8ClampedArray, width: number, height: number): boolean;
   /** Duplicate check on straight-alpha RGBA (alpha > 127 is opaque). */
   figureCheck(rgba: Uint8ClampedArray, width: number, height: number): CutoutFigureCheck;
+  /** Scenery check of straight-alpha RGBA (alpha > 127 is opaque) against a model mask at the image size. */
+  sceneryCheck(rgba: Uint8ClampedArray, mask: Float32Array, width: number, height: number): CutoutSceneryCheck;
   /** PIL-style separable bilinear resize (antialiased when shrinking) of interleaved float channels. */
   resizeBilinear(src: Float32Array, sw: number, sh: number, channels: number, dw: number, dh: number): Float32Array;
   modelInput(rgba: Uint8ClampedArray, width: number, height: number, size: number, fit?: CutoutInputFit): CutoutModelInput;
@@ -127,6 +146,13 @@ export function createCutoutKernel(): CutoutKernel {
     cutAlpha: 8,
     /** ... and the source counts as already cut out when at least this share of the border is. */
     cutBorder: 0.5,
+    /** Scenery check: opaque pixels the mask scores below this ... */
+    sceneryLow: 0.1,
+    /** ... farther than this (L1 px) from every pixel the mask scores at least sceneryFg are stray ... */
+    sceneryFg: 0.5,
+    sceneryGap: 8,
+    /** ... and the cut-out holds scenery when at least this share of its opaque pixels is stray. */
+    sceneryShare: 0.03,
   };
 
   function medianFromHistogram(hist: Uint32Array, count: number): number {
@@ -331,6 +357,22 @@ export function createCutoutKernel(): CutoutKernel {
     return { twoFigures: rows > 0 && splitShare >= params.splitShare, splitShare };
   }
 
+  function sceneryCheck(rgba: Uint8ClampedArray, mask: Float32Array, width: number, height: number): CutoutSceneryCheck {
+    const n = width * height;
+    if (n === 0 || rgba.length < n * 4 || mask.length < n) return { scenery: false, share: 0 };
+    const fg = new Uint8Array(n);
+    for (let i = 0; i < n; i++) fg[i] = mask[i]! >= params.sceneryFg ? 1 : 0;
+    const gap = l1Distance(fg, 1, width, height);
+    let opaque = 0, stray = 0;
+    for (let i = 0, o = 3; i < n; i++, o += 4) {
+      if (rgba[o]! <= params.splitAlpha) continue;
+      opaque++;
+      if (mask[i]! < params.sceneryLow && gap[i]! > params.sceneryGap) stray++;
+    }
+    const share = opaque ? stray / opaque : 0;
+    return { scenery: opaque > 0 && share >= params.sceneryShare, share };
+  }
+
   function cutoutPixels(rgba: Uint8ClampedArray, width: number, height: number, mask: Float32Array | null): CutoutPixelsResult {
     const n = width * height;
     if (rgba.length < n * 4) throw new Error("cutoutPixels: pixel buffer is too small");
@@ -412,7 +454,7 @@ export function createCutoutKernel(): CutoutKernel {
       out[o] = a <= 0 ? 0 : a >= 255 ? 255 : Math.floor(a);
     }
     const bbox = opaqueBBoxFromAlpha((i) => out[i * 4 + 3]!, width, height);
-    return { rgba: out, alpha, bbox, background: bg, figures: figureCheck(out, width, height) };
+    return { rgba: out, alpha, bbox, background: bg, figures: figureCheck(out, width, height), scenery: mask ? sceneryCheck(out, mask, width, height) : null };
   }
 
   /** PIL ImagingResample bilinear coefficients for one axis. */
@@ -513,5 +555,5 @@ export function createCutoutKernel(): CutoutKernel {
     return mask;
   }
 
-  return { params, backgroundColor, colorDistance, floodBackground, cutoutPixels, opaqueBBox, isPreCut, figureCheck, resizeBilinear, modelInput, modelMask };
+  return { params, backgroundColor, colorDistance, floodBackground, cutoutPixels, opaqueBBox, isPreCut, figureCheck, sceneryCheck, resizeBilinear, modelInput, modelMask };
 }

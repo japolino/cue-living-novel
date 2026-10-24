@@ -74,6 +74,7 @@ export function normalizeCutMeta(meta: unknown, size: { width: number; height: n
     ...(record.studio === true ? { studio: true as const } : {}),
     ...(record.provisional === true ? { provisional: true as const } : {}),
     ...(typeof record.twoFigures === "boolean" ? { twoFigures: record.twoFigures } : {}),
+    ...(typeof record.scenery === "boolean" ? { scenery: record.scenery } : {}),
     // A broken face box counts as "not detected" (the stage detects again later).
     ...(record.face === null ? { face: null } : normalizeSpriteFaceBox(record.face) ? { face: normalizeSpriteFaceBox(record.face) } : {}),
     ...(normalizePixelRect(record.crop) ? { crop: normalizePixelRect(record.crop)! } : {}),

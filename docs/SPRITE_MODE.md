@@ -358,15 +358,52 @@ wanted: it keeps one pose across the expressions.
   frontends). On the test set: precision 0.95, false-positive rate 1%,
   recall 0.55 (it finds figures standing apart, not overlapping groups or
   grids). It is a cheap retry trigger, not a guarantee.
-- **Acting on it (backend).** A fresh render flagged by its first check is
-  dropped (its cut is not uploaded) and rendered again once
-  (`autoRetried`):
+- **Scenery check (browser).** For light-themed characters Anima often
+  draws scenery behind the character (a wall panel, a disc or ring, floor
+  bands, a window frame), and the cut keeps it: it is far from the
+  background colour and touches the figure, so the flood fill never reaches
+  it, whatever model made the mask. The kernel (`sceneryCheck`) compares the
+  cut-out with the model's mask: a stray pixel is opaque in the cut-out
+  (alpha > 127), scored below 0.1 by the mask and more than 8 px (L1) from
+  every pixel the mask scores 0.5 or more. The cut-out has scenery when
+  stray pixels are at least 3% of its opaque pixels. It travels as
+  `scenery` in the cut meta; absent when there was no mask to check against
+  ("basic", a pre-cut source, an older frontend), and then nothing is
+  re-rolled. Which mask:
+  - **Best**: the ISNet mask. Measured (October 2026, saved masks of the
+    background-removal benchmark, the shipped kernel): 9 of the 10 hard
+    light-themed renders with scenery flagged (shares 0.037–0.45; the dark
+    ring of c17 sits inside ISNet's figure and is missed), plus c07
+    (sparkles and a background patch kept, a fair re-roll); none of 45
+    clean sprites asked for on white (12 hard, 19 bake-off, 14 reply test;
+    highest 0.013). On the same subjects rendered on black 2 of 11 clean
+    ones were flagged, where ISNet leaves out dark translucent wings (0.14)
+    and fox tails (0.030): one wasted render each.
+  - **Studio**: the Studio model's own mask, same threshold. 8 of 10 (c14's
+    floor band is 0.017 there) plus c07, and c24 (BiRefNet leaves out the
+    lamia's tail, and a floor band is kept); none of 31 clean (highest
+    0.009).
+  - **Pre-cut** (the workflow cut it, see "Server-side cut in ComfyUI"):
+    no check. Its alpha is the workflow model's mask, so there is no second
+    mask to compare with, and running the browser model only for the check
+    would spend what the server-side cut saves (and ISNet disagrees with
+    BiRefNet on tails, wings and glow, the false flags above). The raw
+    ComfyUI cut already drops most of it: of the 10 renders, 6 come out
+    clean, 2 keep part of a floor or wall, and the disc (c08) and the ring
+    (c17) stay.
+- **Acting on it (backend).** A fresh render flagged by its first check
+  (two figures, or scenery) is dropped (its cut is not uploaded) and
+  rendered again once (`autoRetried`, shared by both checks):
   - an expression with its own new seed;
   - the idle with a new set seed (`seedRound` + 1); every expression that
     already rendered, or is rendering, with the old set seed is queued again,
     so the set keeps one pose and the new idle as its reference.
-  A flagged retry is kept and shown; the Sprite library says "may show two
-  figures" and Regenerate draws a new one.
+  Scenery, like duplicates, comes with the composition, so it follows the
+  seed. A flagged retry is kept and shown (never a loop); the Sprite
+  library says "may show two figures" or "may show scenery behind" and
+  Regenerate draws a new one. The check's result is stored per image
+  (`twoFigures`, `scenery`; null until checked, and `scenery` stays null for
+  a cut without a mask).
 - **Waiting for the idle's check.** With anchoring, expressions already
   wait for the idle render; they now also wait for its first check (the
   cut-out), at most `IDLE_CHECK_WAIT_MS` (25 s) from the render, so a slow or
@@ -677,9 +714,10 @@ bake-off (anime line art and lineless painterly styles): ISNet-anime mask → bo
 0.7 guards against leaks) → enclosed near-background components whose mean
 mask < 0.5 become background → separate components whose mean mask < 0.3
 are dropped (brush specks) → defringe (un-mix the background colour from the
-edge band) → duplicate check on the alpha (`figureCheck`, see "Seeds,
-reference strength and the duplicate check"). The background colour is the
-median of the image border.
+edge band) → duplicate check on the alpha (`figureCheck`) and scenery
+check of the alpha against the mask (`sceneryCheck`), see "Seeds, reference
+strength and the duplicate check". The background colour is the median of
+the image border.
 "basic" quality skips the model. The model is downloaded once from
 `spriteModelUrl` and cached in the browser; onnxruntime-web is loaded lazily
 (WebGPU, else WASM) so the frontend bundle stays small.
@@ -701,7 +739,8 @@ thread).
 Pre-cut sources: when the generated image is already transparent (at least
 half of its 1-px border has alpha ≤ 8 and some pixel is opaque, `isPreCut`),
 the cut-out keeps the image's own alpha: no model, no flood fill, only the
-bbox and the duplicate check. It reports quality "best" (so it is never
+bbox and the duplicate check (no scenery check: there is no second mask).
+It reports quality "best" (so it is never
 queued for a basic → best re-cut). This lets a ComfyUI workflow cut on the
 GPU (see "Server-side cut in ComfyUI" below). Images with a few transparent
 pixels on an opaque frame still count as on white. The check runs on the
@@ -709,21 +748,82 @@ image the cut-out gets, so a NovelAI V5 inset render is judged after its
 crop, on the repainted half alone (on the whole canvas, the opaque reference
 half would be half of the border).
 
-### Server-side cut in ComfyUI (optional, workflow side)
+### Server-side cut in ComfyUI (optional)
 
-ComfyUI has native background-removal nodes: `LoadBackgroundRemovalModel`
+A ComfyUI workflow can cut sprites itself, on the GPU and with a stronger
+model than the browser's (folded BiRefNet: IoU 0.976 on white-themed sprites
+on white vs 0.946 for ISNet + kernel, bench notes below). Cue drives it with
+a Boolean switch, like the reference switch: on for sprite renders, off for
+plates, key moments and scene pictures, so only sprites come back
+transparent. The browser keeps the alpha of a render that arrives
+transparent (pre-cut, above) and skips its own model for it.
+
+ComfyUI's native nodes do the cut: `LoadBackgroundRemovalModel`
 (models/background_removal/, BiRefNet Swin-L checkpoints) →
-`RemoveBackground` (IMAGE → MASK, 1 = foreground). `JoinImageWithAlpha`
-uses 1 − mask as alpha, so a workflow that ends in VAE Decode →
-RemoveBackground → InvertMask → JoinImageWithAlpha → SaveImage saves an RGBA
-PNG. To cut sprites only (plates and key moments must stay opaque), a
-Boolean node routed into the core If/Else Switch (`ComfySwitchNode`, lazy:
-the removal runs only when on) can pick the RGBA or the plain image; Cue
-would set it like the reference switch (`comfy-reference-switch.ts`): on for
-sprites, off otherwise. Not built yet: today the workflow is the user's.
-Lumiverse's ComfyUI provider fetches the saved file and stores its bytes
-unchanged (read in Lumiverse `comfy-runner.ts` / `images.service.ts`, not
-run end to end), and the cut-out above keeps the alpha.
+`RemoveBackground` (IMAGE → MASK, 1 = character) → `InvertMask` →
+`JoinImageWithAlpha` (which uses 1 − mask as alpha) gives an RGBA image. A
+Boolean (`PrimitiveBoolean`) feeds the core If/Else Switch
+(`ComfySwitchNode`), which passes the RGBA image (on) or the plain one (off)
+to `SaveImage`. The switch is lazy: with it off the removal does not run.
+
+Setup:
+
+1. Model: put a BiRefNet checkpoint in ComfyUI/models/background_removal/
+   (Comfy-Org's `birefnet.safetensors`, BiRefNet Swin-L general, MIT), and
+   fold the input normalisation into it (see "Weights" below):
+   `python_embeded\python.exe scripts\comfyui\fold_birefnet.py
+   ComfyUI\models\background_removal\birefnet.safetensors
+   ComfyUI\models\background_removal\birefnet_cue_folded.safetensors`.
+   ToonOut (MIT weights, fine-tuned on a CC-BY-4.0 anime dataset) folds the
+   same way and does a little worse on white (0.962).
+2. Workflow: add the six nodes between your VAE Decode and Save Image.
+   `docs/comfyui/sprite-cutout-example.json` is a complete example in API
+   format (a plain checkpoint txt2img graph, nodes 10–16 are the cut-out
+   branch): import it in Lumiverse as is, or drop it on ComfyUI and copy
+   the branch into your own workflow. In your workflow the `image` inputs
+   of Remove background and Join image with alpha, and the switch's
+   `on_false`, come from your decoded image; the switch's output goes to
+   Save Image.
+3. Lumiverse workflow setup: map the Boolean's `value` as **Custom** and
+   keep a title that names the cut-out (matched by
+   `/cut[\s_-]?out|background[\s_-]?remov|remov…background|bg[\s_-]?remov|transparen/i`:
+   "Cue sprite cut-out", "Remove background", "Transparent PNG"). Leave its
+   saved value off: then anything that does not set it (Lumiverse's own
+   image generation, other extensions) gets the plain image.
+
+What Cue does (`findCutoutSwitch` / `cutoutSwitchParameters` in
+`src/backend/runtime/comfy-reference-switch.ts`): the first `custom`
+mapping on a Boolean node whose title or class type matches is the cut-out
+switch (a title that matches both this and the reference pattern counts
+as the cut-out switch only). It is read from the connection profile with
+the reference switch (one lookup, cached 30 s per selection). Sprite renders
+send `true`, plates, key moments and scene pictures `false`, in
+`comfyui_custom_fields` (merged with the user's `comfyui_custom_fields` or
+`custom` and the reference switch; a value the user set for the same key
+wins). The debug log says `cut-out switch 14:value -> on` (node 14 in the
+example). No such field,
+or a failed lookup: nothing changes. A sprite whose cut the workflow made
+reports quality "best", gets the duplicate check on its alpha and no
+scenery check (see "Scenery check" above); the raw render the backend keeps
+(and sends as the idle reference) is the RGBA file, whose colour channels
+hold the whole render (`JoinImageWithAlpha` keeps them, and ComfyUI's
+`LoadImage` reads a reference as RGB).
+
+Weights: ComfyUI's BiRefNet config (comfy/background_removal/birefnet.json)
+feeds pixels 0..1 with mean 0 / std 1, not the ImageNet normalisation
+BiRefNet was trained with, and the stock checkpoints are the original
+weights. `scripts/comfyui/fold_birefnet.py` folds the normalisation into
+the convolutions that read the image (exact for the patch embedding, exact
+but for the outermost ring of the decoder's image-patch convs) and writes
+fp16: on white, BiRefNet IoU 0.949 → 0.976, ToonOut 0.949 → 0.962. The other
+way, editing birefnet.json to the ImageNet mean/std, would change it for
+every workflow on that ComfyUI; upstreaming the normalisation is the
+lasting fix.
+
+Lumiverse keeps the PNG as ComfyUI saved it: its ComfyUI provider fetches
+the output with `/view`, turns the bytes into a data URL
+(`comfy-runner.ts`), and `saveImageFromDataUrl` → `uploadImages` writes
+them to disk as they are (thumbnails go to separate files).
 
 Bench notes (October 2026; synthetic ground truth from 6 white-themed
 sprites rendered on black, composited on flat backgrounds):

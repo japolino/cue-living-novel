@@ -16,12 +16,20 @@ import type { VisualNovelConfig } from "../../config.js";
  * (src/services/image-gen.service.ts applyActiveComfyUIWorkflowConfig):
  * the workflow id of the selection, else the active library entry, else
  * `metadata.comfyui`.
+ *
+ * The same lookup finds the sprite cut-out switch: a Boolean custom field
+ * titled like "cut-out", "remove background" or "transparent" that makes
+ * the workflow remove the background itself (a ComfyUI background-removal
+ * branch before SaveImage). Cue turns it on for sprite renders and off for
+ * everything else (plates, key moments, scene pictures); the browser keeps
+ * the alpha of a render that arrives transparent.
  */
 
 type Mapping = { nodeId?: unknown; fieldName?: unknown; mappedAs?: unknown };
 type ApiNode = { class_type?: unknown; inputs?: Record<string, unknown>; _meta?: { title?: unknown } };
 
 const SWITCH_TITLE = /ip[\s_-]?adapter|reference|\bref\b/i;
+const CUTOUT_TITLE = /cut[\s_-]?out|background[\s_-]?remov|remov\w*?[\s_-]*(?:the[\s_-]+)?(?:background|bg)|\bbg[\s_-]?remov|transparen/i;
 
 /** How long a looked-up switch (or a failed lookup) is reused. */
 export const REFERENCE_SWITCH_TTL_MS = 30_000;
@@ -78,11 +86,11 @@ function nodeInfo(config: Record<string, unknown>, nodeId: string, fieldName: st
 }
 
 /**
- * The `"<nodeId>:<fieldName>"` key of the reference on/off field: the first
- * `custom` mapping on a Boolean node (PrimitiveBoolean, or a boolean input
- * value) whose title or class type names the IP-Adapter or the reference.
+ * The `"<nodeId>:<fieldName>"` key of the first `custom` mapping on a Boolean
+ * node (PrimitiveBoolean, or a boolean input value) whose title or class
+ * type passes `matches`.
  */
-export function findReferenceSwitch(config: Record<string, unknown> | null): string | null {
+function findBooleanSwitch(config: Record<string, unknown> | null, matches: (text: string) => boolean): string | null {
   if (!config || !Array.isArray(config.field_mappings)) return null;
   for (const raw of config.field_mappings as Mapping[]) {
     if (!raw || raw.mappedAs !== "custom") continue;
@@ -93,13 +101,38 @@ export function findReferenceSwitch(config: Record<string, unknown> | null): str
     if (!node) continue;
     const isBoolean = node.classType === "PrimitiveBoolean" || typeof node.value === "boolean";
     if (!isBoolean) continue;
-    if (!SWITCH_TITLE.test(node.title) && !SWITCH_TITLE.test(node.classType)) continue;
+    if (!matches(node.title) && !matches(node.classType)) continue;
     return `${nodeId}:${raw.fieldName}`;
   }
   return null;
 }
 
-type CacheEntry = { until: number; key: Promise<string | null> };
+/**
+ * The `"<nodeId>:<fieldName>"` key of the reference on/off field: the first
+ * `custom` mapping on a Boolean node (PrimitiveBoolean, or a boolean input
+ * value) whose title or class type names the IP-Adapter or the reference
+ * (and not the cut-out, which has its own switch).
+ */
+export function findReferenceSwitch(config: Record<string, unknown> | null): string | null {
+  return findBooleanSwitch(config, (text) => SWITCH_TITLE.test(text) && !CUTOUT_TITLE.test(text));
+}
+
+/**
+ * The `"<nodeId>:<fieldName>"` key of the sprite cut-out on/off field: the
+ * first `custom` mapping on a Boolean node whose title or class type names
+ * a cut-out, background removal or transparency ("Cue sprite cut-out",
+ * "Remove background", "Transparent PNG").
+ */
+export function findCutoutSwitch(config: Record<string, unknown> | null): string | null {
+  return findBooleanSwitch(config, (text) => CUTOUT_TITLE.test(text));
+}
+
+/** The Boolean custom fields Cue drives in the selected workflow (null: none). */
+export type ComfySwitches = { reference: string | null; cutout: string | null };
+
+const NO_SWITCHES: ComfySwitches = { reference: null, cutout: null };
+
+type CacheEntry = { until: number; switches: Promise<ComfySwitches> };
 const caches = new WeakMap<object, Map<string, CacheEntry>>();
 
 /** Forget cached lookups (tests). */
@@ -120,7 +153,7 @@ function splitSelection(raw: string | null): { connectionId?: string; workflowId
   return { connectionId: raw.slice(0, separator), workflowId: raw.slice(separator + 2) };
 }
 
-async function lookup(spindle: SpindleAPI, config: VisualNovelConfig, userId: string | undefined): Promise<string | null> {
+async function lookup(spindle: SpindleAPI, config: VisualNovelConfig, userId: string | undefined): Promise<ComfySwitches> {
   try {
     const { connectionId, workflowId } = splitSelection(config.imageConnectionId);
     const api = spindle.imageGen;
@@ -130,17 +163,19 @@ async function lookup(spindle: SpindleAPI, config: VisualNovelConfig, userId: st
       const connections = await api.listConnections(userId);
       connection = connections.find((candidate) => candidate.is_default) ?? connections[0];
     }
-    return findReferenceSwitch(comfyWorkflowConfigFor(connection?.metadata, workflowIdOf(config, workflowId)));
+    const workflow = comfyWorkflowConfigFor(connection?.metadata, workflowIdOf(config, workflowId));
+    return { reference: findReferenceSwitch(workflow), cutout: findCutoutSwitch(workflow) };
   } catch {
-    return null;
+    return NO_SWITCHES;
   }
 }
 
 /**
- * The reference switch key for the current image connection selection, or
- * null. Cached per selection for {@link REFERENCE_SWITCH_TTL_MS}; never throws.
+ * The reference and cut-out switch keys for the current image connection
+ * selection (null where the workflow has none). Cached per selection for
+ * {@link REFERENCE_SWITCH_TTL_MS}; never throws.
  */
-export function resolveReferenceSwitch(spindle: SpindleAPI, config: VisualNovelConfig, userId?: string, now: number = Date.now()): Promise<string | null> {
+export function resolveComfySwitches(spindle: SpindleAPI, config: VisualNovelConfig, userId?: string, now: number = Date.now()): Promise<ComfySwitches> {
   let cache = caches.get(spindle);
   if (!cache) {
     cache = new Map();
@@ -149,10 +184,18 @@ export function resolveReferenceSwitch(spindle: SpindleAPI, config: VisualNovelC
   const ownWorkflow = config.imageParameters.workflow_id ?? config.imageParameters.workflowId;
   const cacheKey = `${userId ?? ""}\u0000${config.imageConnectionId ?? ""}\u0000${typeof ownWorkflow === "string" ? ownWorkflow : ""}`;
   const hit = cache.get(cacheKey);
-  if (hit && hit.until > now) return hit.key;
-  const key = lookup(spindle, config, userId);
-  cache.set(cacheKey, { until: now + REFERENCE_SWITCH_TTL_MS, key });
-  return key;
+  if (hit && hit.until > now) return hit.switches;
+  const switches = lookup(spindle, config, userId);
+  cache.set(cacheKey, { until: now + REFERENCE_SWITCH_TTL_MS, switches });
+  return switches;
+}
+
+/**
+ * The reference switch key for the current image connection selection, or
+ * null. Cached per selection for {@link REFERENCE_SWITCH_TTL_MS}; never throws.
+ */
+export async function resolveReferenceSwitch(spindle: SpindleAPI, config: VisualNovelConfig, userId?: string, now: number = Date.now()): Promise<string | null> {
+  return (await resolveComfySwitches(spindle, config, userId, now)).reference;
 }
 
 /** The user's custom-field values Lumiverse would read (it reads only one of the two). */
@@ -202,4 +245,31 @@ export function referenceSwitchParameters(
       ? `reference switch ${switchKey} -> user value ${JSON.stringify(custom![switchKey])} (${tail})`
       : `reference switch ${switchKey} -> ${reference ? "on" : "off"}`;
   return { parameters, note };
+}
+
+/**
+ * Parameters with the sprite cut-out switch set: on for a sprite render
+ * (`cutout`), off for anything else, so a workflow that saves transparent
+ * PNGs only does so for sprites. Applied after `referenceSwitchParameters`:
+ * the value is merged into the `comfyui_custom_fields` there are (else the
+ * user's `custom`), and a value the user set for the same key in their own
+ * image parameters wins. No switch, or not ComfyUI: unchanged, no note.
+ */
+export function cutoutSwitchParameters(
+  provider: string | null,
+  userParameters: Record<string, unknown>,
+  parameters: Record<string, unknown>,
+  cutout: boolean,
+  switchKey: string | null
+): ReferenceSwitchResult {
+  if (provider !== "comfyui" || !switchKey) return { parameters, note: null };
+  const own = userCustomFields(userParameters);
+  if (own && Object.hasOwn(own, switchKey)) {
+    return { parameters, note: `cut-out switch ${switchKey} -> user value ${JSON.stringify(own[switchKey])}` };
+  }
+  const custom = userCustomFields(parameters);
+  return {
+    parameters: { ...parameters, comfyui_custom_fields: { ...(custom ?? {}), [switchKey]: cutout } },
+    note: `cut-out switch ${switchKey} -> ${cutout ? "on" : "off"}`
+  };
 }

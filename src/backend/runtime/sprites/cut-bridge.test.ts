@@ -43,6 +43,13 @@ describe("cut meta: duplicate check", () => {
     expect("twoFigures" in normalizeCutMeta({ ...META, twoFigures: "yes" }, { width: 832, height: 1216 })!).toBe(false);
     expect("twoFigures" in normalizeCutMeta(META, { width: 832, height: 1216 })!).toBe(false);
   });
+
+  test("scenery passes through when it is a boolean, else it is absent (unchecked cuts, older frontends)", () => {
+    expect(normalizeCutMeta({ ...META, scenery: true }, { width: 832, height: 1216 })?.scenery).toBe(true);
+    expect(normalizeCutMeta({ ...META, scenery: false }, { width: 832, height: 1216 })?.scenery).toBe(false);
+    expect("scenery" in normalizeCutMeta({ ...META, scenery: 0.2 }, { width: 832, height: 1216 })!).toBe(false);
+    expect("scenery" in normalizeCutMeta(META, { width: 832, height: 1216 })!).toBe(false);
+  });
 });
 
 describe("cut crop (NovelAI V5 inset renders)", () => {

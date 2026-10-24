@@ -88,6 +88,15 @@ export type CutoutResult = {
   twoFigures: boolean;
   /** Share of the checked rows that hold two wide opaque runs (0..1). */
   splitShare: number;
+  /**
+   * Scenery check: the cut kept scenery drawn behind the character (a wall,
+   * disc, ring or floor band the mask calls background; see
+   * `CutoutSceneryCheck`). Absent when there was no mask to check against
+   * ("basic", or a pre-cut source).
+   */
+  scenery?: boolean;
+  /** Share of the opaque pixels the scenery check counts as stray (0..1); absent with `scenery`. */
+  sceneryShare?: number;
   /** Detected face, normalized to the image; null: none found; absent: not detected. */
   face?: FaceBox | null;
   /** The source was already transparent (cut by the image workflow) and kept its own alpha. */
@@ -814,6 +823,7 @@ export async function cutSprite(image: Blob, options: CutoutOptions): Promise<Cu
     ...(later && !studio && result.quality === "best" && !result.preCut ? { provisional: true as const } : {}),
     twoFigures: result.figures?.twoFigures === true,
     splitShare: result.figures?.splitShare ?? 0,
+    ...(result.scenery ? { scenery: result.scenery.scenery, sceneryShare: result.scenery.share } : {}),
     ...(result.face ? { face: result.face.face ? result.face.face.box : null } : {}),
     ...(result.preCut ? { preCut: true as const } : {}),
     durationMs: performance.now() - started,

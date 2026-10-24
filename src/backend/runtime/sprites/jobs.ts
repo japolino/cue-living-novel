@@ -25,7 +25,7 @@ import {
   resolveImageProfile,
   splitConnectionSelection,
 } from "../images.js";
-import { referenceSwitchParameters, resolveReferenceSwitch } from "../comfy-reference-switch.js";
+import { cutoutSwitchParameters, referenceSwitchParameters, resolveComfySwitches } from "../comfy-reference-switch.js";
 import { fetchReferenceImageViaFrontend } from "../reference-source.js";
 import {
   SpriteCutBridge,
@@ -572,6 +572,7 @@ export class SpriteService {
       image.rawImageUrl = null;
       image.seed = null;
       image.twoFigures = null;
+      image.scenery = null;
       delete image.crop;
       delete image.insetReference;
     }
@@ -778,7 +779,7 @@ export class SpriteService {
     const { provider, config } = await this.providerFor(loaded, userId);
     const request = compileKeyMomentRequest({ config, provider, scene });
     const { connectionId, workflowId } = splitConnectionSelection(config.imageConnectionId);
-    const base = await this.baseParameters(userId, provider, config, null, "key moment");
+    const base = await this.baseParameters(userId, provider, config, null, false, "key moment");
     const parameters = {
       ...base,
       ...request.parameters,
@@ -1168,19 +1169,23 @@ export class SpriteService {
   /**
    * User image parameters plus the reference parameters (or null without a
    * reference). A mapped ComfyUI reference switch is turned on with a
-   * reference and off without one (then no `denoise: 0.0`).
+   * reference and off without one (then no `denoise: 0.0`); a mapped cut-out
+   * switch is on for sprites (`cutout`) and off for plates and key moments.
    */
   private async baseParameters(
     userId: string | undefined,
     provider: string | null,
     config: VisualNovelConfig,
     reference: Record<string, unknown> | null,
+    cutout: boolean,
     label: string,
   ): Promise<Record<string, unknown>> {
-    const switchKey = provider === "comfyui" ? await resolveReferenceSwitch(this.spindle, config, userId) : null;
-    const switched = referenceSwitchParameters(provider, config.imageParameters, reference, switchKey);
+    const switches = provider === "comfyui" ? await resolveComfySwitches(this.spindle, config, userId) : null;
+    const switched = referenceSwitchParameters(provider, config.imageParameters, reference, switches?.reference ?? null);
     if (switched.note) this.deps.log?.(`${label}: ${switched.note}`, userId);
-    return switched.parameters;
+    const cut = cutoutSwitchParameters(provider, config.imageParameters, switched.parameters, cutout, switches?.cutout ?? null);
+    if (cut.note) this.deps.log?.(`${label}: ${cut.note}`, userId);
+    return cut.parameters;
   }
 
   private async generateSprite(userId: string | undefined, work: InflightWork & { kind: "sprite" }, signal: AbortSignal): Promise<{ imageId: string; imageUrl: string }> {
@@ -1204,6 +1209,7 @@ export class SpriteService {
       provider,
       config,
       reference && provider ? referenceParametersFor(provider, reference, config, { comfyDefaultStrength: SPRITE_REFERENCE_STRENGTH }) : null,
+      true,
       `sprite ${work.setKey}/${work.expression}`,
     );
     const captureIdle = anchorable && work.expression === "idle";
@@ -1233,7 +1239,7 @@ export class SpriteService {
     inset: NovelAiInsetModel,
   ): Promise<{ imageId: string; imageUrl: string }> {
     const label = `sprite ${work.setKey}/${work.expression}`;
-    const base = await this.baseParameters(userId, "novelai", config, null, label);
+    const base = await this.baseParameters(userId, "novelai", config, null, true, label);
     const plain = () => this.generate(userId, work, signal, config, request, base, null);
     const key = novelAiInsetKey(userId, config.imageConnectionId, inset.model);
     const reference = set.images.idle?.rawImageId ?? null;
@@ -1289,7 +1295,7 @@ export class SpriteService {
     if (!plate) throw new Error("This background plate is no longer in the library.");
     const seed = plate.attempts > 0 ? spriteSeedFor(work.plateKey, plate.attempts) : plate.seed;
     const request = compilePlateRequest({ config, provider, plate, seed });
-    const base = await this.baseParameters(userId, provider, config, null, `plate ${work.plateKey}`);
+    const base = await this.baseParameters(userId, provider, config, null, false, `plate ${work.plateKey}`);
     return this.generate(userId, work, signal, config, request, base, null);
   }
 
@@ -1483,6 +1489,7 @@ export class SpriteService {
         image.attempts += 1;
         image.seed = work.seed ?? null;
         image.twoFigures = null;
+        image.scenery = null;
         if (work.crop) image.crop = { ...work.crop };
         else delete image.crop;
         if (work.insetReference) image.insetReference = work.insetReference;
@@ -1614,10 +1621,12 @@ export class SpriteService {
       void this.pump(userId);
       return;
     }
-    // Duplicate check: a fresh render that looks like two figures gets one
-    // automatic regeneration (a flagged retry is kept and shown).
-    if (first.status === "cutting" && outcome.meta.twoFigures === true && first.twoFigures === null && !first.autoRetried) {
-      await this.regenerateFlagged(userId, target);
+    // Duplicate and scenery checks: a fresh render that looks like two
+    // figures, or kept scenery drawn behind the character, gets one automatic
+    // regeneration between them (a flagged retry is kept and shown).
+    const flag = outcome.meta.twoFigures === true ? "two figures" : outcome.meta.scenery === true ? "scenery" : null;
+    if (first.status === "cutting" && flag && first.twoFigures === null && first.scenery === null && !first.autoRetried) {
+      await this.regenerateFlagged(userId, target, flag);
       return;
     }
     let uploaded: { id: string; url: string } | null = null;
@@ -1663,6 +1672,8 @@ export class SpriteService {
       if (outcome.meta.provisional) image.provisional = true;
       else delete image.provisional;
       if (outcome.meta.twoFigures !== undefined) image.twoFigures = outcome.meta.twoFigures;
+      // A re-cut without a mask (basic, or a workflow cut) leaves the check unknown.
+      image.scenery = outcome.meta.scenery ?? null;
       if (outcome.meta.face !== undefined) image.face = outcome.meta.face;
       else delete image.face;
       // A basic cut while "best" is selected gets one silent upgrade later; a
@@ -1682,13 +1693,14 @@ export class SpriteService {
   }
 
   /**
-   * The browser found two figures in a fresh render: drop it and queue one
-   * new render. Duplicates follow the seed, so an expression gets its own new
-   * seed; a flagged idle draws a new shared seed for the whole set, and every
-   * expression that already ran (or is running) with the old seed is queued
-   * again, so the set keeps one pose and the new idle as its reference.
+   * The browser found two figures (or scenery behind the character) in a
+   * fresh render: drop it and queue one new render. Both follow the seed (the
+   * composition), so an expression gets its own new seed; a flagged idle
+   * draws a new shared seed for the whole set, and every expression that
+   * already ran (or is running) with the old seed is queued again, so the set
+   * keeps one pose and the new idle as its reference.
    */
-  private async regenerateFlagged(userId: string | undefined, target: SpriteCutTarget): Promise<void> {
+  private async regenerateFlagged(userId: string | undefined, target: SpriteCutTarget, flag: "two figures" | "scenery"): Promise<void> {
     const state = this.state(userId);
     const doomed: string[] = [];
     const requeued: string[] = [];
@@ -1736,7 +1748,7 @@ export class SpriteService {
       return out;
     });
     if (broadcasts.length) {
-      this.deps.log?.(`sprite ${target.setKey}/${target.expression}: two figures -> regenerate${target.expression === "idle" ? ` with a new set seed${requeued.length ? `, requeued ${requeued.join(", ")}` : ""}` : ""}`, userId);
+      this.deps.log?.(`sprite ${target.setKey}/${target.expression}: ${flag} -> regenerate${target.expression === "idle" ? ` with a new set seed${requeued.length ? `, requeued ${requeued.join(", ")}` : ""}` : ""}`, userId);
     }
     for (const broadcast of broadcasts) broadcast();
     for (const id of doomed) await this.deleteImage(userId, id);
