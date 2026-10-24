@@ -202,6 +202,33 @@ describe("sprite cut-out kernel", () => {
     expect(performance.now() - t).toBeLessThan(1500); // generous for CI; Chromium measures ~120 ms
   });
 
+  test("pre-cut source: transparent border and an opaque figure", () => {
+    const clear = (w: number, h: number): Img => {
+      const img = image(w, h);
+      for (let i = 3; i < img.rgba.length; i += 4) img.rgba[i] = 0;
+      return img;
+    };
+    const cut = clear(40, 60);
+    fill(cut, 10, 10, 30, 60, [230, 180, 160]); // figure runs off the bottom edge
+    expect(k.isPreCut(cut.rgba, 40, 60)).toBe(true);
+    // A generated image (opaque everywhere) is not.
+    const raw = image(40, 60);
+    fill(raw, 10, 10, 30, 60, [230, 180, 160]);
+    expect(k.isPreCut(raw.rgba, 40, 60)).toBe(false);
+    // Nothing opaque: not a cut-out either.
+    expect(k.isPreCut(clear(40, 60).rgba, 40, 60)).toBe(false);
+    // Faint alpha above cutAlpha on the border counts as opaque.
+    const faint = clear(40, 60);
+    fill(faint, 10, 10, 30, 50, [230, 180, 160]);
+    for (let i = 3; i < faint.rgba.length; i += 4) if (faint.rgba[i] === 0) faint.rgba[i] = k.params.cutAlpha + 1;
+    expect(k.isPreCut(faint.rgba, 40, 60)).toBe(false);
+    // Less than half of the border transparent (a few transparent rows on an opaque image): not pre-cut.
+    const strip = image(40, 60);
+    fill(strip, 10, 10, 30, 50, [230, 180, 160]);
+    for (let x = 0; x < 40; x++) strip.rgba[x * 4 + 3] = 0;
+    expect(k.isPreCut(strip.rgba, 40, 60)).toBe(false);
+  });
+
   test("factory source is self-contained (it is shipped to a Worker as text)", () => {
     const rebuilt = new Function(`return (${String(createCutoutKernel)})`)() as typeof createCutoutKernel;
     const img = image(60, 90);

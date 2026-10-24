@@ -284,13 +284,32 @@ describe("cut-out runtime", () => {
     expect(getCutoutModelState()).toEqual({ state: "error", error: "device lost" });
   });
 
-  test("transparent input pixels count as white background", async () => {
+  test("a few transparent pixels on an opaque image count as white background", async () => {
     configure();
-    const image = fakeImage(16, 16, (x, y) => (x >= 4 && x < 12 && y >= 4 && y < 12 ? [200, 40, 40, 255] : [0, 0, 0, 0]));
+    // Top row transparent (16 of 60 border pixels), the rest of the frame white and opaque.
+    const image = fakeImage(16, 16, (x, y) => (y === 0 ? [0, 0, 0, 0] : x >= 4 && x < 12 && y >= 4 && y < 12 ? [200, 40, 40, 255] : [255, 255, 255, 255]));
     const result = await cutSprite(image, { quality: "basic", modelUrl: "" });
     const png = await decodePng(result.png);
     expect(png.data.slice(0, 4)).toEqual([255, 255, 255, 0]);
     expect(result.bbox).toEqual([0.25, 0.25, 0.5, 0.5]);
+    expect(result.preCut).toBeUndefined();
+  });
+
+  test("a source that is already cut out keeps its alpha and skips the model", async () => {
+    configure();
+    // Transparent frame, opaque figure, a soft edge pixel; colours under alpha 0 are kept as they are.
+    const image = fakeImage(16, 16, (x, y) => (x === 3 && y === 8 ? [200, 40, 40, 128] : x >= 4 && x < 12 && y >= 4 && y < 12 ? [200, 40, 40, 255] : [9, 9, 9, 0]));
+    for (const quality of ["basic", "best"] as const) {
+      const result = await cutSprite(image, { quality, modelUrl: "https://models.test/isnet.onnx" });
+      const png = await decodePng(result.png);
+      expect(png.data.slice(0, 4)).toEqual([9, 9, 9, 0]);
+      expect(png.data.slice((8 * 16 + 3) * 4, (8 * 16 + 3) * 4 + 4)).toEqual([200, 40, 40, 128]);
+      expect(png.data[(8 * 16 + 8) * 4 + 3]).toBe(255);
+      expect(result.bbox).toEqual([3 / 16, 0.25, 9 / 16, 0.5]);
+      expect(result.quality).toBe("best");
+      expect(result.preCut).toBe(true);
+      expect(result.timings?.modelMs).toBe(0);
+    }
   });
 
   test("abort before the cut rejects with AbortError", async () => {

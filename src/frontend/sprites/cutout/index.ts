@@ -18,6 +18,9 @@
  * For the default model a half-precision copy (half the download) is used
  * where it runs at full speed (`chooseCutoutModelUrl`).
  *
+ * A source that is already transparent (the image workflow cut it) keeps its
+ * own alpha: no model, no flood fill (`isPreCut` in the kernel).
+ *
  * A small face detector (YOLOv8, see DEFAULT_SPRITE_FACE_MODEL_URL) runs in
  * the same worker, on WASM, to place emotes on the face. It loads on its own,
  * once, the first time a face is wanted ("best" quality only).
@@ -54,6 +57,8 @@ export type CutoutResult = {
   splitShare: number;
   /** Detected face, normalized to the image; null: none found; absent: not detected. */
   face?: FaceBox | null;
+  /** The source was already transparent (cut by the image workflow) and kept its own alpha. */
+  preCut?: true;
   durationMs: number;
   /** Where the time went (diagnostics). */
   timings?: CutoutCutTimings;
@@ -392,6 +397,7 @@ export async function cutSprite(image: Blob, options: CutoutOptions): Promise<Cu
     twoFigures: result.figures?.twoFigures === true,
     splitShare: result.figures?.splitShare ?? 0,
     ...(result.face ? { face: result.face.face ? result.face.face.box : null } : {}),
+    ...(result.preCut ? { preCut: true as const } : {}),
     durationMs: performance.now() - started,
     timings: result.timings,
   };

@@ -57,12 +57,19 @@ export type CutoutKernel = {
     speckMask: number; band: number; dFull: number; bboxAlpha: number;
     bgMask: number; lightMin: number; lightSpread: number; bgMinPixels: number; bgMinShare: number;
     splitAlpha: number; splitTop: number; splitBottom: number; splitRun: number; splitShare: number;
+    cutAlpha: number; cutBorder: number;
   };
   backgroundColor(rgba: Uint8ClampedArray, width: number, height: number, mask?: Float32Array | null): [number, number, number];
   colorDistance(rgba: Uint8ClampedArray, width: number, height: number, bg: [number, number, number]): Float32Array;
   floodBackground(distance: Float32Array, width: number, height: number): Uint8Array;
   cutoutPixels(rgba: Uint8ClampedArray, width: number, height: number, mask: Float32Array | null): CutoutPixelsResult;
   opaqueBBox(rgba: Uint8ClampedArray, width: number, height: number): CutoutBBox;
+  /**
+   * The source is already cut out (a workflow removed the background and
+   * saved a transparent PNG): at least `cutBorder` of the 1-px border is
+   * transparent (alpha <= `cutAlpha`) and some pixel is opaque.
+   */
+  isPreCut(rgba: Uint8ClampedArray, width: number, height: number): boolean;
   /** Duplicate check on straight-alpha RGBA (alpha > 127 is opaque). */
   figureCheck(rgba: Uint8ClampedArray, width: number, height: number): CutoutFigureCheck;
   /** PIL-style separable bilinear resize (antialiased when shrinking) of interleaved float channels. */
@@ -109,6 +116,10 @@ export function createCutoutKernel(): CutoutKernel {
     splitRun: 0.25,
     /** ... and the image has two figures when at least this share of the rows has two wide runs. */
     splitShare: 0.4,
+    /** Pre-cut source: border pixels with alpha (0..255) at most this are transparent ... */
+    cutAlpha: 8,
+    /** ... and the source counts as already cut out when at least this share of the border is. */
+    cutBorder: 0.5,
   };
 
   function medianFromHistogram(hist: Uint32Array, count: number): number {
@@ -279,6 +290,20 @@ export function createCutoutKernel(): CutoutKernel {
 
   function opaqueBBox(rgba: Uint8ClampedArray, width: number, height: number): CutoutBBox {
     return opaqueBBoxFromAlpha((i) => rgba[i * 4 + 3]!, width, height);
+  }
+
+  function isPreCut(rgba: Uint8ClampedArray, width: number, height: number): boolean {
+    if (width < 1 || height < 1) return false;
+    let border = 0, clear = 0;
+    const at = (x: number, y: number): void => {
+      border++;
+      if (rgba[(y * width + x) * 4 + 3]! <= params.cutAlpha) clear++;
+    };
+    for (let x = 0; x < width; x++) { at(x, 0); if (height > 1) at(x, height - 1); }
+    for (let y = 1; y < height - 1; y++) { at(0, y); if (width > 1) at(width - 1, y); }
+    if (clear < border * params.cutBorder) return false;
+    for (let o = 3; o < rgba.length; o += 4) if (rgba[o] === 255) return true;
+    return false;
   }
 
   function figureCheck(rgba: Uint8ClampedArray, width: number, height: number): CutoutFigureCheck {
@@ -480,5 +505,5 @@ export function createCutoutKernel(): CutoutKernel {
     return mask;
   }
 
-  return { params, backgroundColor, colorDistance, floodBackground, cutoutPixels, opaqueBBox, figureCheck, resizeBilinear, modelInput, modelMask };
+  return { params, backgroundColor, colorDistance, floodBackground, cutoutPixels, opaqueBBox, isPreCut, figureCheck, resizeBilinear, modelInput, modelMask };
 }

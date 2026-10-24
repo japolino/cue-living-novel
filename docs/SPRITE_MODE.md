@@ -501,6 +501,45 @@ as it is. Measured (October 2026): cut alpha against float32 on 58 sprites
 ms per inference, GPU memory +0.78 GB vs +1.47 GB; WASM 18 s vs 17 s (one
 thread).
 
+Pre-cut sources: when the generated image is already transparent (at least
+half of its 1-px border has alpha ≤ 8 and some pixel is opaque, `isPreCut`),
+the cut-out keeps the image's own alpha: no model, no flood fill, only the
+bbox and the duplicate check. It reports quality "best" (so it is never
+queued for a basic → best re-cut). This lets a ComfyUI workflow cut on the
+GPU (see "Server-side cut in ComfyUI" below). Images with a few transparent
+pixels on an opaque frame still count as on white.
+
+### Server-side cut in ComfyUI (optional, workflow side)
+
+ComfyUI has native background-removal nodes: `LoadBackgroundRemovalModel`
+(models/background_removal/, BiRefNet Swin-L checkpoints) →
+`RemoveBackground` (IMAGE → MASK, 1 = foreground). `JoinImageWithAlpha`
+uses 1 − mask as alpha, so a workflow that ends in VAE Decode →
+RemoveBackground → InvertMask → JoinImageWithAlpha → SaveImage saves an RGBA
+PNG. To cut sprites only (plates and key moments must stay opaque), a
+Boolean node routed into the core If/Else Switch (`ComfySwitchNode`, lazy:
+the removal runs only when on) can pick the RGBA or the plain image; Cue
+would set it like the reference switch (`comfy-reference-switch.ts`): on for
+sprites, off otherwise. Not built yet: today the workflow is the user's.
+Lumiverse's ComfyUI provider fetches the saved file and stores its bytes
+unchanged (read in Lumiverse `comfy-runner.ts` / `images.service.ts`, not
+run end to end), and the cut-out above keeps the alpha.
+
+Bench notes (October 2026; synthetic ground truth from 6 white-themed
+sprites rendered on black, composited on flat backgrounds):
+
+- ComfyUI's BiRefNet config feeds pixels 0..1 with mean 0 / std 1, not the
+  ImageNet normalisation BiRefNet was trained with. Folding the
+  normalisation into the first convolutions of the checkpoint (patch embed
+  and the decoder's image-patch convs) fixes it: on white, BiRefNet IoU
+  0.976 vs 0.949 unfolded, ToonOut 0.962 vs 0.949.
+- On white, folded BiRefNet (IoU 0.976, SAD 12) and ToonOut (0.962, SAD 19)
+  beat the browser pipeline (ISNet + kernel 0.946, SAD 27), but no model
+  won on every image (BiRefNet 0.904 on one, ISNet + kernel 0.799 on
+  another, ToonOut never below 0.903). On mid grey both reach 0.994.
+- ~0.7–1.4 s per image in batches on a GPU that was generating at the same
+  time (no idle-GPU timing).
+
 ### Face boxes
 
 A small face detector (`DEFAULT_SPRITE_FACE_MODEL_URL`: deepghs

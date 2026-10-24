@@ -116,6 +116,22 @@ async function cutFigures(url: string, options: { quality: "best" | "basic"; mod
   return { twoFigures: r.twoFigures, splitShare: r.splitShare, quality: r.quality, ms: r.durationMs };
 }
 
+/**
+ * Pre-cut round trip: cut a raw sprite, feed the transparent PNG back in.
+ * The second cut must keep the first one's pixels (straight alpha) and bbox.
+ */
+async function preCutRoundTrip(url: string) {
+  const first = await cutSprite(await fetchBlob(url), { quality: "basic", modelUrl: "" });
+  const second = await cutSprite(first.png, { quality: "basic", modelUrl: "" });
+  const [a, b] = await Promise.all([pixels(first.png), pixels(second.png)]);
+  let alphaDiff = 0, rgbDiff = 0;
+  for (let o = 0; o < a.data.length; o += 4) {
+    alphaDiff = Math.max(alphaDiff, Math.abs(a.data[o + 3]! - b.data[o + 3]!));
+    if (a.data[o + 3]! > 0) rgbDiff = Math.max(rgbDiff, Math.abs(a.data[o]! - b.data[o]!), Math.abs(a.data[o + 1]! - b.data[o + 1]!), Math.abs(a.data[o + 2]! - b.data[o + 2]!));
+  }
+  return { firstPreCut: first.preCut === true, preCut: second.preCut === true, quality: second.quality, modelMs: second.timings?.modelMs ?? null, alphaDiff, rgbDiff, sameBbox: first.bbox.every((v, i) => Math.abs(v - second.bbox[i]!) < 1e-9) };
+}
+
 const states: CutoutModelState[] = [];
 onCutoutModelState((state) => states.push(state));
 
@@ -132,6 +148,6 @@ function startService() {
 (window as unknown as { cutout: unknown }).cutout = {
   cutSprite, configureCutoutRuntime, prepareCutoutModel, clearCutoutModel, getCutoutModelState, getCachedCutoutModelBytes,
   getCutoutRunnerMode, getCutoutRuntimeInfo, resetCutoutRuntime, states, fetchBlob, pixels, compareAlpha, composite, startService, scaleCompare,
-  figureCheckUrl, cutFigures,
+  figureCheckUrl, cutFigures, preCutRoundTrip,
 };
 document.title = "sprite-cutout-ready";
