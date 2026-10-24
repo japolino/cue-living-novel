@@ -118,6 +118,8 @@ function bumpIntakeEpoch(userId: string | undefined, chatId: string): void {
   intakeEpochs.set(key, (intakeEpochs.get(key) ?? 0) + 1);
 }
 const activeTurnKeys = new Map<string, StoredTurnRecord["plan"]["key"]>();
+/** Chats with a reply being generated: GENERATION_STARTED until it ends or stops. */
+const generatingChats = new Set<string>();
 
 /**
  * Temporary scene-image cache (one per backend worker). See
@@ -844,19 +846,37 @@ export async function sendState(
       spindle.log.warn(`Stored turn freshness check failed; sending the stored turn: ${errorText(error)}`);
     }
   }
+  const canPlan = config.enabled && views.isOpen(userId, chatId);
+  // Pictures a close (or a newer generation) stopped resume with the view.
+  let resumed: StoredTurnRecord | null = null;
+  if (record && !stale && canPlan && chatState.activeTurnPath) {
+    resumed = await resumeStoppedPictures(spindle, record, chatState.activeTurnPath, userId, config).catch((error: unknown) => {
+      spindle.log.warn(`Resuming stopped pictures failed: ${errorText(error)}`);
+      return null;
+    });
+    if (resumed) record = resumed;
+  }
   spindle.sendToFrontend({
     type: "vn_state",
     chatId,
     config,
     turn: record && !stale ? await buildTurnView(spindle, record, userId, config) : null
   }, userId);
+  if (resumed && chatState.activeTurnPath) {
+    const resumedRecord = resumed;
+    void startAssets(spindle, resumedRecord, chatState.activeTurnPath, userId).catch((error) => {
+      if (!isAbortError(error)) {
+        spindle.log.error(`Visual novel asset pipeline resume failed: ${errorText(error)}`);
+        spindle.sendToFrontend({ type: "vn_error", chatId, operation: "generate_assets", error: errorText(error) }, userId);
+      }
+    });
+  }
   if (config.presentationMode === "sprites" && views.isOpen(userId, chatId)) {
     // A reloaded frontend lost its cut requests; re-send them and resume the queue.
     void spriteService(spindle).onStateRequested(userId).catch((error) => {
       spindle.log.warn(`Sprite queue resume failed: ${errorText(error)}`);
     });
   }
-  const canPlan = config.enabled && views.isOpen(userId, chatId);
   if (!record) {
     if (canPlan) await bootstrapLatestAssistantTurn(spindle, chatId, userId);
     else dbg(spindle, userId, `skipped bootstrap: ${config.enabled ? "view closed" : "extension disabled (enabled=false)"} chat=${chatId}`);
@@ -868,9 +888,6 @@ export async function sendState(
     : `stored turn is stale (newer or changed reply); planning the latest reply chat=${chatId}`);
   spindle.sendToFrontend({ type: "vn_planning", chatId }, userId);
   await processAssistantMessage(spindle, chatId, stale.message, stale.message.content, userId, stale.intake ? { precomputedIntake: stale.intake } : {});
-  // A close mid-batch leaves cancelled jobs behind. They are not resumed
-  // automatically on reopen (a GENERATION_STARTED abort looks the same and a
-  // newer reply is usually on its way); the reading view offers Retry for them.
 }
 
 async function persistActiveTurn(
@@ -1006,6 +1023,50 @@ async function startAssets(
   } finally {
     if (assetControllers.get(key) === controller) assetControllers.delete(key);
   }
+}
+
+/**
+ * A view that opens on its chat's current turn resumes the pictures that were
+ * stopped: cancelled jobs (a close, a newer generation) and queued or
+ * generating ones nothing runs anymore go back in the queue, with cache
+ * lookups allowed. Finished and failed pictures stay as they are (failed ones
+ * wait for Try again). Nothing resumes while the chat's turn has an owner
+ * (planning, a running batch, a retry), while a reply is being generated for
+ * the chat (that turn is about to be replaced), or when the turn was planned
+ * for the other presentation mode. Returns the re-queued record, or null.
+ */
+async function resumeStoppedPictures(
+  spindle: SpindleAPI,
+  record: StoredTurnRecord,
+  path: string,
+  userId: string | undefined,
+  config: VisualNovelConfig
+): Promise<StoredTurnRecord | null> {
+  const chatId = record.plan.key.chatId;
+  const key = runtimeKey(userId, chatId);
+  if (!config.generateImages || config.useNativeCardImages || record.status !== "ready" || record.jobs.length === 0) return null;
+  if (activeTurnKeys.has(key) || generatingChats.has(key)) return null;
+  const running = assetControllers.get(key);
+  if (running && !running.signal.aborted) return null;
+  const spritePlanned = isSpritePlannedRecord(record);
+  if (spritePlanned ? config.presentationMode !== "sprites" || keyIllustrationCap(config) === 0 : config.presentationMode === "sprites") return null;
+  const stopped = (job: AssetJob): boolean => job.status === "cancelled" || job.status === "queued" || job.status === "generating";
+  if (!record.jobs.some(stopped)) return null;
+  const nowTime = new Date().toISOString();
+  let resumed = 0;
+  const jobs = record.jobs.map((job) => {
+    if (!stopped(job)) return job;
+    resumed += 1;
+    return AssetJobSchema.parse({
+      ...job, status: "queued", imageId: null, imageUrl: null, error: null,
+      queuedAt: nowTime, startedAt: null, generatedAt: null, readyAt: null, finishedAt: null
+    });
+  });
+  const next: StoredTurnRecord = { ...record, jobs, updatedAt: nowTime };
+  activeTurnKeys.set(key, next.plan.key);
+  await saveTurnRecord(spindle, path, next, userId);
+  dbg(spindle, userId, `view open resumed ${resumed} stopped picture(s) chat=${chatId} message=${record.plan.key.assistantMessageId}`);
+  return next;
 }
 
 /**
@@ -1874,6 +1935,7 @@ export function registerVisualNovelBackend(spindle: SpindleAPI): void {
     // current asset batch. The new turn's ownership is re-established when it is
     // actually planned (processAssistantMessage -> activeTurnKeys.set).
     const key = runtimeKey(userId, payload.chatId);
+    generatingChats.add(key);
     bumpIntakeEpoch(userId, payload.chatId);
     activeTurnKeys.delete(key);
     assetControllers.get(key)?.abort("A new generation started before this turn's assets settled.");
@@ -1881,6 +1943,7 @@ export function registerVisualNovelBackend(spindle: SpindleAPI): void {
     spindle.sendToFrontend({ type: "vn_generation", chatId: payload.chatId, active: true }, userId);
   });
   spindle.on("GENERATION_ENDED", (payload, userId) => {
+    generatingChats.delete(runtimeKey(userId, payload.chatId));
     void generationEnded(spindle, payload, userId).catch((error) => {
       spindle.log.error(`Visual novel turn failed: ${errorText(error)}`);
       spindle.sendToFrontend({ type: "vn_error", chatId: payload.chatId, operation: "generation_ended", error: errorText(error) }, userId);
@@ -1888,6 +1951,7 @@ export function registerVisualNovelBackend(spindle: SpindleAPI): void {
   });
   spindle.on("GENERATION_STOPPED", (payload, userId) => {
     dbg(spindle, userId, `event GENERATION_STOPPED chat=${payload.chatId}`);
+    generatingChats.delete(runtimeKey(userId, payload.chatId));
     spindle.sendToFrontend({ type: "vn_generation", chatId: payload.chatId, active: false }, userId);
   });
   spindle.on("MESSAGE_SWIPED", (payload: MessageSwipedPayloadDTO, userId) => {

@@ -317,12 +317,13 @@ export function computeAssetProgress(turn: TurnView | null): { current: number; 
   const budgeted = turn.assets.filter((a) => a.source !== "cache");
   if (budgeted.length === 0) return null;
   const total = budgeted.length;
+  // A cancelled picture is not done: it resumes when the view reopens, and
+  // until then it is neither counted nor shown as a failure.
   const done = budgeted.filter(
     (a) =>
       a.status === "generated" ||
       a.status === "browser_ready" ||
-      a.status === "failed" ||
-      a.status === "cancelled",
+      a.status === "failed",
   ).length;
   const inFlight = budgeted.filter((a) => a.status === "generating" || a.status === "queued").length;
   if (inFlight > 0) {

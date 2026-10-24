@@ -60,7 +60,7 @@ function fixture(options: FixtureOptions = {}) {
   const data = new Map<string, unknown>();
   const sent: Array<Record<string, unknown>> = [];
   const messages: Array<Record<string, unknown>> = [];
-  const gates: Array<{ resolve: (value: { imageId: string; imageUrl?: string | null }) => void }> = [];
+  const gates: Array<{ resolve: (value: { imageId: string; imageUrl?: string | null }) => void; reject: (reason?: unknown) => void }> = [];
   let plannerCalls = 0;
   let imageCalls = 0;
   let seq = 0;
@@ -209,6 +209,59 @@ describe("view gating: automatic work only runs for open views", () => {
     await waitFor(() => f.record("gate-h3", "m1")?.jobs[0]?.status === "generated");
     expect(f.record("gate-h3", "m1")!.jobs[0]!.imageId).toBe("img-retry");
     expect(f.plannerCalls()).toBe(1);
+  });
+
+  test("H3b: reopening the view resumes the stopped pictures without a replan", async () => {
+    const f = fixture({ gated: true });
+    f.request({ type: "vn_view", chatId: "gate-h3b", open: true }, "user-h3b");
+    f.reply("gate-h3b", "m1", "user-h3b");
+    await waitFor(() => f.gates.length >= 1);
+    await waitFor(() => f.record("gate-h3b", "m1")?.jobs[0]?.status === "generating");
+    f.request({ type: "vn_view", chatId: "gate-h3b", open: false }, "user-h3b");
+    await waitFor(() => f.record("gate-h3b", "m1")!.jobs.every((job) => job.status === "cancelled"));
+
+    f.request({ type: "vn_get_state", chatId: "gate-h3b", viewOpen: true }, "user-h3b");
+    await waitFor(() => f.gates.length >= 2);
+    // The view gets the resumed turn, never a cancelled one.
+    const state = f.sent.filter((m) => m.type === "vn_state").at(-1) as { turn: { assets: Array<{ status: string }> } };
+    expect(state.turn.assets.map((asset) => asset.status)).not.toContain("cancelled");
+    f.gates[1]!.resolve({ imageId: "img-resumed", imageUrl: "/api/v1/images/img-resumed" });
+    await waitFor(() => f.record("gate-h3b", "m1")?.jobs[0]?.status === "generated");
+    expect(f.record("gate-h3b", "m1")!.jobs[0]!.imageId).toBe("img-resumed");
+    expect(f.plannerCalls()).toBe(1);
+  });
+
+  test("H3c: nothing resumes while a reply is being generated; it does once generation stops", async () => {
+    const f = fixture({ gated: true });
+    f.request({ type: "vn_view", chatId: "gate-h3c", open: true }, "user-h3c");
+    f.reply("gate-h3c", "m1", "user-h3c");
+    await waitFor(() => f.gates.length >= 1);
+    await waitFor(() => f.record("gate-h3c", "m1")?.jobs[0]?.status === "generating");
+    f.fire("GENERATION_STARTED", { chatId: "gate-h3c" }, "user-h3c");
+    f.request({ type: "vn_get_state", chatId: "gate-h3c", viewOpen: true }, "user-h3c");
+    await waitFor(() => f.sent.filter((m) => m.type === "vn_state").length >= 1);
+    await settle();
+    expect(f.gates.length).toBe(1);
+
+    f.fire("GENERATION_STOPPED", { chatId: "gate-h3c" }, "user-h3c");
+    f.request({ type: "vn_get_state", chatId: "gate-h3c", viewOpen: true }, "user-h3c");
+    await waitFor(() => f.gates.length >= 2);
+    expect(f.plannerCalls()).toBe(1);
+  });
+
+  test("H3d: a failed picture is not resumed on reopen; it waits for Try again", async () => {
+    const f = fixture({ gated: true });
+    f.request({ type: "vn_view", chatId: "gate-h3d", open: true }, "user-h3d");
+    f.reply("gate-h3d", "m1", "user-h3d");
+    await waitFor(() => f.gates.length >= 1);
+    f.gates[0]!.reject(new Error("failed (402): Not enough Anlas"));
+    await waitFor(() => f.record("gate-h3d", "m1")?.jobs[0]?.status === "failed");
+    f.request({ type: "vn_view", chatId: "gate-h3d", open: false }, "user-h3d");
+    f.request({ type: "vn_get_state", chatId: "gate-h3d", viewOpen: true }, "user-h3d");
+    await waitFor(() => f.sent.filter((m) => m.type === "vn_state").length >= 1);
+    await settle();
+    expect(f.gates.length).toBe(1);
+    expect(f.record("gate-h3d", "m1")!.jobs[0]!.status).toBe("failed");
   });
 
   test("H4: enabled:false skips everything even with the view open, but state/config is still served", async () => {

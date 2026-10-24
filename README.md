@@ -22,7 +22,8 @@ Under Advanced, NovelAI has toggles for model-specific quality tags and default 
 - a closed pose/expression catalogue, with deterministic selection by default
 - fixed 16:9 camera scene planning and explicit scene-boundary checks
 - swipe, edit, delete, duplicate-submit, and stale-image reconciliation
-- view-gated generation: Cue only plans turns and generates images for chats whose Cue view is open; closing the view (or leaving the chat) aborts the in-flight image batch and marks it cancelled, opening the view plans the latest reply only when nothing current is stored, and cancelled images wait for a manual Retry instead of resuming on their own
+- view-gated generation: Cue only plans turns and generates images for chats whose Cue view is open; closing the view (or leaving the chat) aborts the in-flight image batch and marks it cancelled, opening the view plans the latest reply only when nothing current is stored, and reopening it resumes the stopped pictures of the current turn (a stopped picture is never counted as done or shown as failed)
+- one silent retry for a picture that failed for a passing reason (a timeout, a dropped connection, a busy provider: HTTP 408, 425, 429, 5xx); refusals, bad requests, missing credits and auth errors are reported at once and wait for Try again
 - per-user and per-chat persisted continuity
 - a settings tab, a user-selectable scene-image fit (Cover / Contain / Stretch / Original size / Scale down), seven built-in theme presets (Lumiverse, Golden hour, Boxed console, Paper novel, Midnight noir, Yamaku classic, Literature club), and a shadow-DOM custom CSS contract that is always the final styling layer
 - optional **sprite mode**: reusable character cut-outs (4, 8 or 12 expressions each) over reusable backgrounds, staged per paragraph, with a sprite library in settings (see [Sprite mode](#sprite-mode))

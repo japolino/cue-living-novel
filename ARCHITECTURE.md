@@ -133,7 +133,7 @@ queued planning cancelled, scene-cache admission released — and persists
 stuck. That stamp is keyed to the aborted turn and skipped only when a new
 owner (retry, reply, reuse) has claimed the chat's turn meanwhile; a view that
 merely reopened still gets the stamp, plus `vn_asset` updates, because the
-aborted batch never resumes on its own. Cancelling a plan aborts its sidecar
+aborted batch itself never resumes: the reopened view starts a new one. Cancelling a plan aborts its sidecar
 request (`spindle.generate.raw` gets the operation's signal, and the call
 rejects locally even when the host keeps it running; a System One request or
 a non-story line check it waits on is let go the same way), with no retry and no fallback plan, so the
@@ -157,8 +157,22 @@ open chat, whose work is aborted. Late results are rejected by the ownership
 guards. Reopening goes through `vn_get_state`: a missing or stale stored
 record (a newer reply arrived while closed, detected by message id/fingerprint)
 plans the latest reply once, and `vn_state` then carries `turn: null` so the
-stale turn is never rendered first. Cancelled jobs stay cancelled; they are never
-resumed on their own — the reader reruns them by hand with `vn_retry_turn`.
+stale turn is never rendered first. When the stored turn is current, the
+reopened view resumes its stopped pictures: `cancelled` jobs, and
+`queued`/`generating` jobs nobody runs (a `GENERATION_STARTED` abort does not
+persist its stamp), go back to `queued` before `vn_state` is sent and a new
+batch starts. It resumes only when images are on, the turn is `ready`, no
+reply is being generated, no owner (retry, reply, reuse) holds the chat's turn
+and no batch is running for it; `failed` jobs are never resumed — the reader
+reruns them with Try again (`vn_retry_turn`). The stage counts a stopped
+picture as neither done nor in flight.
+
+A scene picture that fails for a passing reason (a timeout, a dropped
+connection, a busy provider: HTTP 408, 425, 429, 5xx, including NovelAI's
+concurrent-generation lock) is asked for once more after 3 s before the job is
+marked `failed` (`src/backend/runtime/image-retry.ts`). A refusal, a bad
+request, missing credits or an auth error is reported at once, and a cancelled
+batch never retries.
 
 ```text
 GENERATION_STARTED
@@ -293,7 +307,7 @@ Pipeline: the planner normalizer accepts supported aliases and wrapped values, t
 ```text
 queued -> generating -> generated -> browser_ready
                     \-> failed
-queued/generating   \-> cancelled
+queued/generating   \-> cancelled -> queued   (view reopened)
 ```
 
 `generated` means the provider returned a persisted image ID and URL. `browser_ready` means the active browser decoded that image successfully. Those are intentionally separate states.

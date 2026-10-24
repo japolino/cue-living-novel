@@ -341,6 +341,21 @@ describe("computeAssetProgress (granular image generation progress)", () => {
     expect(computeAssetProgress(source)).toEqual({ current: 3, total: 3 });
   });
 
+  test("a cancelled picture never counts as done", () => {
+    const source = turn({
+      assets: [
+        asset({ jobId: "j1", status: "cancelled" }),
+        asset({ jobId: "j2", status: "generated" }),
+        asset({ jobId: "j3", status: "generating" }),
+      ],
+    });
+    expect(computeAssetProgress(source)).toEqual({ current: 2, total: 3 });
+    // Stopped with nothing running: no progress, and no failure either.
+    const stopped = turn({ assets: [asset({ jobId: "j1", status: "cancelled" }), asset({ jobId: "j2", status: "generated" })] });
+    expect(computeAssetProgress(stopped)).toBeNull();
+    expect(currentAssetFailure(stopped, 0)).toBeNull();
+  });
+
   test("returns null once all three assets have finished", () => {
     const source = turn({
       assets: [
