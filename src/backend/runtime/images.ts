@@ -1,7 +1,7 @@
 import type { SpindleAPI } from "lumiverse-spindle-types";
 import type { VisualNovelConfig } from "../../config.js";
 import { DEFAULT_CONFIG } from "../../config.js";
-import { novelAiCapabilities, novelAiQualityTags, NOVELAI_NEGATIVE_DEFAULT, renderNovelAiEmphasis } from "./novelai-prompt.js";
+import { novelAiCapabilities, novelAiCaption, novelAiQualityTags, NOVELAI_NEGATIVE_DEFAULT, renderNovelAiEmphasis } from "./novelai-prompt.js";
 import { AssetJobSchema, type AssetJob, type SceneState, type TurnPlan, type VisualCue } from "../../shared/contracts.js";
 import { AssetScheduler } from "../core/asset-scheduler.js";
 import { sceneSizeParameters } from "./image-size.js";
@@ -286,8 +286,10 @@ export function compileNovelAiRequest(config: VisualNovelConfig, scene: SceneSta
   const model = config.imageModel;
   const caps = novelAiCapabilities(model);
   const adjusted = { ...config, promptPrefix: config.promptPrefix === DEFAULT_CONFIG.promptPrefix ? "anime visual novel scene" : config.promptPrefix };
-  const entry = describeCue(adjusted, scene, cue, appearances, "novelai").entry;
+  const description = describeCue(adjusted, scene, cue, appearances, "novelai");
+  const entry = description.entry;
   const characterSections = caps.structured ? entry.prompt.characterSections ?? [] : [];
+  const [label] = classifySubject(description.visualState.identity, description.visualState.subjectCategory);
   const base = entry.prompt.sections.filter((section) => !characterSections.includes(section));
   const joined = base.join(", ");
   const quality = config.novelAiQualityTags === false ? [] : splitTopLevelCsv(novelAiQualityTags(model))
@@ -299,7 +301,8 @@ export function compileNovelAiRequest(config: VisualNovelConfig, scene: SceneSta
   return { prompt, negativePrompt, parameters: {
     qualityToggle: false, // Explicit tags above make additions visible and avoid duplicate host defaults.
     negativePrompt,
-    characterTags: characterSections.map((tags) => ({ tags: renderNovelAiEmphasis(tags, model) }))
+    // V4+ captions name only "girl" / "boy" / "other"; count tags stay in the base prompt (novelAiCaption).
+    characterTags: characterSections.map((tags) => ({ tags: renderNovelAiEmphasis(novelAiCaption(label, [tags]), model) }))
   } };
 }
 

@@ -306,6 +306,9 @@ describe("generateAssets reference anchoring", () => {
       } else {
         expect(compiled.prompt).not.toContain("silver hair");
         expect(compiled.parameters.characterTags[0]!.tags).toContain("silver hair");
+        // NovelAI's captions name the subject without a count; "1girl" stays in the base prompt.
+        expect(compiled.parameters.characterTags[0]!.tags.split(", ")[0]).toBe("girl");
+        expect(compiled.parameters.characterTags[0]!.tags.split(", ")).not.toContain("1girl");
         expect(compiled.parameters.characterTags[0]!.tags).not.toContain("Library");
         expect(compiled.negativePrompt).toBe("1.2::watermark::");
       }
@@ -315,6 +318,7 @@ describe("generateAssets reference anchoring", () => {
   test("NAI defaults do not replace edited or explicitly empty negative prompts", () => {
     const config = { ...DEFAULT_CONFIG, imageModel: "nai-diffusion-5-full" };
     expect(compileNovelAiRequest(config, scene, cue("default")).negativePrompt).toContain("artistic error");
+    expect(compileNovelAiRequest(config, scene, cue("default")).negativePrompt).toContain("very displeasing");
     expect(compileNovelAiRequest({ ...config, novelAiUseDefaultNegative: false }, scene, cue("off")).negativePrompt).toBe(DEFAULT_CONFIG.negativePrompt);
     expect(compileNovelAiRequest({ ...config, negativePrompt: "" }, scene, cue("empty")).negativePrompt).toBe("");
     expect(compileNovelAiRequest({ ...config, promptPrefix: "masterpiece" }, scene, cue("dedupe")).prompt.match(/masterpiece/g)).toHaveLength(1);

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_CONFIG } from "../../../config.js";
 import { NOVELAI_INSET_LAYOUTS } from "../../../shared/novelai-inset.js";
-import { MIRA, spriteConfig } from "./__fixtures__/sprite-fixtures.js";
+import { KAI, MIRA, spriteConfig } from "./__fixtures__/sprite-fixtures.js";
 import {
   compileNovelAiInsetRequest,
   insetNegative,
@@ -169,6 +169,22 @@ describe("NovelAI V5 inset: request transform", () => {
     for (const key of ["steps", "guidance", "scale", "sampler"]) expect(inset.parameters[key]).toBeUndefined();
     // The plain request is not changed.
     expect(plain.parameters.rawRequestOverride).toBeUndefined();
+  });
+
+  test("the inset carries the V4+ caption: girl / boy / other first, count tags only in the base prompt", () => {
+    for (const [member, noun, count] of [[MIRA, "girl", "1girl"], [KAI, "boy", "1boy"]] as const) {
+      const plain = compileSpriteRequest({ config: spriteConfig({ imageModel: "nai-diffusion-5-full", referenceAnchoring: true }), provider: "novelai", member, expression: "smile", seed: 1 });
+      const inset = compileNovelAiInsetRequest({ request: plain, layout, canvas: CANVAS });
+      const captions = (inset.parameters.characterTags as Array<{ tags: string }>).map((entry) => entry.tags.split(", "));
+      expect(captions).toHaveLength(1);
+      expect(captions[0]![0]).toBe(noun);
+      expect(captions[0]!.filter((tag) => /^(?:\d+(?:girl|boy|other)s?|solo)$/.test(tag))).toEqual([]);
+      // The identity's own count tag moved out; the base prompt keeps it, after `split screen`.
+      const base = inset.prompt.split(", ");
+      expect(base[0]).toBe("split screen");
+      expect(base).toContain(count);
+      expect(base).toContain("solo");
+    }
   });
 
   test("a reference image left in the parameters is dropped; user overrides are merged", () => {

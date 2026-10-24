@@ -226,6 +226,21 @@ describe("sprite prompts: NovelAI syntax", () => {
     expect(request.parameters.negativePrompt).toBe(request.negativePrompt);
   });
 
+  test("V4+: the caption names girl / boy / other without a number; count tags stay in the base prompt", () => {
+    const girl = compileSpriteRequest({ config: config({ imageModel: "nai-diffusion-4-5-full" }), provider: "novelai", member: mira, expression: "idle", seed: 1 });
+    const girlCaption = (girl.parameters.characterTags as Array<{ tags: string }>)[0]!.tags;
+    expect(splitTopLevelCsv(girlCaption)[0]).toBe("girl");
+    expect(splitTopLevelCsv(girlCaption)).not.toContain("1girl");
+    expect(splitTopLevelCsv(girlCaption)).not.toContain("solo");
+    expect(splitTopLevelCsv(girl.prompt)).toContain("1girl");
+    const boy = compileSpriteRequest({
+      config: config({ imageModel: "nai-diffusion-4-5-full" }), provider: "novelai",
+      member: { name: "Kaito", identity: "1boy, black hair", attire: null, subjectCategory: "male" }, expression: "idle", seed: 1,
+    });
+    expect(splitTopLevelCsv((boy.parameters.characterTags as Array<{ tags: string }>)[0]!.tags).slice(0, 2)).toEqual(["boy", "black hair"]);
+    expect(splitTopLevelCsv(boy.prompt)).toContain("1boy");
+  });
+
   test("V3: everything in one prompt; quality tags can be turned off", () => {
     const request = compileSpriteRequest({
       config: config({ imageModel: "nai-diffusion-3", novelAiQualityTags: false }), provider: "novelai", member: mira, expression: "idle", seed: 1,

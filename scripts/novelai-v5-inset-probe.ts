@@ -7,7 +7,7 @@
  *
  *   NOVELAI_API_KEY=... bun scripts/novelai-v5-inset-probe.ts \
  *     --reference idle.png --prompt "anime coloring, 1girl, solo, standing" \
- *     --character "1girl, silver hair, green eyes, school uniform, smile"
+ *     --character "girl, silver hair, green eyes, school uniform, smile"
  *
  * The key is read only from the NOVELAI_API_KEY environment variable and is
  * never printed or written. Without it (or with --dry-run) nothing is sent:
@@ -28,7 +28,8 @@
  * Options:
  *   --reference <png>    reference image (the set's idle; a plain white background works best)
  *   --prompt <tags>      base (scene) prompt; "split screen, " is added like Cue does
- *   --character <tags>   character caption (coords off), optional
+ *   --character <tags>   character caption (coords off), optional; Cue's V4+ caption starts with
+ *                        girl / boy / other and has no count tags (novelAiCaption)
  *   --negative <tags>    base negative (default: Cue's V5 sprite negative); the inset edits apply
  *   --model <id>         V5 model (default nai-diffusion-5-full -> nai-diffusion-5-full-inpainting)
  *   --steps <n> --scale <n> --sampler <id> --seed <n>   as the Lumiverse connection would send them

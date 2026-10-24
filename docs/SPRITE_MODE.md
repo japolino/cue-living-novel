@@ -262,6 +262,15 @@ prints one `wardrobe` line per decision and one `scene:` line with the scores.
     open: monster identities (`hellhound`, `slime girl`) sometimes draw a
     beast, pattern or text behind the figure (≈ 2–3 of 9 sets), and some
     seeds give a face close-up.
+  - Anima 2.9B, October 2026 (idles only; 4 characters × 4 seeds = 16 per
+    variant; pure-white background / figure touching a side / head touching
+    the top / two figures): today's framing 14 / 1 / 4 / 0; without `no
+    shadow` (29 Danbooru posts, so hardly a tag) 13 / 0 / 6 / 0; with
+    `tachi-e` 14 / 2 / 7 / 0; with the Anima model card's quality tags
+    (`score_7, safe` and its negative) 11 / 3 / 5 / 0. None of these beat
+    today's framing, so it is unchanged. The model card's quality tags also
+    changed the drawing style (softer, more rendered), turned one white
+    blouse pink and gave one idle crossed arms.
   - Skin colour: in sprite identities a non-natural skin colour tag (`blue
     skin`, `light green skin`, `purple_skin`…) not already weighted gets
     weight 1.15 (`weightSkinColourTags`); natural tones (pale, fair, dark, tan,
@@ -380,7 +389,8 @@ one table, so a scene layout can be added). Request:
   negative:   the sprite negative without "split screen" (also weighted or
               bracketed), plus "comic" ("multiple views" stays)
   parameters: the sprite parameters (seed, characterTags = the character
-              caption unchanged, coords off, qualityToggle false,
+              caption unchanged: the V4+ caption, `girl` / `boy` /
+              `other` first, no count tags; coords off, qualityToggle false,
               negativePrompt as above) and
               resolution: "1216x832"
               rawRequestOverride: '{"parameters":{"noise":0,"width":1216,"height":832,"image":"<png>","mask":"<png>"},"action":"infill"}'
@@ -460,7 +470,7 @@ cost and the result with a real key:
 # PowerShell: $env:NOVELAI_API_KEY = "..."   bash: export NOVELAI_API_KEY=...
 bun scripts/novelai-v5-inset-probe.ts --reference idle.png --seed 42 --route both \
   --prompt "anime coloring, 1girl, solo, standing, simple background, white background" \
-  --character "1girl, silver hair, green eyes, school uniform, smile"
+  --character "girl, silver hair, green eyes, school uniform, smile"
 ```
 
 The key is read only from `NOVELAI_API_KEY` (never printed or written);
@@ -822,7 +832,9 @@ Library and generation:
   evicted entries delete their images (best effort).
 - One shared seed per set (`spriteSetSeedFor`); a single-expression
   regeneration gives that image its own seed, a new idle a new set seed.
-  NovelAI: character caption on V4+, `resolution` 832×1216 (plates and key
+  NovelAI: character caption on V4+ (`girl` / `boy` / `other` first, no
+  count tags; `1girl` / `solo` stay in the base prompt, as NovelAI's
+  multiple-characters guide says), `resolution` 832×1216 (plates and key
   moments 1216×832) whatever `spriteImageSize` says;
   ComfyUI / SwarmUI: `width`, `height` from `spriteImageSize` (standard
   624×912 / 912×624, upscaled 832×1216 / 1216×832), `seed`.

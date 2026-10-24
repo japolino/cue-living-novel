@@ -10,17 +10,17 @@ import {
 } from "../../inlay-prompt/index.js";
 import { applyAttireOverride, classifySubject } from "../images.js";
 import { sizeParameters } from "../image-size.js";
-import { NOVELAI_NEGATIVE_DEFAULT, novelAiCapabilities, novelAiQualityTags, renderNovelAiEmphasis } from "../novelai-prompt.js";
+import { NOVELAI_NEGATIVE_DEFAULT, novelAiCapabilities, novelAiCaption, novelAiQualityTags, renderNovelAiEmphasis } from "../novelai-prompt.js";
 
 /**
  * Sprite framing: one standing figure, straight on and centred, on plain
- * white with empty space on both sides, so the browser can cut it out and
- * the stage can place it. Variant "F6" of the October 2026 ComfyUI tests
- * (without the "(white background:1.2)" weight and the "grey background"
- * negative, which had no effect): side clipping 100% -> 58%, figure width
- * share 1.00 -> 0.80, low-angle / tilted shots about 12/18 -> 3/18. The
- * plain-language sentence is the only part that gives side margin; it holds
- * commas, so the top-level tag split makes it three "tags": keep it last.
+ * white, so the browser can cut it out and the stage can place it. Variant
+ * "V2" of the October 2026 ComfyUI tests (docs/SPRITE_MODE.md, "Prompts"):
+ * low-angle / tilted idles about 12/18 -> 3/18 and no doubled expressions in
+ * whole sets. The plain-language sentence variant ("F6") gave more side
+ * margin on idles but smaller figures and more doubles in sets, so it is not
+ * used. On Anima 2.9B, dropping "no shadow" (29 Danbooru posts, so hardly a
+ * tag) or adding "tachi-e" changed nothing measurable over 16 idles each.
  */
 export const SPRITE_FRAMING_TAGS = "solo, standing, centered, front view, straight-on, facing viewer, looking at viewer, cowboy shot, simple background, white background, no shadow";
 export const SPRITE_NEGATIVE_TAGS = "scenery, background, shadow, drop shadow, gradient background, multiple people, text, multiple girls, 2girls, multiple views, split screen, border, from below, from above, dutch angle, cropped, out of frame";
@@ -189,7 +189,7 @@ export function compileSpriteRequest(input: {
 }): SpriteImageRequest {
   const { config, provider, member } = input;
   const plainIdentity = spriteIdentityTags(member);
-  const [, subject] = classifySubject(plainIdentity, member.subjectCategory ?? "unknown");
+  const [label, subject] = classifySubject(plainIdentity, member.subjectCategory ?? "unknown");
   const identity = weightSkinColourTags(plainIdentity);
   const pose = poseById(POSE_EXPRESSION_CATALOGUE, input.expression);
   const extra = { ...sizeParameters(provider, "sprite", config), ...seedParameters(provider, input.seed) };
@@ -197,7 +197,8 @@ export function compileSpriteRequest(input: {
     const model = config.imageModel || "nai-diffusion-4-5-full";
     const caps = novelAiCapabilities(model);
     const characterReference = spriteCharacterReferenceTag(member.name, config, true);
-    const characterSections = dedupeSections([characterReference, identity, pose.suffix]);
+    // V4+ caption: "girl" / "boy" / "other" first, count tags only in the base prompt (novelAiCaption).
+    const characterSections = [novelAiCaption(label, [characterReference, identity, pose.suffix])];
     const base = caps.structured
       ? dedupeSections([stylePrefix(config, true), subject, SPRITE_FRAMING_TAGS, config.promptSuffix])
       : dedupeSections([stylePrefix(config, true), subject, characterReference, identity, pose.suffix, SPRITE_FRAMING_TAGS, config.promptSuffix]);
