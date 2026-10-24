@@ -9,7 +9,7 @@
  * MessageChannel, so both paths share one implementation.
  */
 import type { FaceCandidate, FaceKernel } from "./face-kernel.js";
-import type { CutoutBBox, CutoutFigureCheck, CutoutKernel } from "./kernel.js";
+import type { CutoutBBox, CutoutFigureCheck, CutoutInputFit, CutoutKernel } from "./kernel.js";
 
 export type CutoutBackend = "webgpu" | "wasm";
 export type CutoutBackendPreference = "auto" | CutoutBackend;
@@ -22,6 +22,8 @@ export type CutoutLoadRequest = {
   ortBaseUrl: string;
   backend: CutoutBackendPreference;
   numThreads: number;
+  /** How the image becomes the model input (default "letterbox", ISNet-anime). */
+  fit?: CutoutInputFit;
 };
 
 /** Load the face detector (always on WASM: it is small, and WebGPU memory stays for the cut-out). */
@@ -101,6 +103,7 @@ export function cutoutWorkerMain(port: CutoutPort, createKernel: () => CutoutKer
   let session: any = null;
   let sessionOrt: OrtModule = null;
   let inputSize = 1024;
+  let inputFit: CutoutInputFit = "letterbox";
   const g = globalThis as any;
 
   const message = (error: unknown): string => (error instanceof Error ? error.message : String(error)) || "unknown error";
@@ -163,6 +166,7 @@ export function cutoutWorkerMain(port: CutoutPort, createKernel: () => CutoutKer
         const meta = created.inputMetadata && created.inputMetadata[0];
         const shape = meta && Array.isArray(meta.shape) ? meta.shape : null;
         inputSize = shape && typeof shape[2] === "number" && shape[2] > 0 ? shape[2] : 1024;
+        inputFit = request.fit === "stretch" ? "stretch" : "letterbox";
         return { backend, inputSize, loadMs: performance.now() - started, notes: notes.concat(failures) };
       } catch (error) {
         sessionFailed = true;
@@ -268,7 +272,7 @@ export function cutoutWorkerMain(port: CutoutPort, createKernel: () => CutoutKer
 
   async function infer(rgba: Uint8ClampedArray, width: number, height: number): Promise<Float32Array> {
     const ort = sessionOrt, current = session;
-    const input = kernel.modelInput(rgba, width, height, inputSize);
+    const input = kernel.modelInput(rgba, width, height, inputSize, inputFit);
     const tensor = new ort.Tensor("float32", input.tensor, [1, 3, inputSize, inputSize]);
     const feeds: Record<string, unknown> = {};
     feeds[current.inputNames[0]] = tensor;
