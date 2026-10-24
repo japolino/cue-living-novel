@@ -134,7 +134,11 @@ is still queued or running, whatever it shows itself: a new plan, its stored
 turn (reused, or kept because the host cannot resolve the message right now),
 or the waiting card of an unselected greeting. Only the newest intake cancels:
 one that a newer message event overtook while it read the stored turn is
-dropped. So the old swipe never paints. Leaving a chat
+dropped. So the old swipe never paints. A cancelled plan also stops before
+its next identity write (a discarded swipe never seeds the frozen protagonist,
+registry or appearance roster), and it builds its view before it persists, so
+it becomes the chat's active turn only when the cancel lands during that last
+write, which the newer version's own turn then replaces. Leaving a chat
 sends `vn_view open:false` for the previous chat, and the home screen (empty
 chat id) closes whichever view is open, so a chat nobody is watching never
 keeps planning or generating. Opening one chat displaces the user's previously

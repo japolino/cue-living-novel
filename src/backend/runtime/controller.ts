@@ -1235,11 +1235,19 @@ async function processAssistantMessage(
     ].join(" | "));
     // Runs during the identity writes below (it never throws).
     const personaLookup = activePersonaName(spindle, userId);
+    // A cancel can land during any of these writes: stop before the next one, so
+    // a discarded swipe never seeds the chat's identity (the protagonist freezes
+    // on its first save, and the plan that replaces this one reads it).
+    const cancelled = () => operation.controller.signal.aborted;
     await mergeCharacterAppearanceFromState(spindle, singleCharacter, userId, chatId);
+    if (cancelled()) return;
     await saveSingleCharacterState(spindle, chatId, result.singleCharacter, userId);
+    if (cancelled()) return;
     await mergeCharacterAppearanceFromState(spindle, result.singleCharacter, userId, chatId);
+    if (cancelled()) return;
     if (result.extractedCharacters && result.extractedCharacters.length > 0) {
       await mergePlannerCharacters(spindle, result.extractedCharacters, userId, chatId);
+      if (cancelled()) return;
     }
     // Persist stable ids, explicit aliases and subject categories learned this turn.
     await saveCharacterRegistry(spindle, chatId, result.characterRegistry, userId);
@@ -1342,17 +1350,21 @@ async function processAssistantMessage(
         }
       ]
     };
-    // The view may have closed (or a new generation started) during the awaits
-    // above. Persisting or sending now would resurrect a turn nobody is watching.
-    if (operation.controller.signal.aborted) {
+    // The view may have closed (or a new generation started, or a newer version
+    // of the message replaced this plan) during the awaits above. Persisting or
+    // sending now would resurrect a turn nobody is watching. The view is built
+    // first (sprite staging reads the host), so a cancel that lands while it
+    // builds still drops the turn before it becomes the chat's active turn.
+    const view = cancelled() ? null : await buildTurnView(spindle, record, userId, config);
+    if (!view || cancelled()) {
       dbg(spindle, userId, `planned turn dropped after abort chat=${chatId} message=${message.id}`);
       return;
     }
     const key = runtimeKey(userId, chatId);
     activeTurnKeys.set(key, record.plan.key);
     await persistActiveTurn(spindle, record, path, userId);
-    if (operation.controller.signal.aborted) return;
-    spindle.sendToFrontend({ type: "vn_turn", turn: await buildTurnView(spindle, record, userId, config) }, userId);
+    if (cancelled()) return;
+    spindle.sendToFrontend({ type: "vn_turn", turn: view }, userId);
     if ((!spriteMode || jobs.length > 0) && !config.useNativeCardImages && config.generateImages) {
       void startAssets(spindle, record, path, userId).catch((error) => {
         if (!isAbortError(error)) {

@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import type { SpindleAPI } from "lumiverse-spindle-types";
+import { seedSingleCharacter } from "../core/visual-state.js";
 import { registerVisualNovelBackend } from "./controller.js";
-import { chatStatePath, turnPath, type StoredTurnRecord } from "./storage.js";
+import { characterRegistryPath, chatStatePath, singleCharacterStatePath, turnPath, type StoredTurnRecord } from "./storage.js";
 
 /**
  * Cancelled planning frees the chat's planning queue at once: the planner
@@ -255,5 +256,62 @@ describe("cancelled planning frees the queue", () => {
     await waitFor(() => f.turns().length >= 1);
     await settle();
     expect(f.turns().map((turn) => turn.swipeId)).toEqual([2]);
+  });
+
+  test("a plan superseded during its identity writes stops before it seeds the chat's characters", async () => {
+    const chat = "pc-identity";
+    let armed = false;
+    // The first identity write after planning merges the chat's frozen
+    // protagonist into its appearance roster; the cancel lands during it.
+    const f: ReturnType<typeof fixture> = fixture({
+      beforeGet: async (path) => {
+        if (!armed || path !== `chats/${chat}/characters.json`) return;
+        armed = false;
+        f.swipe(chat, "user-pc7", FIRST, 1, [VEX, FIRST]);
+        await waitFor(() => f.planner[0]!.signal!.aborted);
+      }
+    });
+    f.data.set(singleCharacterStatePath(chat), seedSingleCharacter("Mira", "silver hair, green eyes"));
+    f.request({ type: "vn_view", chatId: chat, open: true }, "user-pc7");
+    f.messages.push(f.message(chat, VEX));
+    f.fire("GENERATION_ENDED", { chatId: chat, messageId: "m1", content: VEX }, "user-pc7");
+    await waitFor(() => f.planner.length === 1);
+    f.planner[0]!.release();
+    armed = true;
+    await waitFor(() => f.planner.length === 2);
+    f.planner[1]!.release();
+    await waitFor(() => f.turns().length === 1);
+    await settle();
+    expect(f.turns().map((turn) => turn.swipeId)).toEqual([1]);
+    // Nothing of the discarded swipe's cast reaches the chat's identity state.
+    for (const path of [singleCharacterStatePath(chat), characterRegistryPath(chat), `chats/${chat}/characters.json`]) {
+      expect(JSON.stringify(f.data.get(path) ?? null)).not.toContain("Vex");
+    }
+  });
+
+  test("a plan superseded while its sprite view builds is neither persisted nor shown", async () => {
+    const chat = "pc-view";
+    let armed = false;
+    // The registry write is the last identity write; the next registry read builds the view.
+    const f: ReturnType<typeof fixture> = fixture({
+      config: { presentationMode: "sprites", generateImages: true, maxImagesPerTurn: 2, imageConcurrency: 4, referenceAnchoring: false },
+      autoRelease: true,
+      beforeSet: (path) => { if (path === characterRegistryPath(chat) && f.turns().length === 0 && f.planner.length > 0 && !f.planner[0]!.signal?.aborted) armed = true; },
+      beforeGet: async (path) => {
+        if (!armed || path !== characterRegistryPath(chat)) return;
+        armed = false;
+        f.swipe(chat, "user-pc8", SECOND, 1);
+        await waitFor(() => f.planner[0]!.signal!.aborted);
+      }
+    });
+    f.request({ type: "vn_view", chatId: chat, open: true }, "user-pc8");
+    f.messages.push(f.message(chat, FIRST));
+    f.fire("GENERATION_ENDED", { chatId: chat, messageId: "m1", content: FIRST }, "user-pc8");
+    await waitFor(() => f.turns().length >= 1);
+    await settle(60);
+    expect(f.planner[0]?.signal?.aborted).toBe(true);
+    expect(f.turns().map((turn) => turn.swipeId)).toEqual([1]);
+    expect(f.record(chat, 0)).toBeUndefined();
+    expect(f.activePath(chat)).toBe(turnPath(chat, "m1", 1));
   });
 });
