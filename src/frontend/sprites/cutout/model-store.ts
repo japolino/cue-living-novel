@@ -84,24 +84,38 @@ export async function cachedModelBytes(url: string): Promise<number | null> {
   return null;
 }
 
+/** Whether a model was stored; `reason` when not (the model still runs for the page, and downloads again next visit). */
+export type ModelWrite = { stored: true } | { stored: false; reason: string };
+
 /** Store the model; failures (quota, private mode) are reported, not thrown. */
-export async function writeCachedModel(url: string, bytes: ArrayBuffer): Promise<boolean> {
+export async function writeCachedModel(url: string, bytes: ArrayBuffer): Promise<ModelWrite> {
   const kind = modelStoreKind();
+  if (kind === "none") return { stored: false, reason: "this page has no browser storage for it" };
   const blob = new Blob([bytes], { type: "application/octet-stream" });
   try {
     if (kind === "cache") {
       const cache = await caches.open(CACHE_NAME);
       await cache.put(url, new Response(blob, { headers: { "Content-Type": "application/octet-stream", "Content-Length": String(blob.size) } }));
-      return true;
-    }
-    if (kind === "indexeddb") {
+    } else {
       await withStore("readwrite", (store) => store.put(blob, url));
-      return true;
     }
-  } catch {
-    /* not cached; the model still runs for this page */
+    return { stored: true };
+  } catch (error) {
+    const name = error instanceof Error ? error.name : "";
+    const text = error instanceof Error ? error.message : String(error);
+    return { stored: false, reason: name === "QuotaExceededError" ? "the browser's storage for this site is full" : text || "the browser refused to store it" };
   }
-  return false;
+}
+
+/** Remove the cached model for `url` (nothing when it is not cached). */
+export async function deleteCachedModel(url: string): Promise<void> {
+  const kind = modelStoreKind();
+  try {
+    if (kind === "cache") await (await caches.open(CACHE_NAME)).delete(url);
+    else if (kind === "indexeddb") await withStore("readwrite", (store) => store.delete(url));
+  } catch {
+    /* nothing to remove */
+  }
 }
 
 /** Remove every cached model. */

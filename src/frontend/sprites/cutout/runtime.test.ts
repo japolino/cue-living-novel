@@ -184,7 +184,8 @@ describe("cut-out runtime", () => {
     expect(states[0]).toEqual({ state: "downloading", receivedBytes: 0, totalBytes: null });
     expect(states.some((s) => s.state === "downloading" && s.receivedBytes === 4096 && s.totalBytes === 4096)).toBe(true);
     expect(states.at(-2)).toEqual({ state: "loading" });
-    expect(states.at(-1)).toEqual({ state: "ready", backend: "wasm", bytes: 4096 });
+    // No browser storage in this test: the ready state says the model downloads again next visit.
+    expect(states.at(-1)).toEqual({ state: "ready", backend: "wasm", bytes: 4096, notStored: true });
     // A second cut reuses the loaded session.
     const again = await cutSprite(sprite(), { quality: "best", modelUrl: "https://models.test/isnet.onnx" });
     expect(again.quality).toBe("best");
@@ -308,7 +309,7 @@ describe("cut-out runtime", () => {
       // Stretched: the top row is the white image, not letterbox padding.
       expect(g.__fakeOrtFirstRow).toEqual(new Array(16).fill(1));
       expect(states.at(-2)).toEqual({ state: "loading", studio: true });
-      expect(states.at(-1)).toEqual({ state: "ready", backend: "webgpu", bytes: 4096, studio: true });
+      expect(states.at(-1)).toEqual({ state: "ready", backend: "webgpu", bytes: 4096, studio: true, notStored: true });
       expect(result.bbox).toEqual([5 / 16, 2 / 8, 6 / 16, 4 / 8]);
       // Best letterboxes the same image (zero padding on top).
       const best = await cutSprite(wide(), { quality: "best", modelUrl: BEST, studioModelUrl: STUDIO });

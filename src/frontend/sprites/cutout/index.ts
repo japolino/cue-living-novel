@@ -41,9 +41,9 @@
  */
 import type { FaceBox } from "./face-kernel.js";
 import type { CutoutInputFit } from "./kernel.js";
-import { cachedModelBytes, deleteCachedModels, downloadModel, readCachedModel, writeCachedModel } from "./model-store.js";
+import { cachedModelBytes, deleteCachedModel, deleteCachedModels, downloadModel, readCachedModel, writeCachedModel } from "./model-store.js";
 import { startCutoutRunner, type CutoutRunner, type CutoutRunnerMode } from "./runner.js";
-import { clearStudioAttempt, readStudioAttempt, releaseStudioLock, studioDeviceProblem, takeStudioLock, writeStudioAttempt } from "./studio-device.js";
+import { clearStudioAttempt, forgetStudioFiles, readStudioAttempt, releaseStudioLock, replaceStudioFile, studioDeviceProblem, takeStudioLock, writeStudioAttempt } from "./studio-device.js";
 import type { CutoutBackendPreference, CutoutCutTimings, CutoutLoadResult, CutoutWorkerCutResult } from "./worker-main.js";
 
 /** "studio": the opt-in BiRefNet model (`studioModelUrl`); "best": ISNet-anime; "basic": no model. */
@@ -51,13 +51,15 @@ export type CutoutQuality = "studio" | "best" | "basic";
 
 /**
  * `studio`: about the Studio model (the Best one otherwise). `note` (ready):
- * why "studio" cuts use the Best model instead.
+ * why "studio" cuts use the Best model instead. `notStored` (ready): the
+ * browser would not store the model (storage full, private mode), so it
+ * downloads again on the next visit.
  */
 export type CutoutModelState =
   | { state: "absent" }
   | { state: "downloading"; receivedBytes: number; totalBytes: number | null; studio?: true }
   | { state: "loading"; studio?: true }
-  | { state: "ready"; backend: "webgpu" | "wasm"; bytes: number; studio?: true; note?: string }
+  | { state: "ready"; backend: "webgpu" | "wasm"; bytes: number; studio?: true; note?: string; notStored?: true }
   | { state: "unsupported"; reason: string; studio?: true }
   | { state: "error"; error: string; studio?: true };
 
@@ -164,7 +166,7 @@ type ModelSpec = { fit: CutoutInputFit; backend: CutoutBackendPreference | null;
 const BEST_SPEC: ModelSpec = { fit: "letterbox", backend: null, studio: false };
 const STUDIO_SPEC: ModelSpec = { fit: "stretch", backend: "webgpu", studio: true };
 /** One cut-out model is loaded at a time (the Best or the Studio one). */
-let loaded: { url: string; runner: CutoutRunner; info: CutoutLoadResult; bytes: number; studio: boolean } | null = null;
+let loaded: { url: string; runner: CutoutRunner; info: CutoutLoadResult; bytes: number; studio: boolean; notStored: boolean } | null = null;
 let loading: { url: string; promise: Promise<void> } | null = null;
 /** Last failure of the Best model, and of the Studio model (kept apart: a Studio failure must not stop Best). */
 let failure: ModelFailure | null = null;
@@ -222,6 +224,18 @@ function publish(): void {
 function setState(next: CutoutModelState): void {
   state = next;
   publish();
+}
+
+/** The loaded model's ready state (`note`: why "studio" cuts use this Best model). */
+function readyState(model: NonNullable<typeof loaded>, note?: string | null): CutoutModelState {
+  return {
+    state: "ready",
+    backend: model.info.backend,
+    bytes: model.bytes,
+    ...(model.studio ? { studio: true as const } : {}),
+    ...(!model.studio && note ? { note } : {}),
+    ...(model.notStored ? { notStored: true as const } : {}),
+  };
 }
 
 function setOverlay(next: CutoutModelState | null): void {
@@ -314,11 +328,13 @@ async function ensureModel(url: string, force: boolean, spec: ModelSpec = BEST_S
     let size = 0;
     let stage: "download" | "load" = "download";
     let deselected = false;
+    let notStored = false;
     try {
       let bytes: ArrayBuffer | null;
       if (spec.studio && studioMemory?.url === url) {
         bytes = studioMemory.bytes;
         studioMemory = null;
+        notStored = true;
       } else bytes = await readCachedModel(url);
       if (stale()) throw abortError();
       if (!bytes && spec.studio) throw new Error("The Studio model is no longer in this browser's storage.");
@@ -327,7 +343,7 @@ async function ensureModel(url: string, force: boolean, spec: ModelSpec = BEST_S
         bytes = await downloadModel(url, (receivedBytes, totalBytes) => { if (!stale()) setState({ state: "downloading", receivedBytes, totalBytes }); });
         if (stale()) throw abortError();
         if (bytes.byteLength < 1024) throw new Error("The downloaded model file is too small to be a model.");
-        await writeCachedModel(url, bytes);
+        notStored = !(await writeCachedModel(url, bytes)).stored;
         if (stale()) throw abortError();
       }
       size = bytes.byteLength;
@@ -348,10 +364,10 @@ async function ensureModel(url: string, force: boolean, spec: ModelSpec = BEST_S
         setState({ state: "absent" });
         throw abortError();
       }
-      setLoaded({ url, runner, info, bytes: size, studio: spec.studio });
+      setLoaded({ url, runner, info, bytes: size, studio: spec.studio, notStored });
       if (spec.studio) { studioFailure = null; studioNote = null; } else failure = null;
       // Best loaded while "studio" cannot run: its ready state says why.
-      setState({ state: "ready", backend: info.backend, bytes: size, ...tag, ...(!spec.studio && studioNote ? { note: studioNote } : {}) });
+      setState(readyState(loaded!, studioNote));
     } catch (error) {
       if (stale() || deselected) throw error;
       const code = (error as { code?: string } | null)?.code;
@@ -585,7 +601,7 @@ function studioFailed(url: string, text: string, runner: CutoutRunner): void {
 function showStudioNote(note: string | null): void {
   if (!note || !loaded || loaded.studio) return;
   if (state.state === "ready" && state.note === note) return;
-  setState({ state: "ready", backend: loaded.info.backend, bytes: loaded.bytes, note });
+  setState(readyState(loaded, note));
 }
 
 const studioRetryMs = (failures: number): number => STUDIO_DOWNLOAD_RETRY_MS * 2 ** (failures - 1);
@@ -609,9 +625,11 @@ function downloadStudio(url: string): Promise<boolean> {
       const bytes = await downloadModel(url, (receivedBytes, totalBytes) => { if (!stopped()) setOverlay({ state: "downloading", receivedBytes, totalBytes, studio: true }); }, controller.signal);
       if (stopped()) return false;
       if (bytes.byteLength < 1024) throw new Error("The downloaded model file is too small to be a model.");
-      const stored = await writeCachedModel(url, bytes);
+      const write = await writeCachedModel(url, bytes);
       if (stopped()) return false;
-      studioMemory = stored ? null : { url, bytes };
+      // One Studio file in the browser (about 500 MB each): an earlier URL's goes.
+      if (write.stored) for (const old of replaceStudioFile(url)) await deleteCachedModel(old);
+      studioMemory = write.stored ? null : { url, bytes };
       studioDownloadFailures = null;
       if (!studioFailure) studioNote = null;
       return true;
@@ -632,7 +650,7 @@ function downloadStudio(url: string): Promise<boolean> {
       if (studioDownload?.promise === promise) studioDownload = null;
       if (!studioDownload) overlay = null;
       // Best's ready state carries the outcome (no note: the Studio model loads with the next sprite).
-      if (loaded && !loaded.studio && state.state === "ready") setState({ state: "ready", backend: loaded.info.backend, bytes: loaded.bytes, ...(studioNote ? { note: studioNote } : {}) });
+      if (loaded && !loaded.studio && state.state === "ready") setState(readyState(loaded, studioNote));
       else publish();
     }
   })();
@@ -925,7 +943,7 @@ export function syncStudioCutout(quality: CutoutQuality, studioModelUrl = ""): v
   if (studioAttempt && studioAttempt.url !== wanted) studioAttemptDone(studioAttempt.url);
   studioNote = null;
   if ("studio" in state && state.studio && state.state !== "loading") setState({ state: "absent" });
-  else if (state.state === "ready" && state.note && loaded && !loaded.studio) setState({ state: "ready", backend: loaded.info.backend, bytes: loaded.bytes });
+  else if (state.state === "ready" && state.note && loaded && !loaded.studio) setState(readyState(loaded));
 }
 
 /** Forget the cached models, the face model too (settings "Remove downloaded model"). */
@@ -953,6 +971,7 @@ export async function clearCutoutModel(): Promise<void> {
   }
   chosenUrls.clear();
   await deleteCachedModels();
+  forgetStudioFiles();
   if (state.state !== "unsupported" || typeof WebAssembly === "object") setState({ state: "absent" });
   if (faceState.state !== "unsupported" || typeof WebAssembly === "object") setFaceState({ state: "absent" });
 }

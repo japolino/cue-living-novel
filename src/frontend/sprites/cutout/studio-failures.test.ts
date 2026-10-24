@@ -83,6 +83,8 @@ let fetches: string[] = [];
 let releaseSlow: () => void = () => {};
 let slowGate = new Promise<void>((resolve) => { releaseSlow = resolve; });
 const cacheStore = new Map<string, string>();
+/** URLs the fake cache refuses to store (quota). */
+const quota = new Set<string>();
 const local = new Map<string, string>();
 type LockCallback = (lock: unknown) => Promise<void> | undefined;
 let heldElsewhere = false;
@@ -108,7 +110,10 @@ beforeAll(() => {
   g.caches = {
     open: async () => ({
       match: async (url: string) => { const body = cacheStore.get(url); return body === undefined ? undefined : new Response(body, { headers: { "Content-Length": String(body.length) } }); },
-      put: async (url: string, response: Response) => { cacheStore.set(url, await response.text()); },
+      put: async (url: string, response: Response) => {
+        if (quota.has(url)) throw Object.assign(new Error("The quota has been exceeded."), { name: "QuotaExceededError" });
+        cacheStore.set(url, await response.text());
+      },
       delete: async (url: string) => cacheStore.delete(url),
     }),
     delete: async () => { cacheStore.clear(); return true; },
@@ -150,6 +155,7 @@ afterEach(() => {
   runners = [];
   fetches = [];
   cacheStore.clear();
+  quota.clear();
   local.clear();
   held.clear();
   heldElsewhere = false;
@@ -468,5 +474,42 @@ describe("the Studio model leaves when it is no longer wanted", () => {
     expect(result.quality).toBe("basic"); // the run failed: the page forgot the model, the worker still holds it
     await cutout.clearCutoutModel();
     expect(runners[0]!.calls.slice(-2)).toEqual(["unload", "unloadFace"]);
+  });
+});
+
+describe("the Studio file in the browser's storage", () => {
+  const FILES = "cue-sprite-cutout-studio-files";
+
+  test("a stored Studio download replaces the Studio file cached for an earlier URL (Best's stays)", async () => {
+    const old = studioUrl("old");
+    cached(old, BEST);
+    local.set(FILES, JSON.stringify([old]));
+    await cut(STUDIO);
+    await downloaded();
+    await tick();
+    expect(cacheStore.has(STUDIO)).toBe(true);
+    expect(cacheStore.has(old)).toBe(false);
+    expect(cacheStore.has(BEST)).toBe(true);
+    expect(JSON.parse(local.get(FILES)!)).toEqual([STUDIO]);
+  });
+
+  test("a Studio file the browser will not store loads from memory, and the state says it downloads again", async () => {
+    quota.add(STUDIO);
+    await cut(STUDIO);
+    await downloaded();
+    const result = await cut(STUDIO);
+    expect(result.studio).toBe(true);
+    expect(fetchesOf(STUDIO)).toBe(1);
+    expect(cutout.getCutoutModelState()).toMatchObject({ state: "ready", studio: true, notStored: true });
+  });
+
+  test("a Best model the browser will not store: its ready state says so too", async () => {
+    quota.add(BEST);
+    await cutout.cutSprite(new Blob(["image"]), { quality: "best", modelUrl: BEST });
+    expect(cutout.getCutoutModelState()).toMatchObject({ state: "ready", notStored: true });
+    cutout.resetCutoutRuntime();
+    quota.clear();
+    await cutout.cutSprite(new Blob(["image"]), { quality: "best", modelUrl: BEST });
+    expect("notStored" in cutout.getCutoutModelState()).toBe(false);
   });
 });
