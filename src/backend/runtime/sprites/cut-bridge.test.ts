@@ -45,6 +45,21 @@ describe("cut meta: duplicate check", () => {
   });
 });
 
+describe("cut crop (NovelAI V5 inset renders)", () => {
+  test("the crop rides on the request (and on re-sends); the meta echo passes through when valid", () => {
+    const { bridge, sent } = harness();
+    const crop = { x: 608, y: 0, width: 608, height: 832 };
+    const requestId = bridge.request("u1", { ...TARGET, crop });
+    expect(sent[0]).toEqual({ type: "vn_sprite_cut", requestId, imageId: "raw-1", setKey: "set_a", expression: "smile", crop, userId: "u1" });
+    expect(bridge.resend("u1")).toBe(1);
+    expect(sent[1]).toMatchObject({ requestId, crop });
+    expect(normalizeCutMeta({ ...META, crop }, { width: 608, height: 832 })?.crop).toEqual(crop);
+    expect("crop" in normalizeCutMeta({ ...META, crop: { x: 1.5, y: 0, width: 1, height: 1 } }, { width: 608, height: 832 })!).toBe(false);
+    expect("crop" in normalizeCutMeta(META, { width: 832, height: 1216 })!).toBe(false);
+    bridge.dispose();
+  });
+});
+
 describe("cut bridge", () => {
   test("sends vn_sprite_cut and settles a single-chunk PNG", () => {
     const { bridge, sent, settled } = harness();

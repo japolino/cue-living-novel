@@ -248,3 +248,22 @@ describe("sprite library: face boxes", () => {
     expect(view.expressions.sad!.face).toBeNull();
   });
 });
+
+describe("sprite library: NovelAI V5 inset renders", () => {
+  test("old images without a crop load as whole-image renders; a crop and its idle persist", () => {
+    const set = newSpriteSet(member, "set_a", STYLE, "2026-01-01T00:00:00.000Z");
+    const ready = { ...set.images.idle!, status: "ready" as const, rawImageId: "r1", cutImageId: "c1", cutUrl: "/api/v1/images/c1", bbox: [0, 0, 1, 1] as [number, number, number, number] };
+    const crop = { x: 608, y: 0, width: 608, height: 832 };
+    const raw = JSON.parse(JSON.stringify({ version: 1, sets: { set_a: { ...set, images: {
+      idle: ready,
+      smile: { ...ready, expression: "smile", crop, insetReference: "r1" },
+    } } }, plates: {}, updatedAt: "x" }));
+    const images = normalizeSpriteLibrary(raw).sets.set_a!.images;
+    expect("crop" in images.idle!).toBe(false);
+    expect("insetReference" in images.idle!).toBe(false);
+    expect(images.smile!.crop).toEqual(crop);
+    expect(images.smile!.insetReference).toBe("r1");
+    // The view sent to the browser does not carry the crop (the cut-out is already cropped).
+    expect("crop" in spriteSetView(normalizeSpriteLibrary(raw).sets.set_a!).expressions.smile!).toBe(false);
+  });
+});

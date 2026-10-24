@@ -16,6 +16,7 @@ import {
   type SpriteStaging,
   type SpriteTurnView,
 } from "../../../shared/sprites.js";
+import { NOVELAI_INSET_LAYOUTS, type PixelRect } from "../../../shared/novelai-inset.js";
 import { AssetScheduler } from "../../core/asset-scheduler.js";
 import {
   parseDataUrl,
@@ -44,8 +45,10 @@ import {
   type StoredSpriteImage,
   type StoredSpriteSet,
 } from "./library.js";
+import { NovelAiInsetBridge, type NovelAiInsetResultMessage } from "./inset-bridge.js";
 import { compileKeyMomentRequest, type KeyMomentScene } from "./moment-prompts.js";
-import { compilePlateRequest, compileSpriteRequest } from "./prompts.js";
+import { compileNovelAiInsetRequest, connectionRawOverride, novelAiInsetKey, novelAiInsetModelFor, novelAiInsetRejected, type NovelAiInsetModel } from "./novelai-inset.js";
+import { compilePlateRequest, compileSpriteRequest, type SpriteImageRequest } from "./prompts.js";
 import { spriteSeedFor, spriteSetSeedFor, spriteStyleKey } from "./style.js";
 import { plateView, resolveSpriteSet, spriteImageView, spriteLibraryView, spriteTurnView, stagingPlateKeys } from "./views.js";
 
@@ -75,6 +78,10 @@ export type SpriteServiceDeps = {
   libraryLimits?: { sets?: number; plates?: number };
   /** Longest wait of anchored expressions for the idle's duplicate check (default IDLE_CHECK_WAIT_MS). */
   idleCheckWaitMs?: number;
+  /** Longest wait for the browser's NovelAI V5 inset canvas (default NOVELAI_INSET_TIMEOUT_MS). */
+  insetTimeoutMs?: number;
+  /** A state request re-sends inset canvas requests quiet this long (default INSET_RESEND_AFTER_MS). */
+  insetResendAfterMs?: number;
 };
 
 /**
@@ -85,6 +92,12 @@ export type SpriteServiceDeps = {
  * images keep 0.7.
  */
 export const SPRITE_REFERENCE_STRENGTH = 0.5;
+/** A state request (page reload) re-sends inset canvas requests that have been quiet this long. */
+const INSET_RESEND_AFTER_MS = 1_000;
+/** The browser answered with an error for an idle: its later expressions do not ask again for this long. */
+const INSET_ERROR_MISS_MS = 5 * 60_000;
+/** The browser did not answer in time (an older page, a reload): a shorter pause; a reload clears it. */
+const INSET_TIMEOUT_MISS_MS = 60_000;
 /**
  * With anchoring, expressions wait this long at most for the idle's
  * duplicate check (the browser cut-out) before they start with the current
@@ -112,6 +125,10 @@ type InflightWork = WorkItem & {
   /** Provider image produced by this job (kept even when the job is cancelled afterwards). */
   producedImageId?: string;
   producedImageUrl?: string;
+  /** NovelAI V5 inset render: the idle raw render it is anchored to (set before it is sent). */
+  insetReference?: string;
+  /** NovelAI V5 inset render: the part of the raw render the cut-out is made from (set once it rendered). */
+  crop?: PixelRect;
 };
 
 /** A key-moment job on the sprite scheduler: the turn's AssetJob under a unique scheduler id. */
@@ -169,7 +186,7 @@ type UserState = {
    */
   castOrder: Map<string, number>;
   /** Whether the image connection can anchor to a reference (cached briefly). */
-  anchorProvider: { connection: string; provider: string | null; until: number } | null;
+  anchorProvider: { connection: string; provider: string | null; model: string | null; until: number } | null;
   /** Re-pump when the first idle-check wait runs out. */
   wake: { at: number; timer: ReturnType<typeof setTimeout> } | null;
 };
@@ -204,6 +221,10 @@ function imageUrlFor(imageId: string): string {
   return `/api/v1/images/${encodeURIComponent(imageId)}`;
 }
 
+function sameRect(left: PixelRect | undefined, right: PixelRect): boolean {
+  return Boolean(left) && left!.x === right.x && left!.y === right.y && left!.width === right.width && left!.height === right.height;
+}
+
 let jobSequence = 0;
 
 export class SpriteService {
@@ -216,6 +237,11 @@ export class SpriteService {
   private readonly cutTasks = new Set<Promise<void>>();
   /** When each fresh idle render (by raw image id) started waiting for its duplicate check. */
   private readonly idleCheckSince = new Map<string, number>();
+  readonly insetBridge: NovelAiInsetBridge;
+  /** NovelAI V5 insets NovelAI rejected (novelAiInsetKey): plain renders until the backend restarts. */
+  private readonly insetOff = new Set<string>();
+  /** Inset canvases the browser could not compose (user + idle render -> until): later expressions do not wait again; a page reload clears them. */
+  private readonly insetMisses = new Map<string, number>();
 
   constructor(private readonly spindle: SpindleAPI, private readonly deps: SpriteServiceDeps) {
     this.library = new SpriteLibraryStore(spindle, {
@@ -232,6 +258,10 @@ export class SpriteService {
         void task.finally(() => this.cutTasks.delete(task));
       },
       ...(deps.cutTimeoutMs !== undefined ? { timeoutMs: deps.cutTimeoutMs } : {}),
+    });
+    this.insetBridge = new NovelAiInsetBridge({
+      send: (message, userId) => this.spindle.sendToFrontend(message, userId),
+      ...(deps.insetTimeoutMs !== undefined ? { timeoutMs: deps.insetTimeoutMs } : {}),
     });
   }
 
@@ -542,6 +572,8 @@ export class SpriteService {
       image.rawImageUrl = null;
       image.seed = null;
       image.twoFigures = null;
+      delete image.crop;
+      delete image.insetReference;
     }
     image.cutImageId = null;
     image.cutUrl = null;
@@ -563,6 +595,7 @@ export class SpriteService {
   /** A Cue view opened: resume queued work (sprite mode only) and re-send cuts the browser may have lost. */
   async onViewOpened(userId: string | undefined): Promise<void> {
     this.bridge.resend(userId, 10_000);
+    this.resendInsets(userId);
     await this.queueCutUpgrades(userId);
     await this.pump(userId);
   }
@@ -592,10 +625,22 @@ export class SpriteService {
     });
   }
 
-  /** `vn_get_state`: a reloaded frontend lost its cut requests; re-send stale ones. */
+  /** `vn_get_state`: a reloaded frontend lost its cut and inset requests; re-send stale ones. */
   async onStateRequested(userId: string | undefined): Promise<void> {
     this.bridge.resend(userId, 10_000);
+    this.resendInsets(userId);
     await this.pump(userId);
+  }
+
+  /**
+   * A (re)loaded page: pending inset canvas requests go out again (same id),
+   * and idles whose canvas failed or timed out are offered to the browser
+   * again (the new page may compose them).
+   */
+  private resendInsets(userId: string | undefined): void {
+    this.insetBridge.resend(userId, this.deps.insetResendAfterMs ?? INSET_RESEND_AFTER_MS);
+    const prefix = `${userKey(userId)}\u0000`;
+    for (const key of [...this.insetMisses.keys()]) if (key.startsWith(prefix)) this.insetMisses.delete(key);
   }
 
   /**
@@ -922,7 +967,7 @@ export class SpriteService {
         const wanted = state.wanted.get(spriteWorkKey(set.setKey, image.expression));
         // A fresh idle first: anchored expressions wait for its duplicate check.
         const rank = upgrade ? 4 : image.expression === "idle" && image.status === "cutting" ? -1 : wanted ? PRIORITY_RANK[wanted] : 3;
-        pending.push({ target: { setKey: set.setKey, expression: image.expression, imageId: image.rawImageId }, rank });
+        pending.push({ target: { setKey: set.setKey, expression: image.expression, imageId: image.rawImageId, ...(image.crop ? { crop: image.crop } : {}) }, rank });
       }
     }
     pending.sort((left, right) => left.rank - right.rank);
@@ -1083,20 +1128,26 @@ export class SpriteService {
   /**
    * Whether the image connection's provider takes a reference image
    * (NovelAI, ComfyUI, SwarmUI). Cached for 30 s per connection; an
-   * unknown provider counts as "cannot anchor", so nothing waits.
+   * unknown provider counts as "cannot anchor", so nothing waits. NovelAI V5
+   * anchors only through the reference inset: once that failed for the
+   * connection and model, nothing waits either.
    */
   private async providerAnchors(userId: string | undefined, state: UserState, config: VisualNovelConfig): Promise<boolean> {
     const connection = config.imageConnectionId ?? "";
-    const cached = state.anchorProvider;
-    if (cached && cached.connection === connection && cached.until > Date.now()) return cached.provider !== null && REFERENCE_PROVIDERS.has(cached.provider);
-    let provider: string | null = null;
-    try {
-      provider = (await resolveImageProfile(this.spindle, config, userId)).provider;
-    } catch {
-      provider = null;
+    let cached = state.anchorProvider;
+    if (!cached || cached.connection !== connection || cached.until <= Date.now()) {
+      let profile: { provider: string | null; model: string | null } = { provider: null, model: null };
+      try {
+        profile = await resolveImageProfile(this.spindle, config, userId);
+      } catch {
+        profile = { provider: null, model: null };
+      }
+      cached = { connection, provider: profile.provider, model: profile.model, until: Date.now() + 30_000 };
+      state.anchorProvider = cached;
     }
-    state.anchorProvider = { connection, provider, until: Date.now() + 30_000 };
-    return provider !== null && REFERENCE_PROVIDERS.has(provider);
+    if (cached.provider === null || !REFERENCE_PROVIDERS.has(cached.provider)) return false;
+    const inset = novelAiInsetModelFor(cached.provider, config.imageModel || cached.model);
+    return !inset || !this.insetOff.has(novelAiInsetKey(userId, config.imageConnectionId, inset.model));
   }
 
   private async providerFor(config: VisualNovelConfig, userId: string | undefined): Promise<{ provider: string | null; config: VisualNovelConfig }> {
@@ -1138,6 +1189,9 @@ export class SpriteService {
     work.seed = seed;
     const request = compileSpriteRequest({ config, provider, member: set, expression: work.expression, seed });
     const anchorable = referenceAnchoringEnabled(config) && provider !== null && REFERENCE_PROVIDERS.has(provider);
+    // NovelAI V5 takes no reference image: an anchored expression is a reference inset instead.
+    const inset = anchorable && work.expression !== "idle" ? novelAiInsetModelFor(provider, config.imageModel) : null;
+    if (inset) return this.generateInsetSprite(userId, work, signal, config, set, request, inset);
     const reference = anchorable && work.expression !== "idle" ? await this.idleReference(userId, set, signal) : null;
     const base = await this.baseParameters(
       userId,
@@ -1148,6 +1202,77 @@ export class SpriteService {
     );
     const captureIdle = anchorable && work.expression === "idle";
     return this.generate(userId, work, signal, config, request, base, captureIdle ? work.setKey : null);
+  }
+
+  /**
+   * NovelAI V5 expression with anchoring: the browser composes the inset
+   * canvas from the set's idle render (left half) and its mask, the V5
+   * inpainting model draws the right half, and the cut-out is made from the
+   * right half (`crop`). No idle render, no canvas (browser closed, too old
+   * or failing) or an unusable raw override: the plain expression,
+   * unanchored, as V5 would draw it anyway. NovelAI rejects the request
+   * (`novelAiInsetRejected`: 400/404/422, an unknown model): the plain
+   * expression once, and no more insets for this user, connection and model
+   * until the backend restarts (a wrong model name cannot keep failing).
+   * Any other error (429 lock, 5xx, network, credits) fails the render as
+   * usual and the inset stays on.
+   */
+  private async generateInsetSprite(
+    userId: string | undefined,
+    work: InflightWork & { kind: "sprite" },
+    signal: AbortSignal,
+    config: VisualNovelConfig,
+    set: StoredSpriteSet,
+    request: SpriteImageRequest,
+    inset: NovelAiInsetModel,
+  ): Promise<{ imageId: string; imageUrl: string }> {
+    const label = `sprite ${work.setKey}/${work.expression}`;
+    const base = await this.baseParameters(userId, "novelai", config, null, label);
+    const plain = () => this.generate(userId, work, signal, config, request, base, null);
+    const key = novelAiInsetKey(userId, config.imageConnectionId, inset.model);
+    const reference = set.images.idle?.rawImageId ?? null;
+    if (this.insetOff.has(key) || !reference) return plain();
+    const missKey = `${userKey(userId)}\u0000${reference}`;
+    if ((this.insetMisses.get(missKey) ?? 0) > Date.now()) return plain();
+    const layout = NOVELAI_INSET_LAYOUTS.sprite;
+    // Set before the canvas is asked for: a new idle stored meanwhile re-queues this work.
+    work.insetReference = reference;
+    const composed = await this.insetBridge.compose(userId, { layout: layout.id, imageId: reference }, { signal });
+    if (signal.aborted) throw abortError(signal);
+    if (!composed.ok) {
+      delete work.insetReference;
+      this.insetMisses.set(missKey, Date.now() + (composed.timedOut ? INSET_TIMEOUT_MISS_MS : INSET_ERROR_MISS_MS));
+      while (this.insetMisses.size > 64) {
+        const oldest = this.insetMisses.keys().next().value;
+        if (oldest === undefined) break;
+        this.insetMisses.delete(oldest);
+      }
+      this.deps.log?.(`${label}: reference inset unavailable (${composed.error}) -> unanchored`, userId);
+      return plain();
+    }
+    let insetRequest: SpriteImageRequest;
+    try {
+      // The override the plain request would carry: Cue's own replaces the connection's (Lumiverse merges one level deep).
+      const own = config.imageParameters.rawRequestOverride;
+      const overrides = [own !== undefined ? own : await connectionRawOverride(this.spindle, config, userId)];
+      insetRequest = compileNovelAiInsetRequest({ request, layout, canvas: composed.canvas, userOverrides: overrides });
+    } catch (error) {
+      delete work.insetReference;
+      this.deps.log?.(`${label}: reference inset skipped (rawRequestOverride: ${errorText(error)}) -> unanchored`, userId);
+      return plain();
+    }
+    this.deps.log?.(`${label}: NovelAI V5 reference inset on ${inset.model}${inset.verified ? "" : " (unverified model name)"}, idle ${reference}`, userId);
+    try {
+      const result = await this.generate(userId, work, signal, { ...config, imageModel: inset.model }, insetRequest, base, null);
+      work.crop = { ...layout.repaint };
+      return result;
+    } catch (error) {
+      if (signal.aborted || !novelAiInsetRejected(error, inset.model)) throw error;
+      delete work.insetReference;
+      this.insetOff.add(key);
+      this.deps.log?.(`${label}: reference inset failed on ${inset.model} (${errorText(error).slice(0, 300)}) -> retrying unanchored; inset off for this connection and model until restart`, userId);
+      return plain();
+    }
   }
 
   private async generatePlate(userId: string | undefined, work: InflightWork & { kind: "plate" }, signal: AbortSignal): Promise<{ imageId: string; imageUrl: string }> {
@@ -1247,6 +1372,8 @@ export class SpriteService {
 
   private async onJobSettled(userId: string | undefined, state: UserState, work: InflightWork, job: AssetJob | null, error: unknown): Promise<void> {
     const current = state.inflight.get(work.key)?.jobId === work.jobId;
+    // A render queued again as it was stored keeps what it was asked for.
+    let keepExplicit = false;
     if (current) state.inflight.delete(work.key);
     state.byJobId.delete(work.jobId);
     try {
@@ -1258,7 +1385,7 @@ export class SpriteService {
         return;
       }
       if (imageId && imageUrl) {
-        await this.storeGenerated(userId, work, imageId, imageUrl);
+        keepExplicit = await this.storeGenerated(userId, work, imageId, imageUrl);
         return;
       }
       if (job?.status === "cancelled") {
@@ -1308,13 +1435,21 @@ export class SpriteService {
       });
       broadcast?.();
     } finally {
-      if (current) state.explicit.delete(work.key);
+      if (current && !keepExplicit) state.explicit.delete(work.key);
       void this.pump(userId);
     }
   }
 
-  private async storeGenerated(userId: string | undefined, work: InflightWork, imageId: string, imageUrl: string): Promise<void> {
+  /**
+   * Store a finished render (a sprite goes on to its cut-out). Returns true
+   * when an inset render was queued again instead: its idle changed while it
+   * rendered (a new idle render, or the idle rendering again).
+   */
+  private async storeGenerated(userId: string | undefined, work: InflightWork, imageId: string, imageUrl: string): Promise<boolean> {
     let orphan = false;
+    let stale = false;
+    const doomed: string[] = [];
+    let requeued: string[] = [];
     const broadcast = await this.library.update(userId, (library, now) => {
       if (work.kind === "sprite") {
         const set = library.sets[work.setKey];
@@ -1322,6 +1457,15 @@ export class SpriteService {
         if (!set || !image || (image.status !== "queued" && image.status !== "generating")) {
           orphan = true;
           return null;
+        }
+        if (work.insetReference && work.expression !== "idle" && work.insetReference !== set.images.idle?.rawImageId) {
+          stale = true;
+          orphan = true;
+          this.resetImage(image, "queued", now);
+          const state = this.state(userId);
+          state.wanted.set(work.key, higher(state.wanted.get(work.key), work.priority));
+          state.explicit.add(work.key);
+          return () => this.broadcastImage(userId, work.setKey, image);
         }
         image.status = "cutting";
         image.rawImageId = imageId;
@@ -1333,9 +1477,15 @@ export class SpriteService {
         image.attempts += 1;
         image.seed = work.seed ?? null;
         image.twoFigures = null;
+        if (work.crop) image.crop = { ...work.crop };
+        else delete image.crop;
+        if (work.insetReference) image.insetReference = work.insetReference;
+        else delete image.insetReference;
         image.updatedAt = now;
         set.updatedAt = now;
-        return () => this.broadcastImage(userId, work.setKey, image);
+        const out = [() => this.broadcastImage(userId, work.setKey, image)];
+        if (work.expression === "idle") requeued = this.requeueStaleInsets(userId, set, imageId, now, doomed, out);
+        return () => { for (const send of out) send(); };
       }
       const plate = library.plates[work.plateKey];
       if (!plate || (plate.status !== "queued" && plate.status !== "generating")) {
@@ -1351,7 +1501,49 @@ export class SpriteService {
       return () => this.broadcastPlate(userId, plate);
     });
     if (orphan) await this.deleteImage(userId, imageId);
+    if (stale && work.kind === "sprite") this.deps.log?.(`sprite ${work.setKey}/${work.expression}: its idle changed while it rendered -> requeued as an inset of the current idle`, userId);
+    if (requeued.length && work.kind === "sprite") this.deps.log?.(`sprite ${work.setKey}/idle: new idle render -> requeued inset expressions made from the old one: ${requeued.join(", ")}`, userId);
     broadcast?.();
+    for (const id of doomed) await this.deleteImage(userId, id);
+    return stale;
+  }
+
+  /**
+   * A set got a new idle render: NovelAI V5 inset expressions drawn from
+   * another idle (rendered, being cut, cut failed, or still composing or
+   * rendering) no longer match it and are queued again, as the idle's
+   * references. Plain renders (other providers, fallbacks) are left alone.
+   * Returns the requeued expressions.
+   */
+  private requeueStaleInsets(
+    userId: string | undefined,
+    set: StoredSpriteSet,
+    idleImageId: string,
+    now: string,
+    doomed: string[],
+    out: Array<() => void>,
+  ): string[] {
+    const state = this.state(userId);
+    const requeued: string[] = [];
+    for (const image of Object.values(set.images)) {
+      if (image.expression === "idle") continue;
+      const key = spriteWorkKey(set.setKey, image.expression);
+      const work = state.inflight.get(key);
+      const running = work?.kind === "sprite" && work.insetReference !== undefined && work.insetReference !== idleImageId;
+      const rendered = image.insetReference !== undefined && image.insetReference !== idleImageId
+        && (image.status === "cutting" || image.status === "ready" || (image.status === "failed" && image.rawImageId !== null));
+      if (!running && !rendered) continue;
+      this.forget(userId, state, key, set.setKey, image.expression);
+      if (image.rawImageId) doomed.push(image.rawImageId);
+      if (image.cutImageId) doomed.push(image.cutImageId);
+      this.resetImage(image, "queued", now);
+      state.wanted.set(key, higher(state.wanted.get(key), state.need.has(key) ? "visible" : "next"));
+      // A continuation of earlier work: it runs even if the mode changed meanwhile.
+      state.explicit.add(key);
+      requeued.push(image.expression);
+      out.push(() => this.broadcastImage(userId, set.setKey, image));
+    }
+    return requeued;
   }
 
   /* ------------------------------------------------------------------ */
@@ -1363,7 +1555,16 @@ export class SpriteService {
     this.bridge.accept(userId, message);
   }
 
+  /** Route one `vn_novelai_inset_result` chunk (stale and unknown ids are ignored). */
+  handleInsetResult(userId: string | undefined, message: NovelAiInsetResultMessage): void {
+    this.insetBridge.accept(userId, message);
+  }
+
   private async onCutSettled(userId: string | undefined, target: SpriteCutTarget, outcome: SpriteCutOutcome): Promise<void> {
+    if (outcome.ok && target.crop && !sameRect(outcome.meta.crop, target.crop)) {
+      // A page from before the inset cut the whole canvas (reference and render): never keep that.
+      outcome = { ok: false, error: "This page did not crop the NovelAI V5 inset render. Reload the page, then use Re-cut." };
+    }
     const library = await this.library.get(userId);
     const current = (): StoredSpriteImage | null => {
       const image = library.sets[target.setKey]?.images[target.expression];

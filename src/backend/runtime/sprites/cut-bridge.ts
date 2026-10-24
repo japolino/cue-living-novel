@@ -1,4 +1,5 @@
 import type { BackendResponse, FrontendRequest } from "../../../protocol.js";
+import { normalizePixelRect, type PixelRect } from "../../../shared/novelai-inset.js";
 import { normalizeSpriteFaceBox, SPRITE_CUT_CHUNK_CHARS, SPRITE_CUT_MAX_BYTES, type SpriteCutMeta } from "../../../shared/sprites.js";
 
 /**
@@ -9,7 +10,8 @@ import { normalizeSpriteFaceBox, SPRITE_CUT_CHUNK_CHARS, SPRITE_CUT_MAX_BYTES, t
  * library (the service does, in `onSettled`).
  */
 
-export type SpriteCutTarget = { setKey: string; expression: string; imageId: string };
+/** `crop`: the browser crops the raw render to it before cutting (NovelAI V5 inset renders). */
+export type SpriteCutTarget = { setKey: string; expression: string; imageId: string; crop?: PixelRect };
 
 export type SpriteCutOutcome =
   | { ok: true; png: Uint8Array; meta: SpriteCutMeta }
@@ -72,6 +74,7 @@ export function normalizeCutMeta(meta: unknown, size: { width: number; height: n
     ...(typeof record.twoFigures === "boolean" ? { twoFigures: record.twoFigures } : {}),
     // A broken face box counts as "not detected" (the stage detects again later).
     ...(record.face === null ? { face: null } : normalizeSpriteFaceBox(record.face) ? { face: normalizeSpriteFaceBox(record.face) } : {}),
+    ...(normalizePixelRect(record.crop) ? { crop: normalizePixelRect(record.crop)! } : {}),
     durationMs: Math.round(duration),
   };
 }
@@ -255,6 +258,7 @@ export class SpriteCutBridge {
         imageId: entry.target.imageId,
         setKey: entry.target.setKey,
         expression: entry.target.expression,
+        ...(entry.target.crop ? { crop: entry.target.crop } : {}),
       }, entry.userId);
     } catch (error) {
       this.settle(entry, { ok: false, error: `Could not reach the browser: ${error instanceof Error ? error.message : String(error)}` });

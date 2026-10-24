@@ -40,6 +40,7 @@ import { SpeechSettingsSection } from "../speech/settings-ui.js";
 import type { SpeechSettings } from "../../speech-config.js";
 import { createSpriteCutService } from "../sprites/cut-service.js";
 import { createSpriteFaceService } from "../sprites/face-service.js";
+import { createNovelAiInsetService } from "../sprites/inset-service.js";
 import { withPlate, withSpriteImage } from "../stage/sprite-layer.js";
 import { spriteIllustrationViewFor, type PlateView, type SpriteIllustrationView, type SpriteImageView } from "../../shared/sprites.js";
 
@@ -882,6 +883,11 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     fetchImage: (imageId) => fetchLumiverseImage(imageId, (input, init) => fetch(input, init)),
     getConfig: () => configRef.current,
   });
+  // NovelAI V5 reference inset: the backend has no canvas, so the browser draws the inset canvas and mask.
+  const spriteInsets = createNovelAiInsetService({
+    sendToBackend: (request) => ctx.sendToBackend(request),
+    fetchImage: (imageId) => fetchLumiverseImage(imageId, (input, init) => fetch(input, init)),
+  });
   // Face backfill for older sprites (emote placement); never delays showing them.
   const spriteFaces = createSpriteFaceService({
     sendToBackend: (request) => ctx.sendToBackend(request),
@@ -1266,6 +1272,11 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       void spriteCuts.handle(message);
       return;
     }
+    if (type === "vn_novelai_inset" && message.type === "vn_novelai_inset") {
+      // Like vn_sprite_cut: served for any chat; the image id comes from the backend.
+      void spriteInsets.handle(message);
+      return;
+    }
     if (type === "vn_sprite_update" && message.type === "vn_sprite_update") {
       if (turn) turn = turnWithSpriteImage(turn, message.setKey, message.image);
       if (pendingNextTurn) pendingNextTurn = turnWithSpriteImage(pendingNextTurn, message.setKey, message.image);
@@ -1397,6 +1408,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     gameBridge?.destroy();
     imageBridge.destroy();
     spriteCuts.dispose();
+    spriteInsets.dispose();
     spriteFaces.dispose();
     for (const pending of panelRequests.values()) { clearTimeout(pending.timer); pending.reject(new Error("Panel layer closed.")); }
     panelRequests.clear();

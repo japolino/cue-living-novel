@@ -28,6 +28,12 @@ const StatusSchema = z.enum(["missing", "queued", "generating", "cutting", "read
 const Id = z.string().trim().min(1).max(512);
 const Stamp = z.string().min(1).max(64);
 const BboxSchema = z.tuple([z.number(), z.number(), z.number(), z.number()]);
+const CropSchema = z.object({
+  x: z.number().int().nonnegative(),
+  y: z.number().int().nonnegative(),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+});
 
 export const StoredSpriteImageSchema = z.object({
   expression: z.string().trim().min(1).max(80),
@@ -73,6 +79,18 @@ export const StoredSpriteImageSchema = z.object({
    * data; the stage detects it once and saves it with `vn_sprite_face`).
    */
   face: BboxSchema.nullable().optional(),
+  /**
+   * NovelAI V5 reference inset render: the raw render is the whole inset
+   * canvas and the cut-out (and every re-cut) is made from this pixel
+   * rectangle of it. Absent: the whole image (every other render).
+   */
+  crop: CropSchema.optional(),
+  /**
+   * Inset render: the idle raw render it was anchored to. When the set gets
+   * a new idle, inset expressions made from another idle are queued again.
+   * Absent: not an inset render.
+   */
+  insetReference: Id.optional(),
   createdAt: Stamp,
   updatedAt: Stamp,
 });

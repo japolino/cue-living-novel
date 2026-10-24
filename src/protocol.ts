@@ -1,6 +1,7 @@
 import type { VisualNovelConfig } from "./config.js";
 import type { PanelArtifact } from "./shared/panels.js";
 import type { CueImageRequest, CueImageResult } from "./shared/cue-images.js";
+import type { NovelAiInsetLayoutId, PixelRect } from "./shared/novelai-inset.js";
 import type { PlateView, SpriteCutMeta, SpriteFaceBox, SpriteImageView, SpriteSetView, SpriteTurnView } from "./shared/sprites.js";
 
 export type FrontendRequest =
@@ -75,6 +76,21 @@ export type FrontendRequest =
    * null: no face found.
    */
   | { type: "vn_sprite_face"; setKey: string; expression: string; url: string; face: SpriteFaceBox | null }
+  /**
+   * Sprite mode, NovelAI V5: reply to `vn_novelai_inset`. The canvas PNG
+   * (`part: "image"`) and the mask PNG (`part: "mask"`) arrive as ordered
+   * base64 chunks of at most SPRITE_CUT_CHUNK_CHARS each (any order). A
+   * failure is one message with `error` set.
+   */
+  | {
+      type: "vn_novelai_inset_result";
+      requestId: string;
+      part?: "image" | "mask";
+      chunkIndex: number;
+      chunkCount: number;
+      dataBase64?: string;
+      error?: string;
+    }
   /** Sprite mode: ask for the whole sprite library (sets and plates). */
   | { type: "vn_get_sprite_library" }
   /** Sprite mode: library actions from settings or the stage. */
@@ -195,7 +211,23 @@ export type BackendResponse =
    * `/api/v1/images/<imageId>` (same origin), removes the white background,
    * and answers with `vn_sprite_cut_result` chunks carrying `requestId`.
    */
-  | { type: "vn_sprite_cut"; requestId: string; imageId: string; setKey: string; expression: string }
+  | {
+      type: "vn_sprite_cut";
+      requestId: string;
+      imageId: string;
+      setKey: string;
+      expression: string;
+      /** Crop the fetched image to this rectangle (pixels) before cutting (NovelAI V5 inset renders). */
+      crop?: PixelRect;
+    }
+  /**
+   * Sprite mode, NovelAI V5: compose a reference inset. The frontend fetches
+   * `/api/v1/images/<imageId>` (or decodes `dataBase64`), draws it contained
+   * and centred in the layout's reference box on a white canvas
+   * (`NOVELAI_INSET_LAYOUTS`), draws the mask (black keep, white repaint),
+   * and answers with `vn_novelai_inset_result` chunks carrying `requestId`.
+   */
+  | { type: "vn_novelai_inset"; requestId: string; layout: NovelAiInsetLayoutId; imageId?: string; dataBase64?: string; mimeType?: string }
   /** Sprite mode: one sprite image changed state (any chat; apply when the set is on stage). */
   | { type: "vn_sprite_update"; setKey: string; image: SpriteImageView }
   /** Sprite mode: one background plate changed state. */
