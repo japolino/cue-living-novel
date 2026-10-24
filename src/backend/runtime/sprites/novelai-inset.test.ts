@@ -9,6 +9,7 @@ import {
   mergeNovelAiRawOverride,
   novelAiInsetKey,
   novelAiInsetModelFor,
+  novelAiInsetRejected,
   parseRawOverride,
 } from "./novelai-inset.js";
 import { compileSpriteRequest, SPRITE_NEGATIVE_TAGS } from "./prompts.js";
@@ -35,6 +36,21 @@ describe("NovelAI V5 inset: detection", () => {
     expect(novelAiInsetModelFor("novelai", null)).toBeNull();
     expect(novelAiInsetModelFor("comfyui", "nai-diffusion-5-full")).toBeNull();
     expect(novelAiInsetModelFor(null, "nai-diffusion-5-full")).toBeNull();
+  });
+
+  test("only a rejected request turns the inset off; passing errors do not", () => {
+    const model = "nai-diffusion-5-curated-inpainting";
+    for (const status of [400, 404, 422]) expect(novelAiInsetRejected(new Error(`NovelAI image generate failed (${status}): Bad Request`), model)).toBe(true);
+    for (const status of [401, 402, 408, 409, 429, 500, 502, 503]) expect(novelAiInsetRejected(new Error(`NovelAI image generate failed (${status}): busy model`), model)).toBe(false);
+    expect(novelAiInsetRejected(Object.assign(new Error("Unprocessable"), { status: 422 }), model)).toBe(true);
+    expect(novelAiInsetRejected(Object.assign(new Error("unknown model"), { status: 429 }), model)).toBe(false);
+    // Without a status: only a message about the model or the inpainting.
+    expect(novelAiInsetRejected(new Error("unknown model"), model)).toBe(true);
+    expect(novelAiInsetRejected(new Error(`${model} is not available`), model)).toBe(true);
+    expect(novelAiInsetRejected(new Error("NovelAI image generate failed: infill is not supported here"), model)).toBe(true);
+    expect(novelAiInsetRejected(new Error("fetch failed"), model)).toBe(false);
+    expect(novelAiInsetRejected(new Error("The image provider completed without a persisted image ID."), model)).toBe(false);
+    expect(novelAiInsetRejected("socket hang up", model)).toBe(false);
   });
 
   test("the session key separates users, connections and models", () => {

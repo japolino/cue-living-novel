@@ -3,8 +3,8 @@ import type { VisualNovelConfig } from "../../../config.js";
 import { NOVELAI_INSET_LAYOUTS } from "../../../shared/novelai-inset.js";
 import { spriteSetKeyFor } from "../../../shared/sprites.js";
 import { referenceParametersFor } from "../images.js";
-import { CUT_META, MIRA, fakePng, mockSpindle, spriteConfig, toBase64, waitFor, type GenerateCall, type MockSpindleOptions } from "./__fixtures__/sprite-fixtures.js";
-import { SpriteService } from "./jobs.js";
+import { CUT_META, KAI, MIRA, fakePng, mockSpindle, spriteConfig, toBase64, waitFor, type GenerateCall, type MockSpindleOptions } from "./__fixtures__/sprite-fixtures.js";
+import { SpriteService, type SpriteServiceDeps } from "./jobs.js";
 import { compileSpriteRequest } from "./prompts.js";
 import { spriteSeedFor, spriteStyleKey } from "./style.js";
 
@@ -22,6 +22,7 @@ function setup(options: MockSpindleOptions & {
   inset?: "ok" | "error" | "silent";
   /** Whether the browser echoes the crop in the cut meta (default true). */
   echoCrop?: boolean;
+  deps?: Partial<SpriteServiceDeps>;
 } = {}) {
   const mock = mockSpindle({ provider: "novelai", ...options });
   let config = spriteConfig({ ...V5, ...(options.config ?? {}) });
@@ -34,7 +35,10 @@ function setup(options: MockSpindleOptions & {
     referenceTimeoutMs: 300,
     insetTimeoutMs: 60,
     idleCheckWaitMs: 2000,
+    ...(options.deps ?? {}),
   });
+  let insetMode = options.inset ?? "ok";
+  let echoCrop = options.echoCrop !== false;
   const styleKey = spriteStyleKey(config);
   const setKey = spriteSetKeyFor(MIRA, styleKey);
   const insets = () => mock.of("vn_novelai_inset") as unknown as InsetMessage[];
@@ -45,8 +49,8 @@ function setup(options: MockSpindleOptions & {
     for (const request of insets()) {
       if (answered.has(request.requestId)) continue;
       answered.add(request.requestId);
-      if ((options.inset ?? "ok") === "silent") continue;
-      if (options.inset === "error") {
+      if (insetMode === "silent") continue;
+      if (insetMode === "error") {
         service.handleInsetResult("u1", { type: "vn_novelai_inset_result", requestId: request.requestId, chunkIndex: 0, chunkCount: 1, error: "Image fetch failed (404)." });
         continue;
       }
@@ -60,7 +64,7 @@ function setup(options: MockSpindleOptions & {
       const height = request.crop ? request.crop.height : 1216;
       service.handleCutResult("u1", {
         type: "vn_sprite_cut_result", requestId: request.requestId, chunkIndex: 0, chunkCount: 1, dataBase64: toBase64(fakePng(width, height)),
-        meta: { ...CUT_META, width, height, twoFigures: false, ...(request.crop && options.echoCrop !== false ? { crop: request.crop } : {}) },
+        meta: { ...CUT_META, width, height, twoFigures: false, ...(request.crop && echoCrop ? { crop: request.crop } : {}) },
       });
     }
   };
@@ -84,6 +88,13 @@ function setup(options: MockSpindleOptions & {
     ...mock, service, log, setKey, insets, cuts, drive, library, image, allSettled,
     get config() { return config; },
     setConfig: (patch: Partial<VisualNovelConfig>) => { config = { ...config, ...patch }; },
+    setInset: (mode: "ok" | "error" | "silent") => { insetMode = mode; },
+    setEchoCrop: (value: boolean) => { echoCrop = value; },
+    /** Answer one inset request with a valid canvas and mask (as the browser would). */
+    answerInset: (requestId: string) => {
+      service.handleInsetResult("u1", { type: "vn_novelai_inset_result", requestId, part: "image", chunkIndex: 0, chunkCount: 1, dataBase64: toBase64(fakePng(1216, 832, 90)) });
+      service.handleInsetResult("u1", { type: "vn_novelai_inset_result", requestId, part: "mask", chunkIndex: 0, chunkCount: 1, dataBase64: toBase64(fakePng(1216, 832, 5)) });
+    },
   };
 }
 
@@ -184,7 +195,7 @@ describe("NovelAI V5 inset: sprite expressions", () => {
 });
 
 describe("NovelAI V5 inset: fallbacks", () => {
-  test("a provider error retries the expression once unanchored and turns the inset off for the session", async () => {
+  test("a rejected request (400) retries the expression once unanchored and turns the inset off for the session", async () => {
     const f = setup({ failGenerate: (call) => (inpainting(call) ? "NovelAI image generate failed (400): unknown model" : null) });
     await f.service.prepareCast("u1", [MIRA], f.config);
     await f.drive(f.allSettled);
@@ -205,6 +216,61 @@ describe("NovelAI V5 inset: fallbacks", () => {
       expect(stored.insetReference).toBeUndefined();
     }
     expect(f.log.some((line) => line.includes("reference inset failed on nai-diffusion-5-full-inpainting") && line.includes("inset off"))).toBe(true);
+  });
+
+  test("a passing error (429 lock, 5xx, network, no image id) fails the render as usual and keeps the inset on", async () => {
+    for (const failure of [
+      "NovelAI image generate failed (429): Concurrent generation is locked",
+      "NovelAI image generate failed (502): Bad Gateway",
+      "fetch failed",
+      "The image provider completed without a persisted image ID.",
+    ]) {
+      let failed = false;
+      const f = setup({ failGenerate: (call) => (inpainting(call) && !failed ? ((failed = true), failure) : null) });
+      await f.service.prepareCast("u1", [MIRA], f.config);
+      await f.drive(f.allSettled);
+      // No plain retry: the idle is the only plain render; every expression asked for an inset.
+      expect(f.calls.filter((call) => !inpainting(call))).toHaveLength(1);
+      expect(f.calls.filter(inpainting)).toHaveLength(3);
+      const statuses = await Promise.all(["smile", "sad", "angry"].map(async (expression) => (await f.image(expression)).status));
+      expect(statuses.filter((status) => status === "failed")).toHaveLength(1);
+      expect(statuses.filter((status) => status === "ready")).toHaveLength(2);
+      expect(f.log.some((line) => line.includes("inset off"))).toBe(false);
+      // Retrying the failed one draws an inset again.
+      const failedExpression = ["smile", "sad", "angry"][statuses.indexOf("failed")]!;
+      await f.service.action("u1", { type: "vn_sprite_action", action: "regenerate", setKey: f.setKey, expression: failedExpression }, { config: f.config });
+      await f.drive(async () => (await f.image(failedExpression)).status === "ready");
+      expect(f.calls.filter(inpainting)).toHaveLength(4);
+      expect((await f.image(failedExpression)).insetReference).toBe((await f.image("idle")).rawImageId!);
+    }
+  });
+
+  test("once the inset is off, a set's expressions no longer wait for its idle's check", async () => {
+    const f = setup({ gated: true, deps: { idleCheckWaitMs: 10_000 }, failGenerate: (call) => (inpainting(call) ? "NovelAI image generate failed (404): Not Found" : null) });
+    const releaseAll = async (done: () => Promise<boolean>) => {
+      await f.drive(async () => {
+        for (const gate of f.gates) gate.release();
+        return done();
+      });
+    };
+    await f.service.prepareCast("u1", [MIRA], f.config);
+    await releaseAll(f.allSettled);
+    expect(f.log.some((line) => line.includes("inset off"))).toBe(true);
+    const asked = f.insets().length;
+    // A new character: the next expression starts before the idle's cut-out (its duplicate check) is back.
+    const released = f.gates.length;
+    await f.service.prepareCast("u1", [KAI], f.config);
+    await waitFor(() => f.gates.length === released + 1);
+    f.gates[released]!.release();
+    await waitFor(() => f.gates.length === released + 2);
+    const kai = spriteSetKeyFor(KAI, spriteStyleKey(f.config));
+    expect((await f.library()).sets[kai]!.images.idle!.status).toBe("cutting");
+    expect(inpainting(f.gates[released + 1]!.call)).toBe(false);
+    await releaseAll(async () => {
+      const set = (await f.library()).sets[kai]!;
+      return ["idle", "smile", "sad", "angry"].every((expression) => set.images[expression]!.status === "ready");
+    });
+    expect(f.insets()).toHaveLength(asked);
   });
 
   test("the switch-off is per model: V5 Curated still tries its own (unverified) inpainting model", async () => {

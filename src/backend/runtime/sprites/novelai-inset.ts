@@ -30,7 +30,11 @@ const VERIFIED_INPAINTING_MODELS = new Set(["nai-diffusion-5-full-inpainting"]);
 export type NovelAiInsetModel = {
   /** The model the inset request sends. */
   model: string;
-  /** False when the name is a guess (anything but V5 Full); a provider error then turns the inset off. */
+  /**
+   * False when the name is a guess (anything but V5 Full). Only logged: any
+   * inset model whose request NovelAI rejects (`novelAiInsetRejected`) is
+   * turned off, verified or not; other errors leave it on.
+   */
   verified: boolean;
 };
 
@@ -45,9 +49,32 @@ export function novelAiInsetModelFor(provider: string | null | undefined, model:
   return { model: inpainting, verified: VERIFIED_INPAINTING_MODELS.has(inpainting) };
 }
 
-/** Session key of an inset that failed once: no more insets for that user, connection and model. */
+/** Session key of an inset NovelAI rejected: no more insets for that user, connection and model. */
 export function novelAiInsetKey(userId: string | undefined, connectionId: string | null | undefined, model: string): string {
   return `${userId ?? "owner"}\u0000${connectionId ?? ""}\u0000${model}`;
+}
+
+/** HTTP statuses that reject the request itself (a wrong model name or body), not a passing condition. */
+const REJECTED_STATUSES = new Set([400, 404, 422]);
+/** Lumiverse's provider errors: `NovelAI image generate failed (429): ...`. */
+const PROVIDER_STATUS = /\bfailed \((\d{3})\)/;
+
+/**
+ * Whether an inset generation error means NovelAI rejects the inset request
+ * (turn the inset off and draw the expression plain): HTTP 400, 404 or 422,
+ * or an error without a status that names the model or the inpainting
+ * (`unknown model`, a streamed error about infill). Everything else (408,
+ * 429 concurrent-generation lock, 5xx, 401/402, network, a missing image id)
+ * is not about the inset: the job fails as any render does and the inset
+ * stays on.
+ */
+export function novelAiInsetRejected(error: unknown, model: string): boolean {
+  const raw = error && typeof error === "object" ? (error as { status?: unknown }).status : undefined;
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  const status = typeof raw === "number" ? raw : Number(PROVIDER_STATUS.exec(message)?.[1] ?? Number.NaN);
+  if (Number.isFinite(status)) return REJECTED_STATUSES.has(status);
+  const text = message.toLowerCase();
+  return text.includes(model.toLowerCase()) || /\b(?:model|infill|inpaint\w*)\b/.test(text);
 }
 
 /** Base prompt with `split screen` first (once). */

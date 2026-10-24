@@ -47,7 +47,7 @@ import {
 } from "./library.js";
 import { NovelAiInsetBridge, type NovelAiInsetResultMessage } from "./inset-bridge.js";
 import { compileKeyMomentRequest, type KeyMomentScene } from "./moment-prompts.js";
-import { compileNovelAiInsetRequest, connectionRawOverride, novelAiInsetKey, novelAiInsetModelFor, type NovelAiInsetModel } from "./novelai-inset.js";
+import { compileNovelAiInsetRequest, connectionRawOverride, novelAiInsetKey, novelAiInsetModelFor, novelAiInsetRejected, type NovelAiInsetModel } from "./novelai-inset.js";
 import { compilePlateRequest, compileSpriteRequest, type SpriteImageRequest } from "./prompts.js";
 import { spriteSeedFor, spriteSetSeedFor, spriteStyleKey } from "./style.js";
 import { plateView, resolveSpriteSet, spriteImageView, spriteLibraryView, spriteTurnView, stagingPlateKeys } from "./views.js";
@@ -230,7 +230,7 @@ export class SpriteService {
   /** When each fresh idle render (by raw image id) started waiting for its duplicate check. */
   private readonly idleCheckSince = new Map<string, number>();
   readonly insetBridge: NovelAiInsetBridge;
-  /** NovelAI V5 insets that failed at the provider (novelAiInsetKey): plain renders until the backend restarts. */
+  /** NovelAI V5 insets NovelAI rejected (novelAiInsetKey): plain renders until the backend restarts. */
   private readonly insetOff = new Set<string>();
   /** Inset canvases the browser could not compose (user + idle render -> until): later expressions do not wait again. */
   private readonly insetMisses = new Map<string, number>();
@@ -1189,9 +1189,12 @@ export class SpriteService {
    * inpainting model draws the right half, and the cut-out is made from the
    * right half (`crop`). No idle render, no canvas (browser closed, too old
    * or failing) or an unusable raw override: the plain expression,
-   * unanchored, as V5 would draw it anyway. A provider error: the plain
+   * unanchored, as V5 would draw it anyway. NovelAI rejects the request
+   * (`novelAiInsetRejected`: 400/404/422, an unknown model): the plain
    * expression once, and no more insets for this user, connection and model
    * until the backend restarts (a wrong model name cannot keep failing).
+   * Any other error (429 lock, 5xx, network, credits) fails the render as
+   * usual and the inset stays on.
    */
   private async generateInsetSprite(
     userId: string | undefined,
@@ -1238,7 +1241,7 @@ export class SpriteService {
       work.crop = { ...layout.repaint };
       return result;
     } catch (error) {
-      if (signal.aborted) throw error;
+      if (signal.aborted || !novelAiInsetRejected(error, inset.model)) throw error;
       delete work.insetReference;
       this.insetOff.add(key);
       this.deps.log?.(`${label}: reference inset failed on ${inset.model} (${errorText(error).slice(0, 300)}) -> retrying unanchored; inset off for this connection and model until restart`, userId);

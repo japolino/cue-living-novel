@@ -402,11 +402,15 @@ one table, so a scene layout can be added). Request:
   basic → best upgrade crop the same way. A cut without the echo (a page
   from before the inset) fails ("reload the page, then use Re-cut") instead
   of keeping both halves.
-- **Fallbacks.** A provider error (for example an unknown model name)
-  retries the expression once as the plain request (portrait, unanchored,
-  as V5 would draw it anyway), logs it (debug logging) and turns the inset
-  off for that user, connection and inpainting model until the backend
-  restarts; anchored expressions then stop waiting for the idle. No canvas
+- **Fallbacks.** NovelAI rejects the request (HTTP 400, 404 or 422, or
+  an error naming the model or the infill, for example an unknown model
+  name): the expression is retried once as the plain request (portrait,
+  unanchored, as V5 would draw it anyway), logged (debug logging), and the
+  inset is off for that user, connection and inpainting model until the
+  backend restarts; anchored expressions then stop waiting for the idle.
+  Any other error (429 concurrent-generation lock, 408, 5xx, network,
+  credits, a missing image id) fails the render as usual, with no plain
+  retry, and the inset stays on for the next attempt. No canvas
   (browser error, timeout, a page without the inset service): the plain
   expression, and that idle is not offered to the browser again for 5
   minutes.
@@ -426,7 +430,7 @@ one table, so a scene layout can be added). Request:
   a repaint area gives several figures. One character per inset.
 - **Unverified** (no key during development): `nai-diffusion-5-full-inpainting`
   is the author's; `nai-diffusion-5-curated-inpainting` is a guess (logged
-  as unverified; a failure turns the inset off). Lumiverse uses
+  as unverified; if NovelAI rejects it, the inset turns off). Lumiverse uses
   `/ai/generate-image-stream` unless the connection is set to non-streaming;
   whether infill works on the stream route is untested. Anlas cost: the
   author reports it free on Opus at 1216×832 and ≤ 28 steps. Result quality
