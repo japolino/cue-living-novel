@@ -10,7 +10,7 @@ import {
 } from "../../inlay-prompt/index.js";
 import { applyAttireOverride, classifySubject } from "../images.js";
 import { sizeParameters } from "../image-size.js";
-import { NOVELAI_NEGATIVE_DEFAULT, novelAiCapabilities, novelAiQualityTags, renderNovelAiEmphasis } from "../novelai-prompt.js";
+import { NOVELAI_NEGATIVE_DEFAULT, novelAiCapabilities, novelAiCaption, novelAiQualityTags, renderNovelAiEmphasis } from "../novelai-prompt.js";
 
 /**
  * Sprite framing: one standing figure, straight on and centred, on plain
@@ -189,7 +189,7 @@ export function compileSpriteRequest(input: {
 }): SpriteImageRequest {
   const { config, provider, member } = input;
   const plainIdentity = spriteIdentityTags(member);
-  const [, subject] = classifySubject(plainIdentity, member.subjectCategory ?? "unknown");
+  const [label, subject] = classifySubject(plainIdentity, member.subjectCategory ?? "unknown");
   const identity = weightSkinColourTags(plainIdentity);
   const pose = poseById(POSE_EXPRESSION_CATALOGUE, input.expression);
   const extra = { ...sizeParameters(provider, "sprite", config), ...seedParameters(provider, input.seed) };
@@ -197,7 +197,8 @@ export function compileSpriteRequest(input: {
     const model = config.imageModel || "nai-diffusion-4-5-full";
     const caps = novelAiCapabilities(model);
     const characterReference = spriteCharacterReferenceTag(member.name, config, true);
-    const characterSections = dedupeSections([characterReference, identity, pose.suffix]);
+    // V4+ caption: "girl" / "boy" / "other" first, count tags only in the base prompt (novelAiCaption).
+    const characterSections = [novelAiCaption(label, [characterReference, identity, pose.suffix])];
     const base = caps.structured
       ? dedupeSections([stylePrefix(config, true), subject, SPRITE_FRAMING_TAGS, config.promptSuffix])
       : dedupeSections([stylePrefix(config, true), subject, characterReference, identity, pose.suffix, SPRITE_FRAMING_TAGS, config.promptSuffix]);

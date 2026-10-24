@@ -615,7 +615,9 @@ Library and generation:
   evicted entries delete their images (best effort).
 - One shared seed per set (`spriteSetSeedFor`); a single-expression
   regeneration gives that image its own seed, a new idle a new set seed.
-  NovelAI: character caption on V4+, `resolution` 832×1216 (plates and key
+  NovelAI: character caption on V4+ (`girl` / `boy` / `other` first, no
+  count tags; `1girl` / `solo` stay in the base prompt, as NovelAI's
+  multiple-characters guide says), `resolution` 832×1216 (plates and key
   moments 1216×832) whatever `spriteImageSize` says;
   ComfyUI / SwarmUI: `width`, `height` from `spriteImageSize` (standard
   624×912 / 912×624, upscaled 832×1216 / 1216×832), `seed`.

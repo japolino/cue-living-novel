@@ -306,6 +306,9 @@ describe("generateAssets reference anchoring", () => {
       } else {
         expect(compiled.prompt).not.toContain("silver hair");
         expect(compiled.parameters.characterTags[0]!.tags).toContain("silver hair");
+        // NovelAI's captions name the subject without a count; "1girl" stays in the base prompt.
+        expect(compiled.parameters.characterTags[0]!.tags.split(", ")[0]).toBe("girl");
+        expect(compiled.parameters.characterTags[0]!.tags.split(", ")).not.toContain("1girl");
         expect(compiled.parameters.characterTags[0]!.tags).not.toContain("Library");
         expect(compiled.negativePrompt).toBe("1.2::watermark::");
       }

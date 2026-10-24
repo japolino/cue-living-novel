@@ -303,6 +303,8 @@ prefix + subject (1girl|1boy|1other, solo) + identity tags (with any attire over
        + camera (upper body, eye level, straight-on) + suffix
 ```
 
+For NovelAI V4+ the character's tags move into a separate character caption that starts with `girl`, `boy` or `other` and carries no count tags (`novelAiCaption`); `1girl` / `1boy` / `1other` and `solo` stay in the base prompt, as NovelAI's multiple-characters guide asks.
+
 `PROMPT_PREFIX`, `PROMPT_SUFFIX`, and the negative prompt come from `config.ts`; the subject line comes from the cue's persisted `subjectCategory`, falling back to explicit gender words in the identity text; the pose suffix comes from the closed catalogue. The scene's `basePrompt`, composition lock, environment `description`, and declared aspect ratio are planner metadata that the current compiler does not forward to the provider.
 
 Where the extension owns the data, behavior is deterministic: a byte-identical content fingerprint keyed by message, swipe, and content makes generation events, reconnects, and edits idempotent; stale asset results are rejected by ownership guards; previous visual state is reused so the scene prompt stays stable until a justified boundary; and the pipeline never mutates the canonical chat message.
