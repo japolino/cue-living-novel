@@ -297,14 +297,14 @@ function plannerInstruction(config: VisualNovelConfig, visualContext?: VisualCon
     `The reader sees the story through ${personaName}'s eyes. ${knownPersona ? `${knownPersona} (the user)` : "The user"} is never drawn and is never the character of a scene or cue (nor 'User' or 'Player'). EXACTLY ONE protagonist/character is visible per frame, usually ${companionName}. Never depict a second character, a crowd, a bystander or ${personaName}.`,
     "TARGET ASSISTANT RESPONSE paragraphs are numbered [0], [1], ... (zero-based).",
     `speakers: {"<index>":"<name>"} for EVERY paragraph: the character whose line, thought or action it is; ${personaName} for the user's own lines and actions; "Narrator" for narration that belongs to no one. First-person "I" narration belongs to whoever "I" is. Use names, never the story or card title.`,
-    "scenes: the first starts at paragraph 0; later startParagraph values increase. A scene is a place and time: never start one for emotion, pose, dialogue, camera or action.",
-    "- Continuing PREVIOUS SCENE: {\"startParagraph\":0,\"boundary\":{\"reason\":\"none\"}} with cast/character; omit environment, it is kept as is.",
-    "- New scene only for a different place, a big time jump (hours later, next day) or a replaced environment: boundary.reason location_change, major_time_jump or environment_replacement (initial when there is no PREVIOUS SCENE) and environment {location,timeOfDay,weather,lighting,description,persistentElements}: location a short place name, description one short visual phrase, persistentElements 3-6 visible background objects.",
+    "scenes: one entry per place, not per paragraph; a reply that stays in one place has exactly one scene. The first starts at paragraph 0; later startParagraph values increase. A scene is a place and time: never start one for a new speaker, emotion, pose, dialogue, camera, action or another spot in the same room.",
+    "- Continuing PREVIOUS SCENE: {\"startParagraph\":0,\"boundary\":{\"reason\":\"none\"}} with cast/character; omit environment, it is kept as is. If paragraph 0 is already somewhere other than PREVIOUS SCENE, the first scene is a new scene.",
+    "- New scene only for a different place, a big time jump (hours later, next day) or a replaced environment: boundary.reason location_change, major_time_jump or environment_replacement (initial when there is no PREVIOUS SCENE), with environment next to boundary, not inside it: {\"startParagraph\":4,\"boundary\":{\"reason\":\"location_change\"},\"environment\":{location,timeOfDay,weather,lighting,description,persistentElements},\"cast\":[...],\"character\":\"...\"}. location a short place name, description one short visual phrase, persistentElements 3-6 visible background objects.",
     "- environmentChanges (continuing scenes only) for a visible change: {lighting?,timeOfDay?,weather?,description?,addElements?,removeElements?,replaceElements?:[{from,to}],clearElements?,clearLighting?,clearWeather?}. Setting lighting, timeOfDay, or weather to null clears it. Location changes belong only in boundary and the environment of a new scene.",
     `- cast: the characters present (never ${personaName}); character: who is on screen at the scene start.`,
     `- ambient: persistent overlay, one of ${AmbientEffectSchema.options.join(", ")}. Rain -> rain; downpour -> heavy_rain; snowfall -> snow; mist -> fog; flashback -> sepia_flashback; dream -> dream_haze; dread -> danger_pulse. Omit to keep it; set null only to clear it.`,
     `cues: ${cueLimit} illustration beats spread over key moments, always including paragraph 0: {"paragraphIndex":n,"expression":"<id>","character":"<name>"}. expression is the on-screen character's visible emotion, exactly one of: ${PLANNER_EXPRESSION_IDS.join(", ")}. When a paragraph is ${personaName}'s line or action, show the on-screen character's reaction to it, not ${personaName}'s own state.`,
-    "- attire: only at the paragraph where that character visibly puts on, takes off or swaps a major garment: the full new outfit as tags. Never restate an unchanged outfit (current outfits are listed in PREVIOUS SCENE).",
+    "- attire (on the cue at that paragraph): only where that character visibly puts on, takes off or swaps a major garment: the full new outfit as ONE comma-separated tag string. Never restate an unchanged outfit (current outfits are listed in PREVIOUS SCENE).",
     "- action (optional): a held prop or bounded gesture, e.g. \"holding brass key in right raised hand\".",
     `effects: a separate optional list [{"paragraphIndex":n,"effect":"<id>"}] for 0-3 strong beats; effects do not count toward the image cue limit and need no cue. ids: ${StageEffectSchema.options.join(", ")}. Impact/explosion -> shake_hard; earthquake -> rumble; sudden reveal -> zoom_punch; shock -> flash_white; blackout/scene cut -> fade_to_black; lightning strike -> lightning; fear -> heartbeat; confession/kiss -> hearts_burst; celebration -> confetti.`,
     "characters: one entry per character in this reply who is not a KNOWN CHARACTER with recorded tags (new characters, and known ones marked \"describe\"): {\"name\",\"description\",\"subjectCategory\"}, plus species and anatomy (array) for non-human traits. description is ONE comma-separated line of permanent appearance tags (species, body, hair, eyes, usual clothes); a description that only repeats the name is invalid; never contradict the card or KNOWN CHARACTERS.",
@@ -600,23 +600,46 @@ function normalizeEnvironment(value: unknown, defaultLoc?: string): unknown {
   };
 }
 
+/**
+ * Attire as one tag string. Models sometimes send a tag list, or a
+ * {"<name>": outfit} map; the map entry for the scene's or cue's character
+ * (or its only entry) is used.
+ */
+function normalizeAttire(value: unknown, character?: unknown): string | null {
+  if (typeof value === "string") return value.trim();
+  if (Array.isArray(value)) {
+    const tags = value.filter((tag): tag is string => typeof tag === "string").map((tag) => tag.trim()).filter(Boolean);
+    return tags.length ? tags.join(", ") : null;
+  }
+  if (!value || typeof value !== "object") return null;
+  const entries = Object.entries(value as Record<string, unknown>);
+  const name = typeof character === "string" ? character.trim().toLowerCase() : "";
+  const entry = entries.find(([key]) => key.trim().toLowerCase() === name) ?? (entries.length === 1 ? entries[0] : undefined);
+  return entry && (typeof entry[1] === "string" || Array.isArray(entry[1])) ? normalizeAttire(entry[1]) : null;
+}
+
 function normalizeScene(value: unknown, defaultLoc?: string): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const record = value as Record<string, unknown>;
-  const rawEnv = record.environment as Record<string, unknown> | undefined;
+  // Some models nest the new scene's environment inside its boundary.
+  const boundaryRecord = record.boundary && typeof record.boundary === "object" && !Array.isArray(record.boundary)
+    ? record.boundary as Record<string, unknown>
+    : null;
+  const environment = record.environment ?? boundaryRecord?.environment;
+  const rawEnv = environment as Record<string, unknown> | undefined;
   const rawChanges = record.environmentChanges ?? rawEnv?.changes;
   const envChanges = normalizeEnvironmentChanges(rawChanges);
   return {
     startParagraph: asNumber(record.startParagraph) ?? 0,
-    boundary: normalizeBoundary(record.boundary, record.environment, defaultLoc),
-    environment: normalizeEnvironment(record.environment, defaultLoc),
+    boundary: normalizeBoundary(record.boundary, environment, defaultLoc),
+    environment: normalizeEnvironment(environment, defaultLoc),
     ...(envChanges ? { environmentChanges: envChanges } : {}),
     cast: Array.isArray(record.cast)
       ? record.cast.map((item) => typeof item === "string" ? item.trim() : String(item)).filter(Boolean)
       : [],
     character: typeof record.character === "string" ? record.character.trim() : null,
     characterId: normalizeCharacterId(record.characterId ?? record.character_id ?? record.id) || null,
-    attire: typeof record.attire === "string" ? record.attire.trim() : null,
+    attire: normalizeAttire(record.attire, record.character),
     ...(record.ambient !== undefined ? { ambient: normalizeAmbientEffect(record.ambient) } : {}),
     basePrompt: typeof record.basePrompt === "string" && record.basePrompt.trim() ? record.basePrompt.trim() : "a visual novel scene",
     compositionLock: typeof record.compositionLock === "string" ? record.compositionLock.trim() : "Character centered with clear negative space behind the dialogue window."
@@ -639,7 +662,7 @@ function normalizeCue(value: unknown): unknown {
     expression: typeof record.expression === "string" ? record.expression.trim() : null,
     character: typeof record.character === "string" ? record.character.trim() : null,
     characterId: normalizeCharacterId(record.characterId ?? record.character_id) || null,
-    attire: typeof record.attire === "string" ? record.attire.trim() : null,
+    attire: normalizeAttire(record.attire, record.character),
     effect: normalizeStageEffect(record.effect),
     promptDelta: typeof record.promptDelta === "string"
       ? record.promptDelta.trim()
@@ -811,6 +834,28 @@ function usefulCharacterEntry(value: unknown): boolean {
     || Boolean(entry.characterId);
 }
 
+/**
+ * A scene that omits its environment continues the place before it: the
+ * turn's first scene the previous turn's place, a later one the scene before
+ * it in this plan (not the previous turn's, which would read as a move back).
+ */
+function normalizeScenes(rawScenes: unknown[], defaultLoc?: string): unknown[] {
+  const scenes: unknown[] = new Array(rawScenes.length);
+  const order = rawScenes.map((_, index) => index).sort((left, right) => startOf(rawScenes[left]) - startOf(rawScenes[right]));
+  let location = defaultLoc;
+  for (const index of order) {
+    const scene = normalizeScene(rawScenes[index], location);
+    scenes[index] = scene;
+    const next = (scene as { environment?: { location?: unknown } } | null)?.environment?.location;
+    if (typeof next === "string" && !isGenericLocation(next)) location = next;
+  }
+  return scenes;
+}
+
+function startOf(scene: unknown): number {
+  return scene && typeof scene === "object" ? asNumber((scene as Record<string, unknown>).startParagraph) ?? 0 : 0;
+}
+
 function normalizePlannerOutput(value: unknown, defaultLoc?: string, trace: EffectTrace = () => {}): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const record = value as Record<string, unknown>;
@@ -825,7 +870,7 @@ function normalizePlannerOutput(value: unknown, defaultLoc?: string, trace: Effe
     rawScenes = [record.current_scene];
   }
 
-  let scenes = rawScenes.map((s) => normalizeScene(s, defaultLoc));
+  let scenes = normalizeScenes(rawScenes, defaultLoc);
   if (scenes.length === 0) {
     scenes = [
       normalizeScene({
@@ -855,7 +900,7 @@ function normalizePlannerOutput(value: unknown, defaultLoc?: string, trace: Effe
               : [])))));
 
   const routed = routePlannerEffects(rawScenes.length ? rawScenes : scenes, rawCues, record, trace);
-  scenes = routed.scenes.map((scene) => normalizeScene(scene, defaultLoc));
+  scenes = normalizeScenes(routed.scenes, defaultLoc);
 
   let rawCharacters: unknown[] = [];
   if (Array.isArray(record.characters)) {
