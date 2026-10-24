@@ -40,6 +40,13 @@ import { mkdir, writeFile } from "node:fs/promises";
  *     SPRITE_CUTOUT_FULL=1 or SPRITE_CUTOUT_DUP_FULL=1 every experiment raw
  *     image is also cut ("basic") and compared with the labels;
  *   - model cache: a second load reads the cache (no download), clear removes it;
+ *   - Studio quality (CUE_SPRITE_STUDIO_MODEL, an exported BiRefNet .onnx;
+ *     skipped when unset): where the browser cannot run it (headless Chromium
+ *     has no shader-f16) the cut uses Best and the Studio file is never
+ *     fetched; where it can (this browser, or CUE_SPRITE_STUDIO_CHANNEL=msedge)
+ *     every sprite is cut by the Studio model in the Worker on WebGPU, IoU vs
+ *     the ISNet reference mean >= 0.95, min >= 0.9 (another model), warm
+ *     model time reported;
  *   - cut service: ordered base64 chunks with meta, duplicate requestIds ignored.
  *
  * WASM is slow (~15-20 s per sprite single-threaded), so by default WASM runs
@@ -53,6 +60,8 @@ const RAW = `${BAKEOFF}/fixtures/raw`;
 const REF = `${BAKEOFF}/fixtures/sprites`;
 const MODELS = `${BAKEOFF}/models`;
 const FULL = process.env.SPRITE_CUTOUT_FULL === "1";
+const STUDIO_MODEL = process.env.CUE_SPRITE_STUDIO_MODEL ? process.env.CUE_SPRITE_STUDIO_MODEL.replace(/\\/g, "/") : "";
+const STUDIO_CHANNEL = process.env.CUE_SPRITE_STUDIO_CHANNEL ?? "";
 const NO_GPU = process.env.SPRITE_CUTOUT_NO_GPU === "1";
 const STANDARD = (process.env.CUE_SPRITE_STANDARD ?? "C:/Users/eme4/cue-living-novel/.cache/reply-test/raw_lr").replace(/\\/g, "/");
 const standardNames = existsSync(STANDARD)
@@ -99,6 +108,7 @@ const server = Bun.serve({
     if (path === "/fixture.js") return new Response(bundle, { headers: { "Content-Type": "text/javascript" } });
     if (path.startsWith("/ort/")) return send(`node_modules/onnxruntime-web/dist/${path.slice(5)}`);
     if (path.startsWith("/models/")) return send(`${MODELS}/${path.slice(8)}`);
+    if (path === "/studio/model.onnx") return STUDIO_MODEL ? new Response(Bun.file(STUDIO_MODEL)) : new Response("missing", { status: 404 });
     if (path.startsWith("/raw/")) return send(`${RAW}/${path.slice(5)}`);
     if (path.startsWith("/ref/")) return send(`${REF}/${path.slice(5)}`);
     if (path.startsWith("/std/")) return send(`${STANDARD}/${path.slice(5)}`);
@@ -110,18 +120,18 @@ const server = Bun.serve({
 const origin = `http://127.0.0.1:${server.port}`;
 await mkdir(OUT, { recursive: true });
 
-type Row = { name: string; quality: string; ms: number; modelMs: number; cutMs: number; iou: number | null; mad: number | null; bbox: number[]; jpeg?: string };
+type Row = { name: string; quality: string; studio?: boolean; ms: number; modelMs: number; cutMs: number; iou: number | null; mad: number | null; bbox: number[]; jpeg?: string };
 
-async function cutAll(page: Page, list: string[], quality: "best" | "basic", modelUrl: string, keepJpeg: boolean): Promise<Row[]> {
+async function cutAll(page: Page, list: string[], quality: "studio" | "best" | "basic", modelUrl: string, keepJpeg: boolean, studioModelUrl = ""): Promise<Row[]> {
   const rows: Row[] = [];
   for (const name of list) {
-    rows.push(await page.evaluate(async ({ name, quality, modelUrl, keepJpeg, hasRef }) => {
+    rows.push(await page.evaluate(async ({ name, quality, modelUrl, studioModelUrl, keepJpeg, hasRef }) => {
       const c = (window as any).cutout;
       const blob = await c.fetchBlob(`/raw/${name}.png`);
-      const r = await c.cutSprite(blob, { quality, modelUrl });
+      const r = await c.cutSprite(blob, { quality, modelUrl, ...(studioModelUrl ? { studioModelUrl } : {}) });
       const cmp = hasRef ? await c.compareAlpha(r.png, `/ref/${name}.png`) : { iou: null, mad: null };
-      return { name, quality: r.quality, ms: r.durationMs, modelMs: r.timings?.modelMs ?? 0, cutMs: r.timings?.cutMs ?? 0, iou: cmp.iou, mad: cmp.mad, bbox: r.bbox, ...(keepJpeg ? { jpeg: await c.composite(r.png) } : {}) };
-    }, { name, quality, modelUrl, keepJpeg, hasRef: withRef.includes(name) }));
+      return { name, quality: r.quality, studio: r.studio === true, ms: r.durationMs, modelMs: r.timings?.modelMs ?? 0, cutMs: r.timings?.cutMs ?? 0, iou: cmp.iou, mad: cmp.mad, bbox: r.bbox, ...(keepJpeg ? { jpeg: await c.composite(r.png) } : {}) };
+    }, { name, quality, modelUrl, studioModelUrl, keepJpeg, hasRef: withRef.includes(name) }));
   }
   return rows;
 }
@@ -364,6 +374,65 @@ try {
     assert.equal(cache.ready.bytes, cache.cachedBefore);
     assert.deepEqual(cache.after, { state: "absent" });
     assert.equal(cache.cachedAfter, null, "clear removes the cached model");
+  }
+
+  // ---- Studio quality (optional) ----------------------------------------------------
+  if (!STUDIO_MODEL || !existsSync(STUDIO_MODEL)) {
+    console.log("\nSKIP Studio check: set CUE_SPRITE_STUDIO_MODEL to an exported BiRefNet .onnx (docs/SPRITE_MODE.md, Studio cut-out).");
+  } else if (models.length) {
+    const studioUrl = `${origin}/studio/model.onnx`;
+    const bestUrl = `${origin}/models/${models.at(-1)}`;
+    const setUp = (target: Page) => target.evaluate(async (base) => {
+      const c = (window as any).cutout;
+      c.resetCutoutRuntime();
+      c.configureCutoutRuntime({ ortBaseUrl: base, backend: "auto" });
+      c.states.length = 0;
+      return c.getStudioCutoutSupport();
+    }, `${origin}/ort/`);
+    const support: string | null = await setUp(page);
+    if (support) {
+      const fallback = await cutAll(page, SAMPLE.slice(0, 1), "studio", bestUrl, false, studioUrl);
+      const state = await page.evaluate(() => (window as any).cutout.getCutoutModelState());
+      assert.ok(fallback.every((r) => r.quality === "best" && !r.studio), "Studio where it cannot run: the cut uses Best");
+      assert.ok(!requests.includes("/studio/model.onnx"), "Studio where it cannot run: the Studio model is never fetched");
+      assert.equal(state.note, support, "the ready state says why Studio is not used");
+      console.log(`\nStudio where it cannot run: Best cut, no Studio download (${support})`);
+      summary.studioFallback = { support, quality: fallback[0]!.quality };
+    }
+    let studioBrowser: Browser | undefined;
+    try {
+      let target: Page | null = support ? null : page;
+      if (!target && STUDIO_CHANNEL) {
+        studioBrowser = await chromium.launch({ headless: true, channel: STUDIO_CHANNEL, args: ["--enable-unsafe-webgpu", "--enable-gpu", "--ignore-gpu-blocklist"] });
+        target = await studioBrowser.newPage();
+        target.on("pageerror", (error) => errors.push(error.message));
+        await target.goto(`${origin}/`);
+        await target.waitForFunction(() => document.title === "sprite-cutout-ready");
+        const there = await setUp(target);
+        if (there) { console.log(`SKIP Studio cuts: ${STUDIO_CHANNEL} cannot run them either (${there})`); target = null; }
+      }
+      if (!target) {
+        if (support && !STUDIO_CHANNEL) console.log("SKIP Studio cuts: set CUE_SPRITE_STUDIO_CHANNEL=msedge (or another browser with shader-f16).");
+      } else {
+        const load = await target.evaluate(async (url) => {
+          const c = (window as any).cutout;
+          const t = performance.now();
+          await c.prepareStudioCutoutModel(url);
+          return { ms: performance.now() - t, info: c.getCutoutRuntimeInfo().model, state: c.getCutoutModelState(), states: c.states.map((s: any) => s.state) };
+        }, studioUrl);
+        assert.equal(load.info.backend, "webgpu", "the Studio model runs on WebGPU");
+        assert.equal(load.state.studio, true, "the ready state is the Studio model's");
+        assert.equal(await target.evaluate(() => (window as any).cutout.getCutoutRunnerMode()), "worker", "the Studio model runs in the Worker");
+        const rows = await cutAll(target, withRef, "studio", bestUrl, true, studioUrl);
+        await saveJpegs(rows, "studio");
+        const stats = summarize(`Studio (BiRefNet, load ${Math.round(load.ms)} ms, session ${Math.round(load.info.loadMs)} ms; states ${[...new Set(load.states)].join(" > ")}) vs the ISNet reference`, rows);
+        assert.ok(rows.every((r) => r.quality === "best" && r.studio), "the Studio model cut every sprite");
+        assert.ok(stats.meanIou >= 0.95 && stats.minIou >= 0.9, `Studio IoU vs reference mean >= 0.95, min >= 0.9 (${fmt(stats.meanIou)}, ${fmt(stats.minIou)})`);
+        summary.studio = { ...stats, loadMs: load.ms, sessionMs: load.info.loadMs, sprites: rows.length, channel: STUDIO_CHANNEL || "chromium" };
+      }
+    } finally {
+      await studioBrowser?.close();
+    }
   }
 
   // ---- Cut service -----------------------------------------------------------------

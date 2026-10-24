@@ -11,8 +11,10 @@ import {
   getCutoutModelState,
   getCutoutRunnerMode,
   getCutoutRuntimeInfo,
+  getStudioCutoutSupport,
   onCutoutModelState,
   prepareCutoutModel,
+  prepareStudioCutoutModel,
   resetCutoutRuntime,
   type CutoutModelState,
 } from "../src/frontend/sprites/cutout/index.js";
@@ -147,7 +149,7 @@ function startService() {
 
 (window as unknown as { cutout: unknown }).cutout = {
   cutSprite, configureCutoutRuntime, prepareCutoutModel, clearCutoutModel, getCutoutModelState, getCachedCutoutModelBytes,
-  getCutoutRunnerMode, getCutoutRuntimeInfo, resetCutoutRuntime, states, fetchBlob, pixels, compareAlpha, composite, startService, scaleCompare,
+  getCutoutRunnerMode, getCutoutRuntimeInfo, getStudioCutoutSupport, prepareStudioCutoutModel, resetCutoutRuntime, states, fetchBlob, pixels, compareAlpha, composite, startService, scaleCompare,
   figureCheckUrl, cutFigures, preCutRoundTrip,
 };
 document.title = "sprite-cutout-ready";
