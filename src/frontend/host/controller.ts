@@ -12,6 +12,7 @@ import {
   getCachedFaceModelBytes,
   getCutoutModelState,
   getFaceModelState,
+  getStudioCutoutSupport,
   onCutoutModelState,
   onFaceModelState,
   prepareCutoutModel,
@@ -800,10 +801,13 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       const prepareBest = (): Promise<void> => prepareCutoutModel(modelUrl, spriteModelF16Url(modelUrl)).catch((error: unknown) => {
         settingsPanel?.setCutoutModelState({ state: "error", error: error instanceof Error ? error.message : String(error) });
       });
-      // Studio quality prepares the Studio model; where it cannot run, the Best one (the cuts use it).
+      // Studio quality prepares the Studio model; where it cannot run (no download then), the Best one (the cuts use it).
       const studioUrl = configRef.current?.spriteCutout === "studio" ? configRef.current.spriteStudioModelUrl : "";
-      if (studioUrl) void prepareStudioCutoutModel(studioUrl).catch(prepareBest);
-      else void prepareBest();
+      if (studioUrl) {
+        void getStudioCutoutSupport()
+          .then((reason) => (reason ? prepareBest() : prepareStudioCutoutModel(studioUrl).catch(prepareBest)))
+          .finally(refreshStudioCutoutFile);
+      } else void prepareBest();
       // The face finder (emote placement) comes along; its state shows its own errors.
       prepareFaceModel(DEFAULT_SPRITE_FACE_MODEL_URL).catch(() => {});
     },
@@ -811,6 +815,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       clearCutoutModel()
         .then(() => {
           settingsPanel?.setCutoutModelCachedBytes(null);
+          settingsPanel?.setStudioCutoutModelCachedBytes(null);
           settingsPanel?.setCutoutModelState(getCutoutModelState());
           settingsPanel?.setFaceModelCachedBytes(null);
           settingsPanel?.setFaceModelState(getFaceModelState());
@@ -819,24 +824,48 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     },
   }) : null;
   settingsPanel?.setCutoutModelState(getCutoutModelState());
-  const unsubCutoutModel = settingsPanel ? onCutoutModelState((state) => settingsPanel.setCutoutModelState(state)) : () => {};
+  // A Studio download that ends (stored, or not) changes what settings say about its file.
+  let studioDownloading = false;
+  const unsubCutoutModel = settingsPanel ? onCutoutModelState((state) => {
+    settingsPanel.setCutoutModelState(state);
+    const downloading = state.state === "downloading" && state.studio === true;
+    if (studioDownloading && !downloading) refreshStudioCutoutFile();
+    studioDownloading = downloading;
+  }) : () => {};
   settingsPanel?.setFaceModelState(getFaceModelState());
   const unsubFaceModel = settingsPanel ? onFaceModelState((state) => settingsPanel.setFaceModelState(state)) : () => {};
   if (settingsPanel) {
     getCachedFaceModelBytes(DEFAULT_SPRITE_FACE_MODEL_URL).then((bytes) => settingsPanel.setFaceModelCachedBytes(bytes)).catch(() => {});
   }
   // A model cached by an earlier visit is not loaded in this page yet: show it as downloaded.
-  // With Studio quality (and its URL set) that is the Studio model.
-  let cachedModelUrl = "";
+  // With Studio quality (and its URL set) the Studio model's file too, and whether this device can run it.
+  let cachedModelKey = "";
   function refreshCachedCutoutModel(bestUrl: string): void {
     const config = configRef.current;
     // The Studio model (about 3 GB of graphics memory) leaves when the settings no longer want it.
     if (config) syncStudioCutout(config.spriteCutout, config.spriteStudioModelUrl);
-    const url = config?.spriteCutout === "studio" && config.spriteStudioModelUrl ? config.spriteStudioModelUrl : bestUrl;
-    if (!settingsPanel || url === cachedModelUrl) return;
-    cachedModelUrl = url;
-    getCachedCutoutModelBytes(url, spriteModelF16Url(url))
-      .then((bytes) => { if (cachedModelUrl === url) settingsPanel.setCutoutModelCachedBytes(bytes); })
+    const studioUrl = config?.spriteCutout === "studio" ? config.spriteStudioModelUrl : "";
+    const key = `${bestUrl}\n${studioUrl}`;
+    if (!settingsPanel || key === cachedModelKey) return;
+    cachedModelKey = key;
+    getCachedCutoutModelBytes(bestUrl, spriteModelF16Url(bestUrl))
+      .then((bytes) => { if (cachedModelKey === key) settingsPanel.setCutoutModelCachedBytes(bytes); })
+      .catch(() => {});
+    refreshStudioCutoutFile();
+    if (!studioUrl) settingsPanel.setStudioCutoutSupport(null);
+    else getStudioCutoutSupport().then((reason) => { if (cachedModelKey === key) settingsPanel.setStudioCutoutSupport(reason); }).catch(() => {});
+  }
+  /** The Studio model's file in this browser ("studio" quality with its URL set; else none). */
+  function refreshStudioCutoutFile(): void {
+    const config = configRef.current;
+    const studioUrl = config?.spriteCutout === "studio" ? config.spriteStudioModelUrl : "";
+    if (!settingsPanel) return;
+    if (!studioUrl) {
+      settingsPanel.setStudioCutoutModelCachedBytes(null);
+      return;
+    }
+    getCachedCutoutModelBytes(studioUrl)
+      .then((bytes) => { if (configRef.current?.spriteStudioModelUrl === studioUrl) settingsPanel.setStudioCutoutModelCachedBytes(bytes); })
       .catch(() => {});
   }
   refreshCachedCutoutModel(DEFAULT_SPRITE_MODEL_URL);

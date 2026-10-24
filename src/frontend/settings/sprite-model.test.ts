@@ -169,28 +169,81 @@ describe("cut-out model status", () => {
     expect(absent.detail).toContain("about 500 MB");
     expect(absent.detail).toContain("from localhost");
     expect(absent.action).toBe("download");
-    expect(describeCutoutModel({ state: "absent" }, "studio", DEFAULT_SPRITE_MODEL_URL, 499 * MB, studioUrl).title).toBe("Studio model downloaded");
+    expect(describeCutoutModel({ state: "absent" }, "studio", DEFAULT_SPRITE_MODEL_URL, null, studioUrl, { cachedBytes: 499 * MB }).title).toBe("Studio model downloaded");
     const downloading = describeCutoutModel({ state: "downloading", receivedBytes: 100 * MB, totalBytes: 400 * MB, studio: true }, "studio", DEFAULT_SPRITE_MODEL_URL, null, studioUrl);
     expect(downloading.title).toBe("Downloading the Studio model\u2026 25%");
     expect(downloading.detail).toContain("from localhost");
     // Best downloading for a Studio fallback names Best's host.
     expect(describeCutoutModel({ state: "downloading", receivedBytes: 1, totalBytes: null }, "studio", DEFAULT_SPRITE_MODEL_URL, null, studioUrl).detail).toContain("huggingface.co");
-    expect(describeCutoutModel({ state: "loading", studio: true }, "studio").title).toBe("Loading the Studio model\u2026");
+    expect(describeCutoutModel({ state: "loading", studio: true }, "studio", DEFAULT_SPRITE_MODEL_URL, null, studioUrl).title).toBe("Loading the Studio model\u2026");
     const ready = describeCutoutModel({ state: "ready", backend: "webgpu", bytes: 499 * MB, studio: true }, "studio", DEFAULT_SPRITE_MODEL_URL, null, studioUrl);
     expect(ready.title).toBe("Studio model ready");
     expect(ready.level).toBe("ready");
-    const unsupported = describeCutoutModel({ state: "unsupported", reason: "No shader-f16.", studio: true }, "studio");
+    const unsupported = describeCutoutModel({ state: "unsupported", reason: "No shader-f16.", studio: true }, "studio", DEFAULT_SPRITE_MODEL_URL, null, studioUrl);
     expect(unsupported.detail).toBe("No shader-f16. Sprites are cut with Best instead.");
     expect(unsupported.level).toBe("attention");
-    const error = describeCutoutModel({ state: "error", error: "HTTP 404.", studio: true }, "studio");
+    const error = describeCutoutModel({ state: "error", error: "HTTP 404.", studio: true }, "studio", DEFAULT_SPRITE_MODEL_URL, null, studioUrl);
     expect(error.action).toBe("retry");
+    expect(error.actionLabel).toBe("Try Studio again");
     expect(error.detail).toContain("cut with Best until this works");
     const fallback = describeCutoutModel({ state: "ready", backend: "webgpu", bytes: 88 * MB, note: "No shader-f16." }, "studio", DEFAULT_SPRITE_MODEL_URL, null, studioUrl);
     expect(fallback.title).toBe("Best model ready (Studio unavailable)");
     expect(fallback.detail).toContain("No shader-f16. Sprites are cut with Best");
     expect(fallback.level).toBe("attention");
+    expect(fallback).toMatchObject({ action: "retry", actionLabel: "Try Studio again", alsoRemove: true });
     // The note only matters while Studio is selected.
     expect(describeCutoutModel({ state: "ready", backend: "webgpu", bytes: 88 * MB, note: "x" }, "best").title).toBe("Model ready");
+  });
+
+  test("Studio selected while Best is loaded: says whether the Studio model is downloaded, and offers it", () => {
+    const studioUrl = "http://localhost:8790/birefnet.onnx";
+    const bestReady = { state: "ready", backend: "webgpu", bytes: 88 * MB } as const;
+    const missing = describeCutoutModel(bestReady, "studio", DEFAULT_SPRITE_MODEL_URL, null, studioUrl);
+    expect(missing.title).toBe("Best model ready; Studio model not downloaded");
+    expect(missing).toMatchObject({ level: "attention", action: "download", actionLabel: "Download Studio model", alsoRemove: true });
+    expect(missing.detail).toContain("about 500 MB");
+    expect(missing.detail).toContain("cut with Best until then");
+    const downloaded = describeCutoutModel(bestReady, "studio", DEFAULT_SPRITE_MODEL_URL, null, studioUrl, { cachedBytes: 499 * MB });
+    expect(downloaded.title).toBe("Best model ready; Studio model downloaded");
+    expect(downloaded).toMatchObject({ level: "ready", action: "remove" });
+    expect(downloaded.detail).toContain("starts when the next sprite is cut");
+    // The Studio download running in the background says Best cuts meanwhile.
+    const progress = describeCutoutModel({ state: "downloading", receivedBytes: 1 * MB, totalBytes: 4 * MB, studio: true }, "studio", DEFAULT_SPRITE_MODEL_URL, null, studioUrl);
+    expect(progress.detail).toContain("Sprites are cut with Best until it is ready.");
+  });
+
+  test("a Studio state while Best is selected, or after the Studio URL is cleared, reads as Best's", () => {
+    const studioReady = { state: "ready", backend: "webgpu", bytes: 499 * MB, studio: true } as const;
+    expect(describeCutoutModel(studioReady, "best", DEFAULT_SPRITE_MODEL_URL, 88 * MB).title).toBe("Model downloaded");
+    expect(describeCutoutModel(studioReady, "best", DEFAULT_SPRITE_MODEL_URL).title).toBe("Model not downloaded");
+    const cleared = describeCutoutModel({ state: "unsupported", reason: "No shader-f16.", studio: true }, "studio", DEFAULT_SPRITE_MODEL_URL, null, "");
+    expect(cleared.title).toBe("Model not downloaded");
+    expect(cleared.detail).not.toContain("shader-f16");
+  });
+
+  test("a device that cannot run the Studio model is not offered its download", () => {
+    const studioUrl = "http://localhost:8790/birefnet.onnx";
+    const support = "The Studio cut-out needs a device with at least 8 GB of memory; this one reports 4 GB.";
+    const absent = describeCutoutModel({ state: "absent" }, "studio", DEFAULT_SPRITE_MODEL_URL, null, studioUrl, { support });
+    expect(absent.title).toBe("This device cannot run the Studio model");
+    expect(absent.detail).toContain(support);
+    expect(absent.detail).toContain("Sprites are cut with Best.");
+    expect(absent.detail).not.toContain("500 MB");
+    expect(absent).toMatchObject({ action: "download", actionLabel: "Download Best model" });
+    const ready = describeCutoutModel({ state: "ready", backend: "webgpu", bytes: 88 * MB, note: support }, "studio", DEFAULT_SPRITE_MODEL_URL, null, studioUrl, { support });
+    expect(ready.title).toBe("This device cannot run the Studio model");
+    expect(ready.action).toBe("remove");
+    expect(ready.actionLabel).toBeUndefined();
+  });
+
+  test("a model the browser did not store says it downloads again next visit", () => {
+    const best = describeCutoutModel({ state: "ready", backend: "wasm", bytes: 88 * MB, notStored: true }, "best");
+    expect(best.detail).toContain("not stored in this browser");
+    expect(best.detail).toContain("downloads again");
+    expect(best.detail).not.toContain("88 MB stored in this browser");
+    const studio = describeCutoutModel({ state: "ready", backend: "webgpu", bytes: 499 * MB, studio: true, notStored: true }, "studio", DEFAULT_SPRITE_MODEL_URL, null, "http://localhost:8790/b.onnx");
+    expect(studio.title).toBe("Studio model ready");
+    expect(studio.detail).toContain("downloads again");
   });
 
   test("bytes read as KB or MB", () => {
