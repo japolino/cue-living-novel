@@ -835,7 +835,7 @@ describe("Model-facing instruction verification and reviewer blockers B1-B3", ()
     });
 
     // 1. Instruction explains environmentChanges
-    assert.ok(captured.systemMessage.includes("environmentChanges:"), "System message must contain environmentChanges instruction");
+    assert.ok(captured.systemMessage.includes("environmentChanges (continuing scenes only)"), "System message must contain environmentChanges instruction");
     assert.ok(captured.systemMessage.includes("clearLighting"), "System message must mention clearLighting");
     assert.ok(captured.systemMessage.includes("Setting lighting, timeOfDay, or weather to null"), "System message must explain null-clear semantics");
     assert.ok(captured.systemMessage.includes("Location changes belong only in boundary"), "System message must explain location is not in patch");

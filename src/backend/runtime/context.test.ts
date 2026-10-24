@@ -179,6 +179,31 @@ describe("visual context assembly", () => {
     expect(snapshot.characterIdentity?.description).toContain("silver hair");
   });
 
+  test("the card context names the character and user and leaves out creator notes", async () => {
+    const macroCharacter: CharacterDTO = {
+      ...character,
+      scenario: "{{char}} guides {{user}} through the observatory.",
+      creator_notes: "CREATOR_NOTES_SENTINEL v2, best with large models."
+    };
+    const spindle = {
+      chats: { get: async () => chat },
+      characters: { get: async () => macroCharacter },
+      personas: { getActive: async () => persona },
+      world_books: { getActivated: async () => [], entries: { get: async () => null } },
+      macros: { resolve: async (content: string) => ({ text: content, diagnostics: [] }) }
+    } as unknown as SpindleAPI;
+
+    const snapshot = await loadVisualContext(spindle, {
+      chatId: "chat-1",
+      target: "Mira arrives",
+      config: { ...DEFAULT_CONFIG, includeLorebookContext: false }
+    });
+
+    expect(snapshot.plannerContext).toContain("Mira guides Theo through the observatory.");
+    expect(snapshot.plannerContext).not.toContain("{{char}}");
+    expect(snapshot.plannerContext).not.toContain("CREATOR_NOTES_SENTINEL");
+  });
+
   test("returns an empty snapshot instead of breaking planning when lookups fail", async () => {
     const unavailable = async (): Promise<never> => { throw new Error("permission unavailable"); };
     const spindle = {

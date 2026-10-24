@@ -109,21 +109,38 @@ function extractVisualSalientDescription(description: string, maximum: number): 
   return `${head}\n[visual traits]: ${visualBlock}`;
 }
 
-function characterContext(character: CharacterDTO | null): string {
+/** Card text names the character and user through {{char}}/{{user}}; the planner reads real names. */
+function withNames(text: string, characterName: string, personaName: string): string {
+  return text
+    .replace(/\{\{\s*(?:char|character)\s*\}\}/gi, characterName || "the character")
+    .replace(/\{\{\s*(?:user|persona)\s*\}\}/gi, personaName || "the user");
+}
+
+/** Card tags that mark a scenario or multi-character card, whose name is a title, not a person. */
+const SCENARIO_TAG = /^(?:scenario|scenarios|multiple characters|multi[- ]?characters?|multiple[_ ]characters|group|group chat|rpg|simulator|world|setting|narrator)$/i;
+
+/**
+ * The card as planner context. Creator notes are left out: they are author
+ * notes about the card (versions, recommended models, greetings), not story.
+ * On a card tagged as a scenario, `{{char}}` is the story's narrator, so it
+ * reads "the narrator" rather than the card title as a person.
+ */
+function characterContext(character: CharacterDTO | null, personaName = ""): string {
   if (!character) return "";
+  const scenarioCard = character.tags.some((tag) => SCENARIO_TAG.test(tag.trim()));
+  const named = (text: string) => withNames(text, scenarioCard ? "the narrator" : clean(character.name), personaName);
   const nameLine = line("Name", character.name);
-  const personalityLine = character.personality ? line("Personality", compact(character.personality, 600)) : "";
-  const scenarioLine = character.scenario ? line("Scenario", compact(character.scenario, 800)) : "";
-  const creatorNotesLine = character.creator_notes ? line("Creator notes", compact(character.creator_notes, 400)) : "";
+  const personalityLine = character.personality ? line("Personality", compact(named(character.personality), 600)) : "";
+  const scenarioLine = character.scenario ? line("Scenario", compact(named(character.scenario), 800)) : "";
   const tagsLine = character.tags.length ? `Tags: ${character.tags.join(", ").slice(0, 400)}` : "";
 
-  const reservedLength = [nameLine, personalityLine, scenarioLine, creatorNotesLine, tagsLine]
+  const reservedLength = [nameLine, personalityLine, scenarioLine, tagsLine]
     .filter(Boolean)
     .reduce((acc, l) => acc + l.length + 1, 30);
 
   const descBudget = Math.max(1200, MAX_CHARACTER_CONTEXT - reservedLength);
   const descLine = character.description
-    ? line("Description", extractVisualSalientDescription(character.description, descBudget))
+    ? line("Description", extractVisualSalientDescription(named(character.description), descBudget))
     : "";
 
   return block("Character card", [
@@ -131,7 +148,6 @@ function characterContext(character: CharacterDTO | null): string {
     descLine,
     personalityLine,
     scenarioLine,
-    creatorNotesLine,
     tagsLine
   ], MAX_CHARACTER_CONTEXT);
 }
@@ -332,7 +348,7 @@ export async function loadVisualContext(
     : null;
   diagnostics.characterLoaded = character !== null;
 
-  const characterBlock = characterContext(character);
+  const characterBlock = characterContext(character, clean(persona?.name));
   const personaBlock = personaContext(persona);
   const characterIdentity = character ? {
     name: clean(character.name),

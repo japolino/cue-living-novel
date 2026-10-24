@@ -108,6 +108,8 @@ const PlannerSceneSchema = z.object({
   character: z.string().trim().nullable().optional(),
   characterId: z.string().trim().nullable().optional(),
   attire: z.string().trim().nullable().optional(),
+  /** Planner-only: a {"<name>": outfit} map, resolved in canonicalizePlannerIdentities. */
+  attireByName: z.record(z.string(), z.string()).optional(),
   ambient: z.string().trim().nullable().optional(),
   basePrompt: z.string().trim().min(1),
   compositionLock: z.string().trim().min(1).default("Character centered with clear negative space behind the dialogue window.")
@@ -120,6 +122,8 @@ const PlannerCueSchema = z.object({
   character: z.string().trim().nullable().optional(),
   characterId: z.string().trim().nullable().optional(),
   attire: z.string().trim().nullable().optional(),
+  /** Planner-only: a {"<name>": outfit} map, resolved in canonicalizePlannerIdentities. */
+  attireByName: z.record(z.string(), z.string()).optional(),
   promptDelta: z.string().trim().optional(),
   effect: z.string().trim().nullable().optional(),
   bgm: z.string().trim().nullable().optional(),
@@ -133,7 +137,8 @@ const PlannerChoiceSchema = z.object({
 
 const PlannerCharacterSchema = z.object({
   name: z.string().trim().min(1),
-  description: z.string().trim().min(1),
+  /** Empty only for an alias-only entry about a KNOWN CHARACTER (see normalizePlannerOutput). */
+  description: z.string().trim(),
   /** Explicit stable id of an already-known character this entry refers to (never inferred). */
   characterId: z.string().trim().nullable().optional(),
   /** Explicit alternative names for the same entity, e.g. "Fox girl" for Kitsune. */
@@ -168,7 +173,8 @@ export type PlanTurnInput = {
   sourceFingerprint?: string;
   previousScene: SceneState | null;
   previousContinuity: TurnPlan["terminalContinuity"] | null;
-  recentMessages: Array<Pick<ChatMessageDTO, "name" | "content" | "is_user">>;
+  /** The recent window; the planned message (by id) and anything after it are not sent as history. */
+  recentMessages: Array<Pick<ChatMessageDTO, "name" | "content" | "is_user"> & { id?: string; index_in_chat?: number }>;
   config: VisualNovelConfig;
   singleCharacter: SingleCharacterState;
   characterAppearance: CharacterAppearanceMap;
@@ -255,6 +261,28 @@ function id(prefix: string, source: string): string {
   return `${prefix}-${stableHash(source)}`;
 }
 
+/**
+ * Expression ids offered to the story reader. Every id is a catalogue entry
+ * (planner.test.ts checks this); other catalogue ids stay reachable through
+ * aliases and keyword matching.
+ */
+export const PLANNER_EXPRESSION_IDS = [
+  "idle", "speak", "smile", "smirk", "laugh", "think", "sad", "angry", "surprise", "wave", "shy", "listen", "pouting",
+  "teary_pouting", "nervous", "nervous_pouting", "blushing_shyly", "full_face_blush", "lovestruck", "aroused", "lustful",
+  "excited", "joyful", "giggling", "happy_smiling", "happy_tears", "playful_winking", "bored", "confused", "curious",
+  "depressed", "determined", "disappointed", "disgusted", "embarrassed", "enraged", "exhausted", "flustered",
+  "forced_smiling", "guilty", "indifferent", "jealous", "melancholic", "relieved", "scared", "seductive_smiling",
+  "serious", "shocked", "sleepy", "smug", "suspicious", "taunting", "thinking", "worried", "acting_cute", "acting_coy",
+  "admiring", "cozy"
+] as const;
+
+/**
+ * The story reader's instruction. It asks only for fields the pipeline reads:
+ * no basePrompt, composition lock or camera (the compiler fixes them), no echo
+ * of an unchanged environment (a continuing scene omits it and normalization
+ * keeps the previous one), no re-description of characters whose appearance
+ * is already recorded, and a compact speaker map.
+ */
 function plannerInstruction(config: VisualNovelConfig, visualContext?: VisualContextSnapshot): string {
   const audioCatalog = getAudioCatalog();
   const hasAudio = audioCatalog.all.length > 0;
@@ -262,56 +290,42 @@ function plannerInstruction(config: VisualNovelConfig, visualContext?: VisualCon
   if (hasAudio) {
     const { bgmLines, sfxSamples } = getAudioCatalogPromptSummary();
     audioInstructions.push(
-      "Audio & Atmosphere (BGM & SFX):",
-      "- Assign or change 'bgm' whenever the emotional tone or intimacy shifts across paragraphs (e.g. from calm conversation to romantic intimacy, tension, or melancholy). Specify a mood (e.g. 'peaceful', 'romantic', 'intimate', 'playful', 'tense', 'melancholy') or a catalog track name.",
-      ...(bgmLines.length > 0 ? ["Available BGM moods & tracks:", ...bgmLines] : []),
-      "- Assign 'sfx' at moments of physical action, movement, impact, or comedic beats (e.g. 'door_close', 'footsteps', 'cloth_rustle', 'impact', 'heartbeat', 'glass_break', 'bell').",
-      ...(sfxSamples.length > 0 ? [`Available SFX samples: [${sfxSamples.slice(0, 25).join(", ")}]`] : [])
+      "audio (optional, on cues): 'bgm' when the mood shifts (a mood such as peaceful, romantic, playful, tense, melancholy, or a track name); 'sfx' at a physical action, impact or comedic beat (e.g. door_close, footsteps, impact, heartbeat, glass_break, bell).",
+      ...bgmLines.map((line) => line.trim().replace(/^\*\s*/, "")),
+      ...(sfxSamples.length > 0 ? [`Available SFX: [${sfxSamples.slice(0, 25).join(", ")}]`] : [])
     );
   }
 
-  const personaName = visualContext?.personaIdentity?.name?.trim() || "the User";
+  const knownPersona = visualContext?.personaIdentity?.name?.trim() ?? "";
+  const personaName = knownPersona || "the user";
   const cardName = visualContext?.characterIdentity?.name?.trim();
   const companionName = cardName || "the Companion";
+  const choices = config.mode === "cyoa" && config.generateChoices;
+  const cueLimit = config.maxImagesPerTurn > 0 ? `up to ${config.maxImagesPerTurn}` : "any number of";
 
   return [
-    "You plan illustrations and atmosphere for a visual-novel presentation. Return one JSON object and no prose.",
-    "FIRST-PERSON PERSPECTIVE (POV) & CHARACTER ATTRIBUTION:",
-    `The visual novel is presented strictly from the first-person POV of the User/Persona (${personaName}).`,
-    `- ${personaName} is the camera/observer and is NEVER drawn on screen. NEVER output ${personaName} as a character in cues.`,
-    `- The visible on-screen character is ${companionName} (or whichever companion or character is active in the scene), never ${personaName}.`,
-    `- Never set 'character' on a scene or cue to '${personaName}', 'User', or 'Player'.`,
-    `- When narrative or dialogue describes what ${personaName} does or says (e.g. ${personaName} says they are sleepy, speaks, or takes an action), the on-screen cue expression must depict ${companionName}'s emotional reaction TO the user (e.g. listening, amused, fond, curious, surprised, playful, gentle), NOT ${personaName}'s private physical state (never make ${companionName} sleepy just because ${personaName} wants to sleep).`,
-    "Paragraph indexes are zero-based. scenes must ALWAYS contain at least one scene with startParagraph: 0. Later scene starts must increase.",
-    "If continuing the current setting without a major jump, set boundary.claimedNewScene: false and boundary.reason: 'none'. Only set claimedNewScene: true for a true location change, major time jump, or environment replacement.",
-    "Do not create a new scene for emotion, pose, dialogue, camera, or action changes.",
-    "Keep the camera fixed at eye level with the companion centered and the lower quarter clear for dialogue UI.",
-    "EXACTLY ONE protagonist / character is visible in every frame. Never depict a second character, a crowd, a bystander, or any other person. The companion is always the single centered subject.",
-    "basePrompt must be concise comma-separated Danbooru-style scene tags for persistent location, time, weather, lighting, and background elements. Include no camera or composition prose, character names, or character description. The companion's appearance belongs only in the single characters entry.",
-    "environment: For an initial scene or true location change, specify full details: location, timeOfDay, weather, lighting, description, persistentElements. For continuing scenes, retain the established setting without rewriting it with generic atmospheric fluff that drops established props.",
-    "environmentChanges: On continuing scenes, use 'environmentChanges' for intentional visual state mutations: {description?, lighting?, timeOfDay?, weather?, addElements?, removeElements?, replaceElements?: [{from, to}], clearElements?, clearLighting?, clearWeather?}. Setting lighting, timeOfDay, or weather to null (or using clearLighting/clearWeather) explicitly clears the field. Setting description replaces it (it cannot be cleared; when lighting/time/weather change without a description, the scene description is re-synthesized automatically). Location changes belong only in boundary and environment.location.",
-    "cues selects paragraph indexes where illustration updates should occur. For each cue, select an expression from the expression catalogue matching the companion's emotional reaction at that moment: [idle, speak, smile, smirk, laugh, think, sad, angry, surprise, wave, shy, listen, pouting, teary_pouting, nervous, nervous_pouting, blushing_shyly, full_face_blush, lovestruck, aroused, lustful, excited, joyful, giggling, happy_smiling, happy_tears, playful_winking, bored, confused, curious, depressed, determined, disappointed, disgusted, embarrassed, enraged, exhausted, flustered, forced_smiling, guilty, indifferent, jealous, melancholic, relieved, scared, seductive_smiling, serious, shocked, sleepy, smug, suspicious, taunting, thinking, worried, acting_cute, acting_coy, admiring, cozy].",
-    config.maxImagesPerTurn > 0
-      ? `Generate up to ${config.maxImagesPerTurn} distinct cues spread across key dialogue or action beats in the turn (always include paragraph 0 as the opening cue).`
-      : "Generate cues spread across distinct visual or emotional beats (unlimited). Always include paragraph 0.",
-    `effect: Use sparse one-shot accents for meaningful story beats, usually 1–3 when the text calls for them; quiet turns need none. Choose ids from: ${StageEffectSchema.options.join(", ")}. Impact/explosion -> shake_hard; earthquake -> rumble; sudden reveal -> zoom_punch; shock -> flash_white; blackout/scene cut -> fade_to_black; lightning strike -> lightning; fear -> heartbeat; confession/kiss -> hearts_burst; celebration -> confetti.`,
-    "Return effects in a separate effects:[{paragraphIndex,effect}] list at ANY paragraph. Effects do not count toward the image cue limit. A cue's effect is also accepted. Do not add illustration cues just to carry effects.",
-    `ambient: Set a persistent weather or mood overlay using: ${AmbientEffectSchema.options.join(", ")}. Rain -> rain; downpour -> heavy_rain; snowfall -> snow; mist -> fog; flashback -> sepia_flashback; dream -> dream_haze; dread -> danger_pulse. Keep the current ambient shown in PREVIOUS SCENE unless weather or mood changes. Omit to keep it; set null only to clear it.`,
-    'Effects example: {"effects":[{"paragraphIndex":5,"effect":"shake_hard"}],"scenes":[{"startParagraph":0,"ambient":"heavy_rain"}]}. Keep other required scene fields.',
-    config.mode === "cyoa" && config.generateChoices
-      ? "choices: If the response does not contain authored Choice tags, return 2 to 4 contextual choices from the user's/persona's perspective. For each choice provide 'label' (a concise button text, e.g. 'Step closer and call her bluff') and 'submission' (a natural, descriptive action or dialogue sentence written in first-person prose from the user's perspective reacting to the scene, e.g. 'I take a slow step toward the desk, meeting her eyes with a quiet smirk. \"Are you really in a position to be making demands, Hina?\"'). NEVER return an index, number, or option code for submission."
-      : "Return an empty choices array.",
-    "characters: Return name and ONE compact comma-separated line containing physical appearance tags. Capture permanent physical traits including species/race (e.g. elf, demon, catgirl, kitsune, furry, anthro, monster girl) and non-human anatomy (e.g. animal ears, horns, tail, wings, fangs, scales, fur, paws, claws). A description that merely repeats the name is invalid. If a new character enters or is introduced in this turn, include them in 'characters'. Keep stable traits and never invent appearance that contradicts the card or KNOWN CHARACTERS baseline.",
-    "Also return species as a short string and anatomy as an array of permanent physical traits when stated in the narrative or card. These fields accept any species, including unfamiliar or invented species. Do not infer a species from an ordinary personal name. Preserve these traits even when a descriptive character label repeats the species. Use null or an empty array when unknown.",
-    "identity: Every KNOWN CHARACTER has a stable characterId. When a character entry, scene or cue refers to a known character under a different label (a nickname, title, or descriptive label such as 'Fox girl' for Kitsune), set 'characterId' to that known id and list the label in the entry's 'aliases'. Only declare an alias when the story makes clear the two labels are the same person; NEVER merge two characters because they share a species, appearance, or clothing. A new character with no known id gets no characterId.",
-    "subjectCategory: On each character entry, set 'subjectCategory' to exactly one of female, male, nonbinary, nonhuman, or unknown, based only on explicit gender or presentation. Animal ears, tails, fur, horns, or species (kitsune, catgirl, wolf) never make a character nonhuman; use nonhuman only for a creature, animal, robot, or object that is not a person.",
-    "cast & active character: Set 'character' on every scene and cue to the name of the character on screen. If a new or different character enters or speaks, set 'character' to that character. Apply changes only at the paragraph where they happen, never to earlier paragraphs.",
-    "When the on-screen character is a KNOWN CHARACTER, also set 'characterId' on that scene or cue to the known id, even if the text calls them by a nickname or descriptive label. Keep 'character' as the label used in the text.",
-    "attire: If the active character changes clothes (e.g. swimsuit, pajamas, armor, sundress, uniform), specify the new outfit tags in 'attire'; otherwise null.",
-    "action: When the visible character interacts with a prominent visible prop or performs a bounded physical gesture, specify 'action' (e.g. 'holding brass key in right raised hand', or {action:'holding',object:'brass key',relationship:'in right raised hand'}); otherwise null. Free-form prose and injection tokens are forbidden.",
-    "speakers: Attribute EVERY paragraph index to its literal on-screen nameplate name. Use the character's actual name for their dialogue and actions. When the text is written from the player's first-person point of view, use the player/persona name. Use \"Narrator\" for omniscient scene narration that belongs to no character. Never use the story or scenario card title as a speaker name.",
+    "You turn one roleplay reply into a visual-novel plan. Reply with ONE minified JSON object on a single line: no markdown fence, no comments, no prose.",
+    `The reader sees the story through ${personaName}'s eyes. ${knownPersona ? `${knownPersona} (the user)` : "The user"} is never drawn and is never the character of a scene or cue (nor 'User' or 'Player'). EXACTLY ONE protagonist/character is visible per frame, usually ${companionName}. Never depict a second character, a crowd, a bystander or ${personaName}.`,
+    "TARGET ASSISTANT RESPONSE paragraphs are numbered [0], [1], ... (zero-based).",
+    `speakers: {"<index>":"<name>"} for EVERY paragraph: the character whose line, thought or action it is; ${personaName} for the user's own lines and thoughts (third-person narration of what ${personaName} does is "Narrator"); "Narrator" for narration that belongs to no one. First-person "I" narration belongs to whoever "I" is. Use names, never the story or card title.`,
+    "scenes: one entry per place, not per paragraph; a reply that stays in one place has exactly one scene. The first starts at paragraph 0; later startParagraph values increase. A scene is a place and time: never start one for a new speaker, emotion, pose, dialogue, camera, action or another spot in the same room.",
+    "- Continuing PREVIOUS SCENE: {\"startParagraph\":0,\"boundary\":{\"reason\":\"none\"}} with cast/character; omit environment, it is kept as is. If paragraph 0 is already somewhere other than PREVIOUS SCENE, the first scene is a new scene.",
+    "- New scene only for a different place, a big time jump (hours later, next day) or a replaced environment: boundary.reason location_change, major_time_jump or environment_replacement (initial when there is no PREVIOUS SCENE), with environment next to boundary, not inside it: {\"startParagraph\":4,\"boundary\":{\"reason\":\"location_change\"},\"environment\":{location,timeOfDay,weather,lighting,description,persistentElements},\"cast\":[...],\"character\":\"...\"}. location a short place name, description one short visual phrase, persistentElements 3-6 visible background objects.",
+    "- environmentChanges (continuing scenes only) for a visible change: {lighting?,timeOfDay?,weather?,description?,addElements?,removeElements?,replaceElements?:[{from,to}],clearElements?,clearLighting?,clearWeather?}. Setting lighting, timeOfDay, or weather to null clears it. Location changes belong only in boundary and the environment of a new scene.",
+    `- cast: the characters present (never ${personaName}); character: who is on screen at the scene start. A scene's or cue's character is a person's name, never the story or card title.`,
+    `- ambient: persistent overlay, one of ${AmbientEffectSchema.options.join(", ")}. Rain -> rain; downpour -> heavy_rain; snowfall -> snow; mist -> fog; flashback -> sepia_flashback; dream -> dream_haze; dread -> danger_pulse. Omit to keep it; set null only to clear it.`,
+    `cues: ${cueLimit} illustration beats spread over key moments, always including paragraph 0: {"paragraphIndex":n,"expression":"<id>","character":"<name>"}. expression is the on-screen character's visible emotion, exactly one of: ${PLANNER_EXPRESSION_IDS.join(", ")}. When a paragraph is ${personaName}'s line or action, show the on-screen character's reaction to it, not ${personaName}'s own state.`,
+    "- attire (on the cue at that paragraph): only where that character visibly puts on, takes off or swaps a major garment: the full new outfit as ONE comma-separated tag string. Never restate an unchanged outfit (current outfits are listed in PREVIOUS SCENE).",
+    "- action (optional): a held prop or bounded gesture, e.g. \"holding brass key in right raised hand\".",
+    `effects: a separate optional list [{"paragraphIndex":n,"effect":"<id>"}] for 0-3 strong beats; effects do not count toward the image cue limit and need no cue. ids: ${StageEffectSchema.options.join(", ")}. Impact/explosion -> shake_hard; earthquake -> rumble; sudden reveal -> zoom_punch; shock -> flash_white; blackout/scene cut -> fade_to_black; lightning strike -> lightning; fear -> heartbeat; confession/kiss -> hearts_burst; celebration -> confetti.`,
+    "characters: one entry per character who appears or speaks in this reply and is not a KNOWN CHARACTER with recorded tags (new characters, characters of a multi-character card, and known ones marked \"describe\"); every character you put in a cue needs recorded tags or an entry: {\"name\",\"description\",\"subjectCategory\"}, plus species and anatomy (array) for non-human traits. description is ONE comma-separated line of permanent appearance tags (species, body, hair, eyes, usual clothes); a description that only repeats the name is invalid; never contradict the card or KNOWN CHARACTERS.",
+    "subjectCategory: female, male, nonbinary, nonhuman or unknown, from explicit gender or presentation only. Animal ears, tails, fur, horns or species never make a person nonhuman; nonhuman is only a creature, animal, robot or object.",
+    "identity: each KNOWN CHARACTER has a stable characterId. When the text calls one by another label (nickname, title, 'Fox girl' for Kitsune), keep that label as character, add \"characterId\", and add {\"name\":\"<label>\",\"characterId\":\"<id>\",\"aliases\":[\"<label>\"]} to characters. Only when the story makes clear they are the same person; NEVER merge characters because they share a species, appearance or clothing. New characters get no characterId.",
+    choices
+      ? "choices: unless the response has authored Choice tags, 2 to 4 options from the user's perspective: {\"label\":\"concise button text\",\"submission\":\"what the user does or says, as natural first-person prose\"}. Never an index or option code."
+      : "",
     hasAudio ? audioInstructions.join("\n") : "",
-    `Shape: {effects:[{paragraphIndex,effect}],scenes:[{startParagraph,boundary:{claimedNewScene,reason,location,timeOfDay,majorTimeJump,environmentReplacement,forced},environment:{location,timeOfDay,weather,lighting,description,persistentElements,removedElements?},environmentChanges?:{description?,lighting?,timeOfDay?,weather?,addElements?,removeElements?,replaceElements?:[{from,to}],clearElements?,clearLighting?,clearWeather?},cast,character?,characterId?,attire?,ambient?,basePrompt,compositionLock}],cues:[{paragraphIndex,expression,action?,character?,characterId?,attire?,effect?${hasAudio ? ",bgm?,sfx?" : ""}}],choices:[{label,submission}],characters:[{name,description,species?,anatomy?,characterId?,aliases?,subjectCategory?}],speakers:[{paragraphIndex,name}]}`,
+    `Shape: {"speakers":{"0":"Name"},"scenes":[{startParagraph,boundary:{reason},environment?:{location,timeOfDay,weather,lighting,description,persistentElements},environmentChanges?:{description?,lighting?,timeOfDay?,weather?,addElements?,removeElements?,replaceElements?:[{from,to}],clearElements?,clearLighting?,clearWeather?},cast,character,characterId?,attire?,ambient?}],"cues":[{paragraphIndex,expression,character,characterId?,attire?,action?${hasAudio ? ",bgm?,sfx?" : ""}}],"effects":[{paragraphIndex,effect}],"characters":[{name,description,subjectCategory,species?,anatomy?,characterId?,aliases?}]${choices ? ",\"choices\":[{label,submission}]" : ""}}`,
     config.customPlannerInstructions ? config.customPlannerInstructions.trim() : ""
   ].filter(Boolean).join("\n");
 }
@@ -322,24 +336,97 @@ function isAttireReset(attire: string | null | undefined): boolean {
   return ["baseline", "default", "original", "reset", "normal"].includes(lower);
 }
 
-function recentContext(messages: PlanTurnInput["recentMessages"], maximum: number): string {
-  if (maximum <= 0) return "";
-  return messages.slice(-maximum).map((message) => {
-    const role = message.is_user ? "User" : message.name || "Assistant";
-    return `${role}: ${stripTextEffectTags(message.content)}`;
-  }).join("\n\n");
+/** Recent chat budget in characters: the newest message, each older one, and the whole block. */
+export const RECENT_CONTEXT_LIMITS = { newest: 2000, older: 900, total: 6000 } as const;
+
+const REASONING_BLOCK = /<(think|thinking|thought|thoughts|reasoning|reflection)\b[^>]*>[\s\S]*?<\/\1\s*>/gi;
+
+/**
+ * Inline data, not prose: a data URI, a long URL, or a long run of base64/hex
+ * style characters. Long runs of CJK or Thai text have no spaces and are kept.
+ */
+const INLINE_DATA = /^(?:data:\S{40,}|[a-z][a-z0-9+.-]*:\/\/\S{80,}|[A-Za-z0-9+/=_%.-]{120,})$/;
+
+/** History text for the planner: no reasoning blocks, markup, inline data or effect tags. */
+function cleanContextText(text: string): string {
+  return stripTextEffectTags(text)
+    .replace(REASONING_BLOCK, " ")
+    .replace(/<[^>\n]{0,400}>/g, " ")
+    .split(/(\s+)/).filter((token) => !INLINE_DATA.test(token)).join("")
+    .replace(/[ \t]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
-function previousSceneContext(scene: SceneState | null): string {
+/**
+ * Keep the end of a long message: it carries the latest place, outfit and
+ * state. The cut is on a code point, and a partial word at the cut is
+ * dropped only when a space follows it closely (text without spaces, such as
+ * Japanese, is cut as is).
+ */
+function clipTail(text: string, maximum: number): string {
+  const points = Array.from(text);
+  if (points.length <= maximum) return text;
+  const kept = points.slice(points.length - maximum + 1).join("");
+  const space = kept.slice(0, 24).search(/\s/);
+  return `…${space >= 0 ? kept.slice(space + 1) : kept}`;
+}
+
+/**
+ * The messages before the planned reply, oldest first, within
+ * RECENT_CONTEXT_LIMITS. The reply itself is sent once, as TARGET ASSISTANT
+ * RESPONSE, so it is dropped here with anything after it: by id, else by chat
+ * position (a re-planned older turn whose window ends later), else by text.
+ */
+function recentContext(input: Pick<PlanTurnInput, "recentMessages" | "message" | "content" | "config">, personaName?: string): string {
+  const maximum = input.config.includeRecentMessages;
+  if (maximum <= 0) return "";
+  let window = [...input.recentMessages];
+  const targetIndex = window.findIndex((message) => (message as { id?: unknown }).id === input.message.id);
+  if (targetIndex >= 0) window = window.slice(0, targetIndex);
+  const position = input.message.index_in_chat;
+  // Only later positions are dropped; a message sharing the target's position is
+  // left to the text check below.
+  if (targetIndex < 0 && typeof position === "number") window = window.filter((message) => typeof message.index_in_chat !== "number" || message.index_in_chat <= position);
+  if (targetIndex < 0 && window.length && !window.at(-1)!.is_user && window.at(-1)!.content.trim() === input.content.trim()) window = window.slice(0, -1);
+  // includeRecentMessages counts the reply itself, as the controller's window does.
+  window = maximum > 1 ? window.slice(-(maximum - 1)) : [];
+  const userLabel = personaName?.trim() ? `${personaName.trim()} (user)` : "User";
+  const lines: string[] = [];
+  let used = 0;
+  for (let index = window.length - 1; index >= 0; index -= 1) {
+    const message = window[index]!;
+    const text = cleanContextText(message.content);
+    if (!text) continue;
+    const budget = Math.min(lines.length === 0 ? RECENT_CONTEXT_LIMITS.newest : RECENT_CONTEXT_LIMITS.older, RECENT_CONTEXT_LIMITS.total - used);
+    if (budget < 200) break;
+    const line = `${message.is_user ? userLabel : message.name || "Assistant"}: ${clipTail(text, budget)}`;
+    lines.unshift(line);
+    used += line.length;
+  }
+  return lines.join("\n\n");
+}
+
+/**
+ * The previous scene as the planner needs it: the place to keep or leave, who
+ * was on screen, and outfits that differ from the KNOWN CHARACTERS baselines.
+ * Fixed camera/composition metadata and the stored base prompt are omitted.
+ */
+function previousSceneContext(scene: SceneState | null, continuity: TurnPlan["terminalContinuity"] | null = null): string {
   if (!scene) return "No previous visual scene exists.";
+  const outfits: Record<string, string> = {};
+  for (const [name, state] of Object.entries(continuity?.characters ?? {})) {
+    const attire = state?.wardrobe?.attire;
+    if (typeof attire === "string" && attire.trim()) outfits[name] = attire.trim();
+  }
+  if (scene.character && scene.attire?.trim() && !outfits[scene.character]) outfits[scene.character] = scene.attire.trim();
   return JSON.stringify({
-    sceneId: scene.sceneId,
-    environment: scene.environment,
-    ambient: scene.ambient,
+    ...scene.environment,
+    ...(scene.ambient !== undefined ? { ambient: scene.ambient } : {}),
     cast: scene.cast,
-    basePrompt: scene.basePrompt,
-    cameraLock: scene.cameraLock,
-    compositionLock: scene.compositionLock
+    ...(scene.character ? { character: scene.character } : {}),
+    ...(Object.keys(outfits).length ? { outfits } : {})
   });
 }
 
@@ -355,6 +442,17 @@ function normalizeBoundaryReason(value: unknown): string {
   if (/environment|weather|structure|replace|rebuild|interior|exterior/.test(text)) return "environment_replacement";
   if (/forced|override|hard|reset/.test(text)) return "forced";
   return "none";
+}
+
+/**
+ * The boundary reason when it is exactly one of BOUNDARY_REASONS, else null.
+ * Only an exact value sets the derived boundary flags: the fuzzy mapping above
+ * is diagnostic and ignores negation ("no_time_skip", "environment unchanged").
+ */
+function exactBoundaryReason(value: unknown): (typeof BOUNDARY_REASONS)[number] | null {
+  if (typeof value !== "string") return null;
+  const text = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  return (BOUNDARY_REASONS as readonly string[]).includes(text) ? text as (typeof BOUNDARY_REASONS)[number] : null;
 }
 
 function asBoolean(value: unknown): boolean {
@@ -459,13 +557,18 @@ function normalizeBoundary(value: unknown, envValue?: unknown, defaultLoc?: stri
   const loc = typeof record.location === "string" && record.location.trim() && !isGenericLocation(record.location)
     ? record.location.trim()
     : fallbackLocation;
+  const reason = normalizeBoundaryReason(record.reason ?? "none");
+  // The compact shape sends only `reason`; explicit flags (older shape) win,
+  // and only an exact reason value derives them.
+  const exact = exactBoundaryReason(record.reason);
+  const flag = (key: string, fromReason: boolean) => record[key] === undefined || record[key] === null ? fromReason : asBoolean(record[key]);
   return {
-    claimedNewScene: asBoolean(record.claimedNewScene),
-    reason: normalizeBoundaryReason(record.reason ?? "none"),
+    claimedNewScene: flag("claimedNewScene", exact !== null && exact !== "none"),
+    reason,
     location: loc,
     timeOfDay: normalizeTimeOfDay(record.timeOfDay),
-    majorTimeJump: asBoolean(record.majorTimeJump),
-    environmentReplacement: asBoolean(record.environmentReplacement),
+    majorTimeJump: flag("majorTimeJump", exact === "major_time_jump"),
+    environmentReplacement: flag("environmentReplacement", exact === "environment_replacement"),
     forced: asBoolean(record.forced)
   };
 }
@@ -541,23 +644,57 @@ function normalizeEnvironment(value: unknown, defaultLoc?: string): unknown {
   };
 }
 
+/** Attire as one tag string; models sometimes send a tag list. A map is read by normalizeAttireMap. */
+function normalizeAttire(value: unknown): string | null {
+  if (typeof value === "string") return value.trim();
+  if (Array.isArray(value)) {
+    const tags = value.filter((tag): tag is string => typeof tag === "string").map((tag) => tag.trim()).filter(Boolean);
+    return tags.length ? tags.join(", ") : null;
+  }
+  return null;
+}
+
+/**
+ * A {"<name>": outfit} attire map. It is resolved after registry names and
+ * aliases are known (canonicalizePlannerIdentities): only the entry for the
+ * scene's or cue's own character dresses it.
+ */
+function normalizeAttireMap(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .map(([name, outfit]) => [name.trim(), normalizeAttire(outfit)] as const)
+    .filter((entry): entry is readonly [string, string] => Boolean(entry[0] && entry[1]));
+  return entries.length ? Object.fromEntries(entries.slice(0, 16)) : undefined;
+}
+
 function normalizeScene(value: unknown, defaultLoc?: string): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const record = value as Record<string, unknown>;
-  const rawEnv = record.environment as Record<string, unknown> | undefined;
+  // Some models nest the new scene's environment inside its boundary.
+  const boundaryRecord = record.boundary && typeof record.boundary === "object" && !Array.isArray(record.boundary)
+    ? record.boundary as Record<string, unknown>
+    : null;
+  const environment = record.environment ?? boundaryRecord?.environment;
+  const rawEnv = environment as Record<string, unknown> | undefined;
   const rawChanges = record.environmentChanges ?? rawEnv?.changes;
   const envChanges = normalizeEnvironmentChanges(rawChanges);
+  // A boundary that names the place is the fallback for an environment without one.
+  const boundaryLocation = typeof boundaryRecord?.location === "string" && boundaryRecord.location.trim() && !isGenericLocation(boundaryRecord.location)
+    ? boundaryRecord.location.trim()
+    : undefined;
+  const placeDefault = boundaryLocation ?? defaultLoc;
   return {
     startParagraph: asNumber(record.startParagraph) ?? 0,
-    boundary: normalizeBoundary(record.boundary, record.environment, defaultLoc),
-    environment: normalizeEnvironment(record.environment, defaultLoc),
+    boundary: normalizeBoundary(record.boundary, environment, placeDefault),
+    environment: normalizeEnvironment(environment, placeDefault),
     ...(envChanges ? { environmentChanges: envChanges } : {}),
     cast: Array.isArray(record.cast)
       ? record.cast.map((item) => typeof item === "string" ? item.trim() : String(item)).filter(Boolean)
       : [],
     character: typeof record.character === "string" ? record.character.trim() : null,
     characterId: normalizeCharacterId(record.characterId ?? record.character_id ?? record.id) || null,
-    attire: typeof record.attire === "string" ? record.attire.trim() : null,
+    attire: normalizeAttire(record.attire),
+    ...(normalizeAttireMap(record.attire) ? { attireByName: normalizeAttireMap(record.attire) } : {}),
     ...(record.ambient !== undefined ? { ambient: normalizeAmbientEffect(record.ambient) } : {}),
     basePrompt: typeof record.basePrompt === "string" && record.basePrompt.trim() ? record.basePrompt.trim() : "a visual novel scene",
     compositionLock: typeof record.compositionLock === "string" ? record.compositionLock.trim() : "Character centered with clear negative space behind the dialogue window."
@@ -580,7 +717,8 @@ function normalizeCue(value: unknown): unknown {
     expression: typeof record.expression === "string" ? record.expression.trim() : null,
     character: typeof record.character === "string" ? record.character.trim() : null,
     characterId: normalizeCharacterId(record.characterId ?? record.character_id) || null,
-    attire: typeof record.attire === "string" ? record.attire.trim() : null,
+    attire: normalizeAttire(record.attire),
+    ...(normalizeAttireMap(record.attire) ? { attireByName: normalizeAttireMap(record.attire) } : {}),
     effect: normalizeStageEffect(record.effect),
     promptDelta: typeof record.promptDelta === "string"
       ? record.promptDelta.trim()
@@ -715,6 +853,65 @@ function routePlannerEffects(rawScenes: unknown[], rawCues: unknown[], top: Reco
   return { scenes, cues, effects };
 }
 
+/**
+ * Per-paragraph speakers in any of the accepted shapes: the compact map
+ * {"0":"Mira"} the instruction asks for, [{paragraphIndex,name}] entries
+ * (older prompt), or a plain array of names indexed by paragraph.
+ */
+function normalizeSpeakers(value: unknown): Array<{ paragraphIndex: number; name: string }> {
+  const entries: Array<[unknown, unknown]> = Array.isArray(value)
+    ? value.map((entry, index) => {
+      if (typeof entry === "string") return [index, entry];
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [null, null];
+      const item = entry as Record<string, unknown>;
+      return [item.paragraphIndex ?? item.paragraph_index ?? item.paragraph ?? item.index, item.name ?? item.speaker];
+    })
+    : value && typeof value === "object" ? Object.entries(value as Record<string, unknown>) : [];
+  const speakers: Array<{ paragraphIndex: number; name: string }> = [];
+  for (const [rawIndex, rawName] of entries) {
+    const paragraphIndex = typeof rawIndex === "number" ? rawIndex : typeof rawIndex === "string" ? Number.parseInt(rawIndex.replace(/^\D+/, ""), 10) : NaN;
+    const name = typeof rawName === "string" ? rawName.trim() : "";
+    if (Number.isInteger(paragraphIndex) && paragraphIndex >= 0 && name) speakers.push({ paragraphIndex, name });
+  }
+  return speakers;
+}
+
+/**
+ * A character entry needs a name and either appearance tags or an explicit
+ * alias/id link (the compact prompt lists known characters only to add an
+ * alias). An empty entry is dropped instead of failing the whole plan.
+ */
+function usefulCharacterEntry(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const entry = value as { name?: unknown; description?: unknown; aliases?: unknown; characterId?: unknown };
+  if (typeof entry.name !== "string" || !entry.name.trim()) return false;
+  return (typeof entry.description === "string" && Boolean(entry.description.trim()))
+    || (Array.isArray(entry.aliases) && entry.aliases.length > 0)
+    || Boolean(entry.characterId);
+}
+
+/**
+ * A scene that omits its environment continues the place before it: the
+ * turn's first scene the previous turn's place, a later one the scene before
+ * it in this plan (not the previous turn's, which would read as a move back).
+ */
+function normalizeScenes(rawScenes: unknown[], defaultLoc?: string): unknown[] {
+  const scenes: unknown[] = new Array(rawScenes.length);
+  const order = rawScenes.map((_, index) => index).sort((left, right) => startOf(rawScenes[left]) - startOf(rawScenes[right]));
+  let location = defaultLoc;
+  for (const index of order) {
+    const scene = normalizeScene(rawScenes[index], location);
+    scenes[index] = scene;
+    const next = (scene as { environment?: { location?: unknown } } | null)?.environment?.location;
+    if (typeof next === "string" && !isGenericLocation(next)) location = next;
+  }
+  return scenes;
+}
+
+function startOf(scene: unknown): number {
+  return scene && typeof scene === "object" ? asNumber((scene as Record<string, unknown>).startParagraph) ?? 0 : 0;
+}
+
 function normalizePlannerOutput(value: unknown, defaultLoc?: string, trace: EffectTrace = () => {}): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const record = value as Record<string, unknown>;
@@ -729,7 +926,7 @@ function normalizePlannerOutput(value: unknown, defaultLoc?: string, trace: Effe
     rawScenes = [record.current_scene];
   }
 
-  let scenes = rawScenes.map((s) => normalizeScene(s, defaultLoc));
+  let scenes = normalizeScenes(rawScenes, defaultLoc);
   if (scenes.length === 0) {
     scenes = [
       normalizeScene({
@@ -759,7 +956,7 @@ function normalizePlannerOutput(value: unknown, defaultLoc?: string, trace: Effe
               : [])))));
 
   const routed = routePlannerEffects(rawScenes.length ? rawScenes : scenes, rawCues, record, trace);
-  scenes = routed.scenes.map((scene) => normalizeScene(scene, defaultLoc));
+  scenes = normalizeScenes(routed.scenes, defaultLoc);
 
   let rawCharacters: unknown[] = [];
   if (Array.isArray(record.characters)) {
@@ -784,23 +981,8 @@ function normalizePlannerOutput(value: unknown, defaultLoc?: string, trace: Effe
           .filter((c): c is { label: string; submission: string } => c !== null)
           .slice(0, 6)
       : [],
-    characters: rawCharacters.map(normalizeCharacter),
-    speakers: Array.isArray(record.speakers)
-      ? record.speakers
-        .map((entry) => {
-          if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
-          const item = entry as Record<string, unknown>;
-          const paragraphIndex = typeof item.paragraphIndex === "number" ? item.paragraphIndex
-            : typeof item.paragraphIndex === "string" ? Number.parseInt(item.paragraphIndex, 10)
-            : NaN;
-          const name = typeof item.name === "string" ? item.name.trim()
-            : typeof item.speaker === "string" ? item.speaker.trim()
-            : "";
-          if (!Number.isInteger(paragraphIndex) || paragraphIndex < 0 || !name) return null;
-          return { paragraphIndex, name };
-        })
-        .filter((entry): entry is { paragraphIndex: number; name: string } => entry !== null)
-      : []
+    characters: rawCharacters.map(normalizeCharacter).filter(usefulCharacterEntry),
+    speakers: normalizeSpeakers(record.speakers)
   };
 }
 
@@ -1134,9 +1316,9 @@ async function requestPlannerOutput(
         role: "user",
         content: [
           "PREVIOUS SCENE",
-          previousSceneContext(input.previousScene),
+          previousSceneContext(input.previousScene, input.previousContinuity),
           "RECENT CHAT",
-          recentContext(input.recentMessages, input.config.includeRecentMessages),
+          recentContext(input, visualContext.personaIdentity?.name),
           ...(input.externalScene
             ? ["EXTERNAL SCENE SUBJECT (select this character by name; resolve appearance from Cue's identity memory, card and lore. Cue still chooses the pose and composition.)", JSON.stringify(input.externalScene)]
             : []),
@@ -1779,14 +1961,17 @@ function knownCharacterBlock(input: PlanTurnInput, visualContext: VisualContextS
     const key = appearanceMapKeyFor(input.characterAppearance, name);
     if (key) tags = toUsableTags(name, splitTags(input.characterAppearance[key] ?? ""));
   }
+  // Tags read off the card are only a fallback, not a recorded appearance:
+  // the planner still describes that character (marked "describe").
+  let fromCard = false;
   if (tags.length === 0) {
     const card = buildCardIdentity(visualContext);
-    if (card && isUsableIdentity(card.name, card.tags)) tags = card.tags;
+    if (card && isUsableIdentity(card.name, card.tags)) { tags = card.tags; fromCard = true; }
   }
   const lines: string[] = [];
   const listed = new Set<string>();
   if (tags.length > 0) {
-    lines.push(`${name}: ${tags.join(", ")}${describe(name)}`);
+    lines.push(`${name}: ${tags.join(", ")}${describe(name)}${fromCard ? " (from the card; describe)" : ""}`);
     listed.add(characterAppearanceKey(name));
   }
 
@@ -1804,7 +1989,7 @@ function knownCharacterBlock(input: PlanTurnInput, visualContext: VisualContextS
   for (const entry of Object.values(registry)) {
     if (listed.has(characterAppearanceKey(entry.name))) continue;
     const cleanTags = entry.tags ? toUsableTags(entry.name, splitTags(entry.tags)) : [];
-    lines.push(`${entry.name}: ${cleanTags.length ? cleanTags.join(", ") : "(no appearance recorded yet)"}${describe(entry.name)}`);
+    lines.push(`${entry.name}: ${cleanTags.length ? cleanTags.join(", ") : "(no appearance recorded yet; describe)"}${describe(entry.name)}`);
     listed.add(characterAppearanceKey(entry.name));
   }
 
@@ -2014,14 +2199,30 @@ function canonicalizePlannerIdentities(planner: PlannerOutput, registry: Charact
     const resolved = canonicalCharacterName(registry, { name: name ?? "", characterId });
     return resolved || name;
   };
+  // An attire map dresses only its own character: the entry whose name or
+  // alias resolves to the reference's character. Other entries are dropped,
+  // never applied to whoever the cue shows.
+  const dressFromMap = (attireByName: Record<string, string> | undefined, character: string | null | undefined): { attire?: string } => {
+    if (!attireByName || !character) return {};
+    const target = characterAppearanceKey(character);
+    const entry = Object.entries(attireByName).find(([name]) => characterAppearanceKey(canon(name, null) || name) === target);
+    return entry ? { attire: entry[1] } : {};
+  };
   return {
     ...planner,
-    scenes: planner.scenes.map((scene) => ({
-      ...scene,
-      character: canon(scene.character, scene.characterId),
-      cast: scene.cast.map((member) => canon(member, null) || member)
-    })),
-    cues: planner.cues.map((cue) => ({ ...cue, character: canon(cue.character, cue.characterId) })),
+    scenes: planner.scenes.map(({ attireByName, ...scene }) => {
+      const character = canon(scene.character, scene.characterId);
+      return {
+        ...scene,
+        character,
+        cast: scene.cast.map((member) => canon(member, null) || member),
+        ...(scene.attire ? {} : dressFromMap(attireByName, character))
+      };
+    }),
+    cues: planner.cues.map(({ attireByName, ...cue }) => {
+      const character = canon(cue.character, cue.characterId);
+      return { ...cue, character, ...(cue.attire ? {} : dressFromMap(attireByName, character)) };
+    }),
     characters: planner.characters.map((character) => ({
       ...character,
       name: canon(character.name, character.characterId) || character.name
@@ -2099,7 +2300,7 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
   const [visualContext, plannerConnection] = await Promise.all([
     loadVisualContext(spindle, {
       chatId: input.chatId,
-      target: [recentContext(input.recentMessages, input.config.includeRecentMessages), stripTextEffectTags(input.content)].filter(Boolean).join("\n\n"),
+      target: [recentContext(input), stripTextEffectTags(input.content)].filter(Boolean).join("\n\n"),
       config: input.config,
       ...(input.userId ? { userId: input.userId } : {})
     }),
@@ -2231,6 +2432,18 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
     ? `outcome=fallback attempts=${failedAttempts}/${PLANNER_ATTEMPTS} deterministic plan: scenes=${planner.scenes.length} cues=${planner.cues.length}`
     : `outcome=planner accepted attempt=${failedAttempts + 1}/${PLANNER_ATTEMPTS} scenes=${planner.scenes.length} cues=${planner.cues.length} characters=${planner.characters.length} speakers=${planner.speakers.length} choices=${planner.choices.length}`);
 
+  // An entry without a description only links a label to a character that
+  // already exists (an alias, an id). It never creates one: an entry with no
+  // tags would be listed as a known character that no image can draw.
+  const linksExisting = (character: PlannerOutput["characters"][number]): boolean => {
+    const id = character.characterId ? normalizeCharacterId(character.characterId) : "";
+    return Boolean((id && seedRegistry[id]) || resolveCharacterReference(seedRegistry, { name: character.name }));
+  };
+  const droppedLinks = planner.characters.filter((character) => !character.description.trim() && !linksExisting(character));
+  if (droppedLinks.length) {
+    debug.line(`dropped ${droppedLinks.length} character entr${droppedLinks.length === 1 ? "y" : "ies"} without a description or a known id: ${droppedLinks.map((character) => character.name).join(", ")}`);
+    planner = { ...planner, characters: planner.characters.filter((character) => !droppedLinks.includes(character)) };
+  }
   // Merge the planner's explicit declarations (ids, aliases, subject class) and
   // canonicalize every reference before identity or timeline resolution.
   const registryReport: RegistryMergeReport = mergeCharacterDeclarations(seedRegistry, plannerDeclarations(planner, isPersona));
@@ -2315,7 +2528,15 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
       : (activeChar ? [activeChar] : (protagonistName ? [protagonistName] : []));
     if (sceneCast.length === 0 && protagonistName) sceneCast.push(protagonistName);
 
-    const baseEnv = previous !== null && !decision.startsNewScene ? previous.environment : null;
+    // A new scene in the same place (a time jump, or a replacement the reader
+    // did not describe) builds on the place before it, so an omitted or
+    // partial environment never becomes a blank one. Only a replacement that
+    // describes the new state, or a different place, starts from the proposal.
+    const describesPlace = !isGenericDescription(proposal.environment.description) || (proposal.environment.persistentElements ?? []).length > 0;
+    const samePlace = previous !== null && normalizePlaceName(proposal.environment.location) === normalizePlaceName(previous.environment.location);
+    const buildsOnPrevious = previous !== null
+      && (!decision.startsNewScene || (samePlace && !(proposal.boundary.environmentReplacement && describesPlace)));
+    const baseEnv = buildsOnPrevious ? previous!.environment : null;
     const plannedEnv = baseEnv
       ? mergeEnvironment(baseEnv, proposal.environment, proposal.environmentChanges)
       : null;
@@ -2532,7 +2753,13 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
   addCanonical(protagonistName);
   addCanonical(cardDisplayName);
   addCanonical(input.message.name);
+  // "Theo" for the persona "Theo Grant" is the persona, not a new speaker.
+  const personaWords = personaDisplayName.toLowerCase().split(/\s+/).filter((word) => word.length >= 2);
+  const isPersonaNickname = (label: string): boolean => personaWords.length > 1
+    && !canonicalNames.has(label.toLowerCase())
+    && label.toLowerCase().split(/\s+/).every((word) => personaWords.includes(word));
   const paragraphSpeakerByIndex = new Map<number, string>();
+  const nameplateOnly = new Set<string>();
   for (const entry of planner.speakers) {
     if (paragraphSpeakerByIndex.has(entry.paragraphIndex)) continue;
     const claimed = entry.name.trim();
@@ -2541,16 +2768,24 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
       paragraphSpeakerByIndex.set(entry.paragraphIndex, "");
       continue;
     }
-    if (isPersona(claimed)) {
+    if (isPersona(claimed) || isPersonaNickname(claimed)) {
       if (personaDisplayName) paragraphSpeakerByIndex.set(entry.paragraphIndex, personaDisplayName);
       continue;
     }
-    const canonical = canonicalNames.get(claimed.toLowerCase());
-    if (canonical) paragraphSpeakerByIndex.set(entry.paragraphIndex, canonical);
+    const known = canonicalNames.get(claimed.toLowerCase());
+    const canonical = known ?? (namedInReply(claimed, replyParagraphs) ? claimed : undefined);
+    if (canonical) {
+      // A speaker only the reply names (a barkeep who never gets a frame)
+      // keeps one spelling and stays a nameplate (see nameplateOnlySpeakers).
+      if (!known) nameplateOnly.add(canonical);
+      addCanonical(canonical);
+      paragraphSpeakerByIndex.set(entry.paragraphIndex, canonicalNames.get(canonical.toLowerCase()) ?? canonical);
+    }
   }
   const paragraphSpeakers = narrative.paragraphs.map(
     (paragraph) => paragraphSpeakerByIndex.get(paragraph.index) ?? null
   );
+  const nameplateOnlySpeakers = [...nameplateOnly].filter((name) => paragraphSpeakers.includes(name)).slice(0, 64);
 
   const continuityDeltas: IndexedContinuityDelta[] = timeline.deltas;
 
@@ -2564,6 +2799,7 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
     panels: narrative.panels,
     panelSource: resolvedContent.slice(0, 200_000),
     paragraphSpeakers,
+    ...(nameplateOnlySpeakers.length ? { nameplateOnlySpeakers } : {}),
     scenes,
     visualCues: cues,
     ...(classifierVisuals ? { classifierVisuals: true } : {}),
@@ -2620,7 +2856,7 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
   }
   return {
     plan, usedFallback, contextDiagnostics: visualContext.diagnostics, singleCharacter,
-    extractedCharacters: planner.characters.map((character) => ({ name: character.name, description: character.description })),
+    extractedCharacters: planner.characters.filter((character) => character.description.trim()).map((character) => ({ name: character.name, description: character.description })),
     characterRegistry: registry,
     rejectedAliases: registryReport.rejectedAliases,
     rejectedSubjects: registryReport.rejectedSubjects
@@ -2687,6 +2923,38 @@ export function wardrobeDebugLines(
   }
   for (const note of notes) if (!decided.has(characterAppearanceKey(note.character))) lines.push(noteLine(note));
   return lines;
+}
+
+const GENERIC_SPEAKER_WORDS = new Set([
+  "i", "me", "you", "he", "him", "she", "her", "they", "them", "we", "us", "it", "someone", "somebody", "everyone",
+  "voice", "a voice", "man", "woman", "girl", "boy", "user", "player", "persona", "character", "unknown", "assistant",
+  // Pronouns of other languages the replies are written in.
+  "elle", "elles", "il", "ils", "lui", "ella", "ellas", "él", "ellos", "yo", "tú", "tu", "ele", "ela", "eles", "elas",
+  "eu", "você", "voce", "er", "sie", "es", "ich", "du", "lei", "loro", "io"
+]);
+
+/** A label that starts like a description of a role ("The guard", "an old man"), not a name. */
+const ROLE_LABEL = /^(?:the|a|an|my|your|his|her|their|our|this|that|some|o|os|as|um|uma|el|la|los|las|un|una|le|les|une|der|die|das|ein|eine)\s/iu;
+
+/**
+ * A speaker the planner names but nobody declared is still a real nameplate
+ * when the reply itself spells that name (the barkeep who speaks one line and
+ * never gets a frame). The reply must write it as a name: every word
+ * capitalized where the script has case ("Dorran", not "the elf customer").
+ * Pronouns and role labels never qualify, so a guessed label cannot invent a
+ * nameplate. Such a speaker is a nameplate only: it is not staged and gets no
+ * sprites, since nothing describes how it looks.
+ */
+export function namedInReply(name: string, paragraphs: readonly string[]): boolean {
+  const claimed = name.trim();
+  if (claimed.length < 2 || claimed.length > 60 || GENERIC_SPEAKER_WORDS.has(claimed.toLowerCase()) || ROLE_LABEL.test(claimed)) return false;
+  const escaped = claimed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+  const pattern = new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, "giu");
+  const writtenAsName = (spelled: string) => spelled.split(/\s+/).every((word) => {
+    const first = Array.from(word)[0] ?? "";
+    return first.toLocaleUpperCase() === first;
+  });
+  return paragraphs.some((paragraph) => [...paragraph.matchAll(pattern)].some((match) => writtenAsName(match[0])));
 }
 
 export function fingerprintForMessage(message: Pick<ChatMessageDTO, "id" | "swipe_id" | "content">): string {

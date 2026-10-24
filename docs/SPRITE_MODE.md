@@ -396,6 +396,9 @@ intensity), the plate key, and the light preset.
   identity gets the entry's tags. Stored staging from older turns is cleaned
   the same way when it is read (`sanitizeStoredStaging`: persona dropped,
   alias members folded into the canonical member), without rewriting the file.
+  A speaker the planner kept only because the reply spells its name (a
+  one-line barkeep, listed in `TurnPlan.nameplateOnlySpeakers`) shows a
+  nameplate but never joins the cast, so no sprite set is generated for it.
 
 ## Key moments (sprite mode, `keyIllustrations: "few"`)
 
