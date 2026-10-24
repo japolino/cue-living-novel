@@ -278,6 +278,32 @@ try {
     assertLayout(await geometry(page), "yuki ready", 2);
     await shot(page, "missing-set-ready");
 
+    // Every image of a set failed: "Could not prepare <name>" with Try again for that set.
+    await page.evaluate(() => {
+      const fx = (window as any).fx;
+      fx.load([{ speaker: "Yuki", text: "Hello?", actors: [{ characterKey: "yuki", focus: true }] }], { sets: { yuki: fx.failedSet("yuki", "Yuki") } });
+    });
+    await page.waitForTimeout(200);
+    assert.ok((await badgeTexts()).includes("Could not prepare Yuki \u00b7 Try again"), `retry badge shown (${await badgeTexts()})`);
+    await shot(page, "failed-set-retry");
+    await page.evaluate(() => {
+      const theme = document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!;
+      (theme.querySelector("[data-vn-badge-key='set_yuki']") as HTMLButtonElement).click();
+    });
+    assert.deepEqual(await page.evaluate(() => (window as any).fx.retried), ["set_yuki"], "Try again asks for that set");
+    assert.equal(await page.evaluate(() => (window as any).fx.stage.getState().currentParagraphIndex), 0, "Try again does not advance the story");
+
+    // The cut-out model's download progress is a stage line in sprite mode (none in scene mode).
+    await page.evaluate(() => (window as any).fx.stage.setSpriteNote("Downloading the cut-out model: 12 MB of 88 MB"));
+    assert.ok((await badgeTexts()).includes("Downloading the cut-out model: 12 MB of 88 MB"), `download line shown (${await badgeTexts()})`);
+    await page.evaluate(() => (window as any).fx.stage.setSpriteNote("Downloading the cut-out model: 40 MB of 88 MB"));
+    assert.ok((await badgeTexts()).includes("Downloading the cut-out model: 40 MB of 88 MB"), "the line follows the progress");
+    await shot(page, "cutout-download-line");
+    await page.evaluate(() => (window as any).fx.stage.setPresentationMode("scene"));
+    assert.ok(!(await badgeTexts()).some((t) => t.startsWith("Downloading")), "no download line in scene mode");
+    await page.evaluate(() => { const stage = (window as any).fx.stage; stage.setPresentationMode("sprites"); stage.setSpriteNote(null); });
+    assert.ok(!(await badgeTexts()).some((t) => t.startsWith("Downloading")), "the line goes when the download ends");
+
     // Plate update while shown; unknown plates are ignored.
     await load(page, [{ actors: [{ characterKey: "mira", focus: true }], plateKey: "plate_park" }]);
     assert.equal((await page.evaluate(() => (window as any).fx.stage.getState().displayedImage)).url, "/sprites/plate_park.webp");

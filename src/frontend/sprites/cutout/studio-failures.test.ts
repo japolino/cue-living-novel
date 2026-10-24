@@ -176,21 +176,14 @@ const note = (): string => {
 };
 const marker = (): { url: string; reason?: string } | null => (local.has(KEY) ? JSON.parse(local.get(KEY)!) : null);
 const tick = (ms = 1): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-/** Wait for a background Studio download to finish (the visible state stops showing it). */
-const downloaded = async (): Promise<void> => {
-  for (let i = 0; i < 500; i++) {
-    const state = cutout.getCutoutModelState();
-    if (!(state.state === "downloading" && state.studio)) return;
-    await tick();
-  }
-  throw new Error("The Studio download did not finish.");
-};
+/** Wait for the background downloads (the Studio model's, and Best's on first use) to finish. */
+const downloaded = (): Promise<void> => cutout.cutoutModelSettled();
 const fetchesOf = (url: string): number => fetches.filter((item) => item === url).length;
 
 describe("Studio failures that stop the worker or the tab", () => {
   test("the worker dies loading the Studio model: not tried again on this page, Best cuts on a fresh worker", async () => {
     const url = studioUrl("crashload");
-    cached(url);
+    cached(url, BEST);
     const first = await cut(url);
     expect(first.quality).toBe("best");
     expect(first.studio).toBeUndefined();
@@ -206,7 +199,7 @@ describe("Studio failures that stop the worker or the tab", () => {
 
   test("onnxruntime cannot start for the Studio model (\"runtime\"): not tried again on this page", async () => {
     const url = studioUrl("runtime");
-    cached(url);
+    cached(url, BEST);
     expect((await cut(url)).studio).toBeUndefined();
     clock += 10 * 60_000;
     expect((await cut(url)).studio).toBeUndefined();
@@ -215,7 +208,7 @@ describe("Studio failures that stop the worker or the tab", () => {
   });
 
   test("the marker is set while the Studio model loads and cleared after its first good cut", async () => {
-    cached(STUDIO);
+    cached(STUDIO, BEST);
     const during: Array<unknown> = [];
     hooks.onLoad = (name) => { if (name.startsWith("STUDIO")) during.push(marker()); };
     const result = await cut(STUDIO);
@@ -225,7 +218,7 @@ describe("Studio failures that stop the worker or the tab", () => {
   });
 
   test("a tab that died loading or first running the Studio model: the next visit uses Best; Settings retries", async () => {
-    cached(STUDIO);
+    cached(STUDIO, BEST);
     local.set(KEY, JSON.stringify({ url: STUDIO, at: 1 }));
     const result = await cut(STUDIO);
     expect(result.quality).toBe("best");
@@ -247,7 +240,7 @@ describe("Studio failures that stop the worker or the tab", () => {
 
   test("a Studio failure the page saw is remembered on the device with its reason", async () => {
     const url = studioUrl("session");
-    cached(url);
+    cached(url, BEST);
     await cut(url);
     expect(marker()).toMatchObject({ url, reason: expect.stringMatching(/failed to allocate/) });
     cutout.resetCutoutRuntime(); // the next visit
@@ -258,7 +251,7 @@ describe("Studio failures that stop the worker or the tab", () => {
   });
 
   test("another Cue tab runs the Studio model: this tab cuts with Best and reads no crash into its marker", async () => {
-    cached(STUDIO);
+    cached(STUDIO, BEST);
     heldElsewhere = true;
     local.set(KEY, JSON.stringify({ url: STUDIO, at: realNow() })); // the other tab is loading it right now
     const result = await cut(STUDIO);
@@ -273,7 +266,7 @@ describe("Studio failures that stop the worker or the tab", () => {
   });
 
   test("phones, small-memory devices and software adapters are not offered the Studio model", async () => {
-    cached(STUDIO);
+    cached(STUDIO, BEST);
     setNav("deviceMemory", 4);
     expect(await cutout.getStudioCutoutSupport()).toMatch(/at least 8 GB of memory; this one reports 4 GB/);
     expect((await cut(STUDIO)).studio).toBeUndefined();
@@ -298,7 +291,7 @@ describe("cutting again after a Studio failure", () => {
 
   test("a Studio run failure: Best cuts the sprite on a fresh worker (a new GPU device), the face finder comes along", async () => {
     const url = studioUrl("modelerr");
-    cached(url);
+    cached(url, BEST);
     const result = await cut(url, { faceModelUrl: FACE });
     expect(result.quality).toBe("best");
     expect(result.studio).toBeUndefined();
@@ -311,7 +304,7 @@ describe("cutting again after a Studio failure", () => {
 
   test("a Studio load failure leaves its worker too: Best starts on a fresh one", async () => {
     const url = studioUrl("session");
-    cached(url);
+    cached(url, BEST);
     expect((await cut(url)).quality).toBe("best");
     expect(runners[0]!.closed).toBe(true);
     expect(runners[1]!.calls).toEqual(["load BEST auto letterbox", "cut BEST"]);
@@ -319,8 +312,8 @@ describe("cutting again after a Studio failure", () => {
 
   test("the worker dies running Studio, then again running Best: the sprite is cut without a model, Best is not tried again", async () => {
     const url = studioUrl("crashcut");
-    cached(url);
     const bestCrash = "https://models.test/isnet-crashcut.onnx";
+    cached(url, bestCrash);
     const result = await cutout.cutSprite(new Blob(["image"]), { quality: "studio", modelUrl: bestCrash, studioModelUrl: url });
     expect(result.quality).toBe("basic");
     expect(runners).toHaveLength(3);
@@ -335,6 +328,7 @@ describe("cutting again after a Studio failure", () => {
 describe("the Studio download runs in the background", () => {
   test("cuts never wait for it: Best cuts while it downloads, the next cut after it loads the Studio model", async () => {
     const url = studioUrl("slow");
+    cached(BEST);
     const first = await Promise.race([cut(url), tick(500).then(() => null)]);
     expect(first).not.toBeNull();
     expect(first!.quality).toBe("best");
@@ -353,6 +347,7 @@ describe("the Studio download runs in the background", () => {
 
   test("a failed download is tried again after 1, 2, then 4 minutes, then not on this page; Settings retries", async () => {
     const url = studioUrl("missing");
+    cached(BEST);
     const step = async (advance: number, expected: number): Promise<void> => {
       clock += advance;
       expect((await cut(url)).studio).toBeUndefined();
@@ -387,6 +382,7 @@ describe("the Studio download runs in the background", () => {
 describe("provisional Best cuts (one Studio re-cut later)", () => {
   test("a Best cut made because the Studio model is not ready yet is provisional; Studio cuts and lasting failures are not", async () => {
     const url = studioUrl("slow");
+    cached(BEST);
     expect((await cut(url)).provisional).toBe(true);
     releaseSlow();
     await downloaded();
@@ -413,7 +409,7 @@ describe("the Studio model leaves when it is no longer wanted", () => {
   const sync = (quality: "studio" | "best" | "basic", url = ""): void => (cutout as unknown as { syncStudioCutout: (q: string, u: string) => void }).syncStudioCutout(quality, url);
 
   test("another quality or another URL: the Studio model leaves the worker, the device lock and its marker go", async () => {
-    cached(STUDIO);
+    cached(STUDIO, BEST);
     expect((await cut(STUDIO)).studio).toBe(true);
     sync("best", STUDIO);
     await tick();
@@ -434,7 +430,7 @@ describe("the Studio model leaves when it is no longer wanted", () => {
   });
 
   test("a Studio load that ends after Studio was deselected is unloaded; the cut uses Best", async () => {
-    cached(STUDIO);
+    cached(STUDIO, BEST);
     hooks.onLoad = (name) => { if (name === "STUDIO") sync("best"); };
     const result = await cut(STUDIO);
     expect(result.studio).toBeUndefined();
@@ -445,6 +441,7 @@ describe("the Studio model leaves when it is no longer wanted", () => {
 
   test("the background download stops when the URL changes or Studio is deselected", async () => {
     const url = studioUrl("slow");
+    cached(BEST);
     await cut(url);
     sync("studio", studioUrl("other"));
     expect(cutout.getCutoutModelState().state).not.toBe("downloading");
@@ -455,7 +452,7 @@ describe("the Studio model leaves when it is no longer wanted", () => {
 
   test("clearing the Studio URL drops its note and its error", async () => {
     const url = studioUrl("session");
-    cached(url);
+    cached(url, BEST);
     await cut(url);
     expect(note()).toMatch(/failed to allocate/);
     sync("studio", "");
@@ -470,6 +467,7 @@ describe("the Studio model leaves when it is no longer wanted", () => {
 
   test("Remove downloaded model unloads the worker's models even when the page lost track of them", async () => {
     const bestErr = "https://models.test/isnet-modelerr.onnx";
+    cached(bestErr);
     const result = await cutout.cutSprite(new Blob(["image"]), { quality: "best", modelUrl: bestErr, faceModelUrl: "https://models.test/face.onnx" });
     expect(result.quality).toBe("basic"); // the run failed: the page forgot the model, the worker still holds it
     await cutout.clearCutoutModel();
@@ -505,11 +503,15 @@ describe("the Studio file in the browser's storage", () => {
 
   test("a Best model the browser will not store: its ready state says so too", async () => {
     quota.add(BEST);
-    await cutout.cutSprite(new Blob(["image"]), { quality: "best", modelUrl: BEST });
+    // First use: the cut is Basic and the model downloads in the background.
+    expect((await cutout.cutSprite(new Blob(["image"]), { quality: "best", modelUrl: BEST })).quality).toBe("basic");
+    await downloaded();
     expect(cutout.getCutoutModelState()).toMatchObject({ state: "ready", notStored: true });
+    expect((await cutout.cutSprite(new Blob(["image"]), { quality: "best", modelUrl: BEST })).quality).toBe("best");
     cutout.resetCutoutRuntime();
     quota.clear();
     await cutout.cutSprite(new Blob(["image"]), { quality: "best", modelUrl: BEST });
+    await downloaded();
     expect("notStored" in cutout.getCutoutModelState()).toBe(false);
   });
 });

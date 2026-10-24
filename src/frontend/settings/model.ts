@@ -733,6 +733,19 @@ export function formatBytes(bytes: number): string {
   return `${mb < 10 ? mb.toFixed(1).replace(/\.0$/, "") : Math.round(mb)} MB`;
 }
 
+/**
+ * The stage's line while a cut-out model downloads (sprite mode; the first
+ * sprites are cut with Basic meanwhile and re-cut when it arrives), or null.
+ */
+export function cutoutDownloadNote(state: CutoutModelState): string | null {
+  if (state.state !== "downloading") return null;
+  const model = state.studio ? "the Studio cut-out model" : "the cut-out model";
+  const total = state.totalBytes && state.totalBytes > 0 ? state.totalBytes : null;
+  return total
+    ? `Downloading ${model}: ${formatBytes(state.receivedBytes)} of ${formatBytes(total)}`
+    : `Downloading ${model}: ${formatBytes(state.receivedBytes)} so far`;
+}
+
 export type CutoutModelSummary = {
   level: "ready" | "loading" | "attention" | "blocked";
   title: string;
@@ -786,7 +799,7 @@ function describeBestModel(state: CutoutModelState, quality: VisualNovelSpriteCu
       return {
         level: quality === "basic" ? "ready" : "attention",
         title: "Model not downloaded",
-        detail: quality === "basic" ? "Basic quality needs no model." : `It downloads once${from} when the first sprite is cut. You can download it now instead.`,
+        detail: quality === "basic" ? "Basic quality needs no model." : `It downloads once${from} in the background when the first sprite is cut; sprites are cut with Basic until it arrives, then cut again with it. You can download it now instead.`,
         action: quality === "basic" ? null : "download",
         progress: null,
       };

@@ -21,6 +21,8 @@ export type FrontendRequest =
    */
   | { type: "vn_get_state"; chatId?: string; viewOpen?: boolean }
   | { type: "vn_get_connection_catalog" }
+  /** A cut-out model finished downloading in this browser: cuts made without it are re-cut now. */
+  | { type: "vn_sprite_cutout_ready" }
   | { type: "vn_get_system_one_key_status" }
   | { type: "vn_set_system_one_key"; key: string }
   | { type: "vn_clear_system_one_key" }
@@ -96,7 +98,8 @@ export type FrontendRequest =
   /** Sprite mode: library actions from settings or the stage. */
   | {
       type: "vn_sprite_action";
-      action: "prepare_chat" | "regenerate" | "recut" | "delete_set" | "regenerate_plate" | "delete_plate";
+      /** `retry_failed`: the set's failed images again (a re-cut where a render exists, else a new render). */
+      action: "prepare_chat" | "regenerate" | "recut" | "retry_failed" | "delete_set" | "regenerate_plate" | "delete_plate";
       chatId?: string;
       setKey?: string;
       expression?: string;

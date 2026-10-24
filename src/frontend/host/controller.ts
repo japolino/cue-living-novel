@@ -5,6 +5,7 @@ import type { AssetView, BackendResponse, ConnectionCatalogOption, FrontendReque
 import { AudioEngine, VnStage, isAmbientEffect, isStageEffect } from "../stage/index.js";
 import type { AmbientEffect, StageEffect } from "../store/index.js";
 import { VisualNovelSettingsPanel } from "../settings/panel.js";
+import { cutoutDownloadNote } from "../settings/model.js";
 import { DEFAULT_SPRITE_FACE_MODEL_URL, DEFAULT_SPRITE_MODEL_URL, spriteModelF16Url } from "../../shared/sprites.js";
 import {
   clearCutoutModel,
@@ -13,6 +14,7 @@ import {
   getCutoutModelState,
   getFaceModelState,
   getStudioCutoutSupport,
+  onCutoutModelArrived,
   onCutoutModelState,
   onFaceModelState,
   prepareCutoutModel,
@@ -672,7 +674,14 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
         messageId: turn.messageId,
       });
     },
+    onSpriteRetry: (setKey) => ctx.sendToBackend({ type: "vn_sprite_action", action: "retry_failed", setKey }),
   });
+  // The cut-out model downloads in the background on first use (the first
+  // sprites are cut with Basic meanwhile): the stage shows its progress, and
+  // its arrival has the backend re-cut those sprites with it.
+  stage.setSpriteNote(cutoutDownloadNote(getCutoutModelState()));
+  const unsubStageCutout = onCutoutModelState((state) => stage.setSpriteNote(cutoutDownloadNote(state)));
+  const unsubCutoutArrival = onCutoutModelArrived(() => ctx.sendToBackend({ type: "vn_sprite_cutout_ready" }));
 
   let panelCapture: { chatId: string; messageId: string; fingerprint: string | null; cards: Array<{ title: string; html: string }> } | null = null;
   // Speech (default-off TTS). Own player and lifecycle; never the SFX channel.
@@ -1447,6 +1456,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     speechDock.destroy();
     speechSettings?.destroy();
     unsubCutoutModel();
+    unsubStageCutout();
+    unsubCutoutArrival();
     unsubFaceModel();
     settingsPanel?.destroy();
     settingsHandle?.destroy();

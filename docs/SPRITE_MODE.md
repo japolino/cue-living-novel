@@ -653,7 +653,12 @@ layers, crossfaded) → ambient overlay (behind sprites) → `[data-vn-sprites]`
 - Light: CSS filter presets per `SpriteLight`.
 - A set with nothing ready shows no sprite and a status badge
   ("Preparing Mira 0/4"; the total is the set size); an unready expression
-  shows `bestAvailableExpression`.
+  shows `bestAvailableExpression`. A set whose images all failed shows
+  "Could not prepare Mira · Try again": the button sends `vn_sprite_action`
+  `retry_failed` for that set (`retryFailedSet`: failed cuts with a render
+  are cut again, the rest render again, at turn priority).
+- While a cut-out model downloads, the stage shows its progress as a status
+  line ("Downloading the cut-out model: 12 MB of 88 MB", `cutoutDownloadNote`).
 - Previous/History navigation re-applies the paragraph's stage.
 
 ## Settings (frontend)
@@ -683,6 +688,16 @@ median of the image border.
 "basic" quality skips the model. The model is downloaded once from
 `spriteModelUrl` and cached in the browser; onnxruntime-web is loaded lazily
 (WebGPU, else WASM) so the frontend bundle stays small.
+
+First use: a "best" (or "studio") cut whose Best model is neither loaded nor
+in the browser's storage does not wait for the download. It is cut "basic" at
+once (without the face finder) while the model downloads in the background,
+like the Studio model; the stage shows the progress. When a downloaded model
+has loaded (`onCutoutModelArrived`; also the Studio download, and settings'
+**Download model**) the host sends `vn_sprite_cutout_ready`, and the backend
+queues the one-shot basic → best (and provisional → Studio) re-cuts at once
+instead of on the next view open. A model already in the browser loads within
+the cut (seconds).
 
 Half-precision download: for the default `spriteModelUrl` the browser
 downloads `DEFAULT_SPRITE_MODEL_F16_URL` instead (the same ISNet-anime in
@@ -782,8 +797,8 @@ starts its download in the background and cuts with Best; its progress shows
 in settings over the loaded model's state. The cut after the download loads
 the Studio model (seconds). Best cuts made meanwhile are marked `provisional`
 (also when another tab holds the Studio model, see below) and get one silent
-Studio re-cut the next time a Cue view opens, the same one-shot upgrade basic
-cuts get: the re-cut replaces the cut only when the Studio model made it,
+Studio re-cut when the download finishes (`vn_sprite_cutout_ready`) or the
+next time a Cue view opens, the same one-shot upgrade basic cuts get: the re-cut replaces the cut only when the Studio model made it,
 otherwise the old cut stays and the try is spent (a basic cut whose upgrade
 came back provisional keeps one Studio try). Re-cut in the library does it at
 once. A failed download is tried again after 1, 2 and 4 minutes, then not on
@@ -1013,7 +1028,8 @@ Library and generation:
   out); see "NovelAI V5 reference inset".
 - Cut bridge: ≤ 2 cuts in flight per user, chunks in any order, PNG signature
   and IHDR checked, 5-minute inactivity timeout, failed after 3 timeouts.
-  A "basic" cut made while "best" or "studio" is selected is re-cut once on
+  A "basic" cut made while "best" or "studio" is selected is re-cut once
+  when the browser reports a model arrival (`vn_sprite_cutout_ready`) or on
   the next view open.
 
 Cut-out runtime:
@@ -1026,7 +1042,8 @@ Cut-out runtime:
   per sprite (IoU 0.995 vs. the reference); fp32 + WASM ≈ 14–16 s; int8 runs
   on both but is not faster (ConvInteger falls back to the CPU on WebGPU);
   basic ≈ 0.1 s (IoU 0.954). The kernel alone ≈ 50 ms.
-- Fallbacks: download failure → basic (retry after 60 s); no WebAssembly or
+- Fallbacks: model not in the browser yet → basic now, background download,
+  re-cut on arrival; download failure → basic (retry after 60 s); no WebAssembly or
   session failure → "unsupported", basic until the user prepares again.
 - Image size: the kernel's pixel parameters (edge band 3 px, holes > 30 px,
   4-px border strip; `bgMinPixels` 64 never binds, the 2% border share does

@@ -397,6 +397,28 @@ describe("sprite jobs: cut bridge", () => {
     expect((await f.library()).sets[setKey]!.images.idle!.provisional).toBeUndefined();
   });
 
+  test("the cut-out model arriving in the browser re-cuts the Basic cuts at once (no view reopen); nothing to re-cut sends nothing", async () => {
+    const f = setup({ config: { spriteCutout: "best" } });
+    await f.service.prepareCast("u1", [MIRA], spriteConfig());
+    await f.service.settle("u1");
+    const setKey = spriteSetKeyFor(MIRA, f.styleKey);
+    // First use: every cut is Basic while the model downloads.
+    await answerPending(f, { ...CUT_META, quality: "basic" });
+    const before = f.cutRequests().length;
+    const basicCount = Object.values((await f.library()).sets[setKey]!.images).filter((image) => image.quality === "basic").length;
+    expect(basicCount).toBeGreaterThan(0);
+    expect(await f.service.onCutoutModelArrived("u1")).toBe(basicCount);
+    await f.service.settle("u1");
+    expect(f.cutRequests().length).toBeGreaterThan(before);
+    await answerPending(f);
+    expect(Object.values((await f.library()).sets[setKey]!.images).every((image) => image.quality === "best")).toBe(true);
+    // Again (the Studio download, say): nothing left to re-cut.
+    const count = f.cutRequests().length;
+    expect(await f.service.onCutoutModelArrived("u1")).toBe(0);
+    await f.service.settle("u1");
+    expect(f.cutRequests().length).toBe(count);
+  });
+
   test("a basic cut made while 'best' is selected is re-cut once on the next view open, silently", async () => {
     const f = setup({ config: { spriteCutout: "best" } });
     await f.service.prepareCast("u1", [MIRA], spriteConfig());
@@ -547,6 +569,45 @@ describe("sprite jobs: library actions", () => {
     expect(count).toBe(failedCalls);
     await f.service.settle("u1");
     expect(f.calls.length).toBe(failedCalls * 2);
+  });
+
+  test("retry_failed (the stage's Try again): one set's failed cuts are cut again from their render, failed renders are made again", async () => {
+    // The first two renders work (their cuts then fail in the browser); the rest fail at the provider.
+    let failing = true;
+    let renders = 0;
+    const f = setup({ failGenerate: () => (failing && ++renders > 2 ? "boom" : null) });
+    await f.service.prepareCast("u1", [MIRA, KAI], spriteConfig());
+    await f.service.settle("u1");
+    const mira = spriteSetKeyFor(MIRA, f.styleKey);
+    const kai = spriteSetKeyFor(KAI, f.styleKey);
+    for (let guard = 0; guard < 30; guard += 1) {
+      const pending = f.cutRequests().filter((request) => !f.answered.has(request.requestId));
+      if (pending.length === 0) break;
+      for (const request of pending) {
+        f.answered.add(request.requestId);
+        f.service.handleCutResult("u1", { type: "vn_sprite_cut_result", requestId: request.requestId, chunkIndex: 0, chunkCount: 1, error: "WebGPU lost" });
+      }
+      await f.service.settle("u1");
+    }
+    const failed = (key: string) => Object.values(f.stored()!.sets[key]!.images).filter((image) => image.status === "failed");
+    const miraFailed = failed(mira);
+    const withRender = miraFailed.filter((image) => image.rawImageId);
+    const withoutRender = miraFailed.filter((image) => !image.rawImageId);
+    expect(withRender.length).toBeGreaterThan(0);
+    expect(withoutRender.length).toBeGreaterThan(0);
+    const kaiFailed = failed(kai).length;
+    failing = false;
+    const calls = f.calls.length;
+    const cuts = f.cutRequests().length;
+    await f.service.action("u1", { type: "vn_sprite_action", action: "retry_failed", setKey: mira }, { config: spriteConfig() });
+    await f.service.settle("u1");
+    // A re-cut of each render (the same image), a new render for the rest; Kai's failures stay.
+    const recuts = f.cutRequests().slice(cuts).filter((request) => request.setKey === mira);
+    expect(recuts.map((request) => request.imageId)).toEqual(expect.arrayContaining(withRender.map((image) => image.rawImageId)));
+    expect(f.calls.length - calls).toBe(withoutRender.length);
+    expect(failed(kai)).toHaveLength(kaiFailed);
+    expect(f.of("vn_sprite_library").length).toBeGreaterThan(0);
+    await expect(f.service.action("u1", { type: "vn_sprite_action", action: "retry_failed", setKey: "set_gone" }, { config: spriteConfig() })).rejects.toThrow("no longer in the library");
   });
 
   test("the library is bounded: an evicted set's images are deleted", async () => {

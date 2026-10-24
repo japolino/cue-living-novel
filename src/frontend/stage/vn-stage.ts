@@ -136,6 +136,8 @@ export interface VnStageCallbacks {
   onExit?: () => void;
   onReroll?: () => void | Promise<void>;
   onSwipe?: () => void | Promise<void>;
+  /** Sprite mode: Try again on "Could not prepare <name>" (the set's failed images again). */
+  onSpriteRetry?: (setKey: string) => void;
 }
 
 export interface VnStageOptions extends VnStageCallbacks {
@@ -510,6 +512,8 @@ export class VnStage {
   private hostImageError: VnStageErrorDetails | null = null;
   /** Sprite mode (config `presentationMode`); "scene" keeps the classic stage untouched. */
   private presentationMode: VisualNovelPresentationMode = "scene";
+  /** Sprite mode: a status line of the stage's own (the cut-out model download), or null. */
+  private spriteNote: string | null = null;
   private readonly spriteLayer: SpriteLayer;
   /**
    * Height (px) from the stage bottom to the top of the dialogue chrome
@@ -876,6 +880,14 @@ export class VnStage {
 
   getPresentationMode(): VisualNovelPresentationMode {
     return this.presentationMode;
+  }
+
+  /** Sprite mode: show a status line (null hides it), e.g. the cut-out model's download progress. */
+  setSpriteNote(note: string | null): void {
+    const next = note?.trim() || null;
+    if (next === this.spriteNote) return;
+    this.spriteNote = next;
+    this.renderStatus();
   }
 
   /**
@@ -2432,6 +2444,8 @@ export class VnStage {
       icon?: "spinner" | "image" | "check" | "alert" | "reroll";
       interactive?: boolean;
       action?: () => void;
+      /** Tells badges of one kind apart when reconciling (an interactive badge's action belongs to it). */
+      key?: string;
       /** Error-card extras. Presence forces a full rebuild instead of a text reconcile. */
       title?: string;
       detail?: string;
@@ -2477,11 +2491,19 @@ export class VnStage {
       badges.push({ kind: "warning", label: "This reply had no story text to show.", icon: "alert" });
     }
 
+    if (this.presentationMode === "sprites" && this.spriteNote) {
+      badges.push({ kind: "image", label: this.spriteNote, icon: "spinner" });
+    }
+
     if (this.presentationMode === "sprites" && selectVnStageView(this.state).paragraph) {
+      const retry = this.callbacks.onSpriteRetry;
       for (const badge of this.spriteLayer.badges()) {
-        badges.push(badge.kind === "warning"
-          ? { kind: "warning", label: badge.label, icon: "alert" }
-          : { kind: "image", label: badge.label, icon: "spinner" });
+        const setKey = badge.setKey;
+        badges.push(badge.kind !== "warning"
+          ? { kind: "image", label: badge.label, icon: "spinner" }
+          : retry && setKey
+            ? { kind: "warning", label: `${badge.label} \u00b7 Try again`, icon: "alert", interactive: true, key: setKey, action: () => retry(setKey) }
+            : { kind: "warning", label: badge.label, icon: "alert" });
       }
     }
 
@@ -2559,7 +2581,7 @@ export class VnStage {
         const b = badges[i]!;
         if (b.kind === "error") return el.dataset.vnBadgeSignature === errorSignature(b);
         const hasInteractiveMatch = Boolean(b.interactive) === (el.tagName.toLowerCase() === "button");
-        const hasKindMatch = el.dataset.vnBadgeKind === b.kind;
+        const hasKindMatch = el.dataset.vnBadgeKind === b.kind && (el.dataset.vnBadgeKey ?? "") === (b.key ?? "");
         const iconEl = el.querySelector("[data-vn-badge-icon]");
         const hasIconMatch = (iconEl?.getAttribute("data-vn-badge-icon") ?? undefined) === b.icon;
         return hasInteractiveMatch && hasKindMatch && hasIconMatch;
@@ -2575,7 +2597,7 @@ export class VnStage {
     }
 
     this.statusStack.replaceChildren(
-      ...badges.map(({ kind, label, icon, interactive, action, title, detail, actions }) => {
+      ...badges.map(({ kind, label, icon, interactive, action, key, title, detail, actions }) => {
         const badge = document.createElement(interactive ? "button" : "span");
         if (interactive) {
           (badge as HTMLButtonElement).type = "button";
@@ -2589,6 +2611,7 @@ export class VnStage {
         }
         badge.setAttribute("data-vn-badge", "");
         badge.dataset.vnBadgeKind = kind;
+        if (key) badge.dataset.vnBadgeKey = key;
         if (icon) {
           badge.appendChild(createBadgeIconSvg(icon));
         }

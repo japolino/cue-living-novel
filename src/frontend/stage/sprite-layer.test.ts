@@ -140,7 +140,7 @@ describe("sprite layout and choice helpers", () => {
     expect(spriteStatusBadges(view, 0)).toEqual([{ kind: "image", label: "Preparing Aoi 0/12", characterKey: "aoi" }]);
     const failed = set("set_aoi", "Aoi", []);
     for (const id of Object.keys(failed.expressions)) failed.expressions[id] = { expression: id, status: "failed", error: "x" };
-    expect(spriteStatusBadges({ ...view, sets: { ...view.sets, aoi: failed } }, 0)[0]).toEqual({ kind: "warning", label: "Could not prepare Aoi", characterKey: "aoi" });
+    expect(spriteStatusBadges({ ...view, sets: { ...view.sets, aoi: failed } }, 0)[0]).toEqual({ kind: "warning", label: "Could not prepare Aoi", characterKey: "aoi", setKey: "set_aoi" });
     // A cast member without any set yet is preparing too.
     expect(spriteStatusBadges({ ...view, sets: { mira: view.sets.mira! } }, 0)[0]!.label).toBe("Preparing Aoi 0/12");
   });

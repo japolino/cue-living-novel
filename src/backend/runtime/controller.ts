@@ -1865,6 +1865,11 @@ async function handleFrontendMessage(spindle: SpindleAPI, request: FrontendReque
     case "vn_get_sprite_library":
       await spriteService(spindle).sendLibrary(userId);
       return;
+    case "vn_sprite_cutout_ready": {
+      const queued = await spriteService(spindle).onCutoutModelArrived(userId);
+      dbg(spindle, userId, `cut-out model ready in the browser: ${queued} cut(s) queued again`);
+      return;
+    }
     case "vn_sprite_action": {
       const config = await loadConfig(spindle, userId);
       rememberDebugFlag(userId, config);

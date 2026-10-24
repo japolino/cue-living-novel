@@ -159,6 +159,8 @@ let state: CutoutModelState = { state: "absent" };
 /** The background Studio download's progress, shown over `state` unless that is a download or load of its own. */
 let overlay: CutoutModelState | null = null;
 const listeners = new Set<(state: CutoutModelState) => void>();
+/** Told when a cut-out model arrives in this browser (a Best download, or the Studio one): earlier cuts can be re-cut with it. */
+const arrivalListeners = new Set<() => void>();
 let runnerPromise: Promise<CutoutRunner> | null = null;
 type ModelFailure = { url: string; at: number; sticky: boolean; message: string };
 /** How a cut-out model runs: ISNet letterboxes, on WebGPU or WASM; the Studio model stretches, on WebGPU only. */
@@ -182,6 +184,8 @@ let studioAttempt: { url: string; failed: boolean } | null = null;
 let pageHideWatched = false;
 /** The Studio model's background download (one at a time). */
 let studioDownload: { url: string; promise: Promise<boolean>; controller: AbortController } | null = null;
+/** The Best model's background download on first use (see cutSprite). */
+let bestBackground: Promise<void> | null = null;
 /** Failed Studio downloads on this page, for the backoff. */
 let studioDownloadFailures: { url: string; count: number; at: number; message: string } | null = null;
 /** A downloaded Studio file the browser would not store: kept until it loads (the load takes it). */
@@ -226,6 +230,12 @@ function setState(next: CutoutModelState): void {
   publish();
 }
 
+function announceArrival(): void {
+  for (const listener of [...arrivalListeners]) {
+    try { listener(); } catch { /* a listener must not break the cut-out */ }
+  }
+}
+
 /** The loaded model's ready state (`note`: why "studio" cuts use this Best model). */
 function readyState(model: NonNullable<typeof loaded>, note?: string | null): CutoutModelState {
   return {
@@ -255,8 +265,11 @@ function throwIfAborted(signal?: AbortSignal): void {
 
 async function getRunner(): Promise<CutoutRunner> {
   if (runnerPromise) {
-    const current = await runnerPromise.catch(() => null);
+    const pending = runnerPromise;
+    const current = await pending.catch(() => null);
     if (current && !current.isClosed()) return current;
+    // Another call (a background download) started the fresh runner meanwhile: share it.
+    if (runnerPromise !== pending) return getRunner();
     runnerPromise = null;
     if (loaded && loaded.runner === current) {
       setLoaded(null);
@@ -329,6 +342,7 @@ async function ensureModel(url: string, force: boolean, spec: ModelSpec = BEST_S
     let stage: "download" | "load" = "download";
     let deselected = false;
     let notStored = false;
+    let downloaded = false;
     try {
       let bytes: ArrayBuffer | null;
       if (spec.studio && studioMemory?.url === url) {
@@ -345,6 +359,7 @@ async function ensureModel(url: string, force: boolean, spec: ModelSpec = BEST_S
         if (bytes.byteLength < 1024) throw new Error("The downloaded model file is too small to be a model.");
         notStored = !(await writeCachedModel(url, bytes)).stored;
         if (stale()) throw abortError();
+        downloaded = true;
       }
       size = bytes.byteLength;
       stage = "load";
@@ -368,6 +383,8 @@ async function ensureModel(url: string, force: boolean, spec: ModelSpec = BEST_S
       if (spec.studio) { studioFailure = null; studioNote = null; } else failure = null;
       // Best loaded while "studio" cannot run: its ready state says why.
       setState(readyState(loaded!, studioNote));
+      // Downloaded just now: the cuts made without it (Basic) can be re-cut.
+      if (downloaded) announceArrival();
     } catch (error) {
       if (stale() || deselected) throw error;
       const code = (error as { code?: string } | null)?.code;
@@ -632,6 +649,7 @@ function downloadStudio(url: string): Promise<boolean> {
       studioMemory = write.stored ? null : { url, bytes };
       studioDownloadFailures = null;
       if (!studioFailure) studioNote = null;
+      announceArrival();
       return true;
     } catch (error) {
       if (stopped()) return false;
@@ -694,12 +712,19 @@ async function studioForCut(url: string): Promise<"load" | "later" | "no"> {
   return "later";
 }
 
+/** Is the Best model loaded, or its file in the browser (loading it then takes seconds, not a download)? */
+async function bestAtHand(url: string): Promise<boolean> {
+  return (loaded?.url === url && !loaded.runner.isClosed()) || isCached(url);
+}
+
 /**
- * Cut one sprite. "best" downloads/loads the model on first use; when the
- * model cannot run the cut falls back to "basic" and says so in `quality`
- * (and the model state says why). "studio" does the same with the Studio
- * model, and falls back to "best" when that cannot run (`studio` in the
- * result says which model made the mask).
+ * Cut one sprite. "best" loads the model; when its file is not in the
+ * browser yet the cut is "basic" now and the model downloads in the
+ * background (`onCutoutModelArrived` tells when the cuts can be re-cut).
+ * When the model cannot run the cut falls back to "basic" and says so in
+ * `quality` (and the model state says why). "studio" does the same with the
+ * Studio model, and falls back to "best" when that cannot run (`studio` in
+ * the result says which model made the mask).
  */
 export async function cutSprite(image: Blob, options: CutoutOptions): Promise<CutoutResult> {
   const started = performance.now();
@@ -711,9 +736,20 @@ export async function cutSprite(image: Blob, options: CutoutOptions): Promise<Cu
   /** The Studio model may come later (see CutoutResult.provisional). */
   let later = false;
   let modelUrl = options.modelUrl;
+  /** Best is downloading in the background: this cut is Basic (and skips the face finder; the re-cut brings it). */
+  let bestLater = false;
   const useBest = async (): Promise<boolean> => {
     try {
       modelUrl = await chooseCutoutModelUrl(options.modelUrl, options.modelUrlF16);
+      if (!(await bestAtHand(modelUrl))) {
+        bestLater = true;
+        if (!bestBackground) {
+          const started = ensureModel(modelUrl, false).catch(() => { /* the model state says why */ });
+          bestBackground = started;
+          void started.finally(() => { if (bestBackground === started) bestBackground = null; });
+        }
+        return false;
+      }
       await ensureModel(modelUrl, false);
       if (options.quality === "studio") showStudioNote(studioNote ?? (options.studioModelUrl ? null : "No Studio model URL is set (Settings, Advanced)."));
       return true;
@@ -739,7 +775,7 @@ export async function cutSprite(image: Blob, options: CutoutOptions): Promise<Cu
   }
   if (wantsModel && !useModel) useModel = await useBest();
   let withFace = false;
-  if (wantsModel && options.faceModelUrl) {
+  if (wantsModel && options.faceModelUrl && !bestLater) {
     try {
       await ensureFaceModel(options.faceModelUrl, false);
       withFace = true;
@@ -881,6 +917,23 @@ export function onCutoutModelState(listener: (state: CutoutModelState) => void):
   return () => { listeners.delete(listener); };
 }
 
+/**
+ * Subscribe to model arrivals: a Best model that finished downloading (and
+ * loaded), or the Studio model's background download. Returns an
+ * unsubscribe function.
+ */
+export function onCutoutModelArrived(listener: () => void): () => void {
+  arrivalListeners.add(listener);
+  return () => { arrivalListeners.delete(listener); };
+}
+
+/** Resolves when no cut-out model download or load runs (the background ones included). */
+export async function cutoutModelSettled(): Promise<void> {
+  while (loading || studioDownload || bestBackground) {
+    await Promise.all([loading?.promise.catch(() => {}), studioDownload?.promise, bestBackground]);
+  }
+}
+
 /** Download (once, cached in the browser) and load the model ahead of time (`modelUrlF16`: see CutoutOptions). */
 export async function prepareCutoutModel(modelUrl: string, modelUrlF16?: string): Promise<void> {
   await ensureModel(await chooseCutoutModelUrl(modelUrl, modelUrlF16), true);
@@ -1013,6 +1066,7 @@ export function resetCutoutRuntime(): void {
   studioCheck = null;
   chosenUrls.clear();
   loading = null;
+  bestBackground = null;
   failure = null;
   studioFailure = null;
   studioNote = null;
