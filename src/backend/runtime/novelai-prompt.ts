@@ -84,4 +84,10 @@ export function novelAiQualityTags(model: string | null | undefined): string {
   return "best quality, amazing quality, very aesthetic, absurdres";
 }
 
-export const NOVELAI_NEGATIVE_DEFAULT = "lowres, artistic error, worst quality, bad quality, jpeg artifacts, blurry, text, watermark, logo, signature, multiple views";
+/**
+ * Default negative for NovelAI when the user's negative is unchanged.
+ * `very displeasing` is the bottom of NovelAI's aesthetic scale and is in
+ * every official Undesired Content preset from V3 Light to V5
+ * (docs.novelai.net/en/image/undesiredcontent).
+ */
+export const NOVELAI_NEGATIVE_DEFAULT = "lowres, artistic error, worst quality, bad quality, very displeasing, jpeg artifacts, blurry, text, watermark, logo, signature, multiple views";

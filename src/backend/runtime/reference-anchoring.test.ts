@@ -318,6 +318,7 @@ describe("generateAssets reference anchoring", () => {
   test("NAI defaults do not replace edited or explicitly empty negative prompts", () => {
     const config = { ...DEFAULT_CONFIG, imageModel: "nai-diffusion-5-full" };
     expect(compileNovelAiRequest(config, scene, cue("default")).negativePrompt).toContain("artistic error");
+    expect(compileNovelAiRequest(config, scene, cue("default")).negativePrompt).toContain("very displeasing");
     expect(compileNovelAiRequest({ ...config, novelAiUseDefaultNegative: false }, scene, cue("off")).negativePrompt).toBe(DEFAULT_CONFIG.negativePrompt);
     expect(compileNovelAiRequest({ ...config, negativePrompt: "" }, scene, cue("empty")).negativePrompt).toBe("");
     expect(compileNovelAiRequest({ ...config, promptPrefix: "masterpiece" }, scene, cue("dedupe")).prompt.match(/masterpiece/g)).toHaveLength(1);
