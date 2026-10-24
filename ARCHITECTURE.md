@@ -91,6 +91,14 @@ Unselected-greeting rule (evidence-based, no bare length heuristic): a message e
 
 When a greeting is re-resolved to a different scene (same stored text, different selection) while it is the chat's only assistant turn, the chat's durable identity state (frozen protagonist visual state, character registry, per-chat appearance roster, scene lineage and scene-image cache scope) is reset to the empty pre-greeting baseline before replanning, so the discarded scene's cast cannot leak into the newly selected one. Mid-chat turns and plain edits of the greeting are never reset. Retry (`vn_retry_turn`) re-resolves macro-bearing messages first and replans when the resolution changed. A cancel, deletion, edit event, or new generation that arrives while a macro resolve is in flight supersedes that intake (per-chat intake epoch), so a stale resolve can never enqueue a plan afterwards.
 
+### Non-story lines
+
+With `skipNonStory` (on by default) `prepareNarrative` runs two structural passes before splitting paragraphs (`src/backend/core/non-story.ts`). `nonStoryMarkupRanges` hides comments, reasoning elements (an orphan closing reasoning tag hides everything before it), interface and form controls, and hidden elements; tracker/status elements (by tag, or by a `tracker`, `stats`, `status-panel` or `hud` class or id, as in Choir) become `<pre>` Panels cards with a `tag:` follow key. An unclosed element ends at the next blank line. `structuralLine` then judges each line of each block: placeholder-only lines (`INLAY[...]`, `{{...}}`), rules and tag-only lines are dropped; bracketed or braced field lines, pipe-bracket segments and table rows are status lines collected into `nonStory`. Text-effect tags stay. If the passes leave nothing, the reply is prepared as before.
+
+`planTurn` then starts one line check (`checkStoryLines`, `src/backend/runtime/story-check.ts`) through the planner connection beside context loading, System One and the planner, with Choir's frozen K/S prompt (`STORY_CHECK_SYSTEM`) and one `index K|S` row per line (`storyLines`: effect tags, emphasis and heading marks removed). There is no JSON mode, temperature is 0 and Gemini gets the planner's light thinking. An empty answer is retried once with 60-character line heads; two refusals keep every line. The planner still reads every paragraph. After both finish, `applyStoryLabels` drops S lines inside their paragraphs, re-indexes paragraphs, remaps panels and choices, and replaces the structural card with one **Not story** card (`followKey: "nonstory"`) holding the structural and checked lines. A reply without story lines becomes one pointer paragraph. `remapPlannerParagraphs` moves scene starts, cues, effects and speakers from removed paragraphs to the paragraph that took their place (a paragraph's own cue wins), and System One decisions move the same way. The persisted `TurnPlan` holds only the story paragraphs, so reopening needs neither the check nor a replan.
+
+Labels are cached in `chats/<chat>/story-check.json` (user storage, last 64 entries) by a versioned hash of the exact lines checked. A refusal is cached for that model only; errors are not cached. Earlier assistant replies in the planner's recent context go through the same structural passes and their cached labels (`cachedStoryLabels`, no request); replies left empty are omitted. `resolvedSourceText` stays the full resolved reply.
+
 ## Turn flow
 
 ### View gating
@@ -144,7 +152,8 @@ GENERATION_ENDED
   -> key by chat + message + swipe + content fingerprint + revision
   -> enqueue one planning job for that chat
   -> gather recent and enabled structured context
-  -> ask sidecar for scenes, cues, speakers, and optional choices
+  -> ask sidecar for scenes, cues, speakers, and optional choices (beside it: the non-story line check)
+  -> drop the lines the check labelled non-story and move the plan onto the remaining paragraphs
   -> resolve the protagonist identity (seed once from planner/card/appearance memory, then freeze) and map each cue's expression onto the closed catalogue
   -> attribute each paragraph to a literal speaker nameplate and each cue to its active character, attire, and optional BGM/SFX
   -> validate claimed scene changes against objective evidence
