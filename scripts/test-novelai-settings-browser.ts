@@ -146,6 +146,14 @@ try {
   assert.equal(await docLink.getAttribute("target"), "_blank");
 
   // --- Test 7: Everyday controls: Steps, Guidance, Sampler, Resolution Presets & Custom Dimensions ---
+  // The sampling controls are in Advanced (shown for NovelAI, with Image size hidden: NovelAI picks its own sizes);
+  // the image dimensions stay in Pictures.
+  const advancedTab = settings.getByRole("tab", { name: "Advanced" });
+  const picturesTab = settings.getByRole("tab", { name: "Pictures" });
+  assert.equal(await settings.locator('[data-pane="pictures"] [name="novelAiSteps"]').count(), 0, "no sampling controls in Pictures");
+  await advancedTab.click();
+  assert.equal(await settings.locator("[data-novelai-sampling]").isVisible(), true, "NovelAI sampling shows in Advanced");
+  assert.equal(await settings.locator('[data-group-id="sprite-size"]').isVisible(), false, "Image size hides for NovelAI");
   // Steps
   const stepsInput = settings.locator('input[name="novelAiSteps"]');
   await stepsInput.fill("30");
@@ -197,6 +205,7 @@ try {
   assert.equal((patch?.imageParameters as any)?.seed, null, "A negative seed is treated as random, never sent as -1");
 
   // Resolution presets: Portrait (832x1216)
+  await picturesTab.click();
   await settings.locator('input[name="novelAiResolutionPreset"][value="portrait"]').check();
   patch = await lastPatch(page);
   assert.equal(
@@ -261,6 +270,7 @@ try {
     f.panel.setConfig(f.config);
   });
   // Change steps to 25 (unrelated control change)
+  await advancedTab.click();
   await stepsInput.fill("25");
   await stepsInput.press("Tab");
   patch = await lastPatch(page);
@@ -299,13 +309,12 @@ try {
   );
 
   // --- Test 10: Advanced JSON editor and NovelAI controls: valid JSON saves when left; invalid JSON is kept and never sent ---
-  // The JSON editor lives in Advanced and the NovelAI controls in Pictures.
-  await settings.getByRole("tab", { name: "Advanced" }).click();
+  // The JSON editor and the NovelAI sampling controls both live in Advanced.
   const jsonTextarea = settings.locator('[name="imageParameters"]');
 
-  // Subtest 10A: valid JSON saves when the field is left (here: switching to Pictures).
+  // Subtest 10A: valid JSON saves when the field is left (here: on to the next field).
   await jsonTextarea.fill('{"steps": 28, "seed": 777888}');
-  await settings.getByRole("tab", { name: "Pictures" }).click();
+  await jsonTextarea.press("Tab");
   patch = await lastPatch(page);
   assert.deepEqual(patch?.imageParameters, { steps: 28, seed: 777888 }, "leaving the editor saves valid JSON");
 
@@ -315,14 +324,13 @@ try {
   patch = await lastPatch(page);
   assert.equal((patch?.imageParameters as any)?.steps, 22, "everyday steps saved");
   assert.equal((patch?.imageParameters as any)?.seed, 777888, "the saved seed is kept by everyday controls");
-  await settings.getByRole("tab", { name: "Advanced" }).click();
   const syncedEditor = JSON.parse(await jsonTextarea.inputValue());
   assert.equal(syncedEditor.steps, 22, "the editor shows the everyday change");
   assert.equal(syncedEditor.seed, 777888);
 
   // Subtest 10B: invalid JSON is retained untouched and never sent, while everyday controls keep saving.
   await jsonTextarea.fill('{"seed": 777888, INVALID_JSON');
-  await settings.getByRole("tab", { name: "Pictures" }).click();
+  await jsonTextarea.press("Tab");
   assert.match(await settings.locator("[data-status]").innerText(), /Image parameters/, "the invalid JSON is reported");
   assert.equal(await settings.getByRole("tab", { name: "Advanced" }).locator("[data-tab-badge]").innerText(), "1", "Advanced shows one field not saved");
   await stepsInput.fill("20");
@@ -332,7 +340,6 @@ try {
   assert.equal((patch?.imageParameters as any)?.seed, 777888, "the last saved JSON is the base, never the invalid text");
 
   // Invalid text in the editor is retained untouched
-  await settings.getByRole("tab", { name: "Advanced" }).click();
   assert.equal(
     await jsonTextarea.inputValue(),
     '{"seed": 777888, INVALID_JSON',
@@ -373,6 +380,7 @@ try {
   });
 
   // Edit 1: change steps to 34
+  await advancedTab.click();
   await stepsInput.fill("34");
   await stepsInput.press("Tab");
 

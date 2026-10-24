@@ -5,7 +5,6 @@ import {
   SCENE_IMAGE_FITS,
   TEXT_SCALE_MAX,
   TEXT_SCALE_MIN,
-  TEXT_EFFECT_MODES,
   THEME_PRESET_IDS,
   PRESENTATION_MODES,
   SPRITE_CUTOUT_QUALITIES,
@@ -20,7 +19,6 @@ import {
   type VisualNovelEffectIntensity,
   type VisualNovelReferenceSource,
   type VisualNovelSceneImageFit,
-  type VisualNovelTextEffectMode,
   type VisualNovelThemePreset,
 } from "../../config.js";
 import { THEME_PRESET_CSS } from "../theme/presets.js";
@@ -159,10 +157,11 @@ export function describeTextScale(value: number): string {
   return step ? step.label : `Custom (${Math.round(value * 100)}%)`;
 }
 
+/** The Motion setting: stage effects and the movement of tagged dialogue words together. */
 export const EFFECT_INTENSITY_OPTIONS: ReadonlyArray<{ value: VisualNovelEffectIntensity; label: string; help: string }> = [
-  { value: "full", label: "Full", help: "Rain, sparkles, shakes and flashes as the story calls for them." },
-  { value: "gentle", label: "Gentle", help: "Softer, slower effects. No flashes or shakes." },
-  { value: "off", label: "Off", help: "Still scenes only." },
+  { value: "full", label: "Full", help: "Rain, sparkles, shakes and flashes as the story calls for them; tagged words shake, wave and shimmer." },
+  { value: "gentle", label: "Gentle", help: "Softer, slower effects, no flashes or shakes; tagged words move less." },
+  { value: "off", label: "Still", help: "No scene effects; tagged words keep their colour and style without moving." },
 ];
 
 export function normalizeEffectIntensity(value: string): VisualNovelEffectIntensity {
@@ -172,22 +171,6 @@ export function normalizeEffectIntensity(value: string): VisualNovelEffectIntens
 }
 
 export { TEXT_SCALE_MIN, TEXT_SCALE_MAX };
-
-/* ------------------------------------------------------------------------ */
-/* Inline text effects (<shake>, <rainbow>, ...).                            */
-/* ------------------------------------------------------------------------ */
-
-export const TEXT_EFFECT_MODE_OPTIONS: ReadonlyArray<{ value: VisualNovelTextEffectMode; label: string; help: string }> = [
-  { value: "animated", label: "Animated", help: "Tagged words move: shake, wave, rainbow and more." },
-  { value: "static", label: "Still", help: "Keeps the colour and style of each effect, without movement." },
-  { value: "off", label: "Off", help: "Tagged words look like normal dialogue." },
-];
-
-export function normalizeTextEffects(value: string): VisualNovelTextEffectMode {
-  return (TEXT_EFFECT_MODES as readonly string[]).includes(value)
-    ? value as VisualNovelTextEffectMode
-    : DEFAULT_CONFIG.textEffects;
-}
 
 /* ------------------------------------------------------------------------ */
 /* Picture fit in plain words.                                               */

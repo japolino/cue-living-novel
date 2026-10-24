@@ -91,9 +91,11 @@ try {
   assert.deepEqual(await lastPatch(page), { textScale: 1.2 });
   await settings.locator('input[name="effectIntensity"][value="gentle"]').check();
   assert.deepEqual(await lastPatch(page), { effectIntensity: "gentle" });
-  await settings.locator('input[name="textEffects"][value="static"]').check();
-  assert.deepEqual(await lastPatch(page), { textEffects: "static" }, "text effects mode is an everyday patch");
-  assert.equal(await settings.locator("[data-text-fx-list]").getAttribute("data-vn-text-effects"), "static", "previews follow the text effects mode");
+  assert.equal(await settings.locator("[data-text-fx-list]").getAttribute("data-vn-text-effects"), "animated", "Gentle motion keeps tagged words moving");
+  assert.equal(await settings.locator('input[name="textEffects"]').count(), 0, "no text effects setting of its own");
+  await settings.locator('input[name="effectIntensity"][value="off"]').check();
+  assert.deepEqual(await lastPatch(page), { effectIntensity: "off" }, "Motion is an everyday patch");
+  assert.equal(await settings.locator("[data-text-fx-list]").getAttribute("data-vn-text-effects"), "static", "Still motion: previews keep their style without moving");
   assert.equal((await fixture(page)).patches.length, patchesBefore + 6, "one patch per everyday change");
 
   // Text effects reference: every catalogue entry, a copy button each, and the chat-model guide.
@@ -153,21 +155,25 @@ try {
   assert.equal(await presentation.isVisible(), true, "presentation mode shows while pictures are generated");
   assert.equal(await settings.locator('input[name="presentationMode"][value="scene"]').isChecked(), true, "scene pictures is the default");
   assert.equal(await settings.locator("[data-sprites-only]").isVisible(), false, "sprite controls hide in scene mode");
-  // Image size also sets the scene picture size, so it shows in scene mode too.
+  // Image size (scenes too) and the sprite set size are in Advanced; the set size only for sprites.
   const sizeGroup = settings.locator('[data-group-id="sprite-size"]');
+  const countGroup = settings.locator('[data-group-id="sprite-expressions"]');
+  assert.equal(await settings.locator('[data-pane="pictures"] [name="spriteImageSize"], [data-pane="pictures"] [name="spriteExpressionCount"]').count(), 0, "no picture size controls in Pictures");
+  await openTab("Advanced");
   assert.equal(await sizeGroup.isVisible(), true, "image size shows in scene mode");
   assert.match(await sizeGroup.innerText(), /Scenes and backgrounds 912×624/);
+  assert.equal(await countGroup.isVisible(), false, "no set size in scene mode");
   await settings.locator('input[name="spriteImageSize"][value="upscaled"]').check();
   assert.deepEqual(await lastPatch(page), { spriteImageSize: "upscaled" }, "image size saves at once in scene mode");
   await settings.locator('input[name="spriteImageSize"][value="standard"]').check();
   assert.deepEqual(await lastPatch(page), { spriteImageSize: "standard" });
+  await openTab("Pictures");
   const budgetGroup = settings.locator('[data-group][data-scene-only]').first();
   assert.equal(await budgetGroup.getAttribute("data-inactive"), null);
   const requestsBefore = (await spriteFixture(page)).libraryRequests;
   await settings.locator('input[name="presentationMode"][value="sprites"]').check();
   assert.deepEqual(await lastPatch(page), { presentationMode: "sprites" }, "presentation mode is an everyday patch");
   assert.equal(await settings.locator("[data-sprites-only]").isVisible(), true, "sprite controls appear with sprites");
-  assert.equal(await sizeGroup.isVisible(), true, "image size stays in sprite mode");
   assert.equal(await budgetGroup.getAttribute("data-inactive"), "", "pictures per reply reads as not applying");
   assert.equal(await budgetGroup.locator("[data-scene-note]").isVisible(), true);
   assert.equal(await settings.locator('input[name="budgetPreset"][value="custom"]').isChecked(), true, "the budget keeps its value in sprite mode");
@@ -185,16 +191,18 @@ try {
   assert.equal(await library.locator("details[data-sprite-set][open]").count(), 0, "many sets start collapsed");
   assert.equal(await library.locator("[data-expression]").count(), 0, "expression tiles are built only when a set opens");
   assert.equal(await library.locator("img:not([loading=lazy])").count(), 0, "every thumbnail loads lazily");
-  // Expressions per character: 4 by default, next to Image size; lists and counts follow the size.
-  const countGroup = settings.locator('[data-group-id="sprite-expressions"]');
-  assert.equal(await countGroup.isVisible(), true, "the set size shows in sprite mode");
-  assert.match(await countGroup.innerText(), /Expressions per character[\s\S]*4 \(fastest\)[\s\S]*8[\s\S]*12 \(all\)/);
-  assert.equal(await settings.locator('input[name="spriteExpressionCount"][value="4"]').isChecked(), true, "4 is the default");
+  // Expressions per character: 4 by default, in Advanced next to Image size; the library's lists and counts follow it.
   assert.match(await library.locator("[data-sets-note]").innerText(), /^4 expressions each/);
   assert.match(await library.locator('details[data-sprite-set="set_ren"] summary').innerText(), /2\/4 ready/, "progress of the 4 set");
   assert.match(await library.locator('details[data-sprite-set="set_elise"] summary').innerText(), /0\/4 ready/);
+  await openTab("Advanced");
+  assert.equal(await sizeGroup.isVisible(), true, "image size stays in sprite mode");
+  assert.equal(await countGroup.isVisible(), true, "the set size shows in sprite mode");
+  assert.match(await countGroup.innerText(), /Expressions per character[\s\S]*4 \(fastest\)[\s\S]*8[\s\S]*12 \(all\)/);
+  assert.equal(await settings.locator('input[name="spriteExpressionCount"][value="4"]').isChecked(), true, "4 is the default");
   await settings.locator('input[name="spriteExpressionCount"][value="12"]').check();
-  assert.deepEqual(await lastPatch(page), { spriteExpressionCount: 12 }, "the set size is an everyday patch");
+  assert.deepEqual(await lastPatch(page), { spriteExpressionCount: 12 }, "the set size saves at once");
+  await openTab("Pictures");
   assert.match(await library.locator("[data-sets-note]").innerText(), /^12 expressions each/);
   const mira = library.locator('details[data-sprite-set="set_mira"]');
   assert.match(await mira.locator("summary").innerText(), /Mira[\s\S]*navy sailor uniform[\s\S]*8\/12 ready[\s\S]*3 in progress[\s\S]*1 failed/);
@@ -377,12 +385,22 @@ try {
   assert.equal(await settings.locator("[data-apply-bar], [data-draft-bar], [data-discard]").count(), 0, "no Apply or Discard anywhere");
   await openTab("Connections");
   assert.equal(await settings.locator('[data-pane="connections"] [data-readiness]').count(), 1, "one readiness widget in Connections");
-  // System One: mode, URL and model save as they change.
+  // System One: Connections has the key and an on/off switch; Compare, the URL and the model are in Advanced.
+  assert.equal(await settings.locator('[data-pane="connections"] [name="systemOneMode"], [data-pane="connections"] [name="systemOneApiUrl"], [data-pane="connections"] [name="systemOneModel"]').count(), 0);
+  const systemOneOn = settings.locator('[name="systemOneOn"]');
+  assert.equal(await systemOneOn.isChecked(), false, "off by default");
+  await systemOneOn.check();
+  assert.deepEqual(await lastPatch(page), { systemOneMode: "on" }, "the switch turns it on");
+  await systemOneOn.uncheck();
+  assert.deepEqual(await lastPatch(page), { systemOneMode: "off" }, "and off");
+  await openTab("Advanced");
   await settings.locator('[name="systemOneMode"]').selectOption("compare");
-  assert.deepEqual(await lastPatch(page), { systemOneMode: "compare" }, "the mode saves at once");
+  assert.deepEqual(await lastPatch(page), { systemOneMode: "compare" }, "Compare saves at once");
   await settings.locator('[name="systemOneModel"]').fill("jev-2");
   await settings.locator('[name="systemOneModel"]').press("Tab");
   assert.deepEqual(await lastPatch(page), { systemOneModel: "jev-2" }, "the model saves when the field is left");
+  await openTab("Connections");
+  assert.equal(await systemOneOn.isChecked(), true, "comparing counts as on in Connections");
   await settings.locator('[name="systemOneApiKey"]').fill("test-key-123");
   await settings.locator('[data-save-system-one-key]').click();
   assert.deepEqual((await fixture(page)).savedSystemOneKeys, ["test-key-123"]);
@@ -396,6 +414,7 @@ try {
     f.panel.setSystemOneKeyStatus(true, "Key saved and tested. System One is on.");
   });
   assert.equal(await settings.locator('[name="systemOneMode"]').inputValue(), "on", "the mode follows the host");
+  assert.equal(await systemOneOn.isChecked(), true, "the switch follows the host");
   assert.match(await settings.locator("[data-system-one-key-status]").innerText(), /tested\. System One is on/);
   await tab("Advanced").focus(); await page.keyboard.press("Enter");
   const params = settings.locator('[name="imageParameters"]');

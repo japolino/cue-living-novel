@@ -66,6 +66,15 @@ export const KEY_ILLUSTRATION_CAP: Readonly<Record<VisualNovelKeyIllustrations, 
 export type VisualNovelTextEffectMode = (typeof TEXT_EFFECT_MODES)[number];
 
 /**
+ * The Motion setting (`effectIntensity`) decides the text effects too: tagged
+ * words move with "full" and "gentle" (smaller and slower), and keep their
+ * style without moving with "off".
+ */
+export function textEffectModeFor(intensity: VisualNovelEffectIntensity): VisualNovelTextEffectMode {
+  return intensity === "off" ? "static" : "animated";
+}
+
+/**
  * Where a character's reference anchor image comes from.
  * - "captured": the first render of the character in the chat (the default, unchanged behaviour);
  * - "card": one fixed sprite per character resolved from the card's assets. Characters the card
@@ -152,10 +161,11 @@ export type VisualNovelConfig = {
   useNativeCardImages: boolean;
   textSpeed: number;
   autoPlayDelay: number;
-  /** Presentation strength of one-shot stage effects. Default "full" keeps existing playback. */
+  /**
+   * Motion: how strongly stage effects play, and whether tagged dialogue
+   * words (<shake>, <rainbow>, ...) move (see textEffectModeFor). Default "full".
+   */
   effectIntensity: VisualNovelEffectIntensity;
-  /** Inline dialogue text effects (<shake>, <rainbow>, ...). Default "animated". */
-  textEffects: VisualNovelTextEffectMode;
   /** Full scene pictures (default) or sprite mode. */
   presentationMode: VisualNovelPresentationMode;
   /** Sprite cut-out quality. */
@@ -220,7 +230,6 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   textSpeed: 20,
   autoPlayDelay: 2000,
   effectIntensity: "full",
-  textEffects: "animated",
   presentationMode: "scene",
   spriteCutout: "best",
   keyIllustrations: "off",
@@ -301,12 +310,6 @@ function effectIntensity(value: unknown): VisualNovelEffectIntensity {
   return typeof value === "string" && (EFFECT_INTENSITIES as readonly string[]).includes(value)
     ? value as VisualNovelEffectIntensity
     : DEFAULT_CONFIG.effectIntensity;
-}
-
-function textEffectMode(value: unknown): VisualNovelTextEffectMode {
-  return typeof value === "string" && (TEXT_EFFECT_MODES as readonly string[]).includes(value)
-    ? value as VisualNovelTextEffectMode
-    : DEFAULT_CONFIG.textEffects;
 }
 
 function presentationMode(value: unknown): VisualNovelPresentationMode {
@@ -421,7 +424,6 @@ export function normalizeConfig(value: unknown): VisualNovelConfig {
     textSpeed: integer(input.textSpeed, 0, 100, DEFAULT_CONFIG.textSpeed),
     autoPlayDelay: integer(input.autoPlayDelay, 500, 10000, DEFAULT_CONFIG.autoPlayDelay),
     effectIntensity: effectIntensity(input.effectIntensity),
-    textEffects: textEffectMode(input.textEffects),
     presentationMode: presentationMode(input.presentationMode),
     spriteCutout: spriteCutout(input.spriteCutout),
     keyIllustrations: keyIllustrations(input.keyIllustrations),

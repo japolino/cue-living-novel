@@ -40,5 +40,7 @@ const turn: VnTurnInput = {
 };
 stage.loadTurn(turn);
 // The host mounts the pinned-panel dock (with its "Panels" launcher) on the stage, as in src/frontend/host/controller.ts.
+// The launcher shows only when there is a card to pin: give the reply one.
 const panels = new PanelDock(stage.panelMount);
+panels.setTurn({ chatId: "reading", messageId: "message-1", swipeId: 0, sourceFingerprint: "source-1", revision: 1, speaker: "Mira", paragraphs: [], status: "ready", assets: [], choices: [], panels: [{ id: "status", title: "Status", paragraphIndex: 0, html: "<div>Status</div>" }] } as never);
 Object.assign(window, { readingFixture: { stage, turn, counters, panels } });

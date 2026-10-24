@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { DEFAULT_CONFIG, THEME_PRESET_IDS, SCENE_IMAGE_FITS, EFFECT_INTENSITIES } from "../../config.js";
+import { DEFAULT_CONFIG, THEME_PRESET_IDS, SCENE_IMAGE_FITS, EFFECT_INTENSITIES, normalizeConfig, textEffectModeFor } from "../../config.js";
 import {
   AUTO_PLAY_STEPS,
   BUDGET_PRESETS,
@@ -32,8 +32,6 @@ import {
   NOVELAI_SAMPLER_OPTIONS,
   NOVELAI_NOTICE,
   normalizeReferenceSource,
-  TEXT_EFFECT_MODE_OPTIONS,
-  normalizeTextEffects,
   SETTINGS_SECTIONS,
   SETTINGS_SECTION_KEY,
   SETUP_DONE_KEY,
@@ -41,7 +39,6 @@ import {
   searchSettings,
   type SettingsSearchEntry,
 } from "./model";
-import { TEXT_EFFECT_MODES } from "../../config.js";
 
 describe("reference source options", () => {
   test("exposes exactly captured (default first) and card sprites", () => {
@@ -337,22 +334,19 @@ describe("NovelAI effective connection & parameters", () => {
   });
 });
 
-describe("text effects mode options", () => {
-  test("lists every config mode once, default first", () => {
-    expect(TEXT_EFFECT_MODE_OPTIONS.map((option) => option.value)).toEqual([...TEXT_EFFECT_MODES]);
-    expect(TEXT_EFFECT_MODE_OPTIONS[0]!.value).toBe(DEFAULT_CONFIG.textEffects);
-    for (const option of TEXT_EFFECT_MODE_OPTIONS) {
-      expect(option.label.trim().length).toBeGreaterThan(0);
-      expect(option.help.trim().length).toBeGreaterThan(0);
-    }
+describe("Motion (effectIntensity) decides the text effects", () => {
+  test("tagged words move with Full and Gentle and keep still with Still", () => {
+    expect(textEffectModeFor("full")).toBe("animated");
+    expect(textEffectModeFor("gentle")).toBe("animated");
+    expect(textEffectModeFor("off")).toBe("static");
+    expect(EFFECT_INTENSITY_OPTIONS.map((option) => option.label)).toEqual(["Full", "Gentle", "Still"]);
   });
 
-  test("normalizes unknown values to the default", () => {
-    expect(normalizeTextEffects("static")).toBe("static");
-    expect(normalizeTextEffects("off")).toBe("off");
-    expect(normalizeTextEffects("animated")).toBe("animated");
-    expect(normalizeTextEffects("sparkly")).toBe("animated");
-    expect(normalizeTextEffects("")).toBe("animated");
+  test("an old saved textEffects value is dropped; Motion stays as saved", () => {
+    const config = normalizeConfig({ textEffects: "off", effectIntensity: "gentle" } as Record<string, unknown>);
+    expect("textEffects" in config).toBe(false);
+    expect(config.effectIntensity).toBe("gentle");
+    expect(DEFAULT_CONFIG.effectIntensity).toBe("full");
   });
 });
 

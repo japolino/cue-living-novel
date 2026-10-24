@@ -1,5 +1,5 @@
 import type { SpindleFrontendContext } from "lumiverse-spindle-types";
-import type { VisualNovelConfig, VisualNovelEffectIntensity, VisualNovelPresentationMode, VisualNovelTextEffectMode } from "../../config.js";
+import { textEffectModeFor, type VisualNovelConfig, type VisualNovelEffectIntensity, type VisualNovelPresentationMode, type VisualNovelTextEffectMode } from "../../config.js";
 import { REFERENCE_IMAGE_MAX_BYTES, REFERENCE_IMAGE_MIMES } from "../../protocol.js";
 import type { AssetView, BackendResponse, ConnectionCatalogOption, FrontendRequest, TurnView } from "../../protocol.js";
 import { AudioEngine, VnStage, isAmbientEffect, isStageEffect } from "../stage/index.js";
@@ -387,7 +387,7 @@ export function applyVisualConfigToStage(
   stage.setAutoPlayDelay?.(config.autoPlayDelay);
   stage.setTextScale?.(config.textScale);
   stage.setEffectIntensity?.(config.effectIntensity);
-  stage.setTextEffects?.(config.textEffects);
+  stage.setTextEffects?.(textEffectModeFor(config.effectIntensity));
   stage.setPresentationMode?.(config.presentationMode);
 }
 
@@ -1251,7 +1251,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
         speech.setCursor(null);
         panels.setTurn(null);
         stage.reset();
-        if (active) stage.setPhase("idle");
+        // An open chat with no reply yet: the reply box is there, so the story can start here.
+        if (active) stage.setPhase(chatId() ? "awaiting-input" : "idle");
       }
       return;
     }

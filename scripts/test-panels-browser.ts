@@ -13,13 +13,23 @@ try {
   const requests: string[] = [];
   page.on("request", (request) => { if (request.url().startsWith("https:")) requests.push(request.url()); });
   await page.goto(`http://127.0.0.1:${server.port}`);
-  await page.getByRole("button", { name: "Panels", exact: true }).click();
-  assert.equal(await page.getByRole("button", { name: "Pin this card", exact: true }).count(), 0);
+  // No card reached yet, nothing pinned, no rule: no Panels button.
+  assert.equal(await page.locator(".launcher").isVisible(), false, "no Panels button while there is nothing to pin");
+  await page.evaluate(() => (window as any).fixture.dock.setCursor(1));
+  await page.getByRole("button", { name: /^Panels/ }).click();
+  assert.ok(await page.getByRole("button", { name: "Pin this card", exact: true }).count() > 0, "the reached card can be pinned");
   assert.equal(await page.getByRole("button", { name: "Capture SimTracker snapshot" }).isVisible(), false);
   await page.getByText("Advanced tools", { exact: true }).click();
   assert.equal(await page.getByRole("button", { name: "Capture SimTracker snapshot" }).isVisible(), true);
   await page.getByText("Advanced tools", { exact: true }).click();
+  // Rewinding with the drawer open keeps it (and its button) until it is closed.
+  await page.evaluate(() => (window as any).fixture.dock.setCursor(0));
+  assert.equal(await page.locator(".launcher").isVisible(), true, "the open drawer keeps its button");
+  assert.match(await page.locator(".drawer").innerText(), /No cards to pin yet/);
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+  assert.equal(await page.locator(".launcher").isVisible(), false, "closed with nothing to pin: the button goes");
   await page.evaluate(() => (window as any).fixture.dock.setCursor(1));
+  await page.getByRole("button", { name: /^Panels/ }).click();
   await mkdir(".cache", { recursive: true });
   await page.screenshot({ path: ".cache/panels-basic-desktop.png" });
   await page.setViewportSize({ width: 360, height: 640 });

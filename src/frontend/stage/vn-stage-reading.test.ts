@@ -59,6 +59,34 @@ describe("reading UX", () => {
     expect(q(s, "[data-vn-empty-state]").textContent).not.toContain("Exit");
   });
 
+  test("an empty chat at Your turn: the reply box asks for the first message and sends it", async () => {
+    const sent: string[] = [];
+    const s = create({ onSubmit: async (text) => { sent.push(text); } });
+    expect(q(s, "[data-vn-empty-state]").hidden).toBe(false);
+    expect(q(s, "[data-vn-interaction]").hidden).toBe(true);
+    s.setPhase("awaiting-input");
+    // The reply box takes the empty card's place, so the two never overlap.
+    expect(q(s, "[data-vn-empty-state]").hidden).toBe(true);
+    expect(q(s, "[data-vn-interaction-hint]").textContent).toStartWith("No reply yet. Write the first message to start the story.");
+    expect(q(s, "[data-vn-interaction]").hidden).toBe(false);
+    expect(q(s, "[data-vn-input-form]").hidden).toBe(false);
+    const input = q(s, "[data-vn-input]");
+    (input as unknown as { value: string }).value = "Hello there";
+    input.dispatchEvent(new FakeEvent("input"));
+    input.dispatchEvent(new FakeEvent("keydown", { key: "Enter" }));
+    await wait(0);
+    expect(sent).toEqual(["Hello there"]);
+    // A reply arrives and is read to the end: the usual hint.
+    s.loadTurn({ paragraphs: paragraphs(1) });
+    s.setPhase("awaiting-input");
+    expect(q(s, "[data-vn-interaction-hint]").textContent).toStartWith("Write your reply.");
+    // Back to no chat: the empty card again.
+    s.reset();
+    s.setPhase("idle");
+    expect(q(s, "[data-vn-empty-state]").hidden).toBe(false);
+    expect(q(s, "[data-vn-empty-text]").textContent).toContain("Go back to chat");
+  });
+
   test("exitLabel option still overrides the Back to chat accessible name", () => {
     const s = create({ exitLabel: "Leave the story" });
     expect(shell(s).querySelector("[data-vn-exit]")!.getAttribute("aria-label")).toBe("Leave the story");

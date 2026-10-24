@@ -32,8 +32,8 @@ own expression and there is no picture cap.
 | `spriteModelUrl` | https URL | ISNet-anime on Hugging Face (its float16 copy downloads where it runs) | Advanced (saved when valid) |
 | `spriteStudioModelUrl` | https URL, or http on this machine; `""` = none | `""` ("studio" cuts like "best") | Advanced (saved when valid) |
 | `keyIllustrations` | `"off"` \| `"few"` (≤ 1 per reply) | `"off"` | at once (everyday, sprite mode only) |
-| `spriteImageSize` | `"standard"` \| `"upscaled"` | `"standard"` | at once (everyday, both modes) |
-| `spriteExpressionCount` | `4` \| `8` \| `12` | `4` | at once (everyday, sprite mode only) |
+| `spriteImageSize` | `"standard"` \| `"upscaled"` | `"standard"` | at once (Advanced, both modes; hidden for NovelAI) |
+| `spriteExpressionCount` | `4` \| `8` \| `12` | `4` | at once (Advanced, sprite mode only) |
 
 ### Image size (`spriteImageSize`)
 
@@ -73,7 +73,7 @@ sizes a sprite from its normalized bbox, never from its pixel size.
 
 ### Expressions per character (`spriteExpressionCount`)
 
-How many expressions Cue makes ahead for each set. Settings: "Expressions
+How many expressions Cue makes ahead for each set. Settings: Advanced, "Expressions
 per character", right after "Image size": 4 (fastest) / 8 / 12 (all). A
 missing or unknown value is 4.
 
@@ -663,12 +663,13 @@ layers, crossfaded) → ambient overlay (behind sprites) → `[data-vn-sprites]`
 
 ## Settings (frontend)
 
-Presentation mode control; image size (Standard / Upscaled, both modes:
-scene pictures use the landscape size); expressions per character (4 / 8 / 12, sprite mode only); cut-out quality; model status (absent /
+Presentation mode control; cut-out quality; model status (absent /
 downloading / ready / unsupported) with Download and Remove; a sprite library
 gallery (sets with their expressions on a checkerboard, plates) with Prepare
-for this chat, Regenerate, Re-cut, and Delete; the model URL and the Studio
-model URL under Advanced. With Studio quality the model status covers both
+for this chat, Regenerate, Re-cut, and Delete. Under Advanced: image size
+(Standard / Upscaled, both modes: scene pictures use the landscape size;
+hidden for NovelAI), expressions per character (4 / 8 / 12, sprite mode only),
+the model URL and the Studio model URL. With Studio quality the model status covers both
 models: whether the Studio model is downloaded (else **Download Studio
 model**), its background download, and why Best cuts instead (**Try Studio
 again**); a device that cannot run it gets Best's status, never the Studio

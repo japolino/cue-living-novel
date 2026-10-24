@@ -85,12 +85,16 @@ export class PanelDock {
     this.root.addEventListener("keydown", (event) => { if ((event as KeyboardEvent).key === "Escape") { this.toggle(false); this.launcher.focus(); } });
     this.observer = new ResizeObserver(() => this.layout()); this.observer.observe(mount);
     window.addEventListener("vn-panel-export-v1", this.receiveBridge);
+    this.syncLauncher();
   }
 
   private button(text: string, action: () => void): HTMLButtonElement {
     const button = document.createElement("button"); button.type = "button"; button.textContent = text; button.onclick = action; return button;
   }
-  private toggle(open: boolean): void { this.drawer.hidden = !open; this.launcher.setAttribute("aria-expanded", String(open)); }
+  private toggle(open: boolean): void { this.drawer.hidden = !open; this.launcher.setAttribute("aria-expanded", String(open)); this.syncLauncher(); }
+  private visibleCards(): PanelArtifact[] { return this.candidates.filter((card) => card.paragraphIndex <= this.cursor); }
+  /** No card to pin so far in this reply, nothing pinned and no rule in this chat: no Panels button (most replies carry no card). */
+  private syncLauncher(): void { this.launcher.hidden = this.drawer.hidden && !this.visibleCards().length && !this.pins.length && !this.rules.length; }
   private error(error: unknown): void { this.notice.textContent = error instanceof Error ? error.message : String(error); }
   private storageKey(): string { return `vn-panels-v1:${this.chat}`; }
   private save(): void {
@@ -132,7 +136,7 @@ export class PanelDock {
   }
   setCursor(cursor: number): void { this.cursor = cursor; this.refresh(); }
   private refresh(): void {
-    const visible = this.candidates.filter((card) => card.paragraphIndex <= this.cursor);
+    const visible = this.visibleCards();
     for (const pin of this.pins) {
       if (!pin.follow || !this.turn) continue;
       const latest = visible.filter((card) => card.followKey === pin.follow).at(-1);
@@ -203,6 +207,7 @@ export class PanelDock {
       this.drag(handle, pin, false); this.drag(resize, pin, true);
     }
     this.layout();
+    this.syncLauncher();
   }
   private rebuild(pin: Pin): void { this.nodes.get(pin.key)?.remove(); this.nodes.delete(pin.key); this.renderPins(); }
   private layout(): void {

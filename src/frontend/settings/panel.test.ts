@@ -50,10 +50,12 @@ describe("settings panel markup", () => {
     }
   });
 
-  test("the text effects mode control exists and saves as an everyday patch", () => {
-    expect(source).toContain('optionList("textEffects", TEXT_EFFECT_MODE_OPTIONS)');
-    expect(source).toContain('case "textEffects": return { textEffects: normalizeTextEffects(target.value) };');
-    expect(advancedKeys).not.toContain("textEffects");
+  test("one Motion control (effectIntensity) also decides the text effects; no text effects setting of its own", () => {
+    expect(source).toContain('optionList("effectIntensity", EFFECT_INTENSITY_OPTIONS)');
+    expect(source).not.toContain('name="textEffects"');
+    expect(source).not.toContain('optionList("textEffects"');
+    expect(source).toContain("textEffectModeFor(config.effectIntensity)");
+    expect(advancedKeys).not.toContain("effectIntensity");
   });
 
   test("the text effects reference renders from the shared catalogue, not a copy", () => {
@@ -83,31 +85,47 @@ describe("settings panel markup", () => {
     expect(source).toContain("data-undo-toast");
   });
 
-  test("image size: one everyday control for both modes, before the sprite-only block", () => {
+  const advancedPane = source.slice(source.indexOf('${pane("advanced"'), source.indexOf('" data-advanced-settings")}'));
+  const picturesPane = source.slice(source.indexOf('${pane("pictures"'), source.indexOf('${pane("sound"'));
+
+  test("image size: one control for both modes, in Advanced (saved at once), hidden for NovelAI", () => {
     expect(source.match(/optionList\("spriteImageSize"/g)).toHaveLength(1);
     expect(source).toContain('case "spriteImageSize": return { spriteImageSize: normalizeSpriteImageSize(target.value) };');
     expect(source).toContain('this.setRadio("spriteImageSize", config.spriteImageSize);');
     expect(advancedKeys).not.toContain("spriteImageSize");
-    const spritesOnly = source.slice(source.indexOf("<div data-sprites-only hidden>"), source.indexOf('${group("Sprite library"'));
-    expect(spritesOnly).not.toContain("spriteImageSize");
-    const generated = source.slice(source.indexOf("<div data-generated-only>"), source.indexOf("<div data-sprites-only hidden>"));
-    expect(generated).toContain('optionList("spriteImageSize", SPRITE_IMAGE_SIZE_OPTIONS)');
+    expect(picturesPane).not.toContain("spriteImageSize");
+    expect(advancedPane).toContain('optionList("spriteImageSize", SPRITE_IMAGE_SIZE_OPTIONS)');
     // Scene pictures use it too, so it is not a scene-only or sprite-only group.
-    const group = generated.slice(generated.indexOf('${group("Image size"'));
+    const group = advancedPane.slice(advancedPane.indexOf('${group("Image size"'), advancedPane.indexOf('${group("Expressions per character"'));
     expect(group).not.toContain("sceneOnly");
     expect(group).toContain("scenes scene pictures");
+    expect(source).toContain("this.root.querySelector<HTMLElement>('[data-group-id=\"sprite-size\"]')!.hidden = isNovelAi;");
   });
 
-  test("expressions per character: one everyday control right after Image size, in the sprite-only block", () => {
+  test("expressions per character: one control right after Image size in Advanced, shown only for sprites", () => {
     expect(source.match(/optionList\("spriteExpressionCount"/g)).toHaveLength(1);
     expect(source).toContain('case "spriteExpressionCount": return { spriteExpressionCount: normalizeSpriteExpressionCount(target.value) };');
     expect(source).toContain('this.setRadio("spriteExpressionCount", String(config.spriteExpressionCount));');
     expect(source).toContain("this.spriteLibrary.setExpressionCount(config.spriteExpressionCount);");
     expect(advancedKeys).not.toContain("spriteExpressionCount");
-    const spritesOnly = source.slice(source.indexOf("<div data-sprites-only hidden>"), source.indexOf('${group("Sprite library"'));
-    expect(spritesOnly).toContain('${group("Expressions per character"');
-    expect(source.indexOf('optionList("spriteImageSize"')).toBeLessThan(source.indexOf('optionList("spriteExpressionCount"'));
-    expect(spritesOnly.indexOf('optionList("spriteExpressionCount"')).toBeLessThan(spritesOnly.indexOf('optionList("spriteCutout"'));
+    expect(picturesPane).not.toContain("spriteExpressionCount");
+    expect(advancedPane.indexOf('optionList("spriteImageSize"')).toBeLessThan(advancedPane.indexOf('optionList("spriteExpressionCount"'));
+    expect(source).toContain("this.root.querySelector<HTMLElement>('[data-group-id=\"sprite-expressions\"]')!.hidden = !sprites;");
+  });
+
+  test("Pictures starts with where pictures come from and the image connection; NovelAI sampling and System One details are in Advanced", () => {
+    const generated = picturesPane.slice(picturesPane.indexOf("<div data-generated-only>"));
+    expect(generated.indexOf('${group("Image connection"')).toBeLessThan(generated.indexOf('${group("How the story is shown"'));
+    expect(generated.indexOf('${group("Image connection"')).toBeLessThan(generated.indexOf("data-novelai-controls"));
+    expect(picturesPane).toContain('name="novelAiWidth"');
+    for (const name of ["novelAiSteps", "novelAiGuidance", "novelAiSampler", "novelAiSeed", "systemOneMode", "systemOneApiUrl", "systemOneModel"]) {
+      expect(advancedPane).toContain(`name="${name}"`);
+    }
+    const connections = source.slice(source.indexOf('${pane("connections"'), source.indexOf('${pane("advanced"'));
+    expect(connections).toContain('name="systemOneOn"');
+    expect(connections).toContain('name="systemOneApiKey"');
+    expect(connections).not.toContain('name="systemOneMode"');
+    expect(source).toContain('case "systemOneOn": return { systemOneMode: checked ? "on" : "off" };');
   });
 
   test("the sprite controls sit with the generated-picture settings in Pictures", () => {

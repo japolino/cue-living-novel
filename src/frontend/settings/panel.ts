@@ -1,6 +1,7 @@
 import { DEFAULT_SPRITE_MODEL_URL } from "../../shared/sprites.js";
 import {
   DEFAULT_CONFIG,
+  textEffectModeFor,
   type VisualNovelConfig,
   type VisualNovelPromptPreset,
 } from "../../config.js";
@@ -11,7 +12,6 @@ import {
   IMAGE_SOURCE_OPTIONS,
   SETTINGS_SECTIONS,
   SETTINGS_SECTION_KEY,
-  TEXT_EFFECT_MODE_OPTIONS,
   REFERENCE_SOURCE_OPTIONS,
   SCENE_IMAGE_FIT_OPTIONS,
   SETUP_DONE_KEY,
@@ -36,7 +36,6 @@ import {
   normalizeReferenceSource,
   normalizeSceneImageFit,
   normalizeSettingsSection,
-  normalizeTextEffects,
   normalizeThemePreset,
   searchSettings,
   resetPatch,
@@ -552,7 +551,7 @@ export class VisualNovelSettingsPanel {
           </div></li>
           <li><div>
             <h3>Look</h3>
-            <small>Text size, text effects and picture fit are in the Look section.</small>
+            <small>Text size, motion and picture fit are in the Look section.</small>
             ${themeTiles("setupThemePreset")}
           </div></li>
         </ol>
@@ -601,14 +600,10 @@ export class VisualNovelSettingsPanel {
                 ${segments("textScaleStep", TEXT_SCALE_STEPS, true)}
                 <label data-field data-custom="textScale" hidden><span>Scale (1 = normal)</span><input name="textScale" type="number" min="${TEXT_SCALE_MIN}" max="${TEXT_SCALE_MAX}" step="0.05" /></label>
               </fieldset>
-              <fieldset ${find("Text effects", "shake rainbow wave animated letters still")}>
-                <legend>Text effects</legend>
-                ${optionList("textEffects", TEXT_EFFECT_MODE_OPTIONS)}
-              </fieldset>
             `)}
             ${group("Scene", `
-              <fieldset ${find("Scene effects", "rain sparkles shake flash intensity gentle motion")}>
-                <legend>Scene effects</legend>
+              <fieldset ${find("Motion", "scene effects text effects rain sparkles shake flash intensity gentle still animated letters wave rainbow reduce motion")}>
+                <legend>Motion</legend>
                 ${optionList("effectIntensity", EFFECT_INTENSITY_OPTIONS)}
               </fieldset>
               <fieldset ${find("Picture fit", "image fit cover contain stretch crop scale")}>
@@ -626,6 +621,29 @@ export class VisualNovelSettingsPanel {
           ${pane("pictures", `
             ${group("Where pictures come from", imageSourceOptions("imageSource"), { find: find("Picture source", "image source card generated illustrations text only") })}
             <div data-generated-only>
+              ${group("Image connection", `
+                <div data-field>
+                  ${readinessRow("image")}
+                  <select name="imageConnectionId" data-connection-select="image" aria-label="Image connection"><option value="">Lumiverse default</option></select>
+                </div>
+              `, { find: find("Image connection", "image model provider stability comfyui novelai") })}
+              <section data-group data-novelai-controls hidden ${find("NovelAI image dimensions", "novelai dimensions resolution size landscape portrait square width height anlas")}>
+                <header data-group-head><h3>NovelAI</h3><small>Shown because the image connection is NovelAI.</small></header>
+                <fieldset data-scene-only>
+                  <legend>Image dimensions</legend>
+                  ${SCENE_NOTE.replace("Used only with scene pictures.", "Used only with scene pictures. Sprites and backgrounds pick their own shape.")}
+                  ${segments("novelAiResolutionPreset", [
+                    { label: "Landscape (1216×832)", value: "landscape" },
+                    { label: "Portrait (832×1216)", value: "portrait" },
+                    { label: "Square (1024×1024)", value: "square" },
+                  ], true)}
+                  <div data-custom="novelAiDimensions" data-row hidden>
+                    <label data-field><span>Width</span><input name="novelAiWidth" type="number" min="64" max="2048" step="64" /></label>
+                    <label data-field><span>Height</span><input name="novelAiHeight" type="number" min="64" max="2048" step="64" /></label>
+                  </div>
+                  <small data-novelai-cost-notice>${esc(NOVELAI_NOTICE)} <a href="https://docs.novelai.net/en/subscription/" target="_blank" rel="noopener noreferrer">NovelAI subscription docs</a></small>
+                </fieldset>
+              </section>
               ${group("How the story is shown", `
                 <fieldset aria-label="How the story is shown">
                   ${optionList("presentationMode", PRESENTATION_MODE_OPTIONS)}
@@ -637,17 +655,7 @@ export class VisualNovelSettingsPanel {
                   </fieldset>
                 </div>
               `, { id: "presentation", find: find("Scene pictures or character sprites", "presentation mode sprites sprite mode character expressions cut-out plates backgrounds scene pictures vn") })}
-              ${group("Image size", `
-                <fieldset aria-label="Image size">
-                  ${optionList("spriteImageSize", SPRITE_IMAGE_SIZE_OPTIONS)}
-                </fieldset>
-              `, { id: "sprite-size", help: esc(SPRITE_IMAGE_SIZE_HELP), find: find("Image size", "scenes scene pictures sprites sprite backgrounds size resolution width height landscape standard upscaled vram gpu memory faster sharper comfyui swarmui novelai") })}
               <div data-sprites-only hidden>
-                ${group("Expressions per character", `
-                  <fieldset aria-label="Expressions per character">
-                    ${optionList("spriteExpressionCount", SPRITE_EXPRESSION_COUNT_OPTIONS)}
-                  </fieldset>
-                `, { id: "sprite-expressions", help: esc(SPRITE_EXPRESSION_COUNT_HELP), find: find("Expressions per character", "sprites expressions per character set size faces 4 8 12 fastest all faster fewer pictures") })}
                 ${group("Sprite cut-out", `
                   <fieldset aria-label="Cut-out quality" ${find("Cut-out quality", "sprites cutout cut-out background removal transparent model download isnet quality basic best")}>
                     ${optionList("spriteCutout", SPRITE_CUTOUT_OPTIONS)}
@@ -677,43 +685,6 @@ export class VisualNovelSettingsPanel {
                   ${optionList("referenceSource", REFERENCE_SOURCE_OPTIONS)}
                 </fieldset>
               `, { find: find("Consistent characters", "reference anchoring portrait same look sprites ip-adapter comfyui switch") })}
-              ${group("Image connection", `
-                <div data-field>
-                  ${readinessRow("image")}
-                  <select name="imageConnectionId" data-connection-select="image" aria-label="Image connection"><option value="">Lumiverse default</option></select>
-                </div>
-              `, { find: find("Image connection", "image model provider stability comfyui novelai") })}
-              <section data-group data-novelai-controls hidden ${find("NovelAI", "novelai dimensions steps sampler seed guidance cfg anlas")}>
-                <header data-group-head><h3>NovelAI</h3><small>Shown because the image connection is NovelAI.</small></header>
-                <fieldset data-scene-only>
-                  <legend>Image dimensions</legend>
-                  ${SCENE_NOTE.replace("Used only with scene pictures.", "Used only with scene pictures. Sprites and backgrounds pick their own shape.")}
-                  ${segments("novelAiResolutionPreset", [
-                    { label: "Landscape (1216×832)", value: "landscape" },
-                    { label: "Portrait (832×1216)", value: "portrait" },
-                    { label: "Square (1024×1024)", value: "square" },
-                  ], true)}
-                  <div data-custom="novelAiDimensions" data-row hidden>
-                    <label data-field><span>Width</span><input name="novelAiWidth" type="number" min="64" max="2048" step="64" /></label>
-                    <label data-field><span>Height</span><input name="novelAiHeight" type="number" min="64" max="2048" step="64" /></label>
-                  </div>
-                  <small data-novelai-cost-notice>${esc(NOVELAI_NOTICE)} <a href="https://docs.novelai.net/en/subscription/" target="_blank" rel="noopener noreferrer">NovelAI subscription docs</a></small>
-                </fieldset>
-                <div data-row>
-                  <label data-field><span>Sampling steps <small data-novelai-steps-help>(≤28 within Opus limit)</small></span><input name="novelAiSteps" type="number" min="${NOVELAI_STEPS_MIN}" max="${NOVELAI_STEPS_MAX}" step="1" /></label>
-                  <label data-field><span>Prompt guidance (CFG scale)</span><input name="novelAiGuidance" type="number" min="${NOVELAI_GUIDANCE_MIN}" max="${NOVELAI_GUIDANCE_MAX}" step="0.5" /></label>
-                </div>
-                <div data-row>
-                  <div data-field>
-                    <span>Sampler</span>
-                    <select name="novelAiSampler" aria-label="NovelAI sampler"></select>
-                  </div>
-                  <div data-field>
-                    <span>Seed <small>(empty = random each image)</small></span>
-                    <div data-actions style="flex-wrap: nowrap"><input name="novelAiSeed" type="number" inputmode="numeric" min="0" max="${NOVELAI_SEED_MAX}" step="1" placeholder="Random" aria-label="Seed" /><button type="button" data-novelai-random-seed>Random</button></div>
-                  </div>
-                </div>
-              </section>
             </div>
           `)}
 
@@ -757,11 +728,7 @@ export class VisualNovelSettingsPanel {
               <div data-actions><small>Chosen in Pictures, next to where pictures come from.</small><button type="button" data-goto="pictures" data-goto-target="imageConnectionId">Go to Pictures</button></div>
             `, { find: "" })}
             ${group("System One", `
-              <label data-field ${find("System One decisions", "jev typesafe mode compare")}><span>System One decisions</span><select name="systemOneMode"><option value="off">Off</option><option value="compare">Compare with story reader</option><option value="on">Use for presentation and familiar scenes</option></select>${more("Jev makes bounded speaker, expression, audio, and scene decisions. Compare logs agreement without changing the turn.")}</label>
-              <div data-row>
-                <label data-field ${find("System One API URL", "jev endpoint url")}><span>API URL</span><input name="systemOneApiUrl" type="url" placeholder="https://api.typesafe.ai" /><small>Requests go through Lumiverse's HTTP proxy.</small></label>
-                <label data-field ${find("System One model", "jev model")}><span>Model</span><input name="systemOneModel" type="text" placeholder="jev-latest" /></label>
-              </div>
+              <label data-check ${find("Use System One", "jev typesafe on off decisions")}><input name="systemOneOn" type="checkbox" /><span>Use System One for presentation and familiar scenes<small>Comparing only, the API URL and the model are in Advanced.</small>${more("Jev makes bounded speaker, expression, audio, and scene decisions.")}</span></label>
               <div data-field ${find("System One API key", "jev key secret password")}><span>API key</span><input name="systemOneApiKey" type="password" autocomplete="new-password" placeholder="Enter key" /><div data-actions><button type="button" data-save-system-one-key>Save key</button><button type="button" data-clear-system-one-key>Remove key</button><small data-system-one-key-status>Checking saved key…</small></div><small>The key saves at once, encrypted for this extension. It is never part of Cue settings. Saving it makes one small test call and turns System One on; removing it turns System One off.</small></div>
             `, { help: "Optional. Saves as you change it.", find: find("System One", "jev") })}
           `)}
@@ -770,6 +737,7 @@ export class VisualNovelSettingsPanel {
             <p class="muted">Changes save when you leave a field, with <b>Undo</b> for a few seconds. JSON and URL fields save only when they are valid.</p>
             <div data-jump aria-label="Jump to">
               <button type="button" data-jump-to="prompts">Image prompts</button>
+              <button type="button" data-jump-to="sprite-size">Picture size</button>
               <button type="button" data-jump-to="context">Story reader</button>
               <button type="button" data-jump-to="filtering">Text filtering</button>
               <button type="button" data-jump-to="models">Models and parameters</button>
@@ -800,6 +768,33 @@ export class VisualNovelSettingsPanel {
               <label data-check ${find("Series reference tag", "creation series original reference")}><input name="originalReference" type="checkbox" /><span>Include character creation / series reference tag</span></label>
               <label data-field ${find("Creation / series name", "series franchise original")}><span>Creation / series name</span><input name="originalCreationName" type="text" placeholder="e.g. doki doki literature club" />${more("When enabled, NovelAI uses: Character, series name. Other profiles use: Character \\(Creation\\). Appearance tags follow as usual.")}</label>
             `, { id: "prompts" })}
+            ${group("Image size", `
+              <fieldset aria-label="Image size">
+                ${optionList("spriteImageSize", SPRITE_IMAGE_SIZE_OPTIONS)}
+              </fieldset>
+            `, { id: "sprite-size", help: esc(SPRITE_IMAGE_SIZE_HELP), find: find("Image size", "scenes scene pictures sprites sprite backgrounds size resolution width height landscape standard upscaled vram gpu memory faster sharper comfyui swarmui novelai") })}
+            ${group("Expressions per character", `
+              <fieldset aria-label="Expressions per character">
+                ${optionList("spriteExpressionCount", SPRITE_EXPRESSION_COUNT_OPTIONS)}
+              </fieldset>
+            `, { id: "sprite-expressions", help: esc(SPRITE_EXPRESSION_COUNT_HELP), find: find("Expressions per character", "sprites expressions per character set size faces 4 8 12 fastest all faster fewer pictures") })}
+            <section data-group data-group-id="novelai-sampling" data-novelai-sampling hidden ${find("NovelAI sampling", "novelai steps sampler seed guidance cfg anlas")}>
+              <header data-group-head><h3>NovelAI sampling</h3><small>Shown because the image connection is NovelAI.</small></header>
+              <div data-row>
+                <label data-field><span>Sampling steps <small data-novelai-steps-help>(≤28 within Opus limit)</small></span><input name="novelAiSteps" type="number" min="${NOVELAI_STEPS_MIN}" max="${NOVELAI_STEPS_MAX}" step="1" /></label>
+                <label data-field><span>Prompt guidance (CFG scale)</span><input name="novelAiGuidance" type="number" min="${NOVELAI_GUIDANCE_MIN}" max="${NOVELAI_GUIDANCE_MAX}" step="0.5" /></label>
+              </div>
+              <div data-row>
+                <div data-field>
+                  <span>Sampler</span>
+                  <select name="novelAiSampler" aria-label="NovelAI sampler"></select>
+                </div>
+                <div data-field>
+                  <span>Seed <small>(empty = random each image)</small></span>
+                  <div data-actions style="flex-wrap: nowrap"><input name="novelAiSeed" type="number" inputmode="numeric" min="0" max="${NOVELAI_SEED_MAX}" step="1" placeholder="Random" aria-label="Seed" /><button type="button" data-novelai-random-seed>Random</button></div>
+                </div>
+              </div>
+            </section>
             ${group("What the story reader sees", `
               <label data-field ${find("Recent messages", "context history messages story reader")}><span>Recent messages</span><input name="includeRecentMessages" type="number" min="0" max="30" step="1" /></label>
               <label data-check ${find("Character-card context", "character card context")}><input name="includeCharacterContext" type="checkbox" /><span>Include character-card context</span></label>
@@ -813,6 +808,11 @@ export class VisualNovelSettingsPanel {
               <label data-field ${find("Display regex rules", "regex replace formatting dialogue pattern")}><span>Display regex rules</span><textarea name="displayRegexRules" spellcheck="false" placeholder="/§([^§]+)§/g => <em class=&quot;vn-transmission&quot;>$1</em>"></textarea><small>One rule per line: <code>/pattern/flags =&gt; replacement</code>. Dialogue formatting only.</small>${more("<code>pattern =&gt; replacement</code> also works. An empty replacement hides a match from dialogue, not from image planning. Only safe inline formatting renders here. For full HTML/SVG cards, open Panels in the novel view.")}</label>
             `, { id: "filtering" })}
             ${group("Models and parameters", `
+              <label data-field ${find("System One decisions", "jev typesafe mode compare")}><span>System One decisions</span><select name="systemOneMode"><option value="off">Off</option><option value="compare">Compare with story reader</option><option value="on">Use for presentation and familiar scenes</option></select>${more("Compare logs agreement with the story reader without changing the turn.")}</label>
+              <div data-row>
+                <label data-field ${find("System One API URL", "jev endpoint url")}><span>System One API URL</span><input name="systemOneApiUrl" type="url" placeholder="https://api.typesafe.ai" /><small>Requests go through Lumiverse's HTTP proxy.</small></label>
+                <label data-field ${find("System One model", "jev model")}><span>System One model</span><input name="systemOneModel" type="text" placeholder="jev-latest" /></label>
+              </div>
               <div data-row>
                 <label data-field ${find("Image model override", "image model checkpoint")}><span>Image model override</span><input name="imageModel" type="text" placeholder="Use the selected connection model" /><small data-image-model-hint>Leave blank to use the model configured on the selected image connection.</small></label>
                 <label data-field ${find("Images at the same time", "concurrency parallel images")}><span>Images generated at the same time</span><input name="imageConcurrency" type="number" min="1" max="6" step="1" /></label>
@@ -1180,7 +1180,7 @@ export class VisualNovelSettingsPanel {
 
   private syncTextEffectMode(config: VisualNovelConfig): void {
     const list = this.root.querySelector<HTMLElement>("[data-text-fx-list]")!;
-    list.setAttribute("data-vn-text-effects", config.textEffects);
+    list.setAttribute("data-vn-text-effects", textEffectModeFor(config.effectIntensity));
     const tokens = themePreviewTokens(config.themePreset);
     list.style.setProperty("--vn-accent", tokens.accent);
     list.style.setProperty("--vn-text", tokens.text);
@@ -1424,7 +1424,6 @@ export class VisualNovelSettingsPanel {
         return { themePreset: normalizeThemePreset(target.value) };
       case "sceneImageFit": return { sceneImageFit: normalizeSceneImageFit(target.value) };
       case "effectIntensity": return { effectIntensity: normalizeEffectIntensity(target.value) };
-      case "textEffects": return { textEffects: normalizeTextEffects(target.value) };
       case "presentationMode": return { presentationMode: normalizePresentationMode(target.value) };
       case "spriteCutout": return { spriteCutout: normalizeSpriteCutout(target.value) };
       case "spriteImageSize": return { spriteImageSize: normalizeSpriteImageSize(target.value) };
@@ -1463,6 +1462,7 @@ export class VisualNovelSettingsPanel {
       }
       case "maxImagesPerTurn": return { maxImagesPerTurn: clamp(Math.round(Number(target.value)), 0, 12, DEFAULT_CONFIG.maxImagesPerTurn) };
       case "systemOneMode": return { systemOneMode: target.value === "compare" || target.value === "on" ? target.value : "off" };
+      case "systemOneOn": return { systemOneMode: checked ? "on" : "off" };
       case "systemOneApiUrl": return { systemOneApiUrl: target.value.trim() || DEFAULT_CONFIG.systemOneApiUrl };
       case "systemOneModel": return { systemOneModel: target.value.trim() || DEFAULT_CONFIG.systemOneModel };
       case "novelAiSteps":
@@ -1588,6 +1588,9 @@ export class VisualNovelSettingsPanel {
     const promptControls = this.root.querySelector<HTMLElement>("[data-novelai-prompt-controls]");
     if (promptControls) promptControls.hidden = !isNovelAi;
     container.hidden = !isNovelAi;
+    this.root.querySelector<HTMLElement>("[data-novelai-sampling]")!.hidden = !isNovelAi;
+    // NovelAI renders sprites and backgrounds at its own sizes (and scenes at the dimensions above).
+    this.root.querySelector<HTMLElement>('[data-group-id="sprite-size"]')!.hidden = isNovelAi;
     if (!isNovelAi) return;
 
     const params = readNovelAiParameters(config.imageParameters);
@@ -1884,6 +1887,7 @@ export class VisualNovelSettingsPanel {
 
   private syncEveryday(config: VisualNovelConfig): void {
     this.control<HTMLSelectElement>("systemOneMode").value = config.systemOneMode;
+    this.control<HTMLInputElement>("systemOneOn").checked = config.systemOneMode !== "off";
     for (const name of ["systemOneApiUrl", "systemOneModel"] as const) {
       const input = this.control<HTMLInputElement>(name);
       if (this.root.activeElement !== input) input.value = config[name];
@@ -1908,7 +1912,6 @@ export class VisualNovelSettingsPanel {
     this.setRadio("setupThemePreset", config.themePreset);
     this.setRadio("sceneImageFit", config.sceneImageFit);
     this.setRadio("effectIntensity", config.effectIntensity);
-    this.setRadio("textEffects", config.textEffects);
     this.syncTextEffectMode(config);
     const scaleStep = namedStepFor(TEXT_SCALE_STEPS, config.textScale);
     this.setRadio("textScaleStep", scaleStep ? String(scaleStep.value) : "custom");
@@ -1954,6 +1957,8 @@ export class VisualNovelSettingsPanel {
     this.setRadio("keyIllustrations", config.keyIllustrations);
     const sprites = config.presentationMode === "sprites";
     this.root.querySelector<HTMLElement>("[data-sprites-only]")!.hidden = !sprites;
+    // Advanced: the set size exists only for sprites.
+    this.root.querySelector<HTMLElement>('[data-group-id="sprite-expressions"]')!.hidden = !sprites;
     // Key moments sit under the presentation choice and also exist only for sprites.
     this.root.querySelector<HTMLElement>("[data-key-moments]")!.hidden = !sprites;
     // Scene-only controls keep their values; they only read as not applying.

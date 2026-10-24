@@ -86,7 +86,6 @@ const baseConfig: VisualNovelConfig = {
   textSpeed: 20,
   autoPlayDelay: 2000,
   effectIntensity: "full",
-  textEffects: "animated",
   presentationMode: "scene",
   spriteCutout: "best",
   keyIllustrations: "off",
