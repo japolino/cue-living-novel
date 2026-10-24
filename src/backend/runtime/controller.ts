@@ -767,6 +767,18 @@ function selectionFingerprint(message: Pick<NormalizedChatMessage, "id" | "swipe
   return fingerprintForMessage({ id: message.id, swipe_id: message.swipe_id, content: intake.selectionText });
 }
 
+/**
+ * The planner's RECENT CHAT: the last `count` messages up to the reply, without
+ * the reply itself (the planner already gets it, indexed, as the target) and
+ * without anything after it (a retried older turn never sees its future).
+ * When the reply is not in the list, the last `count` messages.
+ */
+export function contextBeforeReply<T extends { id: string }>(messages: readonly T[], replyId: string, count: number): T[] {
+  const index = messages.findIndex((candidate) => candidate.id === replyId);
+  if (index < 0) return messages.slice(-count);
+  return messages.slice(Math.max(0, index - (count - 1)), index);
+}
+
 export async function sendState(
   spindle: SpindleAPI,
   chatId: string,
@@ -1076,13 +1088,29 @@ async function processAssistantMessage(
   if (resolved !== content) dbg(spindle, userId, `message ${message.id} macro-resolved: ${content.length} -> ${resolved.length} chars`);
   const path = turnPath(chatId, message.id, message.swipe_id);
   const existing = await loadTurnRecord(spindle, path, userId);
+  // A newer event may have started its own intake during the read: only the
+  // newest version of the message may replace plans of the others.
+  if ((intakeEpochs.get(intakeKey) ?? 0) !== intakeEpoch) {
+    dbg(spindle, userId, `intake for message ${message.id} superseded while loading its turn; dropped`);
+    return;
+  }
   const relation = relateRecord(existing, message, intake);
+  const fingerprint = selectionFingerprint(message, intake);
+  const dedupeId = `${message.id}:${message.swipe_id}:${fingerprint}`;
+  // Whatever this version of the message shows (its stored turn, a waiting
+  // card or a new plan), a plan of another swipe or an older edit that is
+  // still queued or running is stale: cancel it so it never persists or paints.
+  const supersedeOthers = (keepDedupeId: string) => {
+    const superseded = planningQueue.supersede(userId, chatId, message.id, keepDedupeId);
+    if (superseded.length) dbg(spindle, userId, `planning superseded ${superseded.length} older plan(s) of message ${message.id}`);
+  };
   // The host could not resolve the message right now (no interceptor loaded,
   // transient error). A turn already planned from a successful resolution
   // stays authoritative: never replace it with a waiting state or a replan
   // built from the stripped raw text.
   if (!intake.resolved && existing && !options?.forceRegenerate) {
     dbg(spindle, userId, `message ${message.id} could not be resolved by the host; keeping the stored turn`);
+    supersedeOthers(`${message.id}:${message.swipe_id}:${existing.plan.key.sourceFingerprint}`);
     const key = runtimeKey(userId, chatId);
     activeTurnKeys.set(key, existing.plan.key);
     await persistActiveTurn(spindle, existing, path, userId);
@@ -1091,10 +1119,10 @@ async function processAssistantMessage(
   }
   if (isUnselectedGreeting(content, resolved)) {
     dbg(spindle, userId, `message ${message.id} has no narrative after macro resolution; waiting for a scene selection`);
+    supersedeOthers(dedupeId);
     spindle.sendToFrontend({ type: "vn_waiting", chatId, messageId: message.id, reason: "greeting_unselected" }, userId);
     return;
   }
-  const fingerprint = selectionFingerprint(message, intake);
   const rawFingerprint = fingerprintForMessage({ id: message.id, swipe_id: message.swipe_id, content });
   if (!options?.retry && !options?.forceRegenerate && existing && relation === "current") {
     // Sprite mode never runs scene jobs, so their state does not matter; a
@@ -1107,6 +1135,7 @@ async function processAssistantMessage(
       ) || (existing.plan.spriteStaging !== undefined && (existing.jobs.length === 0 || isSpritePlannedRecord(existing)));
     if (!hasIncompleteJobs) {
       dbg(spindle, userId, `turn reused from storage chat=${chatId} message=${message.id} fingerprint=${fingerprint}`);
+      supersedeOthers(dedupeId);
       const key = runtimeKey(userId, chatId);
       activeTurnKeys.set(key, existing.plan.key);
       await persistActiveTurn(spindle, existing, path, userId);
@@ -1118,13 +1147,17 @@ async function processAssistantMessage(
     }
   }
 
-  const dedupeId = `${message.id}:${message.swipe_id}:${fingerprint}`;
+  // Another swipe or an edit of this message replaces a plan of its old version
+  // that is still queued or running, instead of queueing behind it.
+  supersedeOthers(dedupeId);
   dbg(spindle, userId, `planning enqueued chat=${chatId} message=${message.id} swipe=${message.swipe_id} fingerprint=${fingerprint}`);
   const scheduled = planningQueue.enqueue(userId, chatId, message.id, async (operation) => {
     const planningStartedAt = Date.now();
-    const config = await loadConfig(spindle, userId);
+    const [config, messages] = await Promise.all([
+      loadConfig(spindle, userId),
+      spindle.chat.getMessages(chatId) as Promise<NormalizedChatMessage[]>
+    ]);
     rememberDebugFlag(userId, config);
-    const messages = await spindle.chat.getMessages(chatId) as NormalizedChatMessage[];
     // Greeting replacement: the same stored message re-resolved to a different
     // scene while it is the chat's only assistant turn. The durable identity
     // state (frozen protagonist, registry, appearance roster, scene lineage)
@@ -1142,13 +1175,18 @@ async function processAssistantMessage(
       await resetChatIdentityState(spindle, chatId, userId);
       releaseSceneCacheScope(spindle, userId, chatId, "scope_cleared");
     }
-    const chatState = await loadChatState(spindle, chatId, userId);
-    const singleCharacter = await loadSingleCharacterState(spindle, chatId, userId);
-    const characterAppearance = await loadCharacterAppearance(spindle, userId, chatId);
-    const characterRegistry = await loadCharacterRegistry(spindle, chatId, userId);
-    // Another swipe or an edit of the active message plans from the state
-    // before that message, not from the discarded swipe's end state.
-    const activeRecord = await loadTurnRecord(spindle, chatState.activeTurnPath, userId).catch(() => null);
+    // Independent reads: one round of host calls instead of one per file.
+    const [{ chatState, activeRecord }, singleCharacter, characterAppearance, characterRegistry] = await Promise.all([
+      loadChatState(spindle, chatId, userId).then(async (chatState) => ({
+        chatState,
+        // Another swipe or an edit of the active message plans from the state
+        // before that message, not from the discarded swipe's end state.
+        activeRecord: await loadTurnRecord(spindle, chatState.activeTurnPath, userId).catch(() => null)
+      })),
+      loadSingleCharacterState(spindle, chatId, userId),
+      loadCharacterAppearance(spindle, userId, chatId),
+      loadCharacterRegistry(spindle, chatId, userId)
+    ]);
     const planned: { baseline: TurnBaseline; source: string } = replacesGreeting
       ? { baseline: { previousScene: null, previousContinuity: null }, source: "greeting reset" }
       : options?.retry && existing
@@ -1159,7 +1197,7 @@ async function processAssistantMessage(
     const baseline = planned.baseline;
     dbg(spindle, userId, `planning baseline chat=${chatId} message=${message.id} swipe=${message.swipe_id} source=${planned.source} scene=${baseline.previousScene ? `${baseline.previousScene.sceneId} rev${baseline.previousScene.revision}` : "none"} continuity=rev${baseline.previousContinuity?.revision ?? "none"}`);
     const recentMessages = config.includeRecentMessages > 0
-      ? await resolveContextMessages(spindle, chatId, messages.slice(-config.includeRecentMessages), resolutionCache, userId)
+      ? await resolveContextMessages(spindle, chatId, contextBeforeReply(messages, message.id, config.includeRecentMessages), resolutionCache, userId)
       : [];
     const result = await planTurn(spindle, {
       chatId,
@@ -1174,7 +1212,8 @@ async function processAssistantMessage(
       characterAppearance,
       characterRegistry,
       gameHints: gameHintsForTurn(messages, message.id),
-      ...(userId ? { userId } : {})
+      ...(userId ? { userId } : {}),
+      signal: operation.controller.signal
     });
     if (operation.controller.signal.aborted) return;
     dbg(spindle, userId, [
@@ -1194,11 +1233,21 @@ async function processAssistantMessage(
       ...(result.rejectedSubjects.length ? [`rejectedSubjects=[${result.rejectedSubjects.map((item) => `${item.name}: ${item.requested} kept ${item.durable}`).join("; ")}]`] : []),
       `context: ${summarizeDiagnostics(result.contextDiagnostics)}`
     ].join(" | "));
+    // Runs during the identity writes below (it never throws).
+    const personaLookup = activePersonaName(spindle, userId);
+    // A cancel can land during any of these writes: stop before the next one, so
+    // a discarded swipe never seeds the chat's identity (the protagonist freezes
+    // on its first save, and the plan that replaces this one reads it).
+    const cancelled = () => operation.controller.signal.aborted;
     await mergeCharacterAppearanceFromState(spindle, singleCharacter, userId, chatId);
+    if (cancelled()) return;
     await saveSingleCharacterState(spindle, chatId, result.singleCharacter, userId);
+    if (cancelled()) return;
     await mergeCharacterAppearanceFromState(spindle, result.singleCharacter, userId, chatId);
+    if (cancelled()) return;
     if (result.extractedCharacters && result.extractedCharacters.length > 0) {
       await mergePlannerCharacters(spindle, result.extractedCharacters, userId, chatId);
+      if (cancelled()) return;
     }
     // Persist stable ids, explicit aliases and subject categories learned this turn.
     await saveCharacterRegistry(spindle, chatId, result.characterRegistry, userId);
@@ -1237,7 +1286,7 @@ async function processAssistantMessage(
         }
       }
     }
-    let userSpeaker = (await activePersonaName(spindle, userId)) || "You";
+    let userSpeaker = (await personaLookup) || "You";
     if (userSpeaker === "You") {
       try {
         const recent = (await spindle.chat.getMessages(chatId) as NormalizedChatMessage[]);
@@ -1301,17 +1350,21 @@ async function processAssistantMessage(
         }
       ]
     };
-    // The view may have closed (or a new generation started) during the awaits
-    // above. Persisting or sending now would resurrect a turn nobody is watching.
-    if (operation.controller.signal.aborted) {
+    // The view may have closed (or a new generation started, or a newer version
+    // of the message replaced this plan) during the awaits above. Persisting or
+    // sending now would resurrect a turn nobody is watching. The view is built
+    // first (sprite staging reads the host), so a cancel that lands while it
+    // builds still drops the turn before it becomes the chat's active turn.
+    const view = cancelled() ? null : await buildTurnView(spindle, record, userId, config);
+    if (!view || cancelled()) {
       dbg(spindle, userId, `planned turn dropped after abort chat=${chatId} message=${message.id}`);
       return;
     }
     const key = runtimeKey(userId, chatId);
     activeTurnKeys.set(key, record.plan.key);
     await persistActiveTurn(spindle, record, path, userId);
-    if (operation.controller.signal.aborted) return;
-    spindle.sendToFrontend({ type: "vn_turn", turn: await buildTurnView(spindle, record, userId, config) }, userId);
+    if (cancelled()) return;
+    spindle.sendToFrontend({ type: "vn_turn", turn: view }, userId);
     if ((!spriteMode || jobs.length > 0) && !config.useNativeCardImages && config.generateImages) {
       void startAssets(spindle, record, path, userId).catch((error) => {
         if (!isAbortError(error)) {

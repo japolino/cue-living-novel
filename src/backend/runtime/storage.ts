@@ -400,12 +400,14 @@ export async function loadCharacterRegistry(
   userId?: string
 ): Promise<CharacterRegistry> {
   const options = { fallback: null, ...(userOptions(userId) ?? {}) };
-  const raw = await spindle.userStorage.getJson<unknown>(characterRegistryPath(chatId), options);
+  const [raw, rosterRaw, visualRaw] = await Promise.all([
+    spindle.userStorage.getJson<unknown>(characterRegistryPath(chatId), options),
+    spindle.userStorage.getJson<unknown>(chatRosterPath(chatId), { fallback: {}, ...(userOptions(userId) ?? {}) }),
+    spindle.userStorage.getJson<unknown>(singleCharacterStatePath(chatId), options)
+  ]);
   const stored = normalizeCharacterRegistry(raw);
   const declarations: CharacterDeclaration[] = [];
-  const rosterRaw = await spindle.userStorage.getJson<unknown>(chatRosterPath(chatId), { fallback: {}, ...(userOptions(userId) ?? {}) });
   for (const [name, tags] of Object.entries(normalizeAppearanceMap(rosterRaw))) declarations.push({ name, tags });
-  const visualRaw = await spindle.userStorage.getJson<unknown>(singleCharacterStatePath(chatId), options);
   const visual = migrateVisualProfilesToSingleCharacter(visualRaw);
   if (normalizeCharacterName(visual.protagonist.name)) declarations.push({ name: visual.protagonist.name, tags: visual.protagonist.tags });
   return mergeCharacterDeclarations(stored, declarations).registry;
@@ -425,8 +427,10 @@ export async function mergeCharacterRegistry(
   const path = characterRegistryPath(chatId);
   let report: RegistryMergeReport = { registry: {}, changed: false, rejectedAliases: [], rejectedSubjects: [] };
   await serializedWrite(scopedKey(userId, path), async () => {
-    const existing = await loadCharacterRegistry(spindle, chatId, userId);
-    const existingRaw = await spindle.userStorage.getJson<unknown>(path, { fallback: null, ...(userOptions(userId) ?? {}) });
+    const [existing, existingRaw] = await Promise.all([
+      loadCharacterRegistry(spindle, chatId, userId),
+      spindle.userStorage.getJson<unknown>(path, { fallback: null, ...(userOptions(userId) ?? {}) })
+    ]);
     report = mergeCharacterDeclarations(existing, declarations);
     // Persist when anything changed, or when legacy sources were promoted for the first time.
     const promoted = !existingRaw && Object.keys(existing).length > 0;

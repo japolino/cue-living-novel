@@ -51,3 +51,34 @@ describe("planning queue", () => {
     expect(queued.operation.stage).toBe("cancelled");
   });
 });
+
+describe("planning queue cancellation", () => {
+  test("a cancelled operation that is still running is never joined by a new request", async () => {
+    const queue = new PlanningQueue();
+    const gate = deferred();
+    const first = queue.enqueue(undefined, "a", "m1", async () => gate.promise, "m1:0:fp");
+    queue.cancelChat(undefined, "a");
+    let ran = false;
+    const again = queue.enqueue(undefined, "a", "m1", async () => { ran = true; }, "m1:0:fp");
+    expect(again.reused).toBe(false);
+    gate.resolve();
+    await expect(first.promise).rejects.toHaveProperty("name", "AbortError");
+    await again.promise;
+    expect(ran).toBe(true);
+  });
+
+  test("supersede cancels the other versions of one message only", async () => {
+    const queue = new PlanningQueue();
+    const gate = deferred();
+    const oldSwipe = queue.enqueue(undefined, "a", "m1", async () => gate.promise, "m1:0:fp0");
+    const otherMessage = queue.enqueue(undefined, "a", "m2", async () => "m2", "m2:0:fp");
+    const cancelled = queue.supersede(undefined, "a", "m1", "m1:1:fp1");
+    expect(cancelled).toEqual([oldSwipe.operation.id]);
+    expect(oldSwipe.operation.controller.signal.aborted).toBe(true);
+    expect(otherMessage.operation.controller.signal.aborted).toBe(false);
+    expect(queue.supersede(undefined, "a", "m2", "m2:0:fp")).toEqual([]);
+    gate.resolve();
+    await expect(oldSwipe.promise).rejects.toHaveProperty("name", "AbortError");
+    await expect(otherMessage.promise).resolves.toBe("m2");
+  });
+});

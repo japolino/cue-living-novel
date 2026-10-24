@@ -124,7 +124,23 @@ queued planning cancelled, scene-cache admission released — and persists
 stuck. That stamp is keyed to the aborted turn and skipped only when a new
 owner (retry, reply, reuse) has claimed the chat's turn meanwhile; a view that
 merely reopened still gets the stamp, plus `vn_asset` updates, because the
-aborted batch never resumes on its own. Leaving a chat
+aborted batch never resumes on its own. Cancelling a plan aborts its sidecar
+request (`spindle.generate.raw` gets the operation's signal, and the call
+rejects locally even when the host keeps it running; a System One request it
+waits on is let go the same way), with no retry and no fallback plan, so the
+chat's next plan starts at once instead of queueing
+behind it; a reopened view never joins a cancelled plan. A newer version of a
+message (another swipe, an edit) cancels every plan of its other versions that
+is still queued or running, whatever it shows itself: a new plan, its stored
+turn (reused, or kept because the host cannot resolve the message right now),
+or the waiting card of an unselected greeting. Only the newest intake cancels:
+one that a newer message event overtook while it read the stored turn is
+dropped. So the old swipe never paints. A cancelled plan also stops before
+each further identity write (protagonist, appearance roster, registry), so a
+discarded swipe seeds at most the write already in flight, and it builds its
+view before it persists, so
+it becomes the chat's active turn only when the cancel lands during that last
+write, which the newer version's own turn then replaces. Leaving a chat
 sends `vn_view open:false` for the previous chat, and the home screen (empty
 chat id) closes whichever view is open, so a chat nobody is watching never
 keeps planning or generating. Opening one chat displaces the user's previously
@@ -143,7 +159,8 @@ GENERATION_ENDED
   -> locate saved assistant message
   -> key by chat + message + swipe + content fingerprint + revision
   -> enqueue one planning job for that chat
-  -> gather recent and enabled structured context
+  -> gather recent and enabled structured context (recent chat: the messages
+     before the reply; the reply itself goes once, indexed, as the target)
   -> ask sidecar for scenes, cues, speakers, and optional choices
   -> resolve the protagonist identity (seed once from planner/card/appearance memory, then freeze) and map each cue's expression onto the closed catalogue
   -> attribute each paragraph to a literal speaker nameplate and each cue to its active character, attire, and optional BGM/SFX

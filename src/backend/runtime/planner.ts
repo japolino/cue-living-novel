@@ -27,6 +27,7 @@ import { normalizeActionProp, ActionPropSchema } from "../../shared/action-prop.
 import { reduceContinuity } from "../core/continuity.js";
 import { resolveCueTimeline, turnStartWardrobe, type WardrobeNote } from "../core/cue-state.js";
 import { decideScene, jevWardrobeSummary, type ChangeVerdict, type JevWardrobeAnswers } from "../core/change-decisions.js";
+import { abortError, throwIfAborted } from "../core/planning-queue.js";
 import { prepareNarrative } from "../core/paragraphs.js";
 import { decideSceneBoundary } from "../core/scene-boundary.js";
 import { validateTurnPlan } from "../core/turn-plan.js";
@@ -178,6 +179,12 @@ export type PlanTurnInput = {
   /** An external scene selects a subject by name, never by appearance or pose. */
   externalScene?: { characterName: string; venue: string | null; timeOfDay: string | null };
   userId?: string;
+  /**
+   * The planning operation's signal. When it fires, the sidecar request is
+   * torn down (and the call rejects locally even if the host keeps it running),
+   * no retry or fallback runs, and planTurn rejects with an AbortError.
+   */
+  signal?: AbortSignal;
 };
 
 type HintMessage = { id: string; is_user: boolean; metadata?: Record<string, unknown> };
@@ -1045,6 +1052,27 @@ function extractResponseContent(response: unknown): unknown {
   return undefined;
 }
 
+/**
+ * Settle with `promise`, or reject with an AbortError as soon as `signal`
+ * fires. The host tears the request down when it honours the signal; the
+ * local rejection frees the chat's planning queue even when it does not.
+ */
+function abortable<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) {
+    promise.catch(() => undefined);
+    return Promise.reject(abortError(signal.reason));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(abortError(signal.reason));
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => { signal.removeEventListener("abort", onAbort); resolve(value); },
+      (error: unknown) => { signal.removeEventListener("abort", onAbort); reject(error); }
+    );
+  });
+}
+
 async function requestPlannerOutput(
   spindle: SpindleAPI,
   input: PlanTurnInput,
@@ -1088,7 +1116,7 @@ async function requestPlannerOutput(
     ...input.config.parserParameters
   };
 
-  const response = await spindle.generate.raw({
+  const response = await abortable(spindle.generate.raw({
     type: "raw",
     messages: [
       {
@@ -1125,8 +1153,9 @@ async function requestPlannerOutput(
       : {}),
     parameters,
     reasoning: { source: "off" },
-    ...(input.userId ? { userId: input.userId } : {})
-  });
+    ...(input.userId ? { userId: input.userId } : {}),
+    ...(input.signal ? { signal: input.signal } : {})
+  }), input.signal);
   const rawContent = extractResponseContent(response);
   const debug = plannerDebugLogger(spindle, input.config, plannerDebugScope(input));
   if (debug.enabled) {
@@ -2066,12 +2095,16 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
   const narrative = prepareNarrative(resolvedContent, { ignoredTags });
   if (narrative.paragraphs.length === 0) throw new Error("The assistant response does not contain a revealable paragraph.");
 
-  const visualContext = await loadVisualContext(spindle, {
-    chatId: input.chatId,
-    target: [recentContext(input.recentMessages, input.config.includeRecentMessages), stripTextEffectTags(input.content)].filter(Boolean).join("\n\n"),
-    config: input.config,
-    ...(input.userId ? { userId: input.userId } : {})
-  });
+  // The planner connection lookup does not depend on the context reads.
+  const [visualContext, plannerConnection] = await Promise.all([
+    loadVisualContext(spindle, {
+      chatId: input.chatId,
+      target: [recentContext(input.recentMessages, input.config.includeRecentMessages), stripTextEffectTags(input.content)].filter(Boolean).join("\n\n"),
+      config: input.config,
+      ...(input.userId ? { userId: input.userId } : {})
+    }),
+    resolvePlannerConnection(spindle, input.config, input.userId)
+  ]);
 
   const personaName = visualContext.personaIdentity?.name;
   const isPersona = (name: string | null | undefined): boolean => {
@@ -2087,7 +2120,6 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
 
   let planner: z.infer<typeof PlannerOutputSchema>;
   let usedFallback = false;
-  const plannerConnection = await resolvePlannerConnection(spindle, input.config, input.userId);
   // Text effect tags (<shake>, <rainbow>, ...) are display markup: the plan
   // keeps them for the stage, but prompts and pose matching read plain words.
   const promptParagraphs = narrative.paragraphs.map((paragraph) => ({ ...paragraph, text: stripTextEffectTags(paragraph.text) }));
@@ -2108,7 +2140,8 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
         spindle.log.warn(`System One decision failed; using story reader: ${debugErrorSummary(error)}`);
         return null;
       });
-  let systemOne = input.config.systemOneMode === "on" ? await systemOnePromise : null;
+  let systemOne = input.config.systemOneMode === "on" ? await abortable(systemOnePromise, input.signal) : null;
+  throwIfAborted(input.signal);
   let failedAttempts = 0;
   // The deterministic fallback is a last resort, not a peer: transient sidecar
   // failures (empty responses, truncation, malformed JSON) get one retry
@@ -2156,6 +2189,8 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
       usedFallback = false;
       break;
     } catch (error) {
+      // A cancelled plan neither retries nor falls back: nobody wants it any more.
+      if (input.signal?.aborted) throw abortError(input.signal.reason);
       lastError = error;
       failedAttempts += 1;
       debug.line(`attempt ${attempt}/${PLANNER_ATTEMPTS} failed: ${debugErrorSummary(error)}`);
@@ -2167,7 +2202,8 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
   if (usedFallback && lastError !== null) {
     spindle.log.warn(`Visual planner fallback after ${PLANNER_ATTEMPTS} attempts: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
   }
-  if (input.config.systemOneMode === "compare") systemOne = await systemOnePromise;
+  if (input.config.systemOneMode === "compare") systemOne = await abortable(systemOnePromise, input.signal);
+  throwIfAborted(input.signal);
   if (systemOne) {
     if (input.config.systemOneMode === "compare") {
       const speakerAgreement = planner.speakers.filter((entry) => systemOne.speakers.has(entry.paragraphIndex))
