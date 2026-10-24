@@ -178,8 +178,9 @@ test("dedupes same-paragraph cues before the maxImagesPerTurn slice", async () =
   assert.equal(result.plan.visualCues.filter((cue) => cue.paragraphIndex === 0).length, 1);
   assert.equal(result.plan.visualCues[0]?.cueId, result.plan.visualCues[0]?.cueId);
   assert.notEqual(result.plan.visualCues[0]?.assetJobId, result.plan.visualCues[1]?.assetJobId);
-  assert.match(captured.system, /concise comma-separated Danbooru-style scene tags/);
-  assert.match(captured.system, /no camera or composition prose, character names, or character description/);
+  // basePrompt and the composition lock never reach the provider, so the planner is not asked for them.
+  assert.doesNotMatch(captured.system, /basePrompt|compositionLock|Danbooru-style scene tags/);
+  assert.match(captured.system, /Reply with ONE minified JSON object/);
 });
 
 test("maxImagesPerTurn=0 means unlimited: retains all distinct cues", async () => {
@@ -299,7 +300,7 @@ test("planner includes audio catalog in prompt instructions and preserves return
     });
 
     // Check system prompt instruction contains audio section
-    assert.match(captured.system, /Audio & Atmosphere/);
+    assert.match(captured.system, /audio \(optional, on cues\)/);
     assert.match(captured.system, /romantic_theme/);
     assert.match(captured.system, /sword_slash/);
 
