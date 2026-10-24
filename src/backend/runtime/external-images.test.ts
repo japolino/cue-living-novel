@@ -4,6 +4,7 @@ import { DEFAULT_CONFIG } from "../../config.js";
 import { createExternalImages } from "./external-images.js";
 import { CUE_IMAGE_REQUEST, CUE_IMAGE_RESULT, type CueImageRequest } from "../../shared/cue-images.js";
 import { connectImageBridge } from "../../frontend/host/image-bridge.js";
+import { storyCheckReply } from "./__fixtures__/story-check";
 
 const request: CueImageRequest = { version: 1, provider: "warp", chatId: "c", requestId: "r", characterName: "Mira", venue: "Cafe", timeOfDay: "evening", mood: "happy" };
 function fixture(patch: Record<string, unknown> = {}) {
@@ -21,6 +22,7 @@ function fixture(patch: Record<string, unknown> = {}) {
     chat: { getMessages: async () => [] },
     connections: { get: async (id: string) => ({ id, provider: "openai", model: "cue-helper-model" }) },
     generate: { raw: async (r: any) => {
+      const check = storyCheckReply(r); if (check) return check;
       planner.push(r);
       if (f.planGate) await f.planGate;
       return { content: JSON.stringify({
@@ -95,7 +97,8 @@ test("duplicate requests join one operation and cancellation drops a late provid
   release(); await running;
   expect(f.images).toHaveLength(0);
   expect(f.sent.some((m: any) => m.result.status === "ready")).toBe(false);
-  expect(f.writes).toEqual([]);
+  // Only the non-story check cache may be written; no turn or chat state.
+  expect(f.writes.filter((path: string) => !path.endsWith("/story-check.json"))).toEqual([]);
 });
 
 test("window bridge routes the real pipeline without Cue's view being open", async () => {

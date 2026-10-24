@@ -4,6 +4,7 @@ import { DEFAULT_CONFIG } from "../../config.js";
 import { SceneStateSchema } from "../../shared/contracts.js";
 import { seedSingleCharacter } from "../core/visual-state.js";
 import { fingerprintForMessage, planTurn } from "./planner.js";
+import { storyCheckReply } from "./__fixtures__/story-check";
 
 /**
  * Debug-gated planner tracing. Everything asserted here must be invisible when
@@ -46,7 +47,8 @@ function harness(responses: Array<unknown | (() => never)>) {
     personas: { getActive: async () => null },
     connections: { get: async () => null },
     generate: {
-      raw: async () => {
+      raw: async (request: unknown) => {
+        const check = storyCheckReply(request); if (check) return check;
         const next = responses[Math.min(calls, responses.length - 1)];
         calls += 1;
         if (typeof next === "function") return (next as () => never)();

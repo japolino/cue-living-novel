@@ -134,7 +134,7 @@ const ADVANCED_KEYS = [
   "imageModel", "imageConcurrency", "parserParameters", "imageParameters", "audioDirectory", "systemOneMode", "systemOneApiUrl", "systemOneModel",
   "includeRecentMessages", "includeCharacterContext", "includePersonaContext", "includeLorebookContext", "debugLogging",
   "promptPrefix", "promptSuffix", "negativePrompt", "originalReference", "originalCreationName", "customPlannerInstructions",
-  "ignoredTags", "displayRegexRules", "customCss", "spriteModelUrl",
+  "ignoredTags", "skipNonStory", "displayRegexRules", "customCss", "spriteModelUrl",
 ] as const;
 type AdvancedKey = (typeof ADVANCED_KEYS)[number];
 
@@ -803,6 +803,7 @@ export class VisualNovelSettingsPanel {
               <label data-field ${find("Story reader instructions", "planner custom instructions prompt")}><span>Story reader instructions</span><textarea name="customPlannerInstructions"></textarea></label>
             `, { id: "context", apply: true })}
             ${group("Text filtering", `
+              <label data-check ${find("Skip non-story blocks", "skip reasoning tracker status recap menu ooc meta filter")}><input name="skipNonStory" type="checkbox" /><span>Skip non-story blocks<small>Keeps reasoning, trackers, recaps, choice menus and notes out of the dialogue.</small>${more("One short check per reply with the story reader connection labels each line as story or not; the result is cached per message. Removed lines stay readable in a Not story card in Panels. If the check fails or the provider refuses, every line is shown as before.")}</span></label>
               <label data-field ${find("Ignored tags", "status inventory hide strip blocks filter")}><span>Ignored tags</span><input name="ignoredTags" type="text" placeholder="status, stats, system, inventory" /><small>Comma-separated tag names. Removes the whole matching block from dialogue and image planning.</small>${more("For example status, inventory, WORLD_VOICE. Multiline blocks are removed too. Recognized status blocks stay available as plain-text cards in Panels. The chat message is not edited.")}</label>
               <label data-field ${find("Display regex rules", "regex replace formatting dialogue pattern")}><span>Display regex rules</span><textarea name="displayRegexRules" spellcheck="false" placeholder="/§([^§]+)§/g => <em class=&quot;vn-transmission&quot;>$1</em>"></textarea><small>One rule per line: <code>/pattern/flags =&gt; replacement</code>. Dialogue formatting only.</small>${more("<code>pattern =&gt; replacement</code> also works. An empty replacement hides a match from dialogue, not from image planning. Only safe inline formatting renders here. For full HTML/SVG cards, open Panels in the novel view.")}</label>
             `, { id: "filtering", apply: true })}
@@ -1760,6 +1761,7 @@ export class VisualNovelSettingsPanel {
       originalCreationName: this.control<HTMLInputElement>("originalCreationName").value.trim(),
       customPlannerInstructions: this.control<HTMLTextAreaElement>("customPlannerInstructions").value,
       ignoredTags: this.control<HTMLInputElement>("ignoredTags").value,
+      skipNonStory: this.control<HTMLInputElement>("skipNonStory").checked,
       displayRegexRules: this.control<HTMLTextAreaElement>("displayRegexRules").value,
       customCss: this.control<HTMLTextAreaElement>("customCss").value,
       spriteModelUrl: parseSpriteModelUrl(this.control<HTMLInputElement>("spriteModelUrl").value),
@@ -1821,6 +1823,7 @@ export class VisualNovelSettingsPanel {
     set("originalCreationName", () => { this.control<HTMLInputElement>("originalCreationName").value = config.originalCreationName; });
     set("customPlannerInstructions", () => { this.control<HTMLTextAreaElement>("customPlannerInstructions").value = config.customPlannerInstructions; });
     set("ignoredTags", () => { this.control<HTMLInputElement>("ignoredTags").value = config.ignoredTags; });
+    set("skipNonStory", () => { this.control<HTMLInputElement>("skipNonStory").checked = config.skipNonStory; });
     set("displayRegexRules", () => { this.control<HTMLTextAreaElement>("displayRegexRules").value = config.displayRegexRules; });
     set("customCss", () => { this.control<HTMLTextAreaElement>("customCss").value = config.customCss; });
     set("spriteModelUrl", () => { this.control<HTMLInputElement>("spriteModelUrl").value = config.spriteModelUrl; });

@@ -80,6 +80,7 @@ const baseConfig: VisualNovelConfig = {
   customPlannerInstructions: "",
   customCss: "",
   ignoredTags: "",
+  skipNonStory: true,
   displayRegexRules: "",
   useNativeCardImages: false,
   textSpeed: 20,

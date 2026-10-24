@@ -5,6 +5,7 @@ import { fingerprintForMessage } from "./planner.js";
 import { cleanResolvedText, maskVolatileMacros, resolveMessageIntake } from "./message-text.js";
 import { characterRegistryPath, chatStatePath, singleCharacterStatePath, type StoredChatState, type StoredTurnRecord } from "./storage.js";
 import { RAW_GREETING, RESOLVED_GREETING_S1, S1_SCENE_TEXT } from "./__fixtures__/greeting-macro.js";
+import { storyCheckReply } from "./__fixtures__/story-check";
 
 /**
  * Regressions found by the release review of view gating (817e60d) and macro
@@ -69,7 +70,7 @@ function runtime(messages: Msg[], opts: { resolveText?: Resolver; generateImages
         }
       }
     }),
-    generate: { raw: async () => { plannerCalls += 1; return { content: JSON.stringify(plannerPayload()) }; } },
+    generate: { raw: async (request: unknown) => { const check = storyCheckReply(request); if (check) return check; plannerCalls += 1; return { content: JSON.stringify(plannerPayload()) }; } },
     imageGen: {
       getConnection: async () => ({ provider: "comfyui" }),
       listConnections: async () => [{ provider: "comfyui", is_default: true }],

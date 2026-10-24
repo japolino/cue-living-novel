@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { ChatMessageDTO, SpindleAPI } from "lumiverse-spindle-types";
 import { chatStatePath } from "./storage.js";
 import { sendState } from "./controller.js";
+import { storyCheckReply } from "./__fixtures__/story-check";
 
 function message(input: { id: string; content: string; isUser?: boolean }): ChatMessageDTO & { role: "user" | "assistant" } {
   const isUser = input.isUser ?? false;
@@ -64,7 +65,8 @@ function bootstrapRuntime(
       }
     },
     generate: {
-      raw: async () => {
+      raw: async (request: unknown) => {
+        const check = storyCheckReply(request); if (check) return check;
         generateCalls += 1;
         if (options.generateRaw) return options.generateRaw();
         throw new Error("planner unavailable");

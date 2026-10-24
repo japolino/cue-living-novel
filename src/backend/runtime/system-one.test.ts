@@ -7,6 +7,7 @@ import { emptySingleCharacter } from "../core/visual-state.js";
 import { clearAudioCatalogCache, scanAudioCatalog } from "./audio-catalog.js";
 import { planTurn } from "./planner.js";
 import { systemOneEndpoint } from "./system-one.js";
+import { storyCheckReply } from "./__fixtures__/story-check";
 
 const continuity = ContinuityStateSchema.parse({ revision: 1, characters: {}, facts: {} });
 const scene = SceneStateSchema.parse({
@@ -46,7 +47,7 @@ function spindle(raw: () => Promise<unknown>, logs: string[], response: unknown,
       }
       return { status: 200, body: JSON.stringify(response) };
     },
-    generate: { raw },
+    generate: { raw: async (request: unknown) => storyCheckReply(request) ?? raw() },
     storage: { list: async () => ["music/calm.mp3"] },
     log: { warn: (line: string) => logs.push(line), info: (line: string) => logs.push(line) },
   } as unknown as SpindleAPI;

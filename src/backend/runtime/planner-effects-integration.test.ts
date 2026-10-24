@@ -6,6 +6,7 @@ import { emptySingleCharacter } from "../core/visual-state.js";
 import { planTurn } from "./planner.js";
 import { turnView } from "./controller.js";
 import type { StoredTurnRecord } from "./storage.js";
+import { storyCheckReply } from "./__fixtures__/story-check";
 
 // Durable versions of the eight-paragraph effects audit fixtures.
 const paragraphs8 = [
@@ -40,6 +41,7 @@ type Captured = { requests: Array<{ messages: Array<{ content: string }> }>; log
 function spindleWith(payload: unknown, captured?: Captured): SpindleAPI {
   return {
     generate: { raw: async (request: Captured["requests"][number]) => {
+      const check = storyCheckReply(request); if (check) return check;
       captured?.requests.push(request);
       return { choices: [{ message: { content: JSON.stringify(payload) } }] };
     } },

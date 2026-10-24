@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { SpindleAPI } from "lumiverse-spindle-types";
 import { registerVisualNovelBackend, viewRegistry } from "./controller.js";
 import { chatStatePath, turnPath, type StoredChatState, type StoredTurnRecord } from "./storage.js";
+import { storyCheckReply } from "./__fixtures__/story-check";
 
 /**
  * View gating: automatic planning and image generation only run for chats
@@ -83,7 +84,8 @@ function fixture(options: FixtureOptions = {}) {
     },
     chat: { getMessages: async (chatId: string) => messages.filter((m) => m.chat_id === chatId) },
     generate: {
-      raw: async () => {
+      raw: async (request: unknown) => {
+        const check = storyCheckReply(request); if (check) return check;
         plannerCalls += 1;
         return { content: JSON.stringify(plannerPayload()) };
       }

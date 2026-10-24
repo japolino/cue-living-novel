@@ -5,6 +5,7 @@ import { DEFAULT_CONFIG } from "../../config";
 import { ContinuityStateSchema, SceneStateSchema } from "../../shared/contracts";
 import { emptySingleCharacter } from "../core/visual-state";
 import { gameHintsForTurn, parseIgnoredTags, planTurn } from "./planner";
+import { storyCheckKey } from "../core/non-story";
 
 const message: ChatMessageDTO & { role: "assistant" } = {
   id: "assistant-1",
@@ -1257,4 +1258,79 @@ test("game-engine hints come from the reply or the player message it answers", (
   assert.equal(gameHintsForTurn(messages, "a2"), "- Robin: angry");
   assert.equal(gameHintsForTurn(messages, "missing"), "");
   assert.equal(gameHintsForTurn([{ id: "a", is_user: false, metadata: { vn_hints: "nope" } }], "a"), "");
+});
+
+test("skip non-story blocks: the check runs beside the planner and the plan keeps only story paragraphs", async () => {
+  const content = "Okay, plan: rain first, then Tom.\n\nRain fell on the inn.\n\nMood: tired\nTrust: 40%\n\n\"You're late,\" Tom said.";
+  const plannerPayload = {
+    scenes: [{ startParagraph: 0, boundary: { claimedNewScene: true, reason: "initial", location: "Inn", timeOfDay: "night", majorTimeJump: false, environmentReplacement: false, forced: false }, environment: { location: "Inn", timeOfDay: "night", weather: "rain", lighting: "lamplight", description: "An inn", persistentElements: [] }, cast: ["Tom"], character: "Tom", basePrompt: "inn, night, rain", compositionLock: "centered" }],
+    cues: [{ paragraphIndex: 0, expression: "think" }, { paragraphIndex: 2, expression: "sad" }, { paragraphIndex: 3, expression: "angry" }],
+    effects: [{ paragraphIndex: 2, effect: "shake" }],
+    choices: [],
+    characters: [{ name: "Tom", description: "young man, short brown hair, grey coat" }],
+    speakers: [{ paragraphIndex: 0, name: "Narrator" }, { paragraphIndex: 1, name: "Narrator" }, { paragraphIndex: 2, name: "Tom" }, { paragraphIndex: 3, name: "Tom" }]
+  };
+  const requests: Array<{ messages: Array<{ content: string }> }> = [];
+  const spindleFor = (check: (request: { messages: Array<{ content: string }> }) => unknown): SpindleAPI => ({
+    generate: { raw: async (request: { messages: Array<{ content: string }> }) => {
+      requests.push(request);
+      if (request.messages[0]!.content.startsWith("You clean AI roleplay replies")) return check(request);
+      return { content: JSON.stringify(plannerPayload) };
+    } },
+    log: { warn() {}, info() {} }
+  } as unknown as SpindleAPI);
+  const plan = (spindle: SpindleAPI, skipNonStory = true) => planTurn(spindle, {
+    chatId: "chat", message: { ...message, name: "Tom", content }, content, previousScene: null, previousContinuity: null, recentMessages: [],
+    config: { ...DEFAULT_CONFIG, skipNonStory }, singleCharacter: emptySingleCharacter(), characterAppearance: {}
+  });
+
+  const result = await plan(spindleFor(() => ({ content: "0 S\n1 K\n2 S\n3 S\n4 K" })));
+  assert.equal(requests.length, 2);
+  // The planner was not held back: it saw every paragraph.
+  assert.match(requests.find((request) => !request.messages[0]!.content.startsWith("You clean"))!.messages[1]!.content, /\[2\] Mood: tired/);
+  assert.deepEqual(result.plan.paragraphs.map((paragraph) => paragraph.text), ["Rain fell on the inn.", "\"You're late,\" Tom said."]);
+  assert.deepEqual(result.plan.paragraphSpeakers, ["", "Tom"]);
+  assert.deepEqual(result.plan.visualCues.map((cue) => [cue.paragraphIndex, cue.poseExpressionId]), [[0, "think"], [1, "angry"]]);
+  assert.deepEqual(result.plan.effectCues, [{ paragraphIndex: 1, effect: "shake" }]);
+  assert.equal(result.plan.panels?.at(-1)?.title, "Not story");
+  assert.deepEqual(result.storyCheck && { source: result.storyCheck.source, lines: result.storyCheck.lines, skipped: result.storyCheck.skipped }, { source: "llm", lines: 5, skipped: 3 });
+
+  // A failed check plans the whole reply as before; with the setting off there is no check.
+  requests.length = 0;
+  const failed = await plan(spindleFor(() => { throw new Error("blocked"); }));
+  assert.equal(failed.plan.paragraphs.length, 4);
+  assert.equal(failed.storyCheck?.source, "failed");
+  requests.length = 0;
+  const off = await plan(spindleFor(() => ({ content: "0 S" })), false);
+  assert.equal(off.plan.paragraphs.length, 4);
+  assert.equal(off.storyCheck, undefined);
+  assert.equal(requests.length, 1);
+});
+
+test("skip non-story blocks: earlier replies reach the planner without their status lines or checked non-story lines", async () => {
+  const earlier = "[Day 3 | 21:40 | Harbor Inn]\nRain fell.\n\nOkay, next I will have Tom arrive.\nTom waved.";
+  const requests: Array<{ messages: Array<{ content: string }> }> = [];
+  const lines = ["Rain fell.", "Okay, next I will have Tom arrive.", "Tom waved."];
+  const store = new Map<string, unknown>([["chats/chat/story-check.json", { version: 1, entries: [{ key: storyCheckKey(lines), labels: "KSK" }] }]]);
+  const spindle = {
+    generate: { raw: async (request: { messages: Array<{ content: string }> }) => {
+      requests.push(request);
+      if (request.messages[0]!.content.startsWith("You clean AI roleplay replies")) return { content: "0 K" };
+      return { content: JSON.stringify({ scenes: [], cues: [], effects: [], choices: [], characters: [], speakers: [] }) };
+    } },
+    userStorage: {
+      getJson: async (path: string, options: { fallback: unknown }) => structuredClone(store.get(path) ?? options.fallback),
+      setJson: async (path: string, value: unknown) => { store.set(path, value); }
+    },
+    log: { warn() {}, info() {} }
+  } as unknown as SpindleAPI;
+  await planTurn(spindle, {
+    chatId: "chat", message: { ...message, content: "She smiled." }, content: "She smiled.", previousScene: null, previousContinuity: null,
+    recentMessages: [{ name: "User", content: "[Mood: test] hi", is_user: true }, { name: "Tom", content: earlier, is_user: false }, { name: "Tom", content: "<think>plan</think>\n\n[HP 3]", is_user: false }],
+    config: { ...DEFAULT_CONFIG, skipNonStory: true }, singleCharacter: emptySingleCharacter(), characterAppearance: {}
+  });
+  const prompt = requests.find((request) => !request.messages[0]!.content.startsWith("You clean"))!.messages.map((entry) => entry.content).join("\n");
+  assert.match(prompt, /Tom: Rain fell\.\n\nTom waved\./);
+  assert.match(prompt, /User: \[Mood: test\] hi/);
+  assert.doesNotMatch(prompt, /Harbor Inn|next I will have|HP 3|plan<\/think>/);
 });

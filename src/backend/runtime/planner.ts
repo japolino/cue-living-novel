@@ -27,7 +27,8 @@ import { normalizeActionProp, ActionPropSchema } from "../../shared/action-prop.
 import { reduceContinuity } from "../core/continuity.js";
 import { resolveCueTimeline, turnStartWardrobe, type WardrobeNote } from "../core/cue-state.js";
 import { decideScene, jevWardrobeSummary, type ChangeVerdict, type JevWardrobeAnswers } from "../core/change-decisions.js";
-import { prepareNarrative } from "../core/paragraphs.js";
+import { prepareNarrative, type PreparedNarrative } from "../core/paragraphs.js";
+import { applyStoryLabels, PANELS_ONLY_TEXT, storyLines, type CheckedParagraphs } from "../core/non-story.js";
 import { decideSceneBoundary } from "../core/scene-boundary.js";
 import { validateTurnPlan } from "../core/turn-plan.js";
 import { singleCharacterTagBlock } from "../core/visual-state.js";
@@ -52,12 +53,13 @@ import {
   type RegistryMergeReport
 } from "../../shared/identity.js";
 import { loadVisualContext, type VisualContextDiagnostics, type VisualContextSnapshot } from "./context.js";
-import { resolvePlannerConnection, type ResolvedPlannerConnection } from "./connections.js";
+import { lightGoogleThinking, resolvePlannerConnection, type ResolvedPlannerConnection } from "./connections.js";
 import { normalizeStageEffect, normalizeAmbientEffect, deriveWeatherAmbient } from "./planner-effects.js";
 import { getAudioCatalog, getAudioCatalogPromptSummary } from "./audio-catalog.js";
 import { debugErrorSummary, debugJson, debugQuote, plannerDebugLogger, type PlannerDebugScope } from "./debug-trace.js";
 import { decidePresentation, MAX_WARDROBE_QUESTIONS, type SystemOneDecisions, type WardrobeQuestion } from "./system-one.js";
 import { stripTextEffectTags } from "../../shared/text-effects.js";
+import { cachedStoryLabels, checkStoryLines, type StoryCheckResult } from "./story-check.js";
 
 export const PlannerEnvironmentChangesSchema = z.object({
   description: z.string().trim().min(1).optional(),
@@ -1060,19 +1062,9 @@ async function requestPlannerOutput(
   const model = connection?.model ?? "";
   if (provider === "google") {
     defaultParameters.responseMimeType = "application/json";
-    // The host's reasoning off-switch has no Google branch: it only deletes
-    // thinkingConfig, which leaves Gemini on DEFAULT dynamic thinking. Thought
-    // tokens count against maxOutputTokens, so a long scene can exhaust the
-    // whole budget and return empty text (finishReason MAX_TOKENS). Pin the
-    // lightest supported thinking explicitly; parserParameters can override.
-    if (/gemini-3\.8/i.test(model)) {
-      // Gemini 3.8 Flash rejects "minimal"; "low" is its lightest level.
-      defaultParameters.thinkingConfig = { thinkingLevel: "low" };
-    } else if (/gemini-3/i.test(model)) {
-      defaultParameters.thinkingConfig = { thinkingLevel: "minimal" };
-    } else if (/gemini-2\.5/i.test(model)) {
-      defaultParameters.thinkingConfig = { thinkingBudget: 0 };
-    }
+    // Pin the lightest supported thinking explicitly; parserParameters can override.
+    const thinking = lightGoogleThinking(model);
+    if (thinking) defaultParameters.thinkingConfig = thinking;
   } else if (
     provider === "openai" ||
     provider === "custom" ||
@@ -2048,6 +2040,60 @@ async function resolveDisplayMacros(
   return resolved;
 }
 
+/**
+ * Recent replies as the planner reads them with Skip non-story blocks on: the
+ * structural rules, plus the labels their own check left in the cache.
+ */
+async function storyOnlyRecentMessages(spindle: SpindleAPI, input: PlanTurnInput, ignoredTags: readonly string[]): Promise<PlanTurnInput["recentMessages"]> {
+  if (!input.config.skipNonStory || !input.recentMessages.some((message) => !message.is_user)) return input.recentMessages;
+  const labelsFor = await cachedStoryLabels(spindle, input.chatId, input.userId);
+  return input.recentMessages.flatMap((message) => {
+    if (message.is_user) return [message];
+    const prepared = prepareNarrative(message.content, { ignoredTags, skipNonStory: true });
+    const labels = labelsFor(storyLines(prepared.paragraphs));
+    const story = (labels ? applyStoryLabels(prepared, labels) : prepared).paragraphs
+      .map((paragraph) => paragraph.text).filter((text) => text !== PANELS_ONLY_TEXT).join("\n\n");
+    return story ? [{ ...message, content: story }] : [];
+  });
+}
+
+/** Move planner references from paragraphs the non-story check removed to the paragraph that took their place. */
+export function remapPlannerParagraphs(planner: PlannerOutput, checked: CheckedParagraphs): PlannerOutput {
+  const removed = new Set(checked.removedParagraphs);
+  // Out-of-range references stay out of range; the plan filters them later.
+  const to = (index: number) => checked.paragraphMap[index] ?? index;
+  // A paragraph's own cue wins over one moved onto it from a removed paragraph.
+  const cues = [...planner.cues].sort((a, b) => Number(removed.has(a.paragraphIndex)) - Number(removed.has(b.paragraphIndex)))
+    .map((cue) => ({ ...cue, paragraphIndex: to(cue.paragraphIndex) }))
+    .filter((cue, index, all) => all.findIndex((other) => other.paragraphIndex === cue.paragraphIndex) === index)
+    .sort((a, b) => a.paragraphIndex - b.paragraphIndex);
+  // Of scenes that now start at the same paragraph, the later one describes it.
+  const scenes = planner.scenes.map((scene) => ({ ...scene, startParagraph: to(scene.startParagraph) }))
+    .filter((scene, index, all) => !all.slice(index + 1).some((other) => other.startParagraph === scene.startParagraph));
+  return {
+    ...planner,
+    scenes,
+    cues,
+    effects: planner.effects.map((effect) => ({ ...effect, paragraphIndex: to(effect.paragraphIndex) }))
+      .filter((effect, index, all) => all.findIndex((other) => other.paragraphIndex === effect.paragraphIndex && other.effect === effect.effect) === index),
+    speakers: planner.speakers.filter((speaker) => !removed.has(speaker.paragraphIndex)).map((speaker) => ({ ...speaker, paragraphIndex: to(speaker.paragraphIndex) })),
+  };
+}
+
+function remapSystemOneParagraphs(decisions: SystemOneDecisions, checked: CheckedParagraphs): SystemOneDecisions {
+  const removed = new Set(checked.removedParagraphs);
+  const move = <V>(answers: Map<number, V>) => new Map([...answers].filter(([index]) => !removed.has(index) && checked.paragraphMap[index] !== undefined)
+    .map(([index, value]) => [checked.paragraphMap[index]!, value] as [number, V]));
+  return {
+    ...decisions,
+    speakers: move(decisions.speakers),
+    expressions: move(decisions.expressions),
+    bgm: move(decisions.bgm),
+    sfx: move(decisions.sfx),
+    coveredThrough: decisions.coveredThrough < 0 ? decisions.coveredThrough : checked.paragraphMap[Math.min(decisions.coveredThrough, checked.paragraphMap.length - 1)] ?? decisions.coveredThrough,
+  };
+}
+
 export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promise<{
   plan: TurnPlan;
   usedFallback: boolean;
@@ -2060,18 +2106,37 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
   rejectedAliases: RegistryMergeReport["rejectedAliases"];
   /** Per-turn subject categories that disagreed with a durable one and were ignored. */
   rejectedSubjects: RegistryMergeReport["rejectedSubjects"];
+  /** Skip non-story blocks: how the line check ran and how many lines it removed (absent when off). */
+  storyCheck?: Omit<StoryCheckResult, "labels"> & { lines: number; skipped: number };
 }> {
   const ignoredTags = parseIgnoredTags(input.config.ignoredTags);
   const resolvedContent = await resolveDisplayMacros(spindle, input, input.content);
-  const narrative = prepareNarrative(resolvedContent, { ignoredTags });
-  if (narrative.paragraphs.length === 0) throw new Error("The assistant response does not contain a revealable paragraph.");
+  const prepared = prepareNarrative(resolvedContent, { ignoredTags, skipNonStory: input.config.skipNonStory });
+  if (prepared.paragraphs.length === 0) throw new Error("The assistant response does not contain a revealable paragraph.");
+  const plannerConnection = await resolvePlannerConnection(spindle, input.config, input.userId);
+  // Skip non-story blocks: the line check runs alongside context loading and
+  // planning, so it adds no wait before the first paragraph unless it is the
+  // slower call. Its non-story lines are dropped from the plan afterwards.
+  const checkLines = input.config.skipNonStory ? storyLines(prepared.paragraphs) : [];
+  const storyCheckPromise: Promise<StoryCheckResult | null> = input.config.skipNonStory
+    ? checkStoryLines(spindle, {
+        lines: checkLines,
+        chatId: input.chatId,
+        connection: plannerConnection,
+        parameters: input.config.parserParameters,
+        ...(input.userId ? { userId: input.userId } : {})
+      }).catch(() => null)
+    : Promise.resolve(null);
 
+  // Earlier replies reach the planner without their non-story lines too.
+  input = { ...input, recentMessages: await storyOnlyRecentMessages(spindle, input, ignoredTags) };
   const visualContext = await loadVisualContext(spindle, {
     chatId: input.chatId,
     target: [recentContext(input.recentMessages, input.config.includeRecentMessages), stripTextEffectTags(input.content)].filter(Boolean).join("\n\n"),
     config: input.config,
     ...(input.userId ? { userId: input.userId } : {})
   });
+  let narrative: PreparedNarrative = prepared;
 
   const personaName = visualContext.personaIdentity?.name;
   const isPersona = (name: string | null | undefined): boolean => {
@@ -2087,10 +2152,9 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
 
   let planner: z.infer<typeof PlannerOutputSchema>;
   let usedFallback = false;
-  const plannerConnection = await resolvePlannerConnection(spindle, input.config, input.userId);
   // Text effect tags (<shake>, <rainbow>, ...) are display markup: the plan
   // keeps them for the stage, but prompts and pose matching read plain words.
-  const promptParagraphs = narrative.paragraphs.map((paragraph) => ({ ...paragraph, text: stripTextEffectTags(paragraph.text) }));
+  let promptParagraphs = narrative.paragraphs.map((paragraph) => ({ ...paragraph, text: stripTextEffectTags(paragraph.text) }));
   const paragraphText = promptParagraphs.map((paragraph) => `[${paragraph.index}] ${paragraph.text}`).join("\n\n");
   const debug = plannerDebugLogger(spindle, input.config, plannerDebugScope(input));
   const wardrobeAsk = systemOneWardrobeQuestions(input, seedRegistry, isPersona);
@@ -2168,6 +2232,17 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
     spindle.log.warn(`Visual planner fallback after ${PLANNER_ATTEMPTS} attempts: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
   }
   if (input.config.systemOneMode === "compare") systemOne = await systemOnePromise;
+  // Join the non-story check: drop its lines, then move every paragraph reference
+  // of the plan (and System One's answers) to the paragraphs that remain.
+  const storyCheck = await storyCheckPromise;
+  const checked = storyCheck?.labels ? applyStoryLabels(prepared, storyCheck.labels) : null;
+  if (storyCheck) debug.line(`story check source=${storyCheck.source} calls=${storyCheck.calls} durationMs=${storyCheck.durationMs} lines=${checkLines.length} skipped=${checked?.skipped ?? 0} removedParagraphs=[${checked?.removedParagraphs.join(",") ?? ""}]`);
+  if (checked?.skipped) {
+    narrative = checked;
+    promptParagraphs = narrative.paragraphs.map((paragraph) => ({ ...paragraph, text: stripTextEffectTags(paragraph.text) }));
+    planner = remapPlannerParagraphs(planner, checked);
+    if (systemOne) systemOne = remapSystemOneParagraphs(systemOne, checked);
+  }
   if (systemOne) {
     if (input.config.systemOneMode === "compare") {
       const speakerAgreement = planner.speakers.filter((entry) => systemOne.speakers.has(entry.paragraphIndex))
@@ -2587,7 +2662,8 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
     extractedCharacters: planner.characters.map((character) => ({ name: character.name, description: character.description })),
     characterRegistry: registry,
     rejectedAliases: registryReport.rejectedAliases,
-    rejectedSubjects: registryReport.rejectedSubjects
+    rejectedSubjects: registryReport.rejectedSubjects,
+    ...(storyCheck ? { storyCheck: { source: storyCheck.source, calls: storyCheck.calls, durationMs: storyCheck.durationMs, lines: checkLines.length, skipped: checked?.skipped ?? 0 } } : {})
   };
 }
 
