@@ -24,9 +24,16 @@
  * "studio" quality (opt-in, experimental) runs a BiRefNet model exported for
  * onnxruntime-web's WebGPU backend instead (docs/SPRITE_MODE.md, "Studio
  * cut-out"): ComfyUI-grade masks, about 0.8 s per sprite once loaded on the
- * GPU it was measured on, a 500 MB download from a URL the user sets. It
+ * GPU it was measured on, a 500 MB download from a URL the user sets. The
+ * download runs in the background, never inside a cut (the backend times a
+ * cut out after 5 minutes): "studio" cuts use Best until it is in the
+ * browser, and a failed download is tried again after 1, 2 and 4 minutes,
+ * then not on that page. It
  * needs WebGPU with half-precision shaders; where it cannot run, the cut uses
- * the "best" model and the model state says why.
+ * the "best" model and the model state says why. A Studio failure is not
+ * tried again on the page, and is remembered on the device (studio-device.ts):
+ * a tab that died loading the model or running its first cut is not retried
+ * on every reload; settings ("Try Studio again") retry it.
  *
  * A small face detector (YOLOv8, see DEFAULT_SPRITE_FACE_MODEL_URL) runs in
  * the same worker, on WASM, to place emotes on the face. It loads on its own,
@@ -34,22 +41,25 @@
  */
 import type { FaceBox } from "./face-kernel.js";
 import type { CutoutInputFit } from "./kernel.js";
-import { cachedModelBytes, deleteCachedModels, downloadModel, readCachedModel, writeCachedModel } from "./model-store.js";
+import { cachedModelBytes, deleteCachedModel, deleteCachedModels, downloadModel, readCachedModel, writeCachedModel } from "./model-store.js";
 import { startCutoutRunner, type CutoutRunner, type CutoutRunnerMode } from "./runner.js";
-import type { CutoutBackendPreference, CutoutCutTimings, CutoutLoadResult } from "./worker-main.js";
+import { clearStudioAttempt, forgetStudioFiles, readStudioAttempt, releaseStudioLock, replaceStudioFile, studioDeviceProblem, takeStudioLock, writeStudioAttempt } from "./studio-device.js";
+import type { CutoutBackendPreference, CutoutCutTimings, CutoutLoadResult, CutoutWorkerCutResult } from "./worker-main.js";
 
 /** "studio": the opt-in BiRefNet model (`studioModelUrl`); "best": ISNet-anime; "basic": no model. */
 export type CutoutQuality = "studio" | "best" | "basic";
 
 /**
  * `studio`: about the Studio model (the Best one otherwise). `note` (ready):
- * why "studio" cuts use the Best model instead.
+ * why "studio" cuts use the Best model instead. `notStored` (ready): the
+ * browser would not store the model (storage full, private mode), so it
+ * downloads again on the next visit.
  */
 export type CutoutModelState =
   | { state: "absent" }
   | { state: "downloading"; receivedBytes: number; totalBytes: number | null; studio?: true }
   | { state: "loading"; studio?: true }
-  | { state: "ready"; backend: "webgpu" | "wasm"; bytes: number; studio?: true; note?: string }
+  | { state: "ready"; backend: "webgpu" | "wasm"; bytes: number; studio?: true; note?: string; notStored?: true }
   | { state: "unsupported"; reason: string; studio?: true }
   | { state: "error"; error: string; studio?: true };
 
@@ -63,6 +73,13 @@ export type CutoutResult = {
   quality: "best" | "basic";
   /** The Studio model made the mask. */
   studio?: true;
+  /**
+   * "studio" quality, cut with Best only because the Studio model was not
+   * ready yet (downloading, or busy in another tab): worth one Studio re-cut
+   * later (the backend's one-shot upgrade). Absent once the Studio model
+   * cannot run on this page, without a Studio URL, and for other qualities.
+   */
+  provisional?: true;
   /**
    * Duplicate check: the mask looks like two figures side by side (see
    * `CutoutFigureCheck`). Precise (1% false positives) but finds only about
@@ -116,6 +133,10 @@ export const ORT_VERSION = "1.30.0";
 export const ORT_CDN_BASE = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VERSION}/dist/`;
 /** After a failed download, "best" cuts use "basic" for this long before trying again. */
 export const CUTOUT_RETRY_MS = 60_000;
+/** A failed background Studio download is tried again after this, doubling each time. */
+export const STUDIO_DOWNLOAD_RETRY_MS = 60_000;
+/** Studio download tries on one page before it gives up (settings retry). */
+export const STUDIO_DOWNLOAD_ATTEMPTS = 4;
 
 export type CutoutRuntimeOptions = {
   /** Directory URL with ort.*.min.mjs and ort-wasm-*.wasm (trailing slash). */
@@ -135,6 +156,8 @@ const defaultThreads = (): number => {
 
 let runtime: CutoutRuntimeOptions = { ortBaseUrl: ORT_CDN_BASE, backend: "auto", numThreads: 0, preferWorker: true };
 let state: CutoutModelState = { state: "absent" };
+/** The background Studio download's progress, shown over `state` unless that is a download or load of its own. */
+let overlay: CutoutModelState | null = null;
 const listeners = new Set<(state: CutoutModelState) => void>();
 let runnerPromise: Promise<CutoutRunner> | null = null;
 type ModelFailure = { url: string; at: number; sticky: boolean; message: string };
@@ -143,13 +166,28 @@ type ModelSpec = { fit: CutoutInputFit; backend: CutoutBackendPreference | null;
 const BEST_SPEC: ModelSpec = { fit: "letterbox", backend: null, studio: false };
 const STUDIO_SPEC: ModelSpec = { fit: "stretch", backend: "webgpu", studio: true };
 /** One cut-out model is loaded at a time (the Best or the Studio one). */
-let loaded: { url: string; runner: CutoutRunner; info: CutoutLoadResult; bytes: number; studio: boolean } | null = null;
+let loaded: { url: string; runner: CutoutRunner; info: CutoutLoadResult; bytes: number; studio: boolean; notStored: boolean } | null = null;
 let loading: { url: string; promise: Promise<void> } | null = null;
 /** Last failure of the Best model, and of the Studio model (kept apart: a Studio failure must not stop Best). */
 let failure: ModelFailure | null = null;
 let studioFailure: ModelFailure | null = null;
 /** Why "studio" cuts use the Best model, shown with its ready state. */
 let studioNote: string | null = null;
+/**
+ * This page's Studio attempt: the device-wide marker it wrote before loading
+ * the Studio model, cleared after the model's first good cut (`failed`: kept,
+ * with the reason, so the next visit does not try it either).
+ */
+let studioAttempt: { url: string; failed: boolean } | null = null;
+let pageHideWatched = false;
+/** The Studio model's background download (one at a time). */
+let studioDownload: { url: string; promise: Promise<boolean>; controller: AbortController } | null = null;
+/** Failed Studio downloads on this page, for the backoff. */
+let studioDownloadFailures: { url: string; count: number; at: number; message: string } | null = null;
+/** A downloaded Studio file the browser would not store: kept until it loads (the load takes it). */
+let studioMemory: { url: string; bytes: ArrayBuffer } | null = null;
+/** The Studio model the settings want (`syncStudioCutout`; null: none); undefined until told. */
+let studioWanted: string | null | undefined;
 let generation = 0;
 let runnerMode: CutoutRunnerMode | null = null;
 
@@ -168,11 +206,41 @@ function setFaceState(next: CutoutModelState): void {
   }
 }
 
-function setState(next: CutoutModelState): void {
-  state = next;
+/** The loaded model changes; the device-wide Studio lock goes with the Studio model. */
+function setLoaded(next: typeof loaded): void {
+  if (loaded?.studio && !next?.studio) releaseStudioLock();
+  loaded = next;
+}
+
+const visibleState = (): CutoutModelState => (overlay && state.state !== "downloading" && state.state !== "loading" ? overlay : state);
+
+function publish(): void {
+  const next = visibleState();
   for (const listener of [...listeners]) {
     try { listener(next); } catch { /* a listener must not break the cut-out */ }
   }
+}
+
+function setState(next: CutoutModelState): void {
+  state = next;
+  publish();
+}
+
+/** The loaded model's ready state (`note`: why "studio" cuts use this Best model). */
+function readyState(model: NonNullable<typeof loaded>, note?: string | null): CutoutModelState {
+  return {
+    state: "ready",
+    backend: model.info.backend,
+    bytes: model.bytes,
+    ...(model.studio ? { studio: true as const } : {}),
+    ...(!model.studio && note ? { note } : {}),
+    ...(model.notStored ? { notStored: true as const } : {}),
+  };
+}
+
+function setOverlay(next: CutoutModelState | null): void {
+  overlay = next;
+  publish();
 }
 
 const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error)) || "unknown error";
@@ -191,7 +259,7 @@ async function getRunner(): Promise<CutoutRunner> {
     if (current && !current.isClosed()) return current;
     runnerPromise = null;
     if (loaded && loaded.runner === current) {
-      loaded = null;
+      setLoaded(null);
       if (state.state === "ready") setState({ state: "absent" });
     }
     if (faceLoaded && faceLoaded.runner === current) {
@@ -203,6 +271,20 @@ async function getRunner(): Promise<CutoutRunner> {
   const started = await runnerPromise;
   runnerMode = started.mode;
   return started;
+}
+
+/**
+ * Stop a runner and forget its models: the next call starts a fresh worker,
+ * and with it a fresh GPU device (after a Studio failure the old one may be
+ * lost or out of memory).
+ */
+function retireRunner(runner: CutoutRunner): void {
+  runner.terminate();
+  if (loaded?.runner === runner) setLoaded(null);
+  if (faceLoaded?.runner === runner) {
+    faceLoaded = null;
+    if (faceState.state === "ready") setFaceState({ state: "absent" });
+  }
 }
 
 async function ensureModel(url: string, force: boolean, spec: ModelSpec = BEST_SPEC): Promise<void> {
@@ -227,6 +309,17 @@ async function ensureModel(url: string, force: boolean, spec: ModelSpec = BEST_S
       setFailure({ url, at: Date.now(), sticky: true, message: reason });
       throw new Error(reason);
     }
+    // Never downloaded here (500 MB, inside a cut): `downloadStudio` runs in the background.
+    if (studioMemory?.url !== url && !(await isCached(url))) throw new Error("The Studio model is not downloaded yet.");
+    // One Studio session per device (about 3 GB of graphics memory each): another tab's comes first.
+    if (!(await takeStudioLock())) throw new Error(STUDIO_BUSY);
+    // Holding the lock, a marker this page did not write is from a visit that never finished.
+    const earlier = force ? null : earlierStudioFailure(url);
+    if (earlier) {
+      releaseStudioLock();
+      setFailure({ url, at: Date.now(), sticky: true, message: earlier });
+      throw new Error(earlier);
+    }
   }
   const gen = generation;
   const stale = (): boolean => gen !== generation;
@@ -234,15 +327,23 @@ async function ensureModel(url: string, force: boolean, spec: ModelSpec = BEST_S
   promise = (async () => {
     let size = 0;
     let stage: "download" | "load" = "download";
+    let deselected = false;
+    let notStored = false;
     try {
-      let bytes = await readCachedModel(url);
+      let bytes: ArrayBuffer | null;
+      if (spec.studio && studioMemory?.url === url) {
+        bytes = studioMemory.bytes;
+        studioMemory = null;
+        notStored = true;
+      } else bytes = await readCachedModel(url);
       if (stale()) throw abortError();
+      if (!bytes && spec.studio) throw new Error("The Studio model is no longer in this browser's storage.");
       if (!bytes) {
-        setState({ state: "downloading", receivedBytes: 0, totalBytes: null, ...tag });
-        bytes = await downloadModel(url, (receivedBytes, totalBytes) => { if (!stale()) setState({ state: "downloading", receivedBytes, totalBytes, ...tag }); });
+        setState({ state: "downloading", receivedBytes: 0, totalBytes: null });
+        bytes = await downloadModel(url, (receivedBytes, totalBytes) => { if (!stale()) setState({ state: "downloading", receivedBytes, totalBytes }); });
         if (stale()) throw abortError();
         if (bytes.byteLength < 1024) throw new Error("The downloaded model file is too small to be a model.");
-        await writeCachedModel(url, bytes);
+        notStored = !(await writeCachedModel(url, bytes)).stored;
         if (stale()) throw abortError();
       }
       size = bytes.byteLength;
@@ -250,19 +351,45 @@ async function ensureModel(url: string, force: boolean, spec: ModelSpec = BEST_S
       setState({ state: "loading", ...tag });
       const threads = runtime.numThreads > 0 ? runtime.numThreads : defaultThreads();
       // The previous model leaves the worker first (one session at a time).
-      if (loaded && loaded.runner === runner) loaded = null;
+      if (loaded && loaded.runner === runner) setLoaded(null);
+      if (spec.studio) markStudioAttempt(url);
       const info = await runner.load(bytes, { ortBaseUrl: runtime.ortBaseUrl, backend: spec.backend ?? runtime.backend, numThreads: threads, fit: spec.fit });
       if (stale()) throw abortError();
-      loaded = { url, runner, info, bytes: size, studio: spec.studio };
+      if (spec.studio && studioWanted !== undefined && studioWanted !== url) {
+        // Deselected while it loaded: it leaves again (not a failure).
+        deselected = true;
+        void runner.unload().catch(() => {});
+        studioAttemptDone(url);
+        releaseStudioLock();
+        setState({ state: "absent" });
+        throw abortError();
+      }
+      setLoaded({ url, runner, info, bytes: size, studio: spec.studio, notStored });
       if (spec.studio) { studioFailure = null; studioNote = null; } else failure = null;
       // Best loaded while "studio" cannot run: its ready state says why.
-      setState({ state: "ready", backend: info.backend, bytes: size, ...tag, ...(!spec.studio && studioNote ? { note: studioNote } : {}) });
+      setState(readyState(loaded!, studioNote));
     } catch (error) {
-      if (stale()) throw error;
+      if (stale() || deselected) throw error;
       const code = (error as { code?: string } | null)?.code;
       const text = errorText(error);
+      if (spec.studio && stage === "load") {
+        // Any Studio load failure stands for the page and the device: the
+        // worker may have died (out of memory), and the next try costs 500 MB.
+        const reason = runner.isClosed()
+          ? `The cut-out worker stopped while loading the Studio model (most likely out of memory): ${text}`
+          : code === "session" || code === "unsupported"
+            ? `The Studio model cannot run in this browser: ${text}`
+            : `The Studio model could not start: ${text}`;
+        setFailure({ url, at: Date.now(), sticky: true, message: reason });
+        studioAttemptFailed(url, reason);
+        releaseStudioLock();
+        retireRunner(runner);
+        setState({ state: "unsupported", reason, ...tag });
+        throw new Error(reason);
+      }
+      if (spec.studio) releaseStudioLock();
       if (stage === "load" && (code === "session" || code === "unsupported")) {
-        const reason = `The ${spec.studio ? "Studio" : "cut-out"} model cannot run in this browser: ${text}`;
+        const reason = `The cut-out model cannot run in this browser: ${text}`;
         setFailure({ url, at: Date.now(), sticky: true, message: reason });
         setState({ state: "unsupported", reason, ...tag });
       } else {
@@ -278,7 +405,7 @@ async function ensureModel(url: string, force: boolean, spec: ModelSpec = BEST_S
   return promise;
 }
 
-type GpuLike = { requestAdapter(): Promise<{ features: { has(name: string): boolean } } | null> };
+type GpuLike = { requestAdapter(): Promise<{ features: { has(name: string): boolean }; isFallbackAdapter?: boolean; info?: { isFallbackAdapter?: boolean } } | null> };
 let gpuF16: Promise<boolean> | null = null;
 const chosenUrls = new Map<string, string>();
 
@@ -311,15 +438,22 @@ let studioCheck: Promise<string | null> | null = null;
  * WebGPU model: without "shader-f16" onnxruntime-web cannot build it on the
  * GPU, and on WebAssembly it takes tens of seconds per sprite (23 s at half
  * size; at full size the browser passed 4.5 GB of RAM and was stopped).
+ * Phones, devices that report under 8 GB of memory and software adapters are
+ * not offered it (about 3 GB of graphics memory). WebGPU's limits are no
+ * gate: the model ran with the default limits, masks identical to those with
+ * the adapter's maximum buffer sizes.
  */
 function studioCannotRun(): Promise<string | null> {
   if (runtime.backend === "wasm") return Promise.resolve("The Studio cut-out needs WebGPU; the cut-out is set to WebAssembly.");
+  const device = studioDeviceProblem();
+  if (device) return Promise.resolve(device);
   studioCheck ??= (async () => {
     const gpu = (globalThis as { navigator?: { gpu?: GpuLike } }).navigator?.gpu;
     if (!gpu) return "The Studio cut-out needs WebGPU, which this browser does not offer.";
     try {
       const adapter = await gpu.requestAdapter();
       if (!adapter) return "The Studio cut-out needs WebGPU, and no graphics adapter is available to it.";
+      if (adapter.info?.isFallbackAdapter === true || adapter.isFallbackAdapter === true) return "The Studio cut-out needs a graphics card; WebGPU only offers a software graphics adapter here.";
       if (!adapter.features.has("shader-f16")) return "The Studio cut-out needs half-precision WebGPU shaders (shader-f16), which this graphics adapter does not offer.";
       return null;
     } catch (error) {
@@ -411,11 +545,55 @@ async function ensureFaceModel(url: string, force: boolean): Promise<CutoutRunne
 /** A Studio failure as the user reads it (download errors do not name the model). */
 const studioReason = (text: string): string => (/Studio/.test(text) ? text : `The Studio model is not available: ${text}`);
 
-/** The Studio model cannot run here: remember it (no retry this page) and use Best. */
-function studioFailed(url: string, text: string): void {
+const STUDIO_BUSY = "The Studio model is running in another Cue tab; this tab cuts with Best until that tab lets it go.";
+
+/** The marker goes up before the Studio model loads; a normal page close takes it down. */
+function markStudioAttempt(url: string): void {
+  studioAttempt = { url, failed: false };
+  writeStudioAttempt(url);
+  if (pageHideWatched) return;
+  const target = globalThis as { addEventListener?: (type: string, listener: () => void) => void };
+  if (typeof target.addEventListener !== "function") return;
+  pageHideWatched = true;
+  // Closing or reloading the tab is not a crash (a dead tab sends no pagehide).
+  target.addEventListener("pagehide", () => { if (studioAttempt && !studioAttempt.failed) { studioAttempt = null; clearStudioAttempt(); } });
+}
+
+/** The Studio model made its first good cut: the device has run it. */
+function studioAttemptDone(url: string): void {
+  if (studioAttempt?.url !== url || studioAttempt.failed) return;
+  studioAttempt = null;
+  clearStudioAttempt();
+}
+
+/** The page saw the Studio model fail: the next visit reads why. */
+function studioAttemptFailed(url: string, reason: string): void {
+  studioAttempt = { url, failed: true };
+  writeStudioAttempt(url, reason);
+}
+
+/** Why `url` failed on an earlier visit to this device, or null (call while holding the Studio lock). */
+function earlierStudioFailure(url: string): string | null {
+  if (studioAttempt?.url === url) return null;
+  const previous = readStudioAttempt();
+  if (!previous || previous.url !== url) return null;
+  return previous.reason
+    ? `On an earlier visit: ${previous.reason} Try Studio again in Settings to retry.`
+    : "The Studio model did not finish loading or its first cut on an earlier visit (the tab or its cut-out worker most likely ran out of memory). Try Studio again in Settings to retry.";
+}
+
+/**
+ * The Studio model cannot run here: remember it (no retry this page, nor on
+ * this device), and retire the runner that ran it so Best starts on a fresh
+ * worker.
+ */
+function studioFailed(url: string, text: string, runner: CutoutRunner): void {
   studioFailure = { url, at: Date.now(), sticky: true, message: text };
   studioNote = text;
-  if (loaded?.studio) loaded = null;
+  studioAttemptFailed(url, text);
+  retireRunner(runner);
+  if (loaded?.studio) setLoaded(null);
+  releaseStudioLock();
   setState({ state: "unsupported", reason: text, studio: true });
 }
 
@@ -423,7 +601,97 @@ function studioFailed(url: string, text: string): void {
 function showStudioNote(note: string | null): void {
   if (!note || !loaded || loaded.studio) return;
   if (state.state === "ready" && state.note === note) return;
-  setState({ state: "ready", backend: loaded.info.backend, bytes: loaded.bytes, note });
+  setState(readyState(loaded, note));
+}
+
+const studioRetryMs = (failures: number): number => STUDIO_DOWNLOAD_RETRY_MS * 2 ** (failures - 1);
+
+/**
+ * Download the Studio model in the background and store it in the browser
+ * (or keep it in memory when the browser will not store it). Resolves true
+ * when its bytes are ready, false when the download failed (counted for the
+ * backoff, and given up for the page after STUDIO_DOWNLOAD_ATTEMPTS) or was
+ * stopped. One download at a time; a second call for the same URL joins it.
+ */
+function downloadStudio(url: string): Promise<boolean> {
+  if (studioDownload?.url === url) return studioDownload.promise;
+  studioDownload?.controller.abort();
+  const controller = new AbortController();
+  const stopped = (): boolean => controller.signal.aborted;
+  let promise: Promise<boolean> | null = null;
+  promise = (async () => {
+    setOverlay({ state: "downloading", receivedBytes: 0, totalBytes: null, studio: true });
+    try {
+      const bytes = await downloadModel(url, (receivedBytes, totalBytes) => { if (!stopped()) setOverlay({ state: "downloading", receivedBytes, totalBytes, studio: true }); }, controller.signal);
+      if (stopped()) return false;
+      if (bytes.byteLength < 1024) throw new Error("The downloaded model file is too small to be a model.");
+      const write = await writeCachedModel(url, bytes);
+      if (stopped()) return false;
+      // One Studio file in the browser (about 500 MB each): an earlier URL's goes.
+      if (write.stored) for (const old of replaceStudioFile(url)) await deleteCachedModel(old);
+      studioMemory = write.stored ? null : { url, bytes };
+      studioDownloadFailures = null;
+      if (!studioFailure) studioNote = null;
+      return true;
+    } catch (error) {
+      if (stopped()) return false;
+      const count = (studioDownloadFailures?.url === url ? studioDownloadFailures.count : 0) + 1;
+      const message = studioReason(errorText(error));
+      studioDownloadFailures = { url, count, at: Date.now(), message };
+      if (count >= STUDIO_DOWNLOAD_ATTEMPTS) {
+        const text = `${message} Gave up after ${count} tries on this page; Try Studio again in Settings to retry.`;
+        studioFailure = { url, at: Date.now(), sticky: true, message: text };
+        studioNote = text;
+      } else {
+        studioNote = `${message} Trying again in ${Math.round(studioRetryMs(count) / 60_000)} min; sprites are cut with Best meanwhile.`;
+      }
+      return false;
+    } finally {
+      if (studioDownload?.promise === promise) studioDownload = null;
+      if (!studioDownload) overlay = null;
+      // Best's ready state carries the outcome (no note: the Studio model loads with the next sprite).
+      if (loaded && !loaded.studio && state.state === "ready") setState(readyState(loaded, studioNote));
+      else publish();
+    }
+  })();
+  studioDownload = { url, promise, controller };
+  return promise;
+}
+
+/** Stop the background Studio download (nothing is counted against it). */
+function stopStudioDownload(): void {
+  const current = studioDownload;
+  studioDownload = null;
+  current?.controller.abort();
+  if (overlay) setOverlay(null);
+}
+
+/**
+ * How a "studio" cut gets the Studio model: "load" (loaded, or its file is in
+ * the browser or in memory: loading takes seconds), "later" (cut with Best
+ * now: the download runs in the background, or waits for its next try), or
+ * "no" (Best for this page; `studioNote` says why).
+ */
+async function studioForCut(url: string): Promise<"load" | "later" | "no"> {
+  if (loaded?.studio && loaded.url === url && !loaded.runner.isClosed()) return "load";
+  if (studioFailure?.url === url && studioFailure.sticky) {
+    studioNote = studioReason(studioFailure.message);
+    return "no";
+  }
+  const reason = await studioCannotRun();
+  if (reason) {
+    studioFailure = { url, at: Date.now(), sticky: true, message: reason };
+    studioNote = reason;
+    return "no";
+  }
+  if (studioMemory?.url === url || (await isCached(url))) return "load";
+  if (studioDownload?.url === url) return "later";
+  const failures = studioDownloadFailures?.url === url ? studioDownloadFailures : null;
+  if (!failures || Date.now() - failures.at >= studioRetryMs(failures.count)) {
+    studioNote = "The Studio model is downloading (about 500 MB); sprites are cut with Best until it is ready.";
+    void downloadStudio(url);
+  }
+  return "later";
 }
 
 /**
@@ -436,9 +704,12 @@ function showStudioNote(note: string | null): void {
 export async function cutSprite(image: Blob, options: CutoutOptions): Promise<CutoutResult> {
   const started = performance.now();
   throwIfAborted(options.signal);
+  syncStudioCutout(options.quality, options.studioModelUrl);
   const wantsModel = options.quality !== "basic";
   let useModel = false;
   let studio = false;
+  /** The Studio model may come later (see CutoutResult.provisional). */
+  let later = false;
   let modelUrl = options.modelUrl;
   const useBest = async (): Promise<boolean> => {
     try {
@@ -451,12 +722,19 @@ export async function cutSprite(image: Blob, options: CutoutOptions): Promise<Cu
     }
   };
   if (options.quality === "studio" && options.studioModelUrl) {
-    try {
-      await ensureModel(options.studioModelUrl, false, STUDIO_SPEC);
-      modelUrl = options.studioModelUrl;
-      useModel = studio = true;
-    } catch (error) {
-      studioNote = studioReason(studioFailure?.message ?? errorText(error));
+    const url = options.studioModelUrl;
+    const plan = await studioForCut(url);
+    later = plan === "later";
+    if (plan === "load") {
+      try {
+        await ensureModel(url, false, STUDIO_SPEC);
+        modelUrl = url;
+        useModel = studio = true;
+      } catch (error) {
+        // Deselected while it loaded: no note (the cut uses Best as asked).
+        if ((error as { name?: string } | null)?.name !== "AbortError") studioNote = studioReason(errorText(error));
+        later = studioNote === STUDIO_BUSY;
+      }
     }
   }
   if (wantsModel && !useModel) useModel = await useBest();
@@ -470,41 +748,59 @@ export async function cutSprite(image: Blob, options: CutoutOptions): Promise<Cu
     }
   }
   throwIfAborted(options.signal);
-  let runner = await getRunner();
-  let result;
+  const withFaceOn = (on: CutoutRunner): boolean => withFace && faceLoaded?.runner === on;
+  /** The worker died running Best: remember it for the page (the cuts go on without a model). */
+  const bestCrashed = (url: string, error: unknown): void => {
+    const text = `The cut-out worker stopped while running the model: ${errorText(error)}`;
+    failure = { url, at: Date.now(), sticky: true, message: text };
+    setState({ state: "unsupported", reason: text });
+  };
+  /**
+   * Cut again after a failure: with Best when `withBest` and it loads (on the
+   * fresh worker a Studio failure leaves), else without a model. A worker that
+   * dies again here leaves a cut without a model on another fresh worker.
+   */
+  const cutAgain = async (withBest: boolean): Promise<CutoutWorkerCutResult> => {
+    throwIfAborted(options.signal);
+    const best = withBest && await useBest();
+    if (best && withFace && options.faceModelUrl) {
+      try { await ensureFaceModel(options.faceModelUrl, false); } catch { withFace = false; }
+    }
+    throwIfAborted(options.signal);
+    const again = await getRunner();
+    try {
+      return await again.cut(image, best, best && withFaceOn(again));
+    } catch (error) {
+      if (!again.isClosed()) throw error;
+      if (best) bestCrashed(modelUrl, error);
+      throwIfAborted(options.signal);
+      return (await getRunner()).cut(image, false);
+    }
+  };
+  const runner = await getRunner();
+  let result: CutoutWorkerCutResult;
   try {
-    result = await runner.cut(image, useModel, withFace && faceLoaded?.runner === runner);
+    result = await runner.cut(image, useModel, withFaceOn(runner));
   } catch (error) {
     if (!runner.isClosed()) throw error;
     // The worker died mid-cut (most likely out of memory in the model): retry once
     // without it ("studio": with the Best model).
-    if (useModel) {
-      const text = `The cut-out worker stopped while running the ${studio ? "Studio " : ""}model: ${errorText(error)}`;
-      if (studio) studioFailed(modelUrl, text);
-      else {
-        failure = { url: modelUrl, at: Date.now(), sticky: true, message: text };
-        setState({ state: "unsupported", reason: text });
-      }
-    }
-    throwIfAborted(options.signal);
-    useModel = studio && await useBest();
+    if (studio) studioFailed(modelUrl, `The cut-out worker stopped while running the Studio model: ${errorText(error)}`, runner);
+    else if (useModel) bestCrashed(modelUrl, error);
+    const again = studio;
     studio = false;
-    runner = await getRunner();
-    result = await runner.cut(image, useModel);
+    result = await cutAgain(again);
   }
   if (result.modelError && studio) {
     // The Studio model loaded but could not run (GPU memory): cut again with Best.
-    studioFailed(modelUrl, `The Studio model could not run: ${result.modelError}`);
+    studioFailed(modelUrl, `The Studio model could not run: ${result.modelError}`, runner);
     studio = false;
-    throwIfAborted(options.signal);
-    if (await useBest()) {
-      runner = await getRunner();
-      result = await runner.cut(image, true, withFace && faceLoaded?.runner === runner);
-    }
+    result = await cutAgain(true);
   }
+  if (studio && result.quality === "best" && !result.modelError && !result.preCut) studioAttemptDone(modelUrl);
   if (result.modelError && loaded?.url === modelUrl) {
     failure = { url: modelUrl, at: Date.now(), sticky: false, message: result.modelError };
-    loaded = null;
+    setLoaded(null);
     setState({ state: "error", error: result.modelError });
   }
   throwIfAborted(options.signal);
@@ -515,6 +811,7 @@ export async function cutSprite(image: Blob, options: CutoutOptions): Promise<Cu
     bbox: result.bbox,
     quality: result.quality,
     ...(studio && result.quality === "best" && !result.preCut ? { studio: true as const } : {}),
+    ...(later && !studio && result.quality === "best" && !result.preCut ? { provisional: true as const } : {}),
     twoFigures: result.figures?.twoFigures === true,
     splitShare: result.figures?.splitShare ?? 0,
     ...(result.face ? { face: result.face.face ? result.face.face.box : null } : {}),
@@ -575,7 +872,7 @@ export async function getCachedFaceModelBytes(modelUrl: string): Promise<number 
 }
 
 export function getCutoutModelState(): CutoutModelState {
-  return state;
+  return visibleState();
 }
 
 /** Subscribe to model state changes; returns an unsubscribe function. */
@@ -591,14 +888,28 @@ export async function prepareCutoutModel(modelUrl: string, modelUrlF16?: string)
 
 /**
  * Download (once, cached in the browser) and load the Studio model ahead of
- * time. Throws, before any download, where it cannot run (see
- * `getStudioCutoutSupport`).
+ * time; also settings' "Try Studio again" (it forgets an earlier failure on
+ * this page and device). Throws, before any download, where it cannot run
+ * (see `getStudioCutoutSupport`).
  */
 export async function prepareStudioCutoutModel(studioModelUrl: string): Promise<void> {
+  studioWanted = studioModelUrl;
+  if (studioFailure?.url === studioModelUrl) studioFailure = null;
+  if (studioDownloadFailures?.url === studioModelUrl) studioDownloadFailures = null;
+  studioNote = null;
+  if (!studioAttempt || studioAttempt.url !== studioModelUrl || studioAttempt.failed) {
+    studioAttempt = null;
+    clearStudioAttempt();
+  }
   try {
+    const reason = await studioCannotRun();
+    if (reason) throw new Error(reason);
+    if (studioMemory?.url !== studioModelUrl && !(await isCached(studioModelUrl)) && !(await downloadStudio(studioModelUrl))) {
+      throw studioDownloadFailures?.url === studioModelUrl ? new Error(studioDownloadFailures.message) : abortError();
+    }
     await ensureModel(studioModelUrl, true, STUDIO_SPEC);
   } catch (error) {
-    studioNote = studioReason(studioFailure?.message ?? errorText(error));
+    studioNote = studioReason(errorText(error));
     if (state.state !== "unsupported" && state.state !== "error") setState({ state: "unsupported", reason: studioNote, studio: true });
     throw error;
   }
@@ -609,6 +920,32 @@ export function getStudioCutoutSupport(): Promise<string | null> {
   return studioCannotRun();
 }
 
+/**
+ * The cut-out settings changed (cuts call it too): when the Studio model is
+ * no longer wanted (another quality, another or no Studio URL) it leaves the
+ * worker and the device-wide lock (about 3 GB of graphics memory), its
+ * background download stops, and its note and failure state go.
+ */
+export function syncStudioCutout(quality: CutoutQuality, studioModelUrl = ""): void {
+  const wanted = quality === "studio" && studioModelUrl ? studioModelUrl : null;
+  const changed = wanted !== studioWanted;
+  studioWanted = wanted;
+  if (studioDownload && studioDownload.url !== wanted) stopStudioDownload();
+  if (studioMemory && studioMemory.url !== wanted) studioMemory = null;
+  if (loaded?.studio && loaded.url !== wanted) {
+    const current = loaded;
+    setLoaded(null);
+    if (!current.runner.isClosed()) void current.runner.unload().catch(() => {});
+    studioAttemptDone(current.url);
+    setState({ state: "absent" });
+  }
+  if (!changed) return;
+  if (studioAttempt && studioAttempt.url !== wanted) studioAttemptDone(studioAttempt.url);
+  studioNote = null;
+  if ("studio" in state && state.studio && state.state !== "loading") setState({ state: "absent" });
+  else if (state.state === "ready" && state.note && loaded && !loaded.studio) setState(readyState(loaded));
+}
+
 /** Forget the cached models, the face model too (settings "Remove downloaded model"). */
 export async function clearCutoutModel(): Promise<void> {
   generation++;
@@ -616,16 +953,25 @@ export async function clearCutoutModel(): Promise<void> {
   failure = null;
   studioFailure = null;
   studioNote = null;
-  const current = loaded;
-  loaded = null;
-  if (current && !current.runner.isClosed()) await current.runner.unload().catch(() => {});
+  studioAttempt = null;
+  clearStudioAttempt();
+  stopStudioDownload();
+  studioDownloadFailures = null;
+  studioMemory = null;
+  setLoaded(null);
+  releaseStudioLock();
   faceLoading = null;
   faceFailure = null;
-  const face = faceLoaded;
   faceLoaded = null;
-  if (face && !face.runner.isClosed()) await face.runner.unloadFace().catch(() => {});
+  // Whatever the worker holds goes, also a model this page no longer tracks.
+  const live = runnerPromise ? await runnerPromise.catch(() => null) : null;
+  if (live && !live.isClosed()) {
+    await live.unload().catch(() => {});
+    await live.unloadFace().catch(() => {});
+  }
   chosenUrls.clear();
   await deleteCachedModels();
+  forgetStudioFiles();
   if (state.state !== "unsupported" || typeof WebAssembly === "object") setState({ state: "absent" });
   if (faceState.state !== "unsupported" || typeof WebAssembly === "object") setFaceState({ state: "absent" });
 }
@@ -670,7 +1016,15 @@ export function resetCutoutRuntime(): void {
   failure = null;
   studioFailure = null;
   studioNote = null;
+  studioAttempt = null;
+  studioDownload?.controller.abort();
+  studioDownload = null;
+  studioDownloadFailures = null;
+  studioMemory = null;
+  studioWanted = undefined;
+  overlay = null;
   loaded = null;
+  releaseStudioLock();
   faceLoading = null;
   faceFailure = null;
   faceLoaded = null;

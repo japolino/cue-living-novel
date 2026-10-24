@@ -48,6 +48,8 @@ import { mkdir, writeFile } from "node:fs/promises";
  *     skipped when unset): where the browser cannot run it (headless Chromium
  *     has no shader-f16) the cut uses Best and the Studio file is never
  *     fetched; where it can (this browser, or CUE_SPRITE_STUDIO_CHANNEL=msedge)
+ *     the first "studio" cut does not wait for the Studio download (Best,
+ *     provisional), the download goes on in the background, and then
  *     every sprite is cut by the Studio model in the Worker on WebGPU, IoU vs
  *     the ISNet reference mean >= 0.95, min >= 0.9 (another model), warm
  *     model time reported;
@@ -430,12 +432,38 @@ try {
       if (!target) {
         if (support && !STUDIO_CHANNEL) console.log("SKIP Studio cuts: set CUE_SPRITE_STUDIO_CHANNEL=msedge (or another browser with shader-f16).");
       } else {
+        // The 500 MB download never runs inside a cut: the first "studio" cut uses Best (provisional).
+        const early = await target.evaluate(async ({ url, best, name }) => {
+          const c = (window as any).cutout;
+          const blob = await c.fetchBlob(`/raw/${name}.png`);
+          const t = performance.now();
+          const r = await c.cutSprite(blob, { quality: "studio", modelUrl: best, studioModelUrl: url });
+          const state = c.getCutoutModelState();
+          return { ms: performance.now() - t, quality: r.quality, studio: r.studio === true, provisional: r.provisional === true, state: state.state, stateStudio: state.studio === true };
+        }, { url: studioUrl, best: bestUrl, name: withRef[0]! });
+        assert.ok(early.quality === "best" && !early.studio && early.provisional, "the first Studio cut uses Best while the Studio model downloads (provisional)");
+        console.log(`\nStudio download in the background: first cut by Best in ${Math.round(early.ms)} ms (provisional), state then ${early.state}${early.stateStudio ? " (Studio)" : ""}`);
+        // It finishes on its own (no cut waits for it).
+        const after = await target.evaluate(async () => {
+          const c = (window as any).cutout;
+          const t = performance.now();
+          for (let i = 0; i < 1800; i++) {
+            const s = c.getCutoutModelState();
+            if (!(s.state === "downloading" && s.studio)) return { ms: performance.now() - t, state: s };
+            await new Promise((resolve) => setTimeout(resolve, 100));
+          }
+          return { ms: performance.now() - t, state: c.getCutoutModelState() };
+        });
+        console.log(`  the background download ended ${Math.round(after.ms)} ms later: ${JSON.stringify(after.state)}`);
+        assert.ok(!after.state.note, `the background download succeeded (${after.state.note ?? ""})`);
         const load = await target.evaluate(async (url) => {
           const c = (window as any).cutout;
           const t = performance.now();
-          await c.prepareStudioCutoutModel(url);
+          await c.prepareStudioCutoutModel(url); // joins the background download, then loads
           return { ms: performance.now() - t, info: c.getCutoutRuntimeInfo().model, state: c.getCutoutModelState(), states: c.states.map((s: any) => s.state) };
         }, studioUrl);
+        console.log(`Studio model ${load.state.notStored ? "loaded from memory: this browser profile did not store it" : "stored in this browser"}`);
+        assert.equal(requests.filter((path) => path === "/studio/model.onnx").length, 1, "the Studio model downloads once");
         assert.equal(load.info.backend, "webgpu", "the Studio model runs on WebGPU");
         assert.equal(load.state.studio, true, "the ready state is the Studio model's");
         assert.equal(await target.evaluate(() => (window as any).cutout.getCutoutRunnerMode()), "worker", "the Studio model runs in the Worker");
@@ -444,7 +472,7 @@ try {
         const stats = summarize(`Studio (BiRefNet, load ${Math.round(load.ms)} ms, session ${Math.round(load.info.loadMs)} ms; states ${[...new Set(load.states)].join(" > ")}) vs the ISNet reference`, rows);
         assert.ok(rows.every((r) => r.quality === "best" && r.studio), "the Studio model cut every sprite");
         assert.ok(stats.meanIou >= 0.95 && stats.minIou >= 0.9, `Studio IoU vs reference mean >= 0.95, min >= 0.9 (${fmt(stats.meanIou)}, ${fmt(stats.minIou)})`);
-        summary.studio = { ...stats, loadMs: load.ms, sessionMs: load.info.loadMs, sprites: rows.length, channel: STUDIO_CHANNEL || "chromium" };
+        summary.studio = { ...stats, loadMs: load.ms, sessionMs: load.info.loadMs, sprites: rows.length, channel: STUDIO_CHANNEL || "chromium", firstCutMs: early.ms, notStored: load.state.notStored === true };
       }
     } finally {
       await studioBrowser?.close();

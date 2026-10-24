@@ -198,3 +198,12 @@ describe("cut meta: face box", () => {
     expect("face" in normalizeCutMeta(META, size)!).toBe(false);
   });
 });
+
+describe("cut meta: Studio flags", () => {
+  test("studio and provisional pass through when true, else they are absent", () => {
+    expect(normalizeCutMeta({ ...META, studio: true, provisional: true }, { width: 832, height: 1216 })).toMatchObject({ studio: true, provisional: true });
+    const plain = normalizeCutMeta({ ...META, studio: "yes", provisional: 1 }, { width: 832, height: 1216 })!;
+    expect("studio" in plain).toBe(false);
+    expect("provisional" in plain).toBe(false);
+  });
+});

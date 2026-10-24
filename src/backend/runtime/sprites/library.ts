@@ -52,6 +52,12 @@ export const StoredSpriteImageSchema = z.object({
    * settles, then "done" (never retried again).
    */
   upgrade: z.enum(["pending", "done"]).nullable().default(null),
+  /**
+   * A Best cut made while "studio" was selected and the Studio model was not
+   * ready yet (still downloading): it gets one silent Studio re-cut the same
+   * way (`upgrade`). Absent: any other cut.
+   */
+  provisional: z.literal(true).optional(),
   error: z.string().max(2000).nullable().default(null),
   /** Finished provider generations (success or failure); varies the regeneration seed. */
   attempts: z.number().int().nonnegative().default(0),

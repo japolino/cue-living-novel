@@ -184,7 +184,8 @@ describe("cut-out runtime", () => {
     expect(states[0]).toEqual({ state: "downloading", receivedBytes: 0, totalBytes: null });
     expect(states.some((s) => s.state === "downloading" && s.receivedBytes === 4096 && s.totalBytes === 4096)).toBe(true);
     expect(states.at(-2)).toEqual({ state: "loading" });
-    expect(states.at(-1)).toEqual({ state: "ready", backend: "wasm", bytes: 4096 });
+    // No browser storage in this test: the ready state says the model downloads again next visit.
+    expect(states.at(-1)).toEqual({ state: "ready", backend: "wasm", bytes: 4096, notStored: true });
     // A second cut reuses the loaded session.
     const again = await cutSprite(sprite(), { quality: "best", modelUrl: "https://models.test/isnet.onnx" });
     expect(again.quality).toBe("best");
@@ -279,23 +280,36 @@ describe("cut-out runtime", () => {
       setGpu(adapter(["shader-f16"]));
       return true;
     };
+    /** The Studio model downloads in the background (never inside a cut): wait for it. */
+    const studioDownloaded = async (): Promise<void> => {
+      for (let i = 0; i < 500; i++) {
+        const state = getCutoutModelState();
+        if (!(state.state === "downloading" && state.studio)) return;
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
+      throw new Error("The Studio download did not finish.");
+    };
 
-    test("WebGPU with shader-f16: the Studio model downloads, runs on WebGPU with a stretched input", async () => {
+    test("WebGPU with shader-f16: the Studio model downloads in the background, then runs on WebGPU with a stretched input", async () => {
       if (!studioGpu()) return;
       expect(await getStudioCutoutSupport()).toBeNull();
       const states: CutoutModelState[] = [];
       const off = onCutoutModelState((state) => states.push(state));
+      // The first cut uses Best while the Studio model downloads.
+      const first = await cutSprite(wide(), { quality: "studio", modelUrl: BEST, studioModelUrl: STUDIO });
+      expect(first.studio).toBeUndefined();
+      expect(states[0]).toEqual({ state: "downloading", receivedBytes: 0, totalBytes: null, studio: true });
+      await studioDownloaded();
       const result = await cutSprite(wide(), { quality: "studio", modelUrl: BEST, studioModelUrl: STUDIO });
       off();
       expect(result.quality).toBe("best");
       expect(result.studio).toBe(true);
-      expect(fetches).toEqual([STUDIO]);
+      expect(fetches).toEqual([STUDIO, BEST]);
       expect((g.__fakeOrtOptions as { executionProviders: string[] }).executionProviders).toEqual(["webgpu"]);
       // Stretched: the top row is the white image, not letterbox padding.
       expect(g.__fakeOrtFirstRow).toEqual(new Array(16).fill(1));
-      expect(states[0]).toEqual({ state: "downloading", receivedBytes: 0, totalBytes: null, studio: true });
       expect(states.at(-2)).toEqual({ state: "loading", studio: true });
-      expect(states.at(-1)).toEqual({ state: "ready", backend: "webgpu", bytes: 4096, studio: true });
+      expect(states.at(-1)).toEqual({ state: "ready", backend: "webgpu", bytes: 4096, studio: true, notStored: true });
       expect(result.bbox).toEqual([5 / 16, 2 / 8, 6 / 16, 4 / 8]);
       // Best letterboxes the same image (zero padding on top).
       const best = await cutSprite(wide(), { quality: "best", modelUrl: BEST, studioModelUrl: STUDIO });
@@ -341,20 +355,24 @@ describe("cut-out runtime", () => {
     test("the Studio session cannot be built: sticky, Best cuts, no second Studio download", async () => {
       if (!studioGpu()) return;
       const broken = "http://localhost:8790/studio-broken.onnx";
+      await cutSprite(sprite(), { quality: "studio", modelUrl: BEST, studioModelUrl: broken });
+      await studioDownloaded();
       const result = await cutSprite(sprite(), { quality: "studio", modelUrl: BEST, studioModelUrl: broken });
       expect(result.quality).toBe("best");
       expect(result.studio).toBeUndefined();
-      expect(fetches).toEqual([broken, BEST]);
+      // Best again on the fresh worker the failure leaves (this test has no browser cache).
+      expect(fetches).toEqual([broken, BEST, BEST]);
       const state = getCutoutModelState();
       expect(state.state === "ready" && state.note).toMatch(/Studio model cannot run.*failed to allocate/);
       await cutSprite(sprite(), { quality: "studio", modelUrl: BEST, studioModelUrl: broken });
-      expect(fetches).toEqual([broken, BEST]);
+      expect(fetches).toEqual([broken, BEST, BEST]);
     });
 
     test("the Studio download fails: Best cuts and the note names the Studio model", async () => {
       if (!studioGpu()) return;
       const missing = "http://localhost:8790/studio-missing.onnx";
       const result = await cutSprite(sprite(), { quality: "studio", modelUrl: BEST, studioModelUrl: missing });
+      await studioDownloaded();
       expect(result.quality).toBe("best");
       expect(result.studio).toBeUndefined();
       expect(fetches).toEqual([missing, BEST]);
@@ -365,17 +383,19 @@ describe("cut-out runtime", () => {
     test("the Studio model fails while cutting: that sprite is cut again with Best", async () => {
       if (!studioGpu()) return;
       const throws = "http://localhost:8790/studio-throws.onnx";
+      await cutSprite(sprite(), { quality: "studio", modelUrl: BEST, studioModelUrl: throws });
+      await studioDownloaded();
       const result = await cutSprite(sprite(), { quality: "studio", modelUrl: BEST, studioModelUrl: throws });
       expect(result.quality).toBe("best");
       expect(result.studio).toBeUndefined();
       expect(result.bbox).toEqual([5 / 16, 4 / 16, 6 / 16, 8 / 16]);
-      expect(fetches).toEqual([throws, BEST]);
+      expect(fetches).toEqual([throws, BEST, BEST]);
       const state = getCutoutModelState();
       expect(state.state === "ready" && state.note).toMatch(/device lost/);
       // Best keeps cutting; the Studio model is not tried again on this page.
       const again = await cutSprite(sprite(), { quality: "studio", modelUrl: BEST, studioModelUrl: throws });
       expect(again.quality).toBe("best");
-      expect(fetches).toEqual([throws, BEST]);
+      expect(fetches).toEqual([throws, BEST, BEST]);
     });
   });
 

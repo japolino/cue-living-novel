@@ -469,6 +469,9 @@ export class VisualNovelSettingsPanel {
   private faceCachedBytes: number | null = null;
   /** Bytes of a model cached in this browser but not loaded in this page yet. */
   private cutoutCachedBytes: number | null = null;
+  /** The Studio model's file in this browser, and why this device cannot run it ("studio" quality). */
+  private studioCachedBytes: number | null = null;
+  private studioSupport: string | null = null;
   private cutoutConfirmTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly connectionStates: Record<ConnectionCatalogKind, ConnectionCatalogState> = {
     planner: { status: "idle", options: [] },
@@ -1931,7 +1934,8 @@ export class VisualNovelSettingsPanel {
     download.addEventListener("click", () => {
       if (!this.options.onPrepareCutoutModel) return;
       // Immediate feedback; the host's model state replaces it as soon as it reports.
-      this.setCutoutModelState({ state: "downloading", receivedBytes: 0, totalBytes: null });
+      const studio = download.dataset.studio === "true";
+      this.setCutoutModelState({ state: "downloading", receivedBytes: 0, totalBytes: null, ...(studio ? { studio: true as const } : {}) });
       this.options.onPrepareCutoutModel();
     });
     remove.addEventListener("click", () => {
@@ -1957,7 +1961,7 @@ export class VisualNovelSettingsPanel {
 
   private renderCutoutModel(config: VisualNovelConfig = this.config): void {
     const row = this.root.querySelector<HTMLElement>('[data-readiness="cutout"]')!;
-    const summary = describeCutoutModel(this.cutoutModelState, config.spriteCutout, config.spriteModelUrl, this.cutoutCachedBytes, config.spriteStudioModelUrl);
+    const summary = describeCutoutModel(this.cutoutModelState, config.spriteCutout, config.spriteModelUrl, this.cutoutCachedBytes, config.spriteStudioModelUrl, { cachedBytes: this.studioCachedBytes, support: this.studioSupport });
     row.dataset.level = summary.level;
     row.dataset.state = this.cutoutModelState.state;
     row.querySelector("[data-readiness-title]")!.textContent = summary.title;
@@ -1970,9 +1974,10 @@ export class VisualNovelSettingsPanel {
     const download = row.querySelector<HTMLButtonElement>("[data-cutout-download]")!;
     const remove = row.querySelector<HTMLButtonElement>("[data-cutout-remove]")!;
     download.hidden = summary.action !== "download" && summary.action !== "retry";
-    download.textContent = summary.action === "retry" ? "Try again" : "Download model";
+    download.textContent = summary.actionLabel ?? (summary.action === "retry" ? "Try again" : "Download model");
+    download.dataset.studio = String(/Studio/.test(download.textContent));
     download.disabled = !this.options.onPrepareCutoutModel;
-    remove.hidden = summary.action !== "remove";
+    remove.hidden = summary.action !== "remove" && !summary.alsoRemove;
     remove.disabled = !this.options.onClearCutoutModel;
     if (remove.hidden) this.resetCutoutRemove();
     row.querySelector<HTMLElement>("[data-actions]")!.hidden = download.hidden && remove.hidden;
@@ -2002,6 +2007,21 @@ export class VisualNovelSettingsPanel {
    */
   setCutoutModelCachedBytes(bytes: number | null): void {
     this.cutoutCachedBytes = bytes && bytes > 0 ? bytes : null;
+    this.renderCutoutModel();
+  }
+
+  /** Size of the Studio model's file in this browser (`getCachedCutoutModelBytes(studioModelUrl)`), or null. */
+  setStudioCutoutModelCachedBytes(bytes: number | null): void {
+    this.studioCachedBytes = bytes && bytes > 0 ? bytes : null;
+    this.renderCutoutModel();
+  }
+
+  /**
+   * Why this device cannot run the Studio model (`getStudioCutoutSupport`), or
+   * null: such a device is shown Best's status and is not offered the download.
+   */
+  setStudioCutoutSupport(reason: string | null): void {
+    this.studioSupport = reason || null;
     this.renderCutoutModel();
   }
 
