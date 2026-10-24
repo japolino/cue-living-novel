@@ -535,6 +535,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   };
   let turn: TurnView | null = null;
   let pendingNextTurn: TurnView | null = null;
+  // Where the reader was when Regenerate / Try again started; restored if the turn comes back unchanged.
+  let retryResumePhase: "revealing" | "awaiting-input" | null = null;
   let overrideHandles: ComponentOverrideHandle[] = [];
   const acknowledgedAssets = new Set<string>();
   let destroyed = false;
@@ -631,6 +633,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     onReroll: () => {
       const activeChatId = chatId();
       if (!activeChatId) return;
+      retryResumePhase = stage.getState().phase === "awaiting-input" ? "awaiting-input" : "revealing";
       stage.setPhase("planning");
       if (!turn) {
         // No turn exists (an unselected macro greeting): re-check the latest
@@ -647,6 +650,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     onSwipe: () => {
       const activeChatId = chatId();
       if (!activeChatId || !turn) return;
+      retryResumePhase = stage.getState().phase === "awaiting-input" ? "awaiting-input" : "revealing";
       stage.setPhase("planning");
       ctx.sendToBackend({
         type: "vn_retry_turn",
@@ -720,7 +724,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   });
   const settingsPanel: (VisualNovelSettingsPanel & SettingsFeedbackTarget) | null = settingsHandle ? new VisualNovelSettingsPanel({
     mount: settingsHandle.root,
-    onOpenPreview: () => activate(),
+    onOpenPreview: () => { if (!active) toggleVisualNovel(); },
     onRefreshConnections: () => requestConnectionCatalog(),
     onSaveSystemOneKey: (key) => ctx.sendToBackend({ type: "vn_set_system_one_key", key }),
     onClearSystemOneKey: () => ctx.sendToBackend({ type: "vn_clear_system_one_key" }),
@@ -1096,6 +1100,12 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       return;
     }
     if (decision.kind === "same-turn") {
+      // A retry that kept this turn (images only, or a replan of the same
+      // text) never reloads it: end its planning phase where the reader was.
+      if (stage.getState().phase === "planning" && next.status === "ready") {
+        stage.resumeAfterRetry(retryResumePhase ?? "revealing");
+      }
+      retryResumePhase = null;
       // Identical cursor identity: SpeechController treats this as a no-op, so
       // a same-turn rebroadcast (e.g. an image/asset update) never replays speech.
       syncSpeechCursor(next, decision.paragraphIndex);
@@ -1104,6 +1114,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       void syncImageForParagraph(decision.paragraphIndex);
       return;
     }
+    retryResumePhase = null;
     const requestedMode = configRef.current?.mode ?? "standard";
     panels.setTurn(next, 0);
     const mode = requestedMode === "cyoa" && next.choices.length > 0 ? "cyoa" : "standard";
@@ -1161,7 +1172,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       speechSettings?.setConfig(configRef.current.speech);
       settingsPanel?.setConfig(configRef.current);
       refreshCachedCutoutModel(configRef.current.spriteModelUrl);
-      if (configRef.current?.autoEnter && !active) activate();
+      // The home screen has no chat to show.
+      if (configRef.current?.autoEnter && !active && chatId()) activate();
       if (bootPending) {
         // The boot request said nothing about the view. Now that the config is
         // known: autoEnter has just reopened it; otherwise the view the backend
@@ -1334,6 +1346,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     turnOpeningBgm = null;
     speech.onChatChanged();
     stage.reset();
+    // Leaving for the home screen closes the stage instead of covering it.
+    if (active && !chatId()) deactivate();
     requestState();
   });
   const unsubFork = ctx.events.on("CHAT_FORKED", () => {

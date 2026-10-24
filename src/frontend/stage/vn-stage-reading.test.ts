@@ -369,6 +369,33 @@ describe("reading UX", () => {
     expect(FakeDocument.activeElement).toBe(history);
   });
 
+  test("History starts empty after a reset (another chat)", () => {
+    const s = create();
+    s.loadTurn({ mode: "standard", paragraphs: paragraphs(3) });
+    advance(s);
+    advance(s);
+    s.reset();
+    s.loadTurn({ mode: "standard", paragraphs: [{ id: "p0", text: "Other chat.", speaker: "Kai" }] });
+    q(s, "[data-vn-control='log']").click();
+    const items = q(s, "[data-vn-backlog-content]").querySelectorAll("[data-vn-backlog-item]");
+    expect(items.length).toBe(1);
+    expect(items[0]!.textContent).toContain("Other chat.");
+  });
+
+  test("a retry that keeps the turn resumes reading where the reader was", () => {
+    const s = create();
+    s.loadTurn({ mode: "standard", paragraphs: paragraphs(2) });
+    advance(s);
+    advance(s);
+    expect(s.getState().phase).toBe("awaiting-input");
+    s.setPhase("planning");
+    s.resumeAfterRetry("awaiting-input");
+    expect(s.getState().phase).toBe("awaiting-input");
+    expect(s.getState().currentParagraphIndex).toBe(1);
+    s.resumeAfterRetry("revealing");
+    expect(s.getState().phase).toBe("awaiting-input");
+  });
+
   test("setTextScale clamps to the config range and exposes a CSS variable", () => {
     const s = create();
     s.setTextScale(1.25);

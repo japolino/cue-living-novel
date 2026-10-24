@@ -306,3 +306,29 @@ test("a new turn or phase from the host clears the error reread state", () => {
   assert.equal(selectVnStageView(planning).canAdvance, false);
   assert.equal(selectVnStageView(planning).canGoBack, false);
 });
+
+test("resume ends a planning phase left by a same-turn retry and keeps the cursor", () => {
+  let state = reduceVnStage(createInitialVnStageState(), { type: "load-turn", turn: { mode: "standard", paragraphs } });
+  state = reduceVnStage(state, { type: "advance" });
+  state = reduceVnStage(state, { type: "advance" });
+  assert.equal(state.phase, "awaiting-input");
+  const planning = reduceVnStage({ ...state, error: "old failure" }, { type: "set-phase", phase: "planning" });
+  const yourTurn = reduceVnStage(planning, { type: "resume", phase: "awaiting-input" });
+  assert.equal(yourTurn.phase, "awaiting-input");
+  assert.equal(yourTurn.currentParagraphIndex, 1);
+  assert.equal(yourTurn.turnFinished, true);
+  assert.equal(yourTurn.error, null);
+  assert.equal(selectVnStageView(yourTurn).showStandardInput, true);
+  const reading = reduceVnStage(planning, { type: "resume", phase: "revealing" });
+  assert.equal(reading.phase, "revealing");
+  assert.equal(selectVnStageView(reading).canAdvance, true);
+});
+
+test("resume to Your turn needs the cursor on the last paragraph, and only leaves planning", () => {
+  const loaded = reduceVnStage(createInitialVnStageState(), { type: "load-turn", turn: { mode: "standard", paragraphs } });
+  const planning = reduceVnStage(loaded, { type: "set-phase", phase: "planning" });
+  assert.equal(reduceVnStage(planning, { type: "resume", phase: "awaiting-input" }).phase, "revealing");
+  assert.equal(reduceVnStage(loaded, { type: "resume", phase: "awaiting-input" }), loaded);
+  const empty = reduceVnStage(createInitialVnStageState(), { type: "set-phase", phase: "planning" });
+  assert.equal(reduceVnStage(empty, { type: "resume", phase: "revealing" }), empty);
+});

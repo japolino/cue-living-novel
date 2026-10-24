@@ -1212,6 +1212,9 @@ export class VnStage {
     this.errorDetails = null;
     this.hostImageError = null;
     this.lastSkipStop = null;
+    // History and the read set belong to the chat being left.
+    this.backlogEntries.length = 0;
+    this.readParagraphIds.clear();
     this.spriteLayer.setTurn(null);
     this.spriteLayer.clear();
     this.queuedPlateUrl = null;
@@ -1251,6 +1254,13 @@ export class VnStage {
 
   setPhase(phase: VnPhase): void {
     this.dispatch({ type: "set-phase", phase });
+  }
+
+  /** Back to reading (or to Your turn) after a retry that kept the same turn. */
+  resumeAfterRetry(phase: "revealing" | "awaiting-input"): void {
+    if (this.state.phase !== "planning") return;
+    this.errorDetails = null;
+    this.dispatch({ type: "resume", phase });
   }
 
   setActivity(

@@ -128,6 +128,8 @@ export type VnStageAction =
   | { type: "set-mode"; mode: VnMode }
   | { type: "set-draft"; draft: string }
   | { type: "set-phase"; phase: VnPhase }
+  /** End a "planning" phase that a retry of the same turn left behind, keeping the cursor. */
+  | { type: "resume"; phase: "revealing" | "awaiting-input" }
   | { type: "set-activity"; activity: VnActivity | null }
   | { type: "set-error"; error: string | null }
   | { type: "set-asset-progress"; progress: VnAssetProgress | null }
@@ -324,6 +326,21 @@ export const reduceVnStage = (
         noValidOutput: isResetPhase ? false : state.noValidOutput,
         showRerollPrompt: isResetPhase ? false : state.showRerollPrompt,
         assetProgress: isResetPhase ? null : state.assetProgress,
+      };
+    }
+
+    case "resume": {
+      // A retry that kept the turn (images only, or a replan of the same text)
+      // never reloads it, so nothing else would end the planning phase.
+      if (state.phase !== "planning" || state.paragraphs.length === 0) return state;
+      const yourTurn = action.phase === "awaiting-input"
+        && state.currentParagraphIndex >= state.paragraphs.length - 1;
+      return {
+        ...state,
+        phase: yourTurn ? "awaiting-input" : "revealing",
+        error: null,
+        turnFinished: yourTurn,
+        showRerollPrompt: yourTurn,
       };
     }
 
