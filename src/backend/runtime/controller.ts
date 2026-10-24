@@ -1126,9 +1126,11 @@ async function processAssistantMessage(
   dbg(spindle, userId, `planning enqueued chat=${chatId} message=${message.id} swipe=${message.swipe_id} fingerprint=${fingerprint}`);
   const scheduled = planningQueue.enqueue(userId, chatId, message.id, async (operation) => {
     const planningStartedAt = Date.now();
-    const config = await loadConfig(spindle, userId);
+    const [config, messages] = await Promise.all([
+      loadConfig(spindle, userId),
+      spindle.chat.getMessages(chatId) as Promise<NormalizedChatMessage[]>
+    ]);
     rememberDebugFlag(userId, config);
-    const messages = await spindle.chat.getMessages(chatId) as NormalizedChatMessage[];
     // Greeting replacement: the same stored message re-resolved to a different
     // scene while it is the chat's only assistant turn. The durable identity
     // state (frozen protagonist, registry, appearance roster, scene lineage)
@@ -1146,13 +1148,18 @@ async function processAssistantMessage(
       await resetChatIdentityState(spindle, chatId, userId);
       releaseSceneCacheScope(spindle, userId, chatId, "scope_cleared");
     }
-    const chatState = await loadChatState(spindle, chatId, userId);
-    const singleCharacter = await loadSingleCharacterState(spindle, chatId, userId);
-    const characterAppearance = await loadCharacterAppearance(spindle, userId, chatId);
-    const characterRegistry = await loadCharacterRegistry(spindle, chatId, userId);
-    // Another swipe or an edit of the active message plans from the state
-    // before that message, not from the discarded swipe's end state.
-    const activeRecord = await loadTurnRecord(spindle, chatState.activeTurnPath, userId).catch(() => null);
+    // Independent reads: one round of host calls instead of one per file.
+    const [{ chatState, activeRecord }, singleCharacter, characterAppearance, characterRegistry] = await Promise.all([
+      loadChatState(spindle, chatId, userId).then(async (chatState) => ({
+        chatState,
+        // Another swipe or an edit of the active message plans from the state
+        // before that message, not from the discarded swipe's end state.
+        activeRecord: await loadTurnRecord(spindle, chatState.activeTurnPath, userId).catch(() => null)
+      })),
+      loadSingleCharacterState(spindle, chatId, userId),
+      loadCharacterAppearance(spindle, userId, chatId),
+      loadCharacterRegistry(spindle, chatId, userId)
+    ]);
     const planned: { baseline: TurnBaseline; source: string } = replacesGreeting
       ? { baseline: { previousScene: null, previousContinuity: null }, source: "greeting reset" }
       : options?.retry && existing
@@ -1199,6 +1206,8 @@ async function processAssistantMessage(
       ...(result.rejectedSubjects.length ? [`rejectedSubjects=[${result.rejectedSubjects.map((item) => `${item.name}: ${item.requested} kept ${item.durable}`).join("; ")}]`] : []),
       `context: ${summarizeDiagnostics(result.contextDiagnostics)}`
     ].join(" | "));
+    // Runs during the identity writes below (it never throws).
+    const personaLookup = activePersonaName(spindle, userId);
     await mergeCharacterAppearanceFromState(spindle, singleCharacter, userId, chatId);
     await saveSingleCharacterState(spindle, chatId, result.singleCharacter, userId);
     await mergeCharacterAppearanceFromState(spindle, result.singleCharacter, userId, chatId);
@@ -1242,7 +1251,7 @@ async function processAssistantMessage(
         }
       }
     }
-    let userSpeaker = (await activePersonaName(spindle, userId)) || "You";
+    let userSpeaker = (await personaLookup) || "You";
     if (userSpeaker === "You") {
       try {
         const recent = (await spindle.chat.getMessages(chatId) as NormalizedChatMessage[]);

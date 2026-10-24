@@ -2095,12 +2095,16 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
   const narrative = prepareNarrative(resolvedContent, { ignoredTags });
   if (narrative.paragraphs.length === 0) throw new Error("The assistant response does not contain a revealable paragraph.");
 
-  const visualContext = await loadVisualContext(spindle, {
-    chatId: input.chatId,
-    target: [recentContext(input.recentMessages, input.config.includeRecentMessages), stripTextEffectTags(input.content)].filter(Boolean).join("\n\n"),
-    config: input.config,
-    ...(input.userId ? { userId: input.userId } : {})
-  });
+  // The planner connection lookup does not depend on the context reads.
+  const [visualContext, plannerConnection] = await Promise.all([
+    loadVisualContext(spindle, {
+      chatId: input.chatId,
+      target: [recentContext(input.recentMessages, input.config.includeRecentMessages), stripTextEffectTags(input.content)].filter(Boolean).join("\n\n"),
+      config: input.config,
+      ...(input.userId ? { userId: input.userId } : {})
+    }),
+    resolvePlannerConnection(spindle, input.config, input.userId)
+  ]);
 
   const personaName = visualContext.personaIdentity?.name;
   const isPersona = (name: string | null | undefined): boolean => {
@@ -2116,7 +2120,6 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
 
   let planner: z.infer<typeof PlannerOutputSchema>;
   let usedFallback = false;
-  const plannerConnection = await resolvePlannerConnection(spindle, input.config, input.userId);
   // Text effect tags (<shake>, <rainbow>, ...) are display markup: the plan
   // keeps them for the stage, but prompts and pose matching read plain words.
   const promptParagraphs = narrative.paragraphs.map((paragraph) => ({ ...paragraph, text: stripTextEffectTags(paragraph.text) }));
