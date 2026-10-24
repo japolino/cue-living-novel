@@ -322,6 +322,15 @@ describe("sprite jobs: cut bridge", () => {
     expect(f.uploads).toHaveLength(0);
   });
 
+  test("a basic cut made while 'studio' is selected is queued for a re-cut too", async () => {
+    const f = setup({ config: { spriteCutout: "studio" } });
+    await f.service.prepareCast("u1", [MIRA], spriteConfig());
+    await f.service.settle("u1");
+    f.answerCut(f.cutRequests()[0]!, { ...CUT_META, quality: "basic" });
+    await f.service.settle("u1");
+    expect(await f.service.queueCutUpgrades("u1")).toBe(1);
+  });
+
   test("a basic cut made while 'best' is selected is re-cut once on the next view open, silently", async () => {
     const f = setup({ config: { spriteCutout: "best" } });
     await f.service.prepareCast("u1", [MIRA], spriteConfig());

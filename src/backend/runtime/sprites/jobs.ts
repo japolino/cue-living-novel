@@ -568,13 +568,13 @@ export class SpriteService {
   }
 
   /**
-   * Cut-outs made with the "basic" fallback while "best" is selected (the
-   * model was not ready yet) are re-cut once from the raw render. The old
-   * cut stays on stage until the new one replaces it.
+   * Cut-outs made with the "basic" fallback while "best" or "studio" is
+   * selected (the model was not ready yet) are re-cut once from the raw
+   * render. The old cut stays on stage until the new one replaces it.
    */
   async queueCutUpgrades(userId: string | undefined): Promise<number> {
     const config = await this.deps.loadConfig(userId);
-    if (config.spriteCutout !== "best") return 0;
+    if (config.spriteCutout === "basic") return 0;
     const library = await this.library.get(userId);
     const due = Object.values(library.sets).some((set) => Object.values(set.images).some((image) => image.status === "ready" && image.quality === "basic" && image.rawImageId && image.upgrade === null));
     if (!due) return 0;

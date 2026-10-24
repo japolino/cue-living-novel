@@ -73,6 +73,7 @@ import {
   normalizeSpriteCutout,
   normalizeSpriteImageSize,
   parseSpriteModelUrl,
+  parseStudioModelUrl,
   type ConnectionCatalogKind,
   type ConnectionCatalogState,
   type ImageSource,
@@ -122,7 +123,7 @@ export type SettingsPanelOptions = {
   onSpriteAction?: (action: SpriteLibraryAction) => void;
   /** Sprite mode: the library section opened; the host sends `vn_get_sprite_library`. */
   onRequestSpriteLibrary?: () => void;
-  /** Sprite mode: download and load the cut-out model now (`prepareCutoutModel(config.spriteModelUrl)`). */
+  /** Sprite mode: download and load the cut-out model now (`prepareCutoutModel(config.spriteModelUrl)`, or the Studio model). */
   onPrepareCutoutModel?: () => void;
   /** Sprite mode: forget the downloaded cut-out model (`clearCutoutModel()`). */
   onClearCutoutModel?: () => void;
@@ -134,7 +135,7 @@ const ADVANCED_KEYS = [
   "imageModel", "imageConcurrency", "parserParameters", "imageParameters", "audioDirectory", "systemOneMode", "systemOneApiUrl", "systemOneModel",
   "includeRecentMessages", "includeCharacterContext", "includePersonaContext", "includeLorebookContext", "debugLogging",
   "promptPrefix", "promptSuffix", "negativePrompt", "originalReference", "originalCreationName", "customPlannerInstructions",
-  "ignoredTags", "displayRegexRules", "customCss", "spriteModelUrl",
+  "ignoredTags", "displayRegexRules", "customCss", "spriteModelUrl", "spriteStudioModelUrl",
 ] as const;
 type AdvancedKey = (typeof ADVANCED_KEYS)[number];
 
@@ -816,6 +817,7 @@ export class VisualNovelSettingsPanel {
                 <label data-field ${find("Image parameters (JSON)", "image json parameters steps")}><span>Image parameters (JSON)</span><textarea name="imageParameters" spellcheck="false"></textarea></label>
               </div>
               <label data-field ${find("Sprite cut-out model URL", "sprites cutout cut-out background removal model onnx isnet download url huggingface")}><span>Sprite cut-out model URL</span><input name="spriteModelUrl" type="url" spellcheck="false" placeholder="${esc(DEFAULT_SPRITE_MODEL_URL)}" /><small>Where the Best cut-out model downloads from, once. Must start with https://. Leave empty for the default.</small></label>
+              <label data-field ${find("Studio cut-out model URL", "sprites cutout cut-out background removal model onnx birefnet studio download url localhost")}><span>Studio cut-out model URL</span><input name="spriteStudioModelUrl" type="url" spellcheck="false" placeholder="http://localhost:8790/birefnet_general_1024_fp16.onnx" /><small>Studio cut-out quality only (experimental): where its BiRefNet model (about 500 MB) downloads from, once. https://, or http://localhost for a file served on this computer. Leave empty to cut with Best.</small></label>
             `, { id: "models", apply: true })}
             ${group("Custom CSS", `
               <label data-field ${find("Theme CSS", "custom css style stylesheet")}><span>Theme CSS</span><textarea name="customCss" spellcheck="false"></textarea><small>Selectors beginning with data-vn are stable. Remote imports and URL fetches are removed.</small></label>
@@ -1716,7 +1718,11 @@ export class VisualNovelSettingsPanel {
       }
       if (!revealed) {
         try { parseSpriteModelUrl(this.control<HTMLInputElement>("spriteModelUrl").value); }
-        catch { this.reveal(this.control<HTMLInputElement>("spriteModelUrl")); }
+        catch { this.reveal(this.control<HTMLInputElement>("spriteModelUrl")); revealed = true; }
+      }
+      if (!revealed) {
+        try { parseStudioModelUrl(this.control<HTMLInputElement>("spriteStudioModelUrl").value); }
+        catch { this.reveal(this.control<HTMLInputElement>("spriteStudioModelUrl")); }
       }
       this.setStatus(error instanceof Error ? error.message : String(error), "error");
       return;
@@ -1763,6 +1769,7 @@ export class VisualNovelSettingsPanel {
       displayRegexRules: this.control<HTMLTextAreaElement>("displayRegexRules").value,
       customCss: this.control<HTMLTextAreaElement>("customCss").value,
       spriteModelUrl: parseSpriteModelUrl(this.control<HTMLInputElement>("spriteModelUrl").value),
+      spriteStudioModelUrl: parseStudioModelUrl(this.control<HTMLInputElement>("spriteStudioModelUrl").value),
     };
   }
 
@@ -1824,6 +1831,7 @@ export class VisualNovelSettingsPanel {
     set("displayRegexRules", () => { this.control<HTMLTextAreaElement>("displayRegexRules").value = config.displayRegexRules; });
     set("customCss", () => { this.control<HTMLTextAreaElement>("customCss").value = config.customCss; });
     set("spriteModelUrl", () => { this.control<HTMLInputElement>("spriteModelUrl").value = config.spriteModelUrl; });
+    set("spriteStudioModelUrl", () => { this.control<HTMLInputElement>("spriteStudioModelUrl").value = config.spriteStudioModelUrl; });
     this.promptPresets = config.promptPresets.map((preset) => ({ ...preset }));
     this.renderPromptPresetOptions(this.control<HTMLSelectElement>("promptPresetSelect").value);
     this.updateImageModelHint();
@@ -1945,7 +1953,7 @@ export class VisualNovelSettingsPanel {
 
   private renderCutoutModel(config: VisualNovelConfig = this.config): void {
     const row = this.root.querySelector<HTMLElement>('[data-readiness="cutout"]')!;
-    const summary = describeCutoutModel(this.cutoutModelState, config.spriteCutout, config.spriteModelUrl, this.cutoutCachedBytes);
+    const summary = describeCutoutModel(this.cutoutModelState, config.spriteCutout, config.spriteModelUrl, this.cutoutCachedBytes, config.spriteStudioModelUrl);
     row.dataset.level = summary.level;
     row.dataset.state = this.cutoutModelState.state;
     row.querySelector("[data-readiness-title]")!.textContent = summary.title;

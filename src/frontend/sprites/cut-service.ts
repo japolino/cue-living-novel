@@ -64,6 +64,7 @@ export function createSpriteCutService(deps: SpriteCutServiceDeps): SpriteCutSer
         quality: config?.spriteCutout ?? "best",
         modelUrl,
         ...(modelUrlF16 ? { modelUrlF16 } : {}),
+        ...(config?.spriteStudioModelUrl ? { studioModelUrl: config.spriteStudioModelUrl } : {}),
         faceModelUrl: DEFAULT_SPRITE_FACE_MODEL_URL,
         signal: controller.signal,
       });

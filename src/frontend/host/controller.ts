@@ -16,6 +16,7 @@ import {
   onFaceModelState,
   prepareCutoutModel,
   prepareFaceModel,
+  prepareStudioCutoutModel,
 } from "../sprites/cutout/index.js";
 import type { VnChoice, VnTurnInput } from "../store/index.js";
 import { createVnHeaderLauncher } from "./manual-launcher.js";
@@ -795,9 +796,13 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     onRequestSpriteLibrary: () => ctx.sendToBackend({ type: "vn_get_sprite_library" }),
     onPrepareCutoutModel: () => {
       const modelUrl = configRef.current?.spriteModelUrl ?? DEFAULT_SPRITE_MODEL_URL;
-      prepareCutoutModel(modelUrl, spriteModelF16Url(modelUrl)).catch((error: unknown) => {
+      const prepareBest = (): Promise<void> => prepareCutoutModel(modelUrl, spriteModelF16Url(modelUrl)).catch((error: unknown) => {
         settingsPanel?.setCutoutModelState({ state: "error", error: error instanceof Error ? error.message : String(error) });
       });
+      // Studio quality prepares the Studio model; where it cannot run, the Best one (the cuts use it).
+      const studioUrl = configRef.current?.spriteCutout === "studio" ? configRef.current.spriteStudioModelUrl : "";
+      if (studioUrl) void prepareStudioCutoutModel(studioUrl).catch(prepareBest);
+      else void prepareBest();
       // The face finder (emote placement) comes along; its state shows its own errors.
       prepareFaceModel(DEFAULT_SPRITE_FACE_MODEL_URL).catch(() => {});
     },
@@ -820,6 +825,9 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     getCachedFaceModelBytes(DEFAULT_SPRITE_FACE_MODEL_URL).then((bytes) => settingsPanel.setFaceModelCachedBytes(bytes)).catch(() => {});
   }
   // A model cached by an earlier visit is not loaded in this page yet: show it as downloaded.
+  // With Studio quality (and its URL set) that is the Studio model.
+  const activeCutoutModelUrl = (config: VisualNovelConfig): string =>
+    config.spriteCutout === "studio" && config.spriteStudioModelUrl ? config.spriteStudioModelUrl : config.spriteModelUrl;
   let cachedModelUrl = "";
   function refreshCachedCutoutModel(url: string): void {
     if (!settingsPanel || url === cachedModelUrl) return;
@@ -1161,7 +1169,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       speechDock.setEnabled(configRef.current.speech.enabled);
       speechSettings?.setConfig(configRef.current.speech);
       settingsPanel?.setConfig(configRef.current);
-      refreshCachedCutoutModel(configRef.current.spriteModelUrl);
+      refreshCachedCutoutModel(activeCutoutModelUrl(configRef.current));
       if (configRef.current?.autoEnter && !active) activate();
       if (bootPending) {
         // The boot request said nothing about the view. Now that the config is
@@ -1195,7 +1203,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       speechDock.setEnabled(configRef.current.speech.enabled);
       speechSettings?.setConfig(configRef.current.speech);
       settingsPanel?.setConfig(configRef.current);
-      refreshCachedCutoutModel(configRef.current.spriteModelUrl);
+      refreshCachedCutoutModel(activeCutoutModelUrl(configRef.current));
       settingsPanel?.setSaveStatus?.({ kind: "saved" });
       return;
     }
