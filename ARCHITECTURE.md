@@ -126,8 +126,9 @@ owner (retry, reply, reuse) has claimed the chat's turn meanwhile; a view that
 merely reopened still gets the stamp, plus `vn_asset` updates, because the
 aborted batch never resumes on its own. Cancelling a plan aborts its sidecar
 request (`spindle.generate.raw` gets the operation's signal, and the call
-rejects locally even when the host keeps it running), with no retry and no
-fallback plan, so the chat's next plan starts at once instead of queueing
+rejects locally even when the host keeps it running; a System One request it
+waits on is let go the same way), with no retry and no fallback plan, so the
+chat's next plan starts at once instead of queueing
 behind it; a reopened view never joins a cancelled plan. A newer version of a
 message (another swipe, an edit) cancels every plan of its other versions that
 is still queued or running, whatever it shows itself: a new plan, its stored
@@ -135,8 +136,9 @@ turn (reused, or kept because the host cannot resolve the message right now),
 or the waiting card of an unselected greeting. Only the newest intake cancels:
 one that a newer message event overtook while it read the stored turn is
 dropped. So the old swipe never paints. A cancelled plan also stops before
-its next identity write (a discarded swipe never seeds the frozen protagonist,
-registry or appearance roster), and it builds its view before it persists, so
+each further identity write (protagonist, appearance roster, registry), so a
+discarded swipe seeds at most the write already in flight, and it builds its
+view before it persists, so
 it becomes the chat's active turn only when the cancel lands during that last
 write, which the newer version's own turn then replaces. Leaving a chat
 sends `vn_view open:false` for the previous chat, and the home screen (empty

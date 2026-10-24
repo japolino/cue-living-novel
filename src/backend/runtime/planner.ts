@@ -2140,7 +2140,7 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
         spindle.log.warn(`System One decision failed; using story reader: ${debugErrorSummary(error)}`);
         return null;
       });
-  let systemOne = input.config.systemOneMode === "on" ? await systemOnePromise : null;
+  let systemOne = input.config.systemOneMode === "on" ? await abortable(systemOnePromise, input.signal) : null;
   throwIfAborted(input.signal);
   let failedAttempts = 0;
   // The deterministic fallback is a last resort, not a peer: transient sidecar
@@ -2202,7 +2202,7 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
   if (usedFallback && lastError !== null) {
     spindle.log.warn(`Visual planner fallback after ${PLANNER_ATTEMPTS} attempts: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
   }
-  if (input.config.systemOneMode === "compare") systemOne = await systemOnePromise;
+  if (input.config.systemOneMode === "compare") systemOne = await abortable(systemOnePromise, input.signal);
   throwIfAborted(input.signal);
   if (systemOne) {
     if (input.config.systemOneMode === "compare") {
