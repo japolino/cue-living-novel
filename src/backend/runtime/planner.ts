@@ -107,6 +107,8 @@ const PlannerSceneSchema = z.object({
   character: z.string().trim().nullable().optional(),
   characterId: z.string().trim().nullable().optional(),
   attire: z.string().trim().nullable().optional(),
+  /** Planner-only: a {"<name>": outfit} map, resolved in canonicalizePlannerIdentities. */
+  attireByName: z.record(z.string(), z.string()).optional(),
   ambient: z.string().trim().nullable().optional(),
   basePrompt: z.string().trim().min(1),
   compositionLock: z.string().trim().min(1).default("Character centered with clear negative space behind the dialogue window.")
@@ -119,6 +121,8 @@ const PlannerCueSchema = z.object({
   character: z.string().trim().nullable().optional(),
   characterId: z.string().trim().nullable().optional(),
   attire: z.string().trim().nullable().optional(),
+  /** Planner-only: a {"<name>": outfit} map, resolved in canonicalizePlannerIdentities. */
+  attireByName: z.record(z.string(), z.string()).optional(),
   promptDelta: z.string().trim().optional(),
   effect: z.string().trim().nullable().optional(),
   bgm: z.string().trim().nullable().optional(),
@@ -169,7 +173,7 @@ export type PlanTurnInput = {
   previousScene: SceneState | null;
   previousContinuity: TurnPlan["terminalContinuity"] | null;
   /** The recent window; the planned message (by id) and anything after it are not sent as history. */
-  recentMessages: Array<Pick<ChatMessageDTO, "name" | "content" | "is_user"> & { id?: string }>;
+  recentMessages: Array<Pick<ChatMessageDTO, "name" | "content" | "is_user"> & { id?: string; index_in_chat?: number }>;
   config: VisualNovelConfig;
   singleCharacter: SingleCharacterState;
   characterAppearance: CharacterAppearanceMap;
@@ -330,37 +334,56 @@ export const RECENT_CONTEXT_LIMITS = { newest: 2000, older: 900, total: 6000 } a
 
 const REASONING_BLOCK = /<(think|thinking|thought|thoughts|reasoning|reflection)\b[^>]*>[\s\S]*?<\/\1\s*>/gi;
 
+/**
+ * Inline data, not prose: a data URI, a long URL, or a long run of base64/hex
+ * style characters. Long runs of CJK or Thai text have no spaces and are kept.
+ */
+const INLINE_DATA = /^(?:data:\S{40,}|[a-z][a-z0-9+.-]*:\/\/\S{80,}|[A-Za-z0-9+/=_%.-]{120,})$/;
+
 /** History text for the planner: no reasoning blocks, markup, inline data or effect tags. */
 function cleanContextText(text: string): string {
   return stripTextEffectTags(text)
     .replace(REASONING_BLOCK, " ")
     .replace(/<[^>\n]{0,400}>/g, " ")
-    .split(/(\s+)/).filter((token) => !/^\S{120,}$/.test(token)).join("")
+    .split(/(\s+)/).filter((token) => !INLINE_DATA.test(token)).join("")
     .replace(/[ \t]+/g, " ")
     .replace(/ *\n */g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
 
-/** Keep the end of a long message: it carries the latest place, outfit and state. */
+/**
+ * Keep the end of a long message: it carries the latest place, outfit and
+ * state. The cut is on a code point, and a partial word at the cut is
+ * dropped only when a space follows it closely (text without spaces, such as
+ * Japanese, is cut as is).
+ */
 function clipTail(text: string, maximum: number): string {
-  if (text.length <= maximum) return text;
-  return `…${text.slice(text.length - maximum + 1).replace(/^\S*\s/, "")}`;
+  const points = Array.from(text);
+  if (points.length <= maximum) return text;
+  const kept = points.slice(points.length - maximum + 1).join("");
+  const space = kept.slice(0, 24).search(/\s/);
+  return `…${space >= 0 ? kept.slice(space + 1) : kept}`;
 }
 
 /**
  * The messages before the planned reply, oldest first, within
  * RECENT_CONTEXT_LIMITS. The reply itself is sent once, as TARGET ASSISTANT
- * RESPONSE: the controller's window ends with it, so it is dropped here (by
- * id, or by text when ids are absent) with anything after it.
+ * RESPONSE, so it is dropped here with anything after it: by id, by chat
+ * position (a re-planned older turn whose window ends later), or by text when
+ * neither is known.
  */
 function recentContext(input: Pick<PlanTurnInput, "recentMessages" | "message" | "content" | "config">, personaName?: string): string {
   const maximum = input.config.includeRecentMessages;
   if (maximum <= 0) return "";
-  let window = input.recentMessages.slice(-maximum);
+  let window = [...input.recentMessages];
   const targetIndex = window.findIndex((message) => (message as { id?: unknown }).id === input.message.id);
   if (targetIndex >= 0) window = window.slice(0, targetIndex);
-  else if (window.length && !window.at(-1)!.is_user && window.at(-1)!.content.trim() === input.content.trim()) window = window.slice(0, -1);
+  const position = input.message.index_in_chat;
+  if (typeof position === "number") window = window.filter((message) => typeof message.index_in_chat !== "number" || message.index_in_chat < position);
+  if (targetIndex < 0 && window.length && !window.at(-1)!.is_user && window.at(-1)!.content.trim() === input.content.trim()) window = window.slice(0, -1);
+  // includeRecentMessages counts the reply itself, as the controller's window does.
+  window = maximum > 1 ? window.slice(-(maximum - 1)) : [];
   const userLabel = personaName?.trim() ? `${personaName.trim()} (user)` : "User";
   const lines: string[] = [];
   let used = 0;
@@ -411,6 +434,17 @@ function normalizeBoundaryReason(value: unknown): string {
   if (/environment|weather|structure|replace|rebuild|interior|exterior/.test(text)) return "environment_replacement";
   if (/forced|override|hard|reset/.test(text)) return "forced";
   return "none";
+}
+
+/**
+ * The boundary reason when it is exactly one of BOUNDARY_REASONS, else null.
+ * Only an exact value sets the derived boundary flags: the fuzzy mapping above
+ * is diagnostic and ignores negation ("no_time_skip", "environment unchanged").
+ */
+function exactBoundaryReason(value: unknown): (typeof BOUNDARY_REASONS)[number] | null {
+  if (typeof value !== "string") return null;
+  const text = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  return (BOUNDARY_REASONS as readonly string[]).includes(text) ? text as (typeof BOUNDARY_REASONS)[number] : null;
 }
 
 function asBoolean(value: unknown): boolean {
@@ -516,15 +550,17 @@ function normalizeBoundary(value: unknown, envValue?: unknown, defaultLoc?: stri
     ? record.location.trim()
     : fallbackLocation;
   const reason = normalizeBoundaryReason(record.reason ?? "none");
-  // The compact shape sends only `reason`; explicit flags (older shape) win.
+  // The compact shape sends only `reason`; explicit flags (older shape) win,
+  // and only an exact reason value derives them.
+  const exact = exactBoundaryReason(record.reason);
   const flag = (key: string, fromReason: boolean) => record[key] === undefined || record[key] === null ? fromReason : asBoolean(record[key]);
   return {
-    claimedNewScene: flag("claimedNewScene", reason !== "none"),
+    claimedNewScene: flag("claimedNewScene", exact !== null && exact !== "none"),
     reason,
     location: loc,
     timeOfDay: normalizeTimeOfDay(record.timeOfDay),
-    majorTimeJump: flag("majorTimeJump", reason === "major_time_jump"),
-    environmentReplacement: flag("environmentReplacement", reason === "environment_replacement"),
+    majorTimeJump: flag("majorTimeJump", exact === "major_time_jump"),
+    environmentReplacement: flag("environmentReplacement", exact === "environment_replacement"),
     forced: asBoolean(record.forced)
   };
 }
@@ -600,22 +636,27 @@ function normalizeEnvironment(value: unknown, defaultLoc?: string): unknown {
   };
 }
 
-/**
- * Attire as one tag string. Models sometimes send a tag list, or a
- * {"<name>": outfit} map; the map entry for the scene's or cue's character
- * (or its only entry) is used.
- */
-function normalizeAttire(value: unknown, character?: unknown): string | null {
+/** Attire as one tag string; models sometimes send a tag list. A map is read by normalizeAttireMap. */
+function normalizeAttire(value: unknown): string | null {
   if (typeof value === "string") return value.trim();
   if (Array.isArray(value)) {
     const tags = value.filter((tag): tag is string => typeof tag === "string").map((tag) => tag.trim()).filter(Boolean);
     return tags.length ? tags.join(", ") : null;
   }
-  if (!value || typeof value !== "object") return null;
-  const entries = Object.entries(value as Record<string, unknown>);
-  const name = typeof character === "string" ? character.trim().toLowerCase() : "";
-  const entry = entries.find(([key]) => key.trim().toLowerCase() === name) ?? (entries.length === 1 ? entries[0] : undefined);
-  return entry && (typeof entry[1] === "string" || Array.isArray(entry[1])) ? normalizeAttire(entry[1]) : null;
+  return null;
+}
+
+/**
+ * A {"<name>": outfit} attire map. It is resolved after registry names and
+ * aliases are known (canonicalizePlannerIdentities): only the entry for the
+ * scene's or cue's own character dresses it.
+ */
+function normalizeAttireMap(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .map(([name, outfit]) => [name.trim(), normalizeAttire(outfit)] as const)
+    .filter((entry): entry is readonly [string, string] => Boolean(entry[0] && entry[1]));
+  return entries.length ? Object.fromEntries(entries.slice(0, 16)) : undefined;
 }
 
 function normalizeScene(value: unknown, defaultLoc?: string): unknown {
@@ -629,17 +670,23 @@ function normalizeScene(value: unknown, defaultLoc?: string): unknown {
   const rawEnv = environment as Record<string, unknown> | undefined;
   const rawChanges = record.environmentChanges ?? rawEnv?.changes;
   const envChanges = normalizeEnvironmentChanges(rawChanges);
+  // A boundary that names the place is the fallback for an environment without one.
+  const boundaryLocation = typeof boundaryRecord?.location === "string" && boundaryRecord.location.trim() && !isGenericLocation(boundaryRecord.location)
+    ? boundaryRecord.location.trim()
+    : undefined;
+  const placeDefault = boundaryLocation ?? defaultLoc;
   return {
     startParagraph: asNumber(record.startParagraph) ?? 0,
-    boundary: normalizeBoundary(record.boundary, environment, defaultLoc),
-    environment: normalizeEnvironment(environment, defaultLoc),
+    boundary: normalizeBoundary(record.boundary, environment, placeDefault),
+    environment: normalizeEnvironment(environment, placeDefault),
     ...(envChanges ? { environmentChanges: envChanges } : {}),
     cast: Array.isArray(record.cast)
       ? record.cast.map((item) => typeof item === "string" ? item.trim() : String(item)).filter(Boolean)
       : [],
     character: typeof record.character === "string" ? record.character.trim() : null,
     characterId: normalizeCharacterId(record.characterId ?? record.character_id ?? record.id) || null,
-    attire: normalizeAttire(record.attire, record.character),
+    attire: normalizeAttire(record.attire),
+    ...(normalizeAttireMap(record.attire) ? { attireByName: normalizeAttireMap(record.attire) } : {}),
     ...(record.ambient !== undefined ? { ambient: normalizeAmbientEffect(record.ambient) } : {}),
     basePrompt: typeof record.basePrompt === "string" && record.basePrompt.trim() ? record.basePrompt.trim() : "a visual novel scene",
     compositionLock: typeof record.compositionLock === "string" ? record.compositionLock.trim() : "Character centered with clear negative space behind the dialogue window."
@@ -662,7 +709,8 @@ function normalizeCue(value: unknown): unknown {
     expression: typeof record.expression === "string" ? record.expression.trim() : null,
     character: typeof record.character === "string" ? record.character.trim() : null,
     characterId: normalizeCharacterId(record.characterId ?? record.character_id) || null,
-    attire: normalizeAttire(record.attire, record.character),
+    attire: normalizeAttire(record.attire),
+    ...(normalizeAttireMap(record.attire) ? { attireByName: normalizeAttireMap(record.attire) } : {}),
     effect: normalizeStageEffect(record.effect),
     promptDelta: typeof record.promptDelta === "string"
       ? record.promptDelta.trim()
@@ -2121,14 +2169,30 @@ function canonicalizePlannerIdentities(planner: PlannerOutput, registry: Charact
     const resolved = canonicalCharacterName(registry, { name: name ?? "", characterId });
     return resolved || name;
   };
+  // An attire map dresses only its own character: the entry whose name or
+  // alias resolves to the reference's character. Other entries are dropped,
+  // never applied to whoever the cue shows.
+  const dressFromMap = (attireByName: Record<string, string> | undefined, character: string | null | undefined): { attire?: string } => {
+    if (!attireByName || !character) return {};
+    const target = characterAppearanceKey(character);
+    const entry = Object.entries(attireByName).find(([name]) => characterAppearanceKey(canon(name, null) || name) === target);
+    return entry ? { attire: entry[1] } : {};
+  };
   return {
     ...planner,
-    scenes: planner.scenes.map((scene) => ({
-      ...scene,
-      character: canon(scene.character, scene.characterId),
-      cast: scene.cast.map((member) => canon(member, null) || member)
-    })),
-    cues: planner.cues.map((cue) => ({ ...cue, character: canon(cue.character, cue.characterId) })),
+    scenes: planner.scenes.map(({ attireByName, ...scene }) => {
+      const character = canon(scene.character, scene.characterId);
+      return {
+        ...scene,
+        character,
+        cast: scene.cast.map((member) => canon(member, null) || member),
+        ...(scene.attire ? {} : dressFromMap(attireByName, character))
+      };
+    }),
+    cues: planner.cues.map(({ attireByName, ...cue }) => {
+      const character = canon(cue.character, cue.characterId);
+      return { ...cue, character, ...(cue.attire ? {} : dressFromMap(attireByName, character)) };
+    }),
     characters: planner.characters.map((character) => ({
       ...character,
       name: canon(character.name, character.characterId) || character.name
@@ -2331,6 +2395,18 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
     ? `outcome=fallback attempts=${failedAttempts}/${PLANNER_ATTEMPTS} deterministic plan: scenes=${planner.scenes.length} cues=${planner.cues.length}`
     : `outcome=planner accepted attempt=${failedAttempts + 1}/${PLANNER_ATTEMPTS} scenes=${planner.scenes.length} cues=${planner.cues.length} characters=${planner.characters.length} speakers=${planner.speakers.length} choices=${planner.choices.length}`);
 
+  // An entry without a description only links a label to a character that
+  // already exists (an alias, an id). It never creates one: an entry with no
+  // tags would be listed as a known character that no image can draw.
+  const linksExisting = (character: PlannerOutput["characters"][number]): boolean => {
+    const id = character.characterId ? normalizeCharacterId(character.characterId) : "";
+    return Boolean((id && seedRegistry[id]) || resolveCharacterReference(seedRegistry, { name: character.name }));
+  };
+  const droppedLinks = planner.characters.filter((character) => !character.description.trim() && !linksExisting(character));
+  if (droppedLinks.length) {
+    debug.line(`dropped ${droppedLinks.length} character entr${droppedLinks.length === 1 ? "y" : "ies"} without a description or a known id: ${droppedLinks.map((character) => character.name).join(", ")}`);
+    planner = { ...planner, characters: planner.characters.filter((character) => !droppedLinks.includes(character)) };
+  }
   // Merge the planner's explicit declarations (ids, aliases, subject class) and
   // canonicalize every reference before identity or timeline resolution.
   const registryReport: RegistryMergeReport = mergeCharacterDeclarations(seedRegistry, plannerDeclarations(planner, isPersona));
@@ -2415,7 +2491,15 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
       : (activeChar ? [activeChar] : (protagonistName ? [protagonistName] : []));
     if (sceneCast.length === 0 && protagonistName) sceneCast.push(protagonistName);
 
-    const baseEnv = previous !== null && !decision.startsNewScene ? previous.environment : null;
+    // A new scene in the same place (a time jump, or a replacement the reader
+    // did not describe) builds on the place before it, so an omitted or
+    // partial environment never becomes a blank one. Only a replacement that
+    // describes the new state, or a different place, starts from the proposal.
+    const describesPlace = !isGenericDescription(proposal.environment.description) || (proposal.environment.persistentElements ?? []).length > 0;
+    const samePlace = previous !== null && normalizePlaceName(proposal.environment.location) === normalizePlaceName(previous.environment.location);
+    const buildsOnPrevious = previous !== null
+      && (!decision.startsNewScene || (samePlace && !(proposal.boundary.environmentReplacement && describesPlace)));
+    const baseEnv = buildsOnPrevious ? previous!.environment : null;
     const plannedEnv = baseEnv
       ? mergeEnvironment(baseEnv, proposal.environment, proposal.environmentChanges)
       : null;
@@ -2632,7 +2716,13 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
   addCanonical(protagonistName);
   addCanonical(cardDisplayName);
   addCanonical(input.message.name);
+  // "Theo" for the persona "Theo Grant" is the persona, not a new speaker.
+  const personaWords = personaDisplayName.toLowerCase().split(/\s+/).filter((word) => word.length >= 2);
+  const isPersonaNickname = (label: string): boolean => personaWords.length > 1
+    && !canonicalNames.has(label.toLowerCase())
+    && label.toLowerCase().split(/\s+/).every((word) => personaWords.includes(word));
   const paragraphSpeakerByIndex = new Map<number, string>();
+  const nameplateOnly = new Set<string>();
   for (const entry of planner.speakers) {
     if (paragraphSpeakerByIndex.has(entry.paragraphIndex)) continue;
     const claimed = entry.name.trim();
@@ -2641,14 +2731,16 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
       paragraphSpeakerByIndex.set(entry.paragraphIndex, "");
       continue;
     }
-    if (isPersona(claimed)) {
+    if (isPersona(claimed) || isPersonaNickname(claimed)) {
       if (personaDisplayName) paragraphSpeakerByIndex.set(entry.paragraphIndex, personaDisplayName);
       continue;
     }
-    const canonical = canonicalNames.get(claimed.toLowerCase())
-      ?? (namedInReply(claimed, replyParagraphs) ? claimed : undefined);
+    const known = canonicalNames.get(claimed.toLowerCase());
+    const canonical = known ?? (namedInReply(claimed, replyParagraphs) ? claimed : undefined);
     if (canonical) {
-      // A speaker only the reply names (a barkeep who never gets a frame) keeps one spelling.
+      // A speaker only the reply names (a barkeep who never gets a frame)
+      // keeps one spelling and stays a nameplate (see nameplateOnlySpeakers).
+      if (!known) nameplateOnly.add(canonical);
       addCanonical(canonical);
       paragraphSpeakerByIndex.set(entry.paragraphIndex, canonicalNames.get(canonical.toLowerCase()) ?? canonical);
     }
@@ -2656,6 +2748,7 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
   const paragraphSpeakers = narrative.paragraphs.map(
     (paragraph) => paragraphSpeakerByIndex.get(paragraph.index) ?? null
   );
+  const nameplateOnlySpeakers = [...nameplateOnly].filter((name) => paragraphSpeakers.includes(name)).slice(0, 64);
 
   const continuityDeltas: IndexedContinuityDelta[] = timeline.deltas;
 
@@ -2669,6 +2762,7 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
     panels: narrative.panels,
     panelSource: resolvedContent.slice(0, 200_000),
     paragraphSpeakers,
+    ...(nameplateOnlySpeakers.length ? { nameplateOnlySpeakers } : {}),
     scenes,
     visualCues: cues,
     ...(classifierVisuals ? { classifierVisuals: true } : {}),
@@ -2796,21 +2890,34 @@ export function wardrobeDebugLines(
 
 const GENERIC_SPEAKER_WORDS = new Set([
   "i", "me", "you", "he", "him", "she", "her", "they", "them", "we", "us", "it", "someone", "somebody", "everyone",
-  "voice", "a voice", "man", "woman", "girl", "boy", "user", "player", "persona", "character", "unknown", "assistant"
+  "voice", "a voice", "man", "woman", "girl", "boy", "user", "player", "persona", "character", "unknown", "assistant",
+  // Pronouns of other languages the replies are written in.
+  "elle", "elles", "il", "ils", "lui", "ella", "ellas", "él", "ellos", "yo", "tú", "tu", "ele", "ela", "eles", "elas",
+  "eu", "você", "voce", "er", "sie", "es", "ich", "du", "lei", "loro", "io"
 ]);
+
+/** A label that starts like a description of a role ("The guard", "an old man"), not a name. */
+const ROLE_LABEL = /^(?:the|a|an|my|your|his|her|their|our|this|that|some|o|os|as|um|uma|el|la|los|las|un|una|le|les|une|der|die|das|ein|eine)\s/iu;
 
 /**
  * A speaker the planner names but nobody declared is still a real nameplate
  * when the reply itself spells that name (the barkeep who speaks one line and
- * never gets a frame). Pronouns and role words never qualify, so a guessed
- * label cannot invent a nameplate.
+ * never gets a frame). The reply must write it as a name: every word
+ * capitalized where the script has case ("Dorran", not "the elf customer").
+ * Pronouns and role labels never qualify, so a guessed label cannot invent a
+ * nameplate. Such a speaker is a nameplate only: it is not staged and gets no
+ * sprites, since nothing describes how it looks.
  */
 export function namedInReply(name: string, paragraphs: readonly string[]): boolean {
   const claimed = name.trim();
-  if (claimed.length < 2 || claimed.length > 60 || GENERIC_SPEAKER_WORDS.has(claimed.toLowerCase())) return false;
+  if (claimed.length < 2 || claimed.length > 60 || GENERIC_SPEAKER_WORDS.has(claimed.toLowerCase()) || ROLE_LABEL.test(claimed)) return false;
   const escaped = claimed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
-  const pattern = new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, "iu");
-  return paragraphs.some((paragraph) => pattern.test(paragraph));
+  const pattern = new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, "giu");
+  const writtenAsName = (spelled: string) => spelled.split(/\s+/).every((word) => {
+    const first = Array.from(word)[0] ?? "";
+    return first.toLocaleUpperCase() === first;
+  });
+  return paragraphs.some((paragraph) => [...paragraph.matchAll(pattern)].some((match) => writtenAsName(match[0])));
 }
 
 export function fingerprintForMessage(message: Pick<ChatMessageDTO, "id" | "swipe_id" | "content">): string {

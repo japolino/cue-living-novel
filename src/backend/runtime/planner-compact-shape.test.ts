@@ -185,13 +185,15 @@ test("attire sent as a tag list or a {name: outfit} map is a wardrobe change", a
   assert.equal(mapped.plan.scenes.length, 1);
 });
 
-test("an alias-only character entry without a description does not fail the plan", async () => {
+test("an alias-only character entry without a description does not fail the plan or create an entry", async () => {
   const result = await planTurn(plannerSpindle({
     scenes: [{ startParagraph: 0, boundary: { reason: "none" }, cast: ["Aria"], character: "Aria" }],
     cues: [{ paragraphIndex: 0, expression: "idle", character: "Aria" }],
     characters: [{ name: "The ranger", description: "", characterId: "aria", aliases: ["The ranger"] }, { name: "Nobody" }]
   }), input());
   assert.equal(result.usedFallback, false);
+  // No registry entry exists for "aria" here, so the link has nothing to attach to.
+  assert.deepEqual(Object.values(result.characterRegistry).filter((entry) => !entry.tags.trim()).map((entry) => entry.name), []);
 });
 
 test("the request sends the reply once, trims history and drops fixed scene metadata", async () => {
@@ -225,11 +227,15 @@ test("the request sends the reply once, trims history and drops fixed scene meta
   assert.doesNotMatch(captured.system, /basePrompt|compositionLock/);
 });
 
-test("namedInReply accepts names spelled in the reply and never pronouns or role words", () => {
-  const paragraphs = ["\"You've had four,\" Dorran grunts.", "The elf customer waves."];
+test("namedInReply accepts names the reply writes as names, never pronouns, descriptions or role labels", () => {
+  const paragraphs = ["\"You've had four,\" Dorran grunts.", "The elf customer waves.", "The guard nods.", "Elle sourit."];
   assert.equal(namedInReply("Dorran", paragraphs), true);
   assert.equal(namedInReply("dorran", paragraphs), true);
-  assert.equal(namedInReply("Elf customer", paragraphs), true);
+  assert.equal(namedInReply("Old Tom", ["Old Tom nods."]), true);
+  assert.equal(namedInReply("Elf customer", paragraphs), false);
+  assert.equal(namedInReply("The guard", paragraphs), false);
+  assert.equal(namedInReply("Elle", paragraphs), false);
+  assert.equal(namedInReply("Fox girl", ["the fox girl grunts"]), false);
   assert.equal(namedInReply("Dor", paragraphs), false);
   assert.equal(namedInReply("She", ["She waves."]), false);
   assert.equal(namedInReply("Woman", ["A woman waves."]), false);

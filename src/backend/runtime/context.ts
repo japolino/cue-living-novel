@@ -116,13 +116,19 @@ function withNames(text: string, characterName: string, personaName: string): st
     .replace(/\{\{\s*(?:user|persona)\s*\}\}/gi, personaName || "the user");
 }
 
+/** Card tags that mark a scenario or multi-character card, whose name is a title, not a person. */
+const SCENARIO_TAG = /^(?:scenario|scenarios|multiple characters|multi[- ]?characters?|multiple[_ ]characters|group|group chat|rpg|simulator|world|setting|narrator)$/i;
+
 /**
  * The card as planner context. Creator notes are left out: they are author
  * notes about the card (versions, recommended models, greetings), not story.
+ * On a card tagged as a scenario, `{{char}}` is the story's narrator, so it
+ * reads "the narrator" rather than the card title as a person.
  */
 function characterContext(character: CharacterDTO | null, personaName = ""): string {
   if (!character) return "";
-  const named = (text: string) => withNames(text, clean(character.name), personaName);
+  const scenarioCard = character.tags.some((tag) => SCENARIO_TAG.test(tag.trim()));
+  const named = (text: string) => withNames(text, scenarioCard ? "the narrator" : clean(character.name), personaName);
   const nameLine = line("Name", character.name);
   const personalityLine = character.personality ? line("Personality", compact(named(character.personality), 600)) : "";
   const scenarioLine = character.scenario ? line("Scenario", compact(named(character.scenario), 800)) : "";

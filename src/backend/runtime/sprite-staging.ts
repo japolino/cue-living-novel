@@ -586,9 +586,11 @@ export function spriteStagingContext(input: SpriteStagingInput): SpriteStagingCo
     pool.describe(resolve(terminal.character, terminal.characterId), { identity: terminal.identity, attire: terminal.attire, subjectCategory: terminal.subjectCategory });
   }
   const speakers = plan.paragraphSpeakers ?? [];
+  // Nameplate-only speakers (named by the reply, described by nothing) are not actors.
+  const nameplateOnly = new Set((plan.nameplateOnlySpeakers ?? []).map((name) => characterAppearanceKey(name)));
   const speakerKeys = paragraphs.map((_, index) => {
     const label = speakers[index];
-    return typeof label === "string" && label.trim() ? resolve(label) : null;
+    return typeof label === "string" && label.trim() && !nameplateOnly.has(characterAppearanceKey(label)) ? resolve(label) : null;
   });
   // Previous-turn identity/attire fill gaps; the chat appearance map fills the rest.
   for (const member of input.previousCast ?? []) {

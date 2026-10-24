@@ -306,6 +306,9 @@ export const TurnPlanSchema = z.object({
   // (character card name). "" = intentional narrator (hidden plate). Absent on
   // turns planned before this field existed.
   paragraphSpeakers: z.array(z.string().nullable()).default([]),
+  // Speakers kept only because the reply spells their name (a one-line
+  // barkeep): nameplates, never sprite actors, since nothing describes them.
+  nameplateOnlySpeakers: z.array(z.string().trim().min(1).max(200)).max(64).optional(),
   scenes: z.array(SceneStateSchema).min(1),
   visualCues: z.array(VisualCueSchema).default([]),
   // Classifier decisions cover paragraphs independently of the paid-image budget.
