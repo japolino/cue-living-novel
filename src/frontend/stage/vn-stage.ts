@@ -23,8 +23,12 @@ import {
   type VnTurnInput,
 } from "../store";
 import { generateAmbientMarkup, generateCueEffectMarkup, generateFrontAmbientMarkup } from "./procedural-particles.js";
-import { SpriteLayer, type SpriteLayerSnapshot } from "./sprite-layer.js";
+import { SpriteLayer, spritePressTarget, type SpriteLayerSnapshot } from "./sprite-layer.js";
 import { measurePlateLight } from "./sprite-depth.js";
+import { clickEffectFor, spawnClickSparks } from "./click-sparks.js";
+import { interfaceSounds, type InterfaceSounds } from "./interface-sounds.js";
+import { applyInnerVoiceGlow, innerVoiceNames, paragraphInnerVoice } from "./inner-voice.js";
+import type { InnerVoice } from "./voices.js";
 import type { PlateView, SpriteIllustrationView, SpriteImageView, SpriteTurnView } from "../../shared/sprites.js";
 
 export type { StageEffect };
@@ -95,12 +99,15 @@ type TypewriterNode = {
 
 export const TEXT_SHAKE_HEURISTIC_REGEX = /\*\s*(?:thud|slam|crash|smack|shake)[!?.,]*\s*\*/i;
 import {
+  DEFAULT_CONFIG,
   TEXT_SCALE_MAX,
   TEXT_SCALE_MIN,
+  stageFeelSettings,
   type VisualNovelEffectIntensity,
   type VisualNovelPresentationMode,
   type VisualNovelSceneImageFit,
   type VisualNovelSpritePuppet,
+  type VisualNovelStageFeel,
   type VisualNovelTextEffectMode,
   type VisualNovelThemePreset,
 } from "../../config.js";
@@ -155,6 +162,10 @@ export interface VnStageOptions extends VnStageCallbacks {
   autoPlayDelay?: number;
   /** Optional predicate indicating an external hold on auto-play advance (e.g. speech loading/playing). */
   isAutoAdvanceHeld?: () => boolean;
+  /** A voice reads the story aloud now (Cue's read aloud, or Choir by itself): interface sounds stay quiet. */
+  isSpeechActive?: () => boolean;
+  /** Interface sounds to play into (tests); default the shared `interfaceSounds`. */
+  interfaceSounds?: InterfaceSounds;
 }
 
 export interface VnSceneImageRequest {
@@ -286,6 +297,14 @@ const isInteractiveTarget = (target: EventTarget | null): boolean =>
 const isTextEntryTarget = (target: EventTarget | null): boolean =>
   target instanceof Element &&
   Boolean(target.closest("textarea, input, select, option, [contenteditable]:not([contenteditable='false'])"));
+
+/** Text the reader may select: a double-click there still selects a word. */
+const isSelectableTextTarget = (target: EventTarget | null): boolean =>
+  target instanceof Element &&
+  Boolean(target.closest("textarea, input, [contenteditable]:not([contenteditable='false']), [data-vn-dialogue-text], [data-vn-backlog], [data-vn-badge-kind='error']"));
+
+/** Stage chrome over the characters: a press there is a press on the chrome, never on a sprite. */
+const STAGE_CHROME_SELECTOR = "[data-vn-narrative], [data-vn-interaction], [data-vn-status-stack], [data-vn-backlog], [data-vn-empty-state]";
 
 /**
  * A touch-only device (no hover, coarse pointer): its on-screen keyboard's
@@ -582,12 +601,24 @@ export class VnStage {
   private lightningTimer: ReturnType<typeof setTimeout> | null = null;
   /** Plate URL whose light side was last requested (stale answers are dropped). */
   private plateLightUrl: string | null = null;
+  /** Click sparks, press-to-bounce, interface sounds and extra inner voices (config). */
+  private stageFeel: VisualNovelStageFeel = stageFeelSettings(DEFAULT_CONFIG);
+  private innerVoiceExtra: string[] = [];
+  /** The inner voice speaking the line on screen, or null. */
+  private innerVoice: InnerVoice | null = null;
+  private voiceGlowEl: HTMLElement | null = null;
+  private readonly sounds: InterfaceSounds;
+  private readonly speechHold: (() => boolean) | null;
 
   constructor(options: VnStageOptions) {
     this.state = options.initialState ?? createInitialVnStageState();
     this.callbacks = options;
     this.createImage = options.createImage;
     this.isAutoAdvanceHeld = options.isAutoAdvanceHeld;
+    this.sounds = options.interfaceSounds ?? interfaceSounds;
+    // Interface sounds never play over a voice reading the story aloud.
+    this.speechHold = options.isSpeechActive ?? null;
+    if (this.speechHold) this.sounds.setHold(this.speechHold);
 
     this.host = document.createElement("div");
     this.host.setAttribute("data-vn-stage-host", "");
@@ -948,6 +979,30 @@ export class VnStage {
   }
 
   /**
+   * How the stage answers the reader's hand (config `clickEffect`,
+   * `spritePressBounce`, `interfaceSounds`, `interfaceSoundVolume`,
+   * `innerVoices`): click sparks, pressing a character, the shared interface
+   * sounds, and the reader's extra inner-voice names (applied at once).
+   */
+  setStageFeel(settings: VisualNovelStageFeel): void {
+    this.stageFeel = stageFeelSettings(settings);
+    this.innerVoiceExtra = innerVoiceNames(settings.innerVoices);
+    this.sounds.configure({ enabled: settings.interfaceSounds, volume: settings.interfaceSoundVolume });
+    if (this.destroyed) return;
+    this.syncInnerVoice();
+    this.syncSprites();
+  }
+
+  getStageFeel(): VisualNovelStageFeel {
+    return { ...this.stageFeel };
+  }
+
+  /** The inner voice speaking the line on screen (voices.ts), or null. */
+  getInnerVoice(): InnerVoice | null {
+    return this.innerVoice;
+  }
+
+  /**
    * The current turn's sprite view (`TurnView.sprites`), or null. Applied at
    * the current paragraph; `loadTurn({ sprites })` sets it together with a
    * new turn so the first paragraph never shows the previous turn's staging.
@@ -1122,9 +1177,10 @@ export class VnStage {
       if (this.spriteLayer.currentIndex() !== -1) this.spriteLayer.clear();
       return;
     }
-    // The reader's own line is not part of the staging: keep the last stage.
+    // The reader's own line is not part of the staging: keep the last stage,
+    // with nobody on it speaking or dimmed.
     if (this.state.isUserTurn) {
-      this.spriteLayer.setTalking(false);
+      this.spriteLayer.showReaderLine();
       return;
     }
     const index = this.state.currentParagraphIndex;
@@ -1132,6 +1188,7 @@ export class VnStage {
     this.spriteLayer.show(index, {
       animate,
       speaker: view.paragraph.speaker,
+      innerVoice: paragraphInnerVoice(view.paragraph.speaker, this.innerVoiceExtra) !== null,
     });
     this.spriteLayer.setTalking(this.isTyping);
     // Key moment: a ready illustration replaces the sprites for this paragraph.
@@ -1263,6 +1320,32 @@ export class VnStage {
     const sprites = this.spriteContainer();
     this.scene.insertBefore(element, sprites.nextSibling);
     this.ambientFrontEl = element;
+    return element;
+  }
+
+  /**
+   * An inner voice speaks the line on screen (inner-voice.ts): the screen
+   * edges glow in its colour for the length of the paragraph, in both
+   * modes (sprite mode also dims everyone, through `syncSprites`).
+   */
+  private syncInnerVoice(): void {
+    const paragraph = selectVnStageView(this.state).paragraph;
+    const voice = paragraph ? paragraphInnerVoice(paragraph.speaker, this.innerVoiceExtra, this.state.isUserTurn) : null;
+    this.innerVoice = voice;
+    if (voice) this.root.dataset.vnInnerVoice = voice.family;
+    else delete this.root.dataset.vnInnerVoice;
+    if (!voice && !this.voiceGlowEl) return;
+    applyInnerVoiceGlow(this.ensureVoiceGlow(), voice);
+  }
+
+  private ensureVoiceGlow(): HTMLElement {
+    if (this.voiceGlowEl) return this.voiceGlowEl;
+    const element = document.createElement("div");
+    element.setAttribute("data-vn-voice-glow", "");
+    element.setAttribute("aria-hidden", "true");
+    // Right above the scene (sprites included), under the ornaments and the dialogue.
+    this.root.insertBefore(element, this.scene.nextSibling);
+    this.voiceGlowEl = element;
     return element;
   }
 
@@ -1588,6 +1671,7 @@ export class VnStage {
     this.dialogueObserver?.disconnect();
     this.dialogueObserver = null;
     this.spriteLayer.destroy();
+    if (this.speechHold) this.sounds.releaseHold(this.speechHold);
     this.host.remove();
   }
 
@@ -2112,9 +2196,23 @@ export class VnStage {
       this.dialogueText.addEventListener(type, () => { this.dialogueFollow = false; }, { passive: true });
     }
 
+    // Every press on the stage sparks at the pointer (clickEffect).
+    this.root.addEventListener("pointerdown", (event) => this.sparkAt(event));
+    // A double-click or a long press never paints the selection highlight
+    // over the picture or the chrome; the dialogue and History stay selectable.
+    this.root.addEventListener("mousedown", (event) => {
+      if (event.detail > 1 && !isSelectableTextTarget(event.target)) event.preventDefault();
+    });
+    this.root.addEventListener("dragstart", (event) => {
+      if (!isSelectableTextTarget(event.target)) event.preventDefault();
+    });
+
     this.root.addEventListener("click", (event) => {
       if (this.isBacklogOpen) return;
-      if (!isInteractiveTarget(event.target)) this.advance(true);
+      if (isInteractiveTarget(event.target)) return;
+      // A press on a character makes it bounce and reads nothing on.
+      if (this.pressSprite(event)) return;
+      this.advance(true);
     });
 
     this.root.addEventListener("keydown", (event) => {
@@ -2214,6 +2312,36 @@ export class VnStage {
       event.preventDefault();
       void this.submitDraft();
     });
+  }
+
+  /** Click sparks at the pointer (click-sparks.ts), and the pop with the "!". */
+  private sparkAt(event: PointerEvent): void {
+    if (this.destroyed || event.button !== 0 || event.isPrimary === false) return;
+    if (isTextEntryTarget(event.target)) return;
+    const mode = clickEffectFor(this.stageFeel.clickEffect, this.effectIntensity, prefersReducedMotion());
+    if (!spawnClickSparks(this.root, event.clientX, event.clientY, mode)) return;
+    if (mode === "sparks-pop") this.sounds.pop();
+  }
+
+  /**
+   * Sprite mode: a press on a character (not on the dialogue or other
+   * chrome over it) squishes it and it bounces back, and the press reads
+   * nothing on. False when the press is not one (`spritePressTarget`).
+   */
+  private pressSprite(event: MouseEvent): boolean {
+    if (this.presentationMode !== "sprites" || !this.stageFeel.spritePressBounce) return false;
+    if (event.target instanceof Element && event.target.closest(STAGE_CHROME_SELECTOR)) return false;
+    const hit = typeof event.clientX === "number" ? this.spriteLayer.actorAt(event.clientX, event.clientY) : null;
+    const key = spritePressTarget({
+      enabled: this.stageFeel.spritePressBounce,
+      sprites: true,
+      intensity: this.effectIntensity,
+      reducedMotion: prefersReducedMotion(),
+      hit,
+    });
+    if (!key || !this.spriteLayer.press(key)) return false;
+    this.sounds.pop();
+    return true;
   }
 
   private dispatch(action: VnStageAction): void {
@@ -2351,6 +2479,7 @@ export class VnStage {
     const speaker = view.paragraph?.speaker ?? "";
     if (this.speaker.textContent !== speaker) this.speaker.textContent = speaker;
     this.speaker.hidden = !view.paragraph?.speaker;
+    this.syncInnerVoice();
     const progress = view.paragraph
       ? `${view.paragraphNumber} / ${view.paragraphCount}`
       : "";
@@ -2624,14 +2753,18 @@ export class VnStage {
             current.letter.removeAttribute(TYPEWRITER_PENDING_ATTRIBUTE);
             charIdx = current.fullText.length;
             this.spriteLayer.typed(current.fullText);
+            this.sounds.typed(current.fullText);
             this.followTypewriter(current.letter);
             return;
           }
           const code = current.fullText.codePointAt(charIdx) ?? 0;
           charIdx += code > 0xffff ? 2 : 1;
           current.node.textContent = current.fullText.slice(0, charIdx);
-          // The speaking sprite follows the words (sprite-layer.ts `typed`).
-          this.spriteLayer.typed(current.fullText.slice(charIdx - (code > 0xffff ? 2 : 1), charIdx));
+          // The speaking sprite follows the words (sprite-layer.ts `typed`);
+          // a soft tick per letter, throttled (interface-sounds.ts).
+          const typed = current.fullText.slice(charIdx - (code > 0xffff ? 2 : 1), charIdx);
+          this.spriteLayer.typed(typed);
+          this.sounds.typed(typed);
           if (current.rest) {
             if (charIdx < current.fullText.length) {
               current.rest.textContent = current.fullText.slice(charIdx);

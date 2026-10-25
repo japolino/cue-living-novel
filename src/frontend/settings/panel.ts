@@ -69,6 +69,10 @@ import {
   spriteMotionHold,
   describeSpriteMotion,
   describeSpriteOutline,
+  CLICK_EFFECT_OPTIONS,
+  normalizeClickEffect,
+  STAGE_FEEL_HELP,
+  describeInterfaceVolume,
   normalizeSpriteExpressionCount,
   KEY_ILLUSTRATION_OPTIONS,
   normalizeKeyIllustrations,
@@ -629,12 +633,22 @@ export class VisualNovelSettingsPanel {
                 <label data-check ${find("Head movement", "sprites puppet head tilt nod idle")}><input name="spriteHeadMotion" type="checkbox" /><span>Head movement</span></label>
                 <label data-check ${find("Acting", "sprites puppet acting mood posture voice words look speaker listen react emote")}><input name="spriteActing" type="checkbox" /><span>Acting<small>The body carries the mood, the speaker's head follows the words, and the others turn to whoever speaks.</small></span></label>
                 <label data-check ${find("Hair and cloth physics", "sprites puppet physics hair cloth skirt bounce wind follow through")}><input name="spritePhysics" type="checkbox" /><span>Hair and cloth physics<small>Loose hair and clothes trail and settle when a character moves, and flutter in the wind.</small></span></label>
-              `, { id: "sprite-motion", help: esc(SPRITE_MOTION_HELP), find: find("Character motion", "sprites puppet png motion breathing sway head speaker nod bounce") })}
+                <label data-check ${find("Press a character", "sprites press click tap poke character bounce squish jelly")}><input name="spritePressBounce" type="checkbox" /><span>Press a character to make it bounce<small>That click does not turn the page; clicking anywhere else still does.</small></span></label>
+              `, { id: "sprite-motion", help: esc(SPRITE_MOTION_HELP), find: find("Character motion", "sprites puppet png motion breathing sway head speaker nod bounce press") })}
               ${group("Character look", `
                 <label data-field ${find("Sticker outline", "sprites outline border white sticker stroke edge")}><span>Sticker outline <span data-sprite-outline-val>Off</span></span><input name="spriteOutline" type="range" min="0" max="${SPRITE_OUTLINE_MAX}" step="1" /></label>
                 <label data-check ${find("Blur others", "sprites focus speaker dim blur depth")}><input name="spriteFocusBlur" type="checkbox" /><span>Blur characters who are not speaking<small>The speaker steps forward a little; the others are dimmed.</small></span></label>
               `, { id: "sprite-look", find: find("Character look", "sprites outline sticker focus speaker dim blur") })}
             </div>
+            ${group("Stage feel", `
+              <fieldset ${find("Click effect", "click tap sparks sparkle star burst pop exclamation feedback")}>
+                <legend>Click effect</legend>
+                ${segments("clickEffect", CLICK_EFFECT_OPTIONS, false)}
+              </fieldset>
+              <label data-check ${find("Interface sounds", "interface sounds typing tick click pop blip audio ui")}><input name="interfaceSounds" type="checkbox" /><span>Interface sounds<small>A soft tick as the text types, and a pop with the "!" or when you press a character. Quiet while a voice reads the story aloud.</small></span></label>
+              <label data-field ${find("Interface sound volume", "interface sounds volume typing tick pop loudness")}><span>Interface volume <span data-interface-volume-val>Off</span></span><input name="interfaceSoundVolume" type="range" min="0" max="1" step="0.05" /></label>
+              <label data-field ${find("Inner voices", "inner voice thoughts skill disco elysium conscience narrator glow dim names")}><span>Inner voices</span><input name="innerVoices" type="text" maxlength="2000" spellcheck="false" placeholder="Conscience, The Ancient Reptilian Brain" /><small>Extra names, separated by commas, whose lines are thoughts: everyone on stage dims and the screen edges glow. Skill names such as Logic or Inland Empire are known already.</small></label>
+            `, { id: "stage-feel", help: esc(STAGE_FEEL_HELP), find: find("Stage feel", "click sparks press bounce interface sounds typing inner voices") })}
             ${group("Text effect tags", `
               <div data-actions><button type="button" data-copy-guide>Copy guide for your chat model</button><small>Paste it into a character card, lorebook entry or preset so the model uses the tags.</small></div>
               <div data-copy-fallback hidden><small data-copy-fallback-label>Copying is blocked here. The text is selected: press Ctrl+C (or ⌘C).</small><textarea readonly spellcheck="false" aria-label="Text to copy"></textarea></div>
@@ -1260,6 +1274,7 @@ export class VisualNovelSettingsPanel {
       // Sliders and number fields preview while dragging or typing; the save happens on change.
       if (target.name === "bgmVolume" || target.name === "sfxVolume") this.updateVolumeLabels();
       if (target.name === "spriteMotion" || target.name === "spriteOutline") this.updatePuppetLabels();
+      if (target.name === "interfaceSoundVolume") this.updateInterfaceVolumeLabel();
       if (target.name === "textSpeed") this.restartSample();
       if (target.name === "textScale") this.root.querySelector<HTMLElement>("[data-sample-stage]")!.style.setProperty("--sample-scale", String(clamp(Number(target.value), TEXT_SCALE_MIN, TEXT_SCALE_MAX, this.config.textScale)));
     });
@@ -1471,6 +1486,11 @@ export class VisualNovelSettingsPanel {
       case "spritePhysics": return { spritePhysics: checked };
       case "spriteOutline": return { spriteOutline: clamp(Math.round(Number(target.value)), 0, SPRITE_OUTLINE_MAX, DEFAULT_CONFIG.spriteOutline) };
       case "spriteFocusBlur": return { spriteFocusBlur: checked };
+      case "spritePressBounce": return { spritePressBounce: checked };
+      case "clickEffect": return { clickEffect: normalizeClickEffect(target.value) };
+      case "interfaceSounds": return { interfaceSounds: checked };
+      case "interfaceSoundVolume": return { interfaceSoundVolume: clamp(Number(target.value), 0, 1, DEFAULT_CONFIG.interfaceSoundVolume) };
+      case "innerVoices": return { innerVoices: target.value.trim().slice(0, 2000) };
       case "textScaleStep": {
         if (target.value === "custom") { this.showCustom("textScale", true); return null; }
         return { textScale: Number(target.value) };
@@ -1989,6 +2009,7 @@ export class VisualNovelSettingsPanel {
     this.control<HTMLInputElement>("bgmVolume").value = String(config.bgmVolume);
     this.control<HTMLInputElement>("sfxVolume").value = String(config.sfxVolume);
     this.updateVolumeLabels();
+    this.syncStageFeel(config);
 
     this.renderConnectionSelects("planner", config.parserConnectionId);
     this.renderConnectionSelects("image", config.imageConnectionId);
@@ -2023,6 +2044,7 @@ export class VisualNovelSettingsPanel {
       input.disabled = config.spriteMotion <= 0;
     }
     this.control<HTMLInputElement>("spriteFocusBlur").checked = config.spriteFocusBlur;
+    this.control<HTMLInputElement>("spritePressBounce").checked = config.spritePressBounce;
     this.updatePuppetLabels();
     // Motion Still (or the system's reduced motion) keeps the characters still; the choices here are kept.
     const hold = spriteMotionHold(config.effectIntensity, typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches);
@@ -2174,6 +2196,24 @@ export class VisualNovelSettingsPanel {
   private showCustomQuiet(name: string, visible: boolean): void {
     const field = this.root.querySelector<HTMLElement>(`[data-custom="${name}"]`);
     if (field) field.hidden = !visible;
+  }
+
+  /** Look → Stage feel: click effect, interface sounds, inner voices (both presentation modes). */
+  private syncStageFeel(config: VisualNovelConfig): void {
+    this.setRadio("clickEffect", config.clickEffect);
+    this.control<HTMLInputElement>("interfaceSounds").checked = config.interfaceSounds;
+    const volume = this.control<HTMLInputElement>("interfaceSoundVolume");
+    volume.value = String(config.interfaceSoundVolume);
+    volume.disabled = !config.interfaceSounds;
+    this.updateInterfaceVolumeLabel();
+    const voices = this.control<HTMLInputElement>("innerVoices");
+    if (this.root.activeElement !== voices) voices.value = config.innerVoices;
+  }
+
+  private updateInterfaceVolumeLabel(): void {
+    const on = this.control<HTMLInputElement>("interfaceSounds").checked;
+    const volume = Number(this.control<HTMLInputElement>("interfaceSoundVolume").value);
+    this.root.querySelector("[data-interface-volume-val]")!.textContent = describeInterfaceVolume(on, volume);
   }
 
   private updatePuppetLabels(): void {

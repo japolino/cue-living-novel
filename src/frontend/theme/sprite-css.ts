@@ -39,7 +39,8 @@ export const VN_SPRITE_CSS = `
   --vn-sprite-slot-w: 62cqw;
   /* Effect intensity scale for motion and emotes ("gentle" halves it). */
   --vn-sprite-fx: 1;
-  --vn-sprite-move-ms: 620ms;
+  /* Others slide to their new slot when someone enters or leaves. */
+  --vn-sprite-move-ms: 400ms;
   /* Rim light: colour and strength per light preset; side from the plate
      (data-vn-light-side on the scene: left / right / top, default top). */
   --vn-sprite-rim: #fff6e6;
@@ -49,6 +50,17 @@ export const VN_SPRITE_CSS = `
   /* Contact shadow strength. */
   --vn-sprite-ground-o: 0.42;
   transition: filter 600ms ease;
+  /* Characters are pictures, never text: no selection highlight on a
+     double-click, no drag ghost, no long-press menu. */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+[data-vn-sprites] * {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
 }
 
 [data-vn-sprites]:empty {
@@ -100,7 +112,8 @@ export const VN_SPRITE_CSS = `
       filter 320ms ease,
       opacity 320ms ease;
   }
-  [data-vn-sprites][data-vn-sprite-count="3"] [data-vn-sprite][data-vn-sprite-dim="true"] {
+  /* An inner voice dims everyone: then nobody steps back. */
+  [data-vn-sprites][data-vn-sprite-count="3"]:not([data-vn-sprite-voice]) [data-vn-sprite][data-vn-sprite-dim="true"] {
     scale: 0.8;
   }
   /* The speaker always stands whole on screen. */
@@ -146,15 +159,17 @@ export const VN_SPRITE_CSS = `
 
 [data-vn-sprite][data-vn-sprite-order="1"] { z-index: 2; }
 [data-vn-sprite][data-vn-sprite-order="2"] { z-index: 1; }
-/* The speaker stands in front, in full light and a little larger when
-   others share the stage; the others dim slightly, and blur a little with
-   spriteFocusBlur (data-vn-sprite-blur). The puppet blurs in its own pass,
-   so a CSS blur never re-runs on its per-frame canvas. */
+/* The speaker stands in front, in full light and 3% larger when others
+   share the stage; the others drop to half brightness, and blur by 1 px
+   with spriteFocusBlur (data-vn-sprite-blur). The puppet blurs in its own
+   pass, so a CSS blur never re-runs on its per-frame canvas. Who dims is
+   decided in sprite-layer.ts (spriteDimmedKeys): nobody while the speaker
+   is not on stage, everyone for an inner voice. */
 [data-vn-sprite][data-vn-sprite-focus="true"] { z-index: 4; }
-[data-vn-sprites]:not([data-vn-sprite-count="1"]) [data-vn-sprite][data-vn-sprite-focus="true"] { --vn-sprite-zoom: 1.035; }
-[data-vn-sprite][data-vn-sprite-dim="true"] { filter: brightness(0.68) saturate(0.8); }
+[data-vn-sprites]:not([data-vn-sprite-count="1"]) [data-vn-sprite][data-vn-sprite-focus="true"] { --vn-sprite-zoom: 1.03; }
+[data-vn-sprite][data-vn-sprite-dim="true"] { filter: brightness(0.5) saturate(0.8); }
 [data-vn-sprites][data-vn-sprite-blur="true"] [data-vn-sprite]:not([data-vn-puppet="gl"])[data-vn-sprite-dim="true"] {
-  filter: brightness(0.68) saturate(0.8) blur(1.2px);
+  filter: brightness(0.5) saturate(0.8) blur(1px);
 }
 [data-vn-sprite][data-vn-sprite-facing="left"] { --vn-sprite-dir: -1; }
 [data-vn-sprite][data-vn-sprite-facing="right"] { --vn-sprite-dir: 1; }
@@ -208,17 +223,18 @@ export const VN_SPRITE_CSS = `
   mask-composite: intersect;
 }
 
-/* Expression crossfade: the new layer fades in on top, the old one leaves a
-   moment later so the figure never turns see-through halfway. */
+/* Expression and pose crossfade (SPRITE_CROSSFADE_MS): the new layer fades
+   in on top, the old one leaves a moment later so the figure never turns
+   see-through halfway. */
 [data-vn-sprite-image][data-vn-sprite-layer="active"] {
   z-index: 1;
   opacity: 1;
-  transition: opacity 260ms ease;
+  transition: opacity 200ms ease;
 }
 
 [data-vn-sprite-image][data-vn-sprite-layer="leaving"] {
   opacity: 0;
-  transition: opacity 180ms ease 140ms;
+  transition: opacity 120ms ease 100ms;
 }
 
 [data-vn-sprite-image][data-vn-empty="true"] {
@@ -502,11 +518,18 @@ export const VN_SPRITE_CSS = `
 }
 
 @media (prefers-reduced-motion: no-preference) {
+  /* Entering: a quick fade in with a few px rise (SPRITE_ENTER_MS). */
   [data-vn-sprite][data-vn-sprite-state="entering"] {
-    animation: vn-sprite-enter 460ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation: vn-sprite-enter 150ms cubic-bezier(0.22, 1, 0.36, 1) both;
   }
   [data-vn-sprite][data-vn-sprite-state="exiting"] {
     animation: vn-sprite-exit 420ms ease-in both;
+  }
+  /* A pressed character squishes around its feet and bounces back
+     (SPRITE_PRESS_MS). On the anchor's transform, so it composes with the
+     motions, the zoom and the talking bob on the body. */
+  [data-vn-sprite][data-vn-sprite-press="true"] {
+    animation: vn-sprite-press 350ms ease-out both;
   }
 
   /* Idle breathing (CSS fallback; the puppet breathes in its warp): a slow
@@ -571,6 +594,7 @@ export const VN_SPRITE_CSS = `
   }
 
   /* "Off": no motion or emote animation; positions still change. */
+  [data-vn-root][data-vn-effect-intensity="off"] [data-vn-sprite][data-vn-sprite-press],
   [data-vn-root][data-vn-effect-intensity="off"] [data-vn-sprite] [data-vn-sprite-body],
   [data-vn-root][data-vn-effect-intensity="off"] [data-vn-sprite] [data-vn-sprite-figure],
   [data-vn-root][data-vn-effect-intensity="off"] [data-vn-sprite] [data-vn-sprite-marks],
@@ -595,8 +619,15 @@ export const VN_SPRITE_CSS = `
 }
 
 @keyframes vn-sprite-enter {
-  from { opacity: 0; translate: 0 calc(var(--vn-sprite-img-h) * 0.035); }
+  from { opacity: 0; translate: 0 6px; }
   to { opacity: 1; translate: 0 0; }
+}
+@keyframes vn-sprite-press {
+  0% { transform: none; }
+  22% { transform: scale(1.07, 0.9); }
+  52% { transform: scale(0.97, 1.05); }
+  76% { transform: scale(1.015, 0.99); }
+  100% { transform: none; }
 }
 @keyframes vn-sprite-exit {
   from { opacity: 1; translate: 0 0; }

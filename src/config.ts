@@ -79,6 +79,13 @@ export const SPRITE_MOTION_MAX = 150;
 export const SPRITE_OUTLINE_MAX = 6;
 export type VisualNovelSpritePuppet = Pick<VisualNovelConfig,
   "spriteMotion" | "spriteBreathing" | "spriteSway" | "spriteHeadMotion" | "spriteActing" | "spritePhysics" | "spriteOutline" | "spriteFocusBlur">;
+/**
+ * How the stage answers the reader's hand (VnStage.setStageFeel): click
+ * sparks, pressing a sprite to make it bounce, the interface sounds (typing
+ * ticks and a pop, with their own volume), and extra inner-voice names.
+ */
+export type VisualNovelStageFeel = Pick<VisualNovelConfig,
+  "clickEffect" | "spritePressBounce" | "interfaceSounds" | "interfaceSoundVolume" | "innerVoices">;
 export type VisualNovelTextEffectMode = (typeof TEXT_EFFECT_MODES)[number];
 
 /**
@@ -98,6 +105,15 @@ export function textEffectModeFor(intensity: VisualNovelEffectIntensity): Visual
  */
 export const REFERENCE_SOURCES = ["captured", "card"] as const;
 export type VisualNovelReferenceSource = (typeof REFERENCE_SOURCES)[number];
+
+/**
+ * What a click or tap on the stage shows at the pointer: a small gold spark
+ * burst with a little "!" ("sparks-pop"), the sparks alone ("sparks", the
+ * default), or nothing. Motion "off" and the OS reduced-motion setting turn
+ * it off whatever this says (src/frontend/stage/click-sparks.ts).
+ */
+export const CLICK_EFFECTS = ["sparks-pop", "sparks", "off"] as const;
+export type VisualNovelClickEffect = (typeof CLICK_EFFECTS)[number];
 
 /** Dialogue text scale bounds (multiplier over the theme's dialogue font size). */
 export const TEXT_SCALE_MIN = 0.8;
@@ -212,6 +228,16 @@ export type VisualNovelConfig = {
   spriteOutline: number;
   /** Sprite mode: blur the characters who are not speaking a little. */
   spriteFocusBlur: boolean;
+  /** A click or tap on the stage: gold sparks with a "!", sparks alone, or nothing. */
+  clickEffect: VisualNovelClickEffect;
+  /** Sprite mode: pressing a character squishes it and it bounces back; that click does not read on. */
+  spritePressBounce: boolean;
+  /** Soft typing ticks and a pop, synthesized in the browser. Never while a voice reads aloud. */
+  interfaceSounds: boolean;
+  /** Volume of the interface sounds, 0..1. */
+  interfaceSoundVolume: number;
+  /** More inner-voice names (comma separated): their lines dim everyone and light the screen edges. */
+  innerVoices: string;
   /** Dialogue text size multiplier, 1 = the theme's own size. */
   textScale: number;
   audioDirectory: string;
@@ -277,6 +303,11 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   spritePhysics: true,
   spriteOutline: 0,
   spriteFocusBlur: true,
+  clickEffect: "sparks",
+  spritePressBounce: true,
+  interfaceSounds: false,
+  interfaceSoundVolume: 0.4,
+  innerVoices: "",
   textScale: 1,
   audioDirectory: "",
   bgmVolume: 0.7,
@@ -395,6 +426,17 @@ function spriteModelUrl(value: unknown): string {
   return modelUrl(value, DEFAULT_CONFIG.spriteModelUrl);
 }
 
+/** The stage feel settings of a config (what VnStage.setStageFeel needs). */
+export function stageFeelSettings(config: VisualNovelStageFeel): VisualNovelStageFeel {
+  return {
+    clickEffect: config.clickEffect,
+    spritePressBounce: config.spritePressBounce,
+    interfaceSounds: config.interfaceSounds,
+    interfaceSoundVolume: config.interfaceSoundVolume,
+    innerVoices: config.innerVoices,
+  };
+}
+
 /** The puppet settings of a config (what the sprite layer needs). */
 export function spritePuppetSettings(config: VisualNovelSpritePuppet): VisualNovelSpritePuppet {
   return {
@@ -511,6 +553,13 @@ export function normalizeConfig(value: unknown): VisualNovelConfig {
     spritePhysics: bool(input.spritePhysics, DEFAULT_CONFIG.spritePhysics),
     spriteOutline: integer(input.spriteOutline, 0, SPRITE_OUTLINE_MAX, DEFAULT_CONFIG.spriteOutline),
     spriteFocusBlur: bool(input.spriteFocusBlur, DEFAULT_CONFIG.spriteFocusBlur),
+    clickEffect: (CLICK_EFFECTS as readonly string[]).includes(input.clickEffect as string)
+      ? input.clickEffect as VisualNovelClickEffect
+      : DEFAULT_CONFIG.clickEffect,
+    spritePressBounce: bool(input.spritePressBounce, DEFAULT_CONFIG.spritePressBounce),
+    interfaceSounds: bool(input.interfaceSounds, DEFAULT_CONFIG.interfaceSounds),
+    interfaceSoundVolume: Math.round(floatBetween(input.interfaceSoundVolume, 0, 1, DEFAULT_CONFIG.interfaceSoundVolume) * 100) / 100,
+    innerVoices: stringValue(input.innerVoices, DEFAULT_CONFIG.innerVoices).slice(0, 2000),
     textScale: textScale(input.textScale),
     audioDirectory: stringValue(input.audioDirectory, DEFAULT_CONFIG.audioDirectory).trim(),
     bgmVolume: floatBetween(input.bgmVolume, 0, 1, DEFAULT_CONFIG.bgmVolume),

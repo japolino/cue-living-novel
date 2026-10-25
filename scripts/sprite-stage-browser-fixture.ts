@@ -1,7 +1,7 @@
 import { VnStage } from "../src/frontend/stage/vn-stage.js";
 import type { VnTurnInput } from "../src/frontend/store/vn-store.js";
 import { puppetGlOptions } from "../src/frontend/stage/sprite-puppet.js";
-import { DEFAULT_CONFIG, spritePuppetSettings, type VisualNovelSpritePuppet } from "../src/config.js";
+import { DEFAULT_CONFIG, spritePuppetSettings, stageFeelSettings, type VisualNovelSpritePuppet, type VisualNovelStageFeel } from "../src/config.js";
 import {
   SPRITE_HOT_SET,
   type PlateView,
@@ -20,7 +20,7 @@ import {
  *
  * Query: ?preset, ?intensity (full|gentle|off), ?speed (typewriter ms), ?mode (sprites|scene),
  * ?puppet=css (no WebGL puppet: the CSS fallback), ?outline (px).
- * window.fx: { stage, load(paragraphs, options), plan(), go(index), illustrate(index, status), ready(...), view(), effect(name), ambient(name), puppet(settings) }.
+ * window.fx: { stage, load(paragraphs, options), plan(), go(index), illustrate(index, status), ready(...), view(), effect(name), ambient(name), puppet(settings), feel(settings) }.
  * `load(paragraphs, { provisional: true })` shows the text before its plan (no
  * nameplates, no staging); `plan()` lands the plan (VnStage.upgradeTurn).
  * Headless Chromium only has software WebGL (SwiftShader), which the puppet
@@ -133,6 +133,8 @@ stage.setEffectIntensity((q.get("intensity") as never) ?? "full");
 stage.setPresentationMode((q.get("mode") as never) ?? "sprites");
 const puppet = (settings: Partial<VisualNovelSpritePuppet>) => stage.setSpritePuppet({ ...spritePuppetSettings(DEFAULT_CONFIG), ...settings });
 if (q.get("outline")) puppet({ spriteOutline: Number(q.get("outline")) });
+/** Click sparks, press-to-bounce, interface sounds and inner voices (scripts/test-stage-feel-browser.ts). */
+const feel = (settings: Partial<VisualNovelStageFeel>) => stage.setStageFeel({ ...stageFeelSettings(DEFAULT_CONFIG), ...settings });
 
 let current: SpriteTurnView | null = null;
 let turnCounter = 0;
@@ -218,5 +220,6 @@ Object.assign(window, {
     effect: (name: string) => stage.triggerEffect(name as never),
     ambient: (name: string | null) => stage.applyAmbient(name as never),
     puppet,
+    feel,
   },
 });

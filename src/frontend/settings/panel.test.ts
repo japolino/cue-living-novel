@@ -84,6 +84,26 @@ describe("settings panel markup", () => {
     expect(source).toContain('this.root.querySelector<HTMLElement>("[data-sprites-look]")!.hidden = !sprites;');
   });
 
+  test("stage feel: press-to-bounce in Character motion; click effect, interface sounds and inner voices in Look, saving at once", () => {
+    for (const name of ["spritePressBounce", "clickEffect", "interfaceSounds", "interfaceSoundVolume", "innerVoices"]) {
+      expect(source).toContain(`case "${name}": return { ${name}: `);
+      expect(advancedKeys).not.toContain(name);
+    }
+    for (const name of ["spritePressBounce", "interfaceSounds", "interfaceSoundVolume", "innerVoices"]) {
+      expect(names.filter((candidate) => candidate === name)).toEqual([name]);
+    }
+    expect(source).toContain('segments("clickEffect", CLICK_EFFECT_OPTIONS, false)');
+    // Inside the Look pane, after the sprite groups and before the text effect tags; not in Reading.
+    const look = source.slice(source.indexOf('${pane("look"'), source.indexOf('${pane("pictures"'));
+    const motion = look.indexOf('id: "sprite-motion"');
+    expect(motion).toBeGreaterThan(-1);
+    expect(look.indexOf('name="spritePressBounce"')).toBeLessThan(motion);
+    expect(look.indexOf('id: "stage-feel"')).toBeGreaterThan(look.indexOf('id: "sprite-look"'));
+    expect(look.indexOf('id: "stage-feel"')).toBeLessThan(look.indexOf('id: "text-fx"'));
+    // The reader's text is not overwritten while being typed.
+    expect(source).toContain("if (this.root.activeElement !== voices) voices.value = config.innerVoices;");
+  });
+
   test("character motion reads as not applying under Motion Still or reduced motion, with a note", () => {
     expect(source).toContain('<p data-motion-note hidden></p>');
     expect(source).toContain("spriteMotionHold(config.effectIntensity,");

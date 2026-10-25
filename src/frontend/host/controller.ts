@@ -1,5 +1,5 @@
 import type { SpindleFrontendContext } from "lumiverse-spindle-types";
-import { spritePuppetSettings, textEffectModeFor, type VisualNovelConfig, type VisualNovelEffectIntensity, type VisualNovelPresentationMode, type VisualNovelSpritePuppet, type VisualNovelTextEffectMode } from "../../config.js";
+import { spritePuppetSettings, stageFeelSettings, textEffectModeFor, type VisualNovelConfig, type VisualNovelEffectIntensity, type VisualNovelPresentationMode, type VisualNovelSpritePuppet, type VisualNovelStageFeel, type VisualNovelTextEffectMode } from "../../config.js";
 import { REFERENCE_IMAGE_MAX_BYTES, REFERENCE_IMAGE_MIMES } from "../../protocol.js";
 import type { AssetView, BackendResponse, ConnectionCatalogOption, FrontendRequest, TurnView } from "../../protocol.js";
 import { AudioEngine, VnStage, isAmbientEffect, isStageEffect } from "../stage/index.js";
@@ -36,7 +36,7 @@ import {
   describePlanningFailure,
   type HostStageError,
 } from "./turn-status.js";
-import { SpeechController, type SpeechCursor } from "../speech/controller.js";
+import { SpeechController, type SpeechCursor, type SpeechStatus } from "../speech/controller.js";
 import { ChoirBridge } from "./choir-bridge.js";
 import { PackSound } from "./pack-sound.js";
 import { SpeechDock } from "../speech/ui.js";
@@ -69,6 +69,19 @@ function base64FromBytes(bytes: Uint8Array): string {
  */
 export function choirPlaysSound(speech: SpeechSettings | undefined, choir: Pick<ChoirBridge, "isAvailable" | "soundEnabled" | "readsByItself">): boolean {
   return choir.isAvailable() && choir.soundEnabled() && (Boolean(speech?.enabled) || choir.readsByItself());
+}
+
+/**
+ * Whether a voice may be reading the story aloud now, which keeps the
+ * interface sounds (typing ticks, the pop) quiet: Cue's read aloud is loading
+ * or playing a paragraph, or Choir reads replies by itself (its Auto; Cue
+ * cannot see when that reading starts or ends, so they stay quiet while it
+ * is on). Choir's music and effects alone do not count: interface sounds are
+ * not story sound.
+ */
+export function speechHoldsInterfaceSounds(status: Pick<SpeechStatus, "kind"> | null | undefined, choir: Pick<ChoirBridge, "readsByItself">): boolean {
+  if (status?.kind === "loading" || status?.kind === "playing") return true;
+  return choir.readsByItself();
 }
 
 /**
@@ -414,6 +427,8 @@ export type VisualStageThemeTarget = Pick<
   setPresentationMode?: (mode: VisualNovelPresentationMode) => void;
   /** Sprite puppet motion, outline and focus blur. */
   setSpritePuppet?: (settings: VisualNovelSpritePuppet) => void;
+  /** Click sparks, press-to-bounce, interface sounds and extra inner voices. */
+  setStageFeel?: (settings: VisualNovelStageFeel) => void;
 };
 
 /**
@@ -438,6 +453,7 @@ export function applyVisualConfigToStage(
   stage.setTextEffects?.(textEffectModeFor(config.effectIntensity));
   stage.setPresentationMode?.(config.presentationMode);
   stage.setSpritePuppet?.(spritePuppetSettings(config));
+  stage.setStageFeel?.(stageFeelSettings(config));
 }
 
 /**
@@ -680,6 +696,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     mount: app.root,
     themePreset: configRef.current?.themePreset ?? "lumiverse",
     isAutoAdvanceHeld: () => isSpeechHoldingAuto(),
+    isSpeechActive: () => speechHoldsInterfaceSounds(speech?.getStatus(), choirBridge),
     onExit: () => deactivate(),
     onPrevious: (paragraphIndex) => {
       panels.setCursor(paragraphIndex);

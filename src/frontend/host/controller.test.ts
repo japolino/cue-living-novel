@@ -13,6 +13,7 @@ import {
   sameTurnIdentity,
   selectCurrentImage,
   shouldPreserveImage,
+  speechHoldsInterfaceSounds,
   stageTurnInput,
   systemOneKeyMessage,
   viewStateMessages,
@@ -101,6 +102,11 @@ const baseConfig: VisualNovelConfig = {
   spritePhysics: true,
   spriteOutline: 0,
   spriteFocusBlur: true,
+  clickEffect: "sparks",
+  spritePressBounce: true,
+  interfaceSounds: false,
+  interfaceSoundVolume: 0.4,
+  innerVoices: "",
   textScale: 1,
   audioDirectory: "",
   bgmVolume: 0.7,
@@ -199,6 +205,30 @@ describe("applyVisualConfigToStage (redesign presentation preferences)", () => {
     const stage = spyStage();
     expect(() => applyVisualConfigToStage(stage, { ...baseConfig, textScale: 1.4, effectIntensity: "off" })).not.toThrow();
     expect(stage.calls).toHaveLength(4);
+  });
+
+  test("pushes the stage feel settings (click effect, press, interface sounds, inner voices)", () => {
+    const seen: unknown[] = [];
+    const stage: VisualStageThemeTarget = { ...spyStage(), setStageFeel(settings) { seen.push(settings); } };
+    applyVisualConfigToStage(stage, { ...baseConfig, clickEffect: "sparks-pop", interfaceSounds: true, interfaceSoundVolume: 0.6, innerVoices: "Conscience" });
+    expect(seen).toEqual([{ clickEffect: "sparks-pop", spritePressBounce: true, interfaceSounds: true, interfaceSoundVolume: 0.6, innerVoices: "Conscience" }]);
+  });
+});
+
+describe("speechHoldsInterfaceSounds", () => {
+  const choir = (reads: boolean) => ({ readsByItself: () => reads });
+
+  test("Cue's read aloud loading or playing holds the interface sounds", () => {
+    expect(speechHoldsInterfaceSounds({ kind: "loading" }, choir(false))).toBe(true);
+    expect(speechHoldsInterfaceSounds({ kind: "playing" }, choir(false))).toBe(true);
+  });
+
+  test("Choir reading by itself holds them; idle, off and no speech do not", () => {
+    expect(speechHoldsInterfaceSounds({ kind: "idle" }, choir(true))).toBe(true);
+    expect(speechHoldsInterfaceSounds(null, choir(true))).toBe(true);
+    expect(speechHoldsInterfaceSounds({ kind: "idle" }, choir(false))).toBe(false);
+    expect(speechHoldsInterfaceSounds({ kind: "off" }, choir(false))).toBe(false);
+    expect(speechHoldsInterfaceSounds(undefined, choir(false))).toBe(false);
   });
 });
 

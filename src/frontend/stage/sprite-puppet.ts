@@ -100,7 +100,7 @@ export type PuppetActorRef = {
 export type PuppetMode = "gl" | "css";
 
 /** Blur of characters who are not speaking (CSS px), with `spriteFocusBlur`. */
-export const PUPPET_FOCUS_BLUR_PX = 1.2;
+export const PUPPET_FOCUS_BLUR_PX = 1;
 /** Motion "gentle" scales the puppet like the CSS motions (--vn-sprite-fx in sprite-css.ts). */
 export const PUPPET_GENTLE = 0.55;
 /** Rim light width in image heights (matches --vn-sprite-rim-w in sprite-css.ts). */

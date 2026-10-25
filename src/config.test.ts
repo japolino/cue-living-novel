@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
+  CLICK_EFFECTS,
   DEFAULT_CONFIG,
   EFFECT_INTENSITIES,
   TEXT_SCALE_MAX,
@@ -14,6 +15,7 @@ import {
   SPRITE_OUTLINE_MAX,
   THEME_PRESET_IDS,
   spritePuppetSettings,
+  stageFeelSettings,
 } from "./config";
 
 test("configuration normalizes unsafe ranges", () => {
@@ -312,4 +314,36 @@ test("sprite puppet settings default on (no outline) and clamp to their ranges",
   assert.equal(normalizeConfig({ spriteMotion: -5, spriteOutline: "2" }).spriteMotion, 0);
   assert.equal(normalizeConfig({ spriteOutline: "2" }).spriteOutline, 2);
   assert.deepEqual(Object.keys(spritePuppetSettings(defaults)).sort(), ["spriteActing", "spriteBreathing", "spriteFocusBlur", "spriteHeadMotion", "spriteMotion", "spriteOutline", "spritePhysics", "spriteSway"]);
+});
+
+test("stage feel settings: sparks and press-to-bounce on, interface sounds off, and they normalise", () => {
+  const defaults = normalizeConfig({});
+  assert.equal(defaults.clickEffect, "sparks");
+  assert.equal(defaults.spritePressBounce, true);
+  assert.equal(defaults.interfaceSounds, false);
+  assert.equal(defaults.interfaceSoundVolume, 0.4);
+  assert.equal(defaults.innerVoices, "");
+  for (const effect of CLICK_EFFECTS) assert.equal(normalizeConfig({ clickEffect: effect }).clickEffect, effect);
+  assert.equal(normalizeConfig({ clickEffect: "fireworks" }).clickEffect, "sparks");
+  assert.equal(normalizeConfig({ spritePressBounce: false }).spritePressBounce, false);
+  assert.equal(normalizeConfig({ spritePressBounce: "no" }).spritePressBounce, true);
+  assert.equal(normalizeConfig({ interfaceSounds: true }).interfaceSounds, true);
+  assert.equal(normalizeConfig({ interfaceSounds: "yes" }).interfaceSounds, false);
+  assert.equal(normalizeConfig({ interfaceSoundVolume: 3 }).interfaceSoundVolume, 1);
+  assert.equal(normalizeConfig({ interfaceSoundVolume: -1 }).interfaceSoundVolume, 0);
+  assert.equal(normalizeConfig({ interfaceSoundVolume: 0.333 }).interfaceSoundVolume, 0.33);
+  assert.equal(normalizeConfig({ interfaceSoundVolume: "loud" }).interfaceSoundVolume, 0.4);
+  assert.equal(normalizeConfig({ innerVoices: "Conscience, Ancient Reptilian Brain" }).innerVoices, "Conscience, Ancient Reptilian Brain");
+  assert.equal(normalizeConfig({ innerVoices: 42 }).innerVoices, "");
+  assert.equal(normalizeConfig({ innerVoices: "x".repeat(5000) }).innerVoices.length, 2000);
+  assert.deepEqual(Object.keys(stageFeelSettings(defaults)).sort(), ["clickEffect", "innerVoices", "interfaceSoundVolume", "interfaceSounds", "spritePressBounce"]);
+});
+
+test("stage feel fields sit right after spriteFocusBlur", () => {
+  const keys = Object.keys(DEFAULT_CONFIG);
+  const at = keys.indexOf("spriteFocusBlur");
+  assert.deepEqual(keys.slice(at + 1, at + 6), ["clickEffect", "spritePressBounce", "interfaceSounds", "interfaceSoundVolume", "innerVoices"]);
+  const normalized = Object.keys(normalizeConfig({}));
+  const nAt = normalized.indexOf("spriteFocusBlur");
+  assert.deepEqual(normalized.slice(nAt + 1, nAt + 6), ["clickEffect", "spritePressBounce", "interfaceSounds", "interfaceSoundVolume", "innerVoices"]);
 });
