@@ -524,7 +524,9 @@ export class SpritePuppet {
     if (!actor) return;
     if (talking && !actor.talking) {
       actor.voice = puppetVoice();
-      if (reaction && actor.mode === "gl") actor.reaction = { kind: reaction, start: now() / 1000 };
+      // Kept in any mode: an actor staged mid-line (a plan that lands after its
+      // text) is still "css" here, until the refresh that follows applyStage.
+      if (reaction) actor.reaction = { kind: reaction, start: now() / 1000 };
     }
     actor.talking = talking;
   }

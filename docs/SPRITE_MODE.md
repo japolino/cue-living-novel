@@ -739,13 +739,18 @@ and the head tilts and bobs around the neck while the feet stay planted.
   the top moves most), head tilt and bob (slow waves plus a little sway
   coupling). Each actor has its own phase (`puppetPhase`, a hash of the
   key), so two figures never move in step. `spriteMotion` scales it all
-  (0–150%); effect intensity "gentle" multiplies by 0.55; the three toggles
-  ease each part in or out.
+  (0–150%); the Motion setting (`effectIntensity`) "gentle" multiplies by
+  0.55 and "off" (Still) stops the puppet; the three toggles ease each part
+  in or out.
 - **Speaker reaction**: when the focused speaker's line starts, a nod
   (500 ms) or, for smile / laughing / surprised / happy / excited / smug, a
   bounce (750 ms), skipped while a staged motion plays. While the text
   types, the head moves with the words (syllable dips ≈ 2.7 Hz with phrase
-  swells, a small tilt jitter) instead of the CSS bob.
+  swells, a small tilt jitter) instead of the CSS bob. Text before its plan
+  (a provisional turn) has no staging, so nobody is on stage while it types;
+  when the plan lands mid-line (`VnStage.upgradeTurn`), the speaker steps in
+  with the reaction and follows the rest of the line. A plan that lands after
+  the line has typed brings the speaker in without one.
 - **Displacement** (`puppetDisplace`): one pure function moves the mesh
   vertices on the CPU (24 × 36 grid) and places the emotes:
   `[data-vn-sprite-marks]` gets a `translate` from the face offset (x flipped
@@ -794,8 +799,9 @@ and the head tilts and bobs around the neck while the feet stay planted.
   the 2.5D turn, shoulders, posture, trails, springs, wind);
   `bun run test:sprite-stage` asserts puppet mode, that the head band moves
   more than the feet, the marks following the head, the nod, the outline,
-  settings, the pauses and the CSS fallback, plus acting and physics (see
-  below), and writes `.cache/sprite-stage/puppet-frames.png` and
+  settings, the pauses, the CSS fallback and a plan that lands mid-line
+  (`fx.load(p, { provisional: true })`, then `fx.plan()`), plus acting and
+  physics (see below), and writes `.cache/sprite-stage/puppet-frames.png` and
   `puppet-diff.png` (four frames 0.25 s apart and their differences ×12).
 
 ### Puppet acting (`sprite-puppet-acting.ts`, `spriteActing`)

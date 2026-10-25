@@ -871,6 +871,20 @@ try {
     });
     await page.waitForTimeout(100);
     assert.equal((await puppetState(page)).running, true, "runs again when visible");
+
+    // Text before its plan: the line types with nobody staged; the plan lands mid-line and the
+    // speaker who appears nods (head movement off, so the nod is the reaction alone) and follows the words.
+    await page.evaluate(() => (window as any).fx.puppet({ spriteHeadMotion: false }));
+    await page.evaluate((p) => (window as any).fx.load(p, { provisional: true }), [{ speaker: "Mira", text: "This line came before its plan, so I step in while it is still typing and nod as I do.", actors: [{ characterKey: "mira", slot: "left", focus: true }, { characterKey: "ren", slot: "right" }] }]);
+    await page.waitForTimeout(500);
+    assert.equal((await snap(page)).actors.length, 0, "the provisional line has nobody on stage");
+    await page.evaluate(() => (window as any).fx.plan());
+    const late = await samplePoses(page, 900);
+    const lateNod = series(late, "mira", "nod");
+    assert.ok(lateNod.length && Math.max(...lateNod) > 0.003, `a plan that lands mid-line: the speaker nods (peak ${Math.max(0, ...lateNod).toFixed(4)})`);
+    assert.ok(Math.max(...late.map((frame) => frame.mira?.voice ?? 0)) > 0.5, "and follows the rest of the line");
+    assert.equal(await page.evaluate(() => document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!.querySelector<HTMLElement>("[data-vn-sprite-key='mira']")!.dataset.vnSpriteTalking), "true");
+    await shot(page, "puppet-late-plan");
     await page.close();
   }
 

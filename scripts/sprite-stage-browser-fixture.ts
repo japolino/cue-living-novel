@@ -1,4 +1,5 @@
 import { VnStage } from "../src/frontend/stage/vn-stage.js";
+import type { VnTurnInput } from "../src/frontend/store/vn-store.js";
 import { puppetGlOptions } from "../src/frontend/stage/sprite-puppet.js";
 import { DEFAULT_CONFIG, spritePuppetSettings, type VisualNovelSpritePuppet } from "../src/config.js";
 import {
@@ -19,7 +20,9 @@ import {
  *
  * Query: ?preset, ?intensity (full|gentle|off), ?speed (typewriter ms), ?mode (sprites|scene),
  * ?puppet=css (no WebGL puppet: the CSS fallback), ?outline (px).
- * window.fx: { stage, load(paragraphs, options), go(index), illustrate(index, status), ready(...), view(), effect(name), ambient(name), puppet(settings) }.
+ * window.fx: { stage, load(paragraphs, options), plan(), go(index), illustrate(index, status), ready(...), view(), effect(name), ambient(name), puppet(settings) }.
+ * `load(paragraphs, { provisional: true })` shows the text before its plan (no
+ * nameplates, no staging); `plan()` lands the plan (VnStage.upgradeTurn).
  * Headless Chromium only has software WebGL (SwiftShader), which the puppet
  * refuses by default; the fixture allows it so the WebGL path runs here.
  * Key moments: a paragraph with `illustrate: true` gets the fixture
@@ -133,8 +136,10 @@ if (q.get("outline")) puppet({ spriteOutline: Number(q.get("outline")) });
 
 let current: SpriteTurnView | null = null;
 let turnCounter = 0;
+/** The planned turn behind the provisional one on stage (fx.plan). */
+let planned: VnTurnInput | null = null;
 
-function load(paragraphs: FixtureParagraph[], options: { sets?: Partial<SpriteTurnView["sets"]>; plates?: Partial<SpriteTurnView["plates"]> } = {}): void {
+function load(paragraphs: FixtureParagraph[], options: { sets?: Partial<SpriteTurnView["sets"]>; plates?: Partial<SpriteTurnView["plates"]>; provisional?: boolean } = {}): void {
   const base = baseView();
   const view: SpriteTurnView = {
     staging: {
@@ -155,7 +160,7 @@ function load(paragraphs: FixtureParagraph[], options: { sets?: Partial<SpriteTu
   };
   current = view;
   turnCounter += 1;
-  stage.loadTurn({
+  const turn: VnTurnInput = {
     preserveImage: true,
     paragraphs: paragraphs.map((p, index) => ({
       id: `fixture-${turnCounter}:${index}`,
@@ -165,7 +170,18 @@ function load(paragraphs: FixtureParagraph[], options: { sets?: Partial<SpriteTu
       ...(p.effect !== undefined ? { effect: p.effect as never } : {}),
     })),
     sprites: view,
-  });
+  };
+  planned = options.provisional ? turn : null;
+  stage.loadTurn(options.provisional
+    ? { preserveImage: true, paragraphs: turn.paragraphs.map(({ id, text }) => ({ id, text })), planHold: 0 }
+    : turn);
+}
+
+/** The plan lands for the provisional turn on stage. */
+function plan(): boolean {
+  const turn = planned;
+  planned = null;
+  return turn ? stage.upgradeTurn(turn) : false;
 }
 
 /** A key illustration changes state (the backend re-sends the turn's sprite view). */
@@ -187,6 +203,7 @@ Object.assign(window, {
   fx: {
     stage,
     load,
+    plan,
     go,
     illustrate,
     spriteImage,
