@@ -70,6 +70,14 @@ describe("waiting screen", () => {
     expect(resolveRecapMode("film", many)).toBe("film");
   });
 
+  test("auto: the film when nobody has a picture but there are lines to show", () => {
+    const plain = character("aoi", "Aoi", [["Hello.", null, null]]);
+    const said = recap().entries.map((entry) => ({ ...entry, image: null }));
+    expect(resolveRecapMode("auto", { characters: [plain], voices: [], entries: said })).toBe("film");
+    expect(resolveRecapMode("auto", { characters: [plain], voices: [], entries: [] })).toBe("lineup");
+    expect(resolveRecapMode("auto", { characters: [mira, plain], voices: [], entries: said })).toBe("lineup");
+  });
+
   test("lines are quoted for their script", () => {
     expect(quoteLine("Hello")).toBe("“Hello”");
     expect(quoteLine("おはよう")).toBe("「おはよう」");
@@ -112,6 +120,39 @@ describe("waiting screen", () => {
     expect(first.querySelector("[data-vn-figure-img][data-vn-front]")!.getAttribute("src")).toBe("/mira/idle.png");
   });
 
+  test("a line-up too narrow for every bubble shows one at a time; a tap passes it on", () => {
+    // 200 px for two figures: under WAITING_CROWDED_SLOT_PX each.
+    const width = Object.getOwnPropertyDescriptor(FakeNode.prototype, "clientWidth");
+    Object.defineProperty(FakeNode.prototype, "clientWidth", {
+      configurable: true,
+      get(this: FakeNode) { return this.hasAttribute("data-vn-lineup") ? 200 : 0; },
+    });
+    try {
+      screen.show(recap(), options({ recap: "lineup" }), "");
+      expect(q("[data-vn-lineup]")!.hasAttribute("data-vn-lineup-crowded")).toBe(true);
+      const [first, second] = el().querySelectorAll("[data-vn-waiting-figure]");
+      const speaking = () => el().querySelectorAll("[data-vn-figure-speaking]");
+      expect(speaking()).toEqual([first!]);
+      // Ren's first tap gives him the bubble with his first line, no new line yet.
+      click(second!);
+      expect(speaking()).toEqual([second!]);
+      expect(second!.querySelector("[data-vn-bubble-text]")!.textContent).toBe("“Too loud.”");
+      // Mira has spoken already: her tap brings her next line.
+      click(first!);
+      expect(speaking()).toEqual([first!]);
+      expect(first!.querySelector("[data-vn-bubble-text]")!.textContent).toBe("“Come outside.”");
+    } finally {
+      if (width) Object.defineProperty(FakeNode.prototype, "clientWidth", width);
+      else delete (FakeNode.prototype as { clientWidth?: number }).clientWidth;
+    }
+  });
+
+  test("a wide line-up shows every bubble at once", () => {
+    screen.show(recap(), options({ recap: "lineup" }), "");
+    expect(q("[data-vn-lineup]")!.hasAttribute("data-vn-lineup-crowded")).toBe(false);
+    expect(el().querySelectorAll("[data-vn-figure-speaking]")).toHaveLength(0);
+  });
+
   test("with motion a tap bounces the figure and the bubble swaps after its fade", async () => {
     screen.show(recap(), options({ recap: "lineup", motion: true }), "");
     const first = el().querySelectorAll("[data-vn-waiting-figure]")[0]!;
@@ -136,6 +177,22 @@ describe("waiting screen", () => {
     expect(q("[data-vn-recap-name]")!.textContent).toBe("Ren");
     expect(q("[data-vn-card-img][data-vn-front]")!.getAttribute("src")).toBe("/ren/idle.png");
     expect(el().querySelectorAll("[data-vn-card-img][data-vn-front]")).toHaveLength(1);
+  });
+
+  test("flashback cards: no picture shows the initial in a ring, an inner voice a glow", () => {
+    const plain = character("aoi", "Aoi", [["Hello.", null, null]]);
+    const voice = character("logic", "Logic", [["Think.", null, null]], { kind: "voice" });
+    screen.show(recap({ characters: [plain], voices: [voice] }), options({ recap: "cards" }), "");
+    const figure = q("[data-vn-card-figure]")!;
+    expect(q("[data-vn-recap-name]")!.textContent).toBe("Aoi");
+    expect(figure.dataset.vnCardEmpty).toBe("true");
+    expect(q("[data-vn-card-initial]")!.textContent).toBe("A");
+    click(q("[data-vn-recap-card]")!);
+    expect(q("[data-vn-recap-name]")!.textContent).toBe("Logic");
+    expect(figure.dataset.vnCardEmpty).toBe("voice");
+    expect(q("[data-vn-card-initial]")!.textContent).toBe("");
+    click(q("[data-vn-recap-card]")!);
+    expect(q("[data-vn-recap-name]")!.textContent).toBe("Aoi");
   });
 
   test("scene film: every paragraph as a card, twice for the loop; a tap reads one whole", () => {

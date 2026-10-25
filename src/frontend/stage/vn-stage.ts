@@ -618,6 +618,8 @@ export class VnStage {
   private dialogueObserver: ResizeObserver | null = null;
   /** How far the dialogue chrome reaches up from the stage bottom right now (px), for the reply area. */
   private dialogueReach = 0;
+  /** How far the location label and status badges reach down over the reply area's column (px; 0 when clear). */
+  private topReach = 0;
   /** The paragraph is taller than its box (measured when it starts typing). */
   private dialogueScrolls = false;
   /** The typewriter keeps its line in view until the reader scrolls the paragraph. */
@@ -785,9 +787,14 @@ export class VnStage {
       this.dialogueObserver = new ResizeObserver(() => {
         this.measureDialogueClearance();
         this.updateDialogueOverflow();
+        this.measureTopReach();
+        this.updateChoiceOverflow();
       });
       this.dialogueObserver.observe(this.root);
       this.dialogueObserver.observe(this.narrative);
+      this.dialogueObserver.observe(this.statusStack);
+      this.dialogueObserver.observe(this.interaction);
+      this.dialogueObserver.observe(this.choiceList);
     }
 
     if (typeof options.textSpeed === "number") this.setTextSpeed(options.textSpeed);
@@ -1232,10 +1239,66 @@ export class VnStage {
   }
 
   /**
+   * Publish `--vn-top-reach`: how far down the location label and status
+   * badges reach while they would sit over the open reply area's column
+   * (phones, narrow windows). The reply area then starts below them
+   * (`data-vn-top-crowded`, base-css.ts); beside it, nothing changes.
+   */
+  private measureTopReach(): void {
+    if (this.destroyed || typeof this.root.getBoundingClientRect !== "function") return;
+    let reach = 0;
+    if (!this.interaction.hidden) {
+      const stage = this.root.getBoundingClientRect();
+      let bottom = 0;
+      let right = 0;
+      for (const element of [this.locationLabelEl?.element, ...Array.from(this.statusStack.children)]) {
+        if (typeof element?.getBoundingClientRect !== "function") continue;
+        const rect = element.getBoundingClientRect();
+        if (!rect.width || !rect.height) continue;
+        bottom = Math.max(bottom, rect.bottom - stage.top);
+        right = Math.max(right, rect.right - stage.left);
+      }
+      let left = Number.POSITIVE_INFINITY;
+      for (const child of Array.from(this.interaction.children)) {
+        if (typeof child.getBoundingClientRect !== "function") continue;
+        const rect = child.getBoundingClientRect();
+        if (rect.width && rect.height) left = Math.min(left, rect.left - stage.left);
+      }
+      // 12 px: the gap kept between them.
+      if (bottom > 0 && right + 12 > left) reach = Math.ceil(bottom);
+    }
+    if (reach === this.topReach) return;
+    this.topReach = reach;
+    if (reach > 0) {
+      this.root.style.setProperty("--vn-top-reach", `${reach}px`);
+      this.root.setAttribute("data-vn-top-crowded", "");
+    } else {
+      this.root.style.removeProperty("--vn-top-reach");
+      this.root.removeAttribute("data-vn-top-crowded");
+    }
+  }
+
+  /**
    * Mark which ends of a long paragraph are scrolled out of view
    * (`data-vn-overflow`, faded in base-css.ts). While it types, the untyped
    * rest below does not count. Continue reads "Show more" while it pages.
    */
+  /**
+   * Mark which ends of the suggestion list are scrolled out of view
+   * (`data-vn-overflow`, faded in base-css.ts), so a cut-off suggestion
+   * shows there is more to scroll to.
+   */
+  private updateChoiceOverflow(): void {
+    const list = this.choiceList;
+    if (typeof list.scrollHeight !== "number") return;
+    const above = list.scrollTop > 1;
+    const below = list.scrollHeight - list.clientHeight - list.scrollTop > 1;
+    const value = above && below ? "both" : above ? "above" : below ? "below" : "";
+    if ((list.dataset.vnOverflow ?? "") === value) return;
+    if (value) list.dataset.vnOverflow = value;
+    else delete list.dataset.vnOverflow;
+  }
+
   private updateDialogueOverflow(): void {
     const text = this.dialogueText;
     const above = text.scrollTop > 1;
@@ -2459,6 +2522,7 @@ export class VnStage {
       this.advance(true);
     });
 
+    this.choiceList.addEventListener("scroll", () => this.updateChoiceOverflow(), { passive: true });
     this.choiceList.addEventListener("click", (event) => {
       const button =
         event.target instanceof Element
@@ -3520,6 +3584,9 @@ export class VnStage {
     } else if (this.choiceList.childElementCount > 0) {
       this.choiceList.replaceChildren();
     }
+    this.updateChoiceOverflow();
+    // The column widens when the reply box shows, without the area resizing.
+    this.measureTopReach();
 
     this.input.placeholder = this.state.inputPlaceholder;
     if (this.input.value !== this.state.draft) this.input.value = this.state.draft;
@@ -3559,7 +3626,11 @@ export class VnStage {
       this.waitingScreenEl = new WaitingScreen({
         // Its taps spark through the stage's own pointerdown (sparkAt); a new bubble or card pops.
         onPop: () => this.sounds.pop(),
-        onClose: () => this.root.focus({ preventScroll: true }),
+        // A preview closed while a reply is really being written: the real waiting screen comes back.
+        onClose: () => {
+          this.syncSceneChrome();
+          this.root.focus({ preventScroll: true });
+        },
       });
       this.root.insertBefore(this.waitingScreenEl.element, this.openingCardEl?.element ?? null);
     }
@@ -3570,6 +3641,7 @@ export class VnStage {
     if (!this.locationLabelEl) {
       this.locationLabelEl = new LocationLabel();
       this.root.insertBefore(this.locationLabelEl.element, this.statusStack);
+      this.dialogueObserver?.observe(this.locationLabelEl.element);
     }
     return this.locationLabelEl;
   }

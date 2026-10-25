@@ -56,6 +56,8 @@ export const WAITING_FILM_SECONDS_PER_CARD = 4;
 export const WAITING_BUBBLE_SWAP_MS = 200;
 /** The screen fades out this long (ms); matches the CSS. */
 export const WAITING_FADE_MS = 320;
+/** A line-up with less width than this a figure (px) shows one bubble at a time: all at once would be too narrow to read. */
+export const WAITING_CROWDED_SLOT_PX = 120;
 /** A tap's ripple (and daylight's light sweep) lasts this long (ms); matches the CSS. */
 export const WAITING_RIPPLE_MS = 700;
 
@@ -66,14 +68,22 @@ const TIPS = [
   "Settings → Reading changes this screen.",
 ];
 
-/** The recap a setting shows for this reply ("auto": line-up up to three, cards from four). */
+/**
+ * The recap a setting shows for this reply ("auto": line-up up to three,
+ * cards from four, the film when nobody has a picture, as with scene pictures).
+ */
 export function resolveRecapMode(recap: VisualNovelWaitingRecap, data: Pick<WaitingRecap, "characters" | "voices" | "entries">): WaitingRecapMode {
   if (recap !== "auto") return recap;
+  const pictured = [...data.characters, ...data.voices].some((item) => item.image || item.lines.some((line) => line.image));
+  if (!pictured && data.entries.some((entry) => entry.excerpt)) return "film";
   const standing = data.characters.length;
   if (standing >= WAITING_AUTO_CARDS_FROM) return "cards";
   if (standing > 0) return "lineup";
   return data.voices.length > 0 ? "cards" : "off";
 }
+
+/** "1 paragraph", "7 paragraphs"; "" for none. */
+const paragraphWords = (count: number): string => count <= 0 ? "" : count === 1 ? "1 paragraph" : `${count} paragraphs`;
 
 const escapeHtml = (value: string): string =>
   value.replace(/[&<>"']/g, (character) => `&#${character.charCodeAt(0)};`);
@@ -125,7 +135,8 @@ function initialOf(name: string): string {
 }
 
 /** One character standing in the line-up, with the line in their bubble. */
-type Figure = { character: RecapCharacter; element: HTMLElement; line: number; swapTimer: ReturnType<typeof setTimeout> | null };
+/** `spoke`: its bubble has shown (a crowded line-up's next turn for it is its next line). */
+type Figure = { character: RecapCharacter; element: HTMLElement; line: number; swapTimer: ReturnType<typeof setTimeout> | null; spoke: boolean };
 
 export class WaitingScreen {
   readonly element: HTMLElement;
@@ -141,6 +152,8 @@ export class WaitingScreen {
   private tipTimer: ReturnType<typeof setInterval> | null = null;
   private fadeTimer: ReturnType<typeof setTimeout> | null = null;
   private nextFigure = 0;
+  /** One bubble at a time (see WAITING_CROWDED_SLOT_PX). */
+  private crowded = false;
   private status = "";
   /** The pointer drift waiting for the next frame (null: none pending). */
   private drift: { x: number; y: number } | null = null;
@@ -200,9 +213,16 @@ export class WaitingScreen {
     this.element.innerHTML = this.markup(data, options, mode);
     this.element.hidden = false;
     this.figures = Array.from(this.element.querySelectorAll<HTMLElement>("[data-vn-waiting-figure]"))
-      .map((element, index) => ({ character: this.lineupCharacters(data, mode)[index]!, element, line: 0, swapTimer: null }))
+      .map((element, index) => ({ character: this.lineupCharacters(data, mode)[index]!, element, line: 0, swapTimer: null, spoke: false }))
       .filter((figure) => Boolean(figure.character));
     this.nextFigure = 0;
+    const lineup = this.element.querySelector<HTMLElement>("[data-vn-lineup]");
+    const width = lineup?.clientWidth ?? 0;
+    this.crowded = mode === "lineup" && this.figures.length > 1 && width > 0 && width / this.figures.length < WAITING_CROWDED_SLOT_PX;
+    if (this.crowded) {
+      lineup!.setAttribute("data-vn-lineup-crowded", "");
+      this.speak(this.figures[0]!);
+    }
     this.cardItems = mode === "cards" ? [...data.characters, ...data.voices].filter((item) => item.lines.length > 0 || item.image) : [];
     this.cardIndex = 0;
     if (mode === "cards") this.renderCard(false);
@@ -262,7 +282,7 @@ export class WaitingScreen {
     const cast = data.characters.map((character) => character.name);
     const castLine = cast.length > 0 ? `With ${cast.slice(0, 3).join(", ")}${cast.length > 3 ? ` and ${cast.length - 3} more` : ""}` : "";
     const counts = [
-      data.paragraphCount > 0 ? (data.paragraphCount === 1 ? "1 paragraph" : `${data.paragraphCount} paragraphs`) : "",
+      paragraphWords(data.paragraphCount),
       cast.length > 0 ? `${cast.length} in the scene` : "",
     ].filter(Boolean).join(" · ");
     const sent = data.sent
@@ -283,7 +303,7 @@ export class WaitingScreen {
       <div data-vn-daylight-banner aria-hidden="true"><span>Now loading</span></div>
       <aside data-vn-daylight-tip><b>Tip</b><p data-vn-daylight-tip-text>${escapeHtml(TIPS[0]!)}</p></aside>
       <p data-vn-daylight-pill><svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8 1.5a4.5 4.5 0 0 0-4.5 4.5c0 3.2 4.5 8.5 4.5 8.5s4.5-5.3 4.5-8.5A4.5 4.5 0 0 0 8 1.5zm0 6.2a1.7 1.7 0 1 1 0-3.4 1.7 1.7 0 0 1 0 3.4z"/></svg><span>${escapeHtml(words.title)}</span></p>
-      ${castLine || counts ? `<p data-vn-daylight-meta>${escapeHtml([castLine, data.paragraphCount > 0 ? `${data.paragraphCount} paragraphs` : ""].filter(Boolean).join(" · "))}</p>` : ""}
+      ${castLine || counts ? `<p data-vn-daylight-meta>${escapeHtml([castLine, paragraphWords(data.paragraphCount)].filter(Boolean).join(" · "))}</p>` : ""}
       <div data-vn-daylight-bar aria-hidden="true"><span></span></div>
       ${mode === "off" && data.characters[0]?.image ? `<figure data-vn-daylight-hero aria-hidden="true"><img alt="" draggable="false" src="${escapeHtml(data.characters[0].image.url)}" /></figure>` : ""}` : "";
     const castHeader = options.backdrop === "cast" ? `
@@ -327,7 +347,7 @@ export class WaitingScreen {
     if (mode === "cards") {
       return `
         <div data-vn-recap-cards>
-          <figure data-vn-card-figure aria-hidden="true"><img data-vn-card-img data-vn-layer="a" alt="" draggable="false" /><img data-vn-card-img data-vn-layer="b" alt="" draggable="false" /></figure>
+          <figure data-vn-card-figure aria-hidden="true"><img data-vn-card-img data-vn-layer="a" alt="" draggable="false" /><img data-vn-card-img data-vn-layer="b" alt="" draggable="false" /><span data-vn-card-initial></span></figure>
           <article data-vn-recap-card aria-live="polite">
             <p data-vn-recap-kicker>Last line</p>
             <h3 data-vn-recap-name></h3>
@@ -345,8 +365,8 @@ export class WaitingScreen {
       const names = data.characters.map((character) => character.name);
       const recapLine = [
         data.scene?.location ? `Last scene: ${data.scene.location}` : "Last scene",
-        data.paragraphCount > 0 ? `${data.paragraphCount} paragraphs` : "",
-        names.length > 0 ? `with ${names.slice(0, 3).join(", ")}` : "",
+        paragraphWords(data.paragraphCount),
+        names.length > 0 ? `with ${names.slice(0, 3).join(", ")}${names.length > 3 ? ` and ${names.length - 3} more` : ""}` : "",
       ].filter(Boolean).join(" · ");
       return `
         <div data-vn-film>
@@ -385,7 +405,7 @@ export class WaitingScreen {
   }
 
   private filmCard(entry: RecapEntry, total: number): string {
-    const mark = entry.kind === "voice" ? "✦" : entry.kind === "reader" ? "You" : undefined;
+    const mark = entry.kind === "voice" ? "✦" : entry.kind === "reader" ? "You" : entry.kind === "narration" ? "¶" : undefined;
     return `
       <button type="button" data-vn-film-card data-vn-film-kind="${entry.kind}" data-vn-film-index="${entry.index}" style="--vn-figure-color: ${entry.color}">
         <span data-vn-film-head>${this.avatar(entry.kind === "voice" || entry.kind === "reader" ? null : entry.image, entry.speaker || "·", 34, mark)}<span data-vn-film-name>${escapeHtml(entry.speaker || "Narration")}</span>${entry.kind === "reader" ? "" : `<span data-vn-film-count>${entry.index + 1}/${total}</span>`}</span>
@@ -410,11 +430,16 @@ export class WaitingScreen {
       const found = this.figures.find((item) => item.element === figure);
       if (found && this.element.dataset.vnRecap === "lineup") {
         this.hooks.onPop?.();
-        this.nextLine(found);
+        const spoke = found.spoke;
+        if (this.crowded) this.speak(found);
+        if (!this.crowded || spoke) this.nextLine(found);
+        // The next automatic change waits a whole turn again, so it never undoes this tap.
+        this.startLineTimer();
       }
       return;
     }
-    if (target?.closest("[data-vn-recap-cards]")) {
+    // In a preview only the card and the picture advance: a tap anywhere else closes it.
+    if (target?.closest(this.options?.preview ? "[data-vn-recap-card], [data-vn-card-figure]" : "[data-vn-recap-cards]")) {
       this.hooks.onTap?.(event);
       this.hooks.onPop?.();
       this.advanceCard(true);
@@ -555,7 +580,11 @@ export class WaitingScreen {
     const figure = this.element.querySelector<HTMLElement>("[data-vn-card-figure]");
     const image = line?.image ?? item.image;
     if (!figure) return;
-    figure.dataset.vnCardEmpty = String(!image);
+    // No picture: an inner voice gets a lamp glow, anyone else their initial in a ring.
+    figure.dataset.vnCardEmpty = image ? "false" : item.kind === "voice" ? "voice" : "true";
+    figure.style.setProperty("--vn-figure-color", item.color);
+    const initial = figure.querySelector<HTMLElement>("[data-vn-card-initial]");
+    if (initial) initial.textContent = image || item.kind === "voice" ? "" : initialOf(item.name);
     const layers = Array.from(figure.querySelectorAll<HTMLImageElement>("[data-vn-card-img]"));
     if (!image || layers.length < 2) {
       for (const layer of layers) delete layer.dataset.vnFront;
@@ -606,16 +635,7 @@ export class WaitingScreen {
   }
 
   private startTimers(mode: WaitingRecapMode): void {
-    if (mode === "lineup" && this.figures.some((figure) => figure.character.lines.length > 1)) {
-      this.lineTimer = setInterval(() => {
-        if (!this.open) return;
-        const talkers = this.figures.filter((figure) => figure.character.lines.length > 1);
-        if (talkers.length === 0) return;
-        const figure = talkers[this.nextFigure % talkers.length]!;
-        this.nextFigure += 1;
-        this.nextLine(figure);
-      }, WAITING_LINE_MS);
-    }
+    if (mode === "lineup") this.startLineTimer();
     if (mode === "cards") this.restartCardTimer();
     if (this.options?.backdrop === "daylight") {
       let tip = 0;
@@ -626,6 +646,43 @@ export class WaitingScreen {
         element.textContent = TIPS[tip]!;
       }, WAITING_CARD_MS * 1.5);
     }
+  }
+
+  /**
+   * One line-up change every WAITING_LINE_MS: the next figure with more to say
+   * gets its next line; a crowded line-up passes its one bubble to the next
+   * figure (their next line once they have spoken).
+   */
+  private startLineTimer(): void {
+    if (this.lineTimer !== null) clearInterval(this.lineTimer);
+    this.lineTimer = null;
+    const turns = this.crowded ? this.figures.length > 1 : this.figures.some((figure) => figure.character.lines.length > 1);
+    if (!turns) return;
+    this.lineTimer = setInterval(() => {
+      if (!this.open) return;
+      if (this.crowded) {
+        const current = this.figures.findIndex((figure) => figure.element.hasAttribute("data-vn-figure-speaking"));
+        const next = this.figures[(current + 1) % this.figures.length]!;
+        const spoke = next.spoke;
+        this.speak(next);
+        if (spoke && next.character.lines.length > 1) this.nextLine(next);
+        return;
+      }
+      const talkers = this.figures.filter((figure) => figure.character.lines.length > 1);
+      if (talkers.length === 0) return;
+      const figure = talkers[this.nextFigure % talkers.length]!;
+      this.nextFigure += 1;
+      this.nextLine(figure);
+    }, WAITING_LINE_MS);
+  }
+
+  /** A crowded line-up's one bubble moves to this figure. */
+  private speak(figure: Figure): void {
+    for (const other of this.figures) {
+      if (other === figure) other.element.setAttribute("data-vn-figure-speaking", "");
+      else other.element.removeAttribute("data-vn-figure-speaking");
+    }
+    figure.spoke = true;
   }
 
   private restartCardTimer(): void {

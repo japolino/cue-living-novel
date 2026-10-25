@@ -338,6 +338,9 @@ const GOLDEN_HOUR_CSS = `
 const BOXED_CONSOLE_CSS = `
 [data-vn-root][data-vn-preset="boxed-console"] {
   --vn-accent: #7dffa1;
+  /* Opening card, location label and waiting screen. */
+  --vn-scene-gold: #7dffa1;
+  --vn-scene-serif: var(--vn-font-family);
   --vn-text: #e7f9eb;
   --vn-muted-text: rgba(190, 222, 197, 0.78);
   --vn-dialogue-bg: linear-gradient(180deg, #0e1412, #080d0b);
@@ -359,6 +362,9 @@ const BOXED_CONSOLE_CSS = `
   --vn-odds-poor: #ff8f8f;
 }
 [data-vn-root][data-vn-preset="boxed-console"] [data-vn-ornament-group][data-vn-preset="boxed-console"] { display: block; filter: drop-shadow(0 0 6px rgba(125, 255, 161, 0.35)); }
+/* The location label as a terminal line. */
+[data-vn-root][data-vn-preset="boxed-console"] [data-vn-location] { background: linear-gradient(90deg, rgba(5, 10, 7, 0.86), rgba(5, 10, 7, 0)); }
+[data-vn-root][data-vn-preset="boxed-console"] [data-vn-location-place] { color: #c9ffd8; text-shadow: 0 0 8px rgba(125, 255, 161, 0.35); }
 [data-vn-root][data-vn-preset="boxed-console"] [data-vn-dialogue] {
   padding-top: 2.1rem;
   border: 1px solid #4a6b55;
@@ -521,6 +527,12 @@ const BOXED_CONSOLE_CSS = `
   box-shadow: 0 0 10px rgba(125, 255, 161, 0.6);
 }
 [data-vn-root][data-vn-preset="boxed-console"] [data-vn-control]:active:not(:disabled) { transform: translate(1px, 1px); }
+@media (min-width: 381px) and (max-width: 640px) {
+  /* Monospace labels run wide: words only, so "Previous" fits its cell
+     (narrower phones show icons only, base-css.ts). */
+  [data-vn-root][data-vn-preset="boxed-console"] [data-vn-control] { padding-right: 0.3rem; padding-left: 0.3rem; }
+  [data-vn-root][data-vn-preset="boxed-console"] [data-vn-control-icon] { display: none; }
+}
 [data-vn-root][data-vn-preset="boxed-console"] [data-vn-badge] {
   border: 1px solid #3fae63;
   border-radius: 0;
@@ -579,6 +591,11 @@ const PAPER_NOVEL_CSS = `
   --vn-error-title: #8a2f23;
 }
 [data-vn-root][data-vn-preset="paper-novel"] [data-vn-ornament-group][data-vn-preset="paper-novel"] { display: block; color: #e9d9b8; }
+/* The location label in the preset's own light look. */
+[data-vn-root][data-vn-preset="paper-novel"] [data-vn-location] { border-left-color: #8a2f23; background: linear-gradient(90deg, rgba(243, 235, 218, 0.94) calc(100% - 1.4rem), transparent); }
+[data-vn-root][data-vn-preset="paper-novel"] [data-vn-location-kicker] { color: #8a2f23; }
+[data-vn-root][data-vn-preset="paper-novel"] [data-vn-location-place] { color: #29221e; text-shadow: none; }
+[data-vn-root][data-vn-preset="paper-novel"] [data-vn-location-meta] { color: rgba(70, 57, 48, 0.82); }
 [data-vn-root][data-vn-preset="paper-novel"] [data-vn-dialogue] {
   padding: 2.5rem 3.8rem 1.9rem 3.2rem;
   border: 1px solid rgba(101, 75, 43, 0.5);
@@ -1054,12 +1071,15 @@ const MIDNIGHT_NOIR_CSS = `
 [data-vn-root][data-vn-preset="midnight-noir"] [data-vn-backlog-item] { border-radius: 0; border-color: rgba(217, 164, 65, 0.14); }
 [data-vn-root][data-vn-preset="midnight-noir"] [data-vn-backlog-speaker] { font-style: italic; text-transform: none; letter-spacing: 0.06em; font-size: 0.95rem; }
 [data-vn-root][data-vn-preset="midnight-noir"] [data-vn-backlog-close] { border-radius: 0; border-color: rgba(217, 164, 65, 0.5); background: rgba(16, 22, 36, 0.92); color: #efc76e; }
+[data-vn-root][data-vn-preset="midnight-noir"] [data-vn-backlog-close]:hover { border-color: #d9a441; background: rgba(48, 40, 26, 0.95); }
 `;
 
 /* yamaku-classic — nostalgic school romance visual novel (Katawa Shoujo style) */
 const YAMAKU_CLASSIC_CSS = `
 [data-vn-root][data-vn-preset="yamaku-classic"] {
   --vn-accent: #ff7095;
+  /* Opening card, location label and waiting screen. */
+  --vn-scene-gold: #ff7095;
   --vn-text: #ffffff;
   --vn-muted-text: rgba(255, 255, 255, 0.78);
   --vn-dialogue-bg: linear-gradient(to top, rgba(20, 17, 15, 0.88) 0%, rgba(25, 22, 19, 0.7) 50%, rgba(28, 24, 20, 0.45) 100%);
@@ -1075,6 +1095,9 @@ const YAMAKU_CLASSIC_CSS = `
   --vn-chrome-border: transparent;
   --vn-chrome-text: rgba(255, 255, 255, 0.88);
   --vn-chrome-hover: rgba(255, 255, 255, 0.08);
+  /* The toolbar has no box, but buttons alone on the scene need one. */
+  --vn-float-bg: rgba(34, 30, 26, 0.86);
+  --vn-float-border: rgba(195, 182, 168, 0.5);
   --vn-control-radius: 2px;
   --vn-panel-bg: rgba(34, 30, 26, 0.92);
   --vn-panel-solid: #221e1a;
@@ -1286,12 +1309,16 @@ const YAMAKU_CLASSIC_CSS = `
   background: rgba(36, 28, 24, 0.85);
   color: #ff7396;
 }
+[data-vn-root][data-vn-preset="yamaku-classic"] [data-vn-backlog-close]:hover { border-color: #ff7396; background: rgba(62, 44, 40, 0.95); }
 `;
 
 /* literature-club — pink club-room textbox (Doki Doki Literature Club style) */
 const LITERATURE_CLUB_CSS = `
 [data-vn-root][data-vn-preset="literature-club"] {
   --vn-accent: #e8507c;
+  /* Opening card, location label and waiting screen. */
+  --vn-scene-gold: #ffa9cb;
+  --vn-scene-serif: var(--vn-font-family);
   --vn-text: #ffffff;
   --vn-muted-text: rgba(255, 235, 245, 0.88);
   --vn-dialogue-bg: linear-gradient(to bottom, rgba(255, 150, 197, 0.94) 0%, rgba(250, 146, 193, 0.86) 45%, rgba(229, 140, 184, 0.64) 100%);
@@ -1318,6 +1345,11 @@ const LITERATURE_CLUB_CSS = `
   --vn-error-title: #b8285a;
 }
 [data-vn-root][data-vn-preset="literature-club"] [data-vn-ornament-group][data-vn-preset="literature-club"] { display: block; }
+/* The location label in the preset's own light look. */
+[data-vn-root][data-vn-preset="literature-club"] [data-vn-location] { border-left-color: #e8507c; background: linear-gradient(90deg, rgba(255, 240, 246, 0.94) calc(100% - 1.4rem), transparent); }
+[data-vn-root][data-vn-preset="literature-club"] [data-vn-location-kicker] { color: #c43868; }
+[data-vn-root][data-vn-preset="literature-club"] [data-vn-location-place] { color: #7a2446; text-shadow: none; }
+[data-vn-root][data-vn-preset="literature-club"] [data-vn-location-meta] { color: rgba(122, 36, 70, 0.78); }
 [data-vn-root][data-vn-preset="literature-club"] [data-vn-dialogue] {
   position: relative;
   min-height: 9rem;
@@ -1346,7 +1378,7 @@ const LITERATURE_CLUB_CSS = `
   font-size: 1.3rem;
   letter-spacing: 0.02em;
   text-transform: none;
-  text-shadow: 0 1.5px 2px #c4577f, 1.5px 0 2px #c4577f, 0 -1.5px 2px #c4577f, -1.5px 0 2px #c4577f, 0 2px 3px rgba(150, 60, 95, 0.55);
+  text-shadow: 0 2px 1.5px #a83a68, 2px 0 1.5px #a83a68, 0 -2px 1.5px #a83a68, -2px 0 1.5px #a83a68, 1.4px 1.4px 1.5px #a83a68, -1.4px 1.4px 1.5px #a83a68, 1.4px -1.4px 1.5px #a83a68, -1.4px -1.4px 1.5px #a83a68;
   box-shadow: 0 4px 12px rgba(150, 60, 95, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.9);
 }
 [data-vn-root][data-vn-preset="literature-club"] [data-vn-dialogue-text] {
@@ -1354,7 +1386,8 @@ const LITERATURE_CLUB_CSS = `
   font-family: "Comic Sans MS", "Comfortaa", "Trebuchet MS", ui-rounded, sans-serif;
   font-weight: 700;
   line-height: 1.55;
-  text-shadow: 0 1.5px 2px rgba(97, 58, 78, 0.95), 1.5px 0 2px rgba(97, 58, 78, 0.95), 0 -1.5px 2px rgba(97, 58, 78, 0.95), -1.5px 0 2px rgba(97, 58, 78, 0.95);
+  /* White on pink reads only through its outline: a full, dark one. */
+  text-shadow: 0 2px 1.5px #5c2a43, 2px 0 1.5px #5c2a43, 0 -2px 1.5px #5c2a43, -2px 0 1.5px #5c2a43, 1.4px 1.4px 1.5px #5c2a43, -1.4px 1.4px 1.5px #5c2a43, 1.4px -1.4px 1.5px #5c2a43, -1.4px -1.4px 1.5px #5c2a43;
 }
 [data-vn-root][data-vn-preset="literature-club"] [data-vn-controls] {
   top: auto;
@@ -1389,12 +1422,12 @@ const LITERATURE_CLUB_CSS = `
   padding: 0.1rem 0.3rem;
   border: none;
   background: transparent;
-  color: #6a2140;
+  color: #3f0a22;
   font-family: var(--vn-font-family);
   font-size: 0.95rem;
   font-weight: 700;
   letter-spacing: 0.02em;
-  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.45);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.5);
 }
 [data-vn-root][data-vn-preset="literature-club"] [data-vn-control-icon] { display: none; }
 [data-vn-root][data-vn-preset="literature-club"] [data-vn-control]:hover:not(:disabled) {
@@ -1600,6 +1633,12 @@ const CINEMA_CSS = `
   --vn-chrome-border: transparent;
   --vn-chrome-text: rgba(222, 225, 232, 0.66);
   --vn-chrome-hover: rgba(255, 255, 255, 0.08);
+  /* The toolbar has no box, but buttons alone on the scene need one. */
+  --vn-float-bg: rgba(9, 10, 15, 0.82);
+  --vn-float-border: rgba(255, 255, 255, 0.16);
+  /* The subtitle gradient's tall top padding is no box: the reply area may
+     reach down over it (keeps room for all suggestions). */
+  --vn-interaction-clearance: max(11.5rem, calc(var(--vn-dialogue-reach, 0px) - clamp(5rem, 18 * var(--vn-dvh, 1dvh), 11rem) + 1rem));
   --vn-control-radius: 4px;
   --vn-panel-bg: rgba(9, 10, 15, 0.9);
   --vn-panel-solid: #090a0f;
@@ -1810,6 +1849,8 @@ const CINEMA_CSS = `
 const NVL_CSS = `
 [data-vn-root][data-vn-preset="nvl"] {
   --vn-accent: #a9bcff;
+  /* Opening card, location label and waiting screen. */
+  --vn-scene-gold: #a9bcff;
   --vn-text: #f1f2f6;
   --vn-muted-text: rgba(214, 218, 230, 0.74);
   --vn-dialogue-bg: rgba(7, 8, 14, 0.66);
@@ -2004,6 +2045,8 @@ const NVL_CSS = `
 const DAYLIGHT_CSS = `
 [data-vn-root][data-vn-preset="daylight"] {
   --vn-accent: #2f7de1;
+  /* Opening card and waiting screen (dark behind them): a lighter blue. */
+  --vn-scene-gold: #9cc4ff;
   --vn-text: #1d2736;
   --vn-muted-text: rgba(45, 58, 78, 0.78);
   --vn-dialogue-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.93), rgba(245, 249, 255, 0.86));
@@ -2043,6 +2086,11 @@ const DAYLIGHT_CSS = `
   font-family: var(--vn-font-family);
 }
 [data-vn-root][data-vn-preset="daylight"] [data-vn-ornament-group][data-vn-preset="daylight"] { display: block; color: #ffffff; }
+/* The location label in the preset's own light look. */
+[data-vn-root][data-vn-preset="daylight"] [data-vn-location] { border-left-color: #2f7de1; background: linear-gradient(90deg, rgba(255, 255, 255, 0.92) calc(100% - 1.4rem), transparent); }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-location-kicker] { color: #1f63c4; }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-location-place] { color: #1d2736; text-shadow: none; }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-location-meta] { color: rgba(45, 58, 78, 0.78); }
 [data-vn-root][data-vn-preset="daylight"] [data-vn-scene] { background: linear-gradient(180deg, #cfe3fb 0%, #e8f1fc 55%, #f6f9fd 100%); }
 /* The scene goes light: brightened and softened behind a pale veil that
    thickens toward the box. Characters (sprite mode) stand in front of it. */
@@ -2144,7 +2192,8 @@ const DAYLIGHT_CSS = `
 [data-vn-root][data-vn-preset="daylight"] [data-vn-input-form] { border-color: rgba(255, 255, 255, 0.95); background-image: none; box-shadow: 0 0.9rem 2.2rem rgba(40, 70, 120, 0.22); }
 [data-vn-root][data-vn-preset="daylight"] [data-vn-input] { border-color: rgba(150, 172, 205, 0.7); background: #ffffff; color: #1d2736; box-shadow: inset 0 1px 3px rgba(40, 70, 120, 0.12); }
 [data-vn-root][data-vn-preset="daylight"] [data-vn-input]:focus { border-color: #2f7de1; box-shadow: inset 0 1px 3px rgba(40, 70, 120, 0.12), 0 0 0 3px rgba(47, 125, 225, 0.18); }
-[data-vn-root][data-vn-preset="daylight"] [data-vn-submit] { border-color: #2f7de1; box-shadow: 0 0.35rem 1rem rgba(47, 125, 225, 0.3); }
+/* A deeper blue than the accent: white "Send" on it stays readable (5.6:1). */
+[data-vn-root][data-vn-preset="daylight"] [data-vn-submit] { border-color: #1f63c4; background-color: #1f63c4; box-shadow: 0 0.35rem 1rem rgba(47, 125, 225, 0.3); }
 [data-vn-root][data-vn-preset="daylight"] [data-vn-game-choice] { border-color: rgba(150, 172, 205, 0.6); background-image: none; color: #1d2736; box-shadow: 0 0.3rem 0.8rem rgba(40, 70, 120, 0.16); }
 [data-vn-root][data-vn-preset="daylight"] [data-vn-game-choice]:hover:not(:disabled) { border-color: #2f7de1; background-color: #ffffff; color: #1f63c4; }
 [data-vn-root][data-vn-preset="daylight"] [data-vn-choice-key] { color: #5b6b82; }

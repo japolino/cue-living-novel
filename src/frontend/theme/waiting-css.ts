@@ -148,6 +148,15 @@ export const VN_WAITING_CSS = `
   animation: vn-scene-fade-in 320ms ease-out both;
 }
 
+/* Beside an open reply area the label keeps to the margin (a long place name
+   shortens). Where even that is too narrow, the reply area starts below it
+   instead (data-vn-top-crowded, base-css.ts). */
+@media (min-width: 641px) {
+  [data-vn-root]:has([data-vn-interaction]:not([hidden])) [data-vn-location] {
+    max-width: max(12rem, calc((100 * var(--vn-vw, 1vw) - 48rem) / 2 - 1.6rem));
+  }
+}
+
 /* The status badges move down while the label shows. */
 [data-vn-root]:has([data-vn-location]:not([hidden])) [data-vn-status-stack] {
   --vn-status-top-clearance: calc(3.6rem + var(--vn-location-h) + 0.45rem);
@@ -209,6 +218,27 @@ export const VN_WAITING_CSS = `
 /* Errors and picture progress stay on top (and clickable) while it shows. */
 [data-vn-root]:has([data-vn-waiting]:not([hidden])) [data-vn-status-stack] {
   z-index: 13;
+  /* Along the top edge, clear of the screen's own words and pictures below it. */
+  top: max(0.85rem, env(safe-area-inset-top));
+  left: 50%;
+  justify-content: center;
+  max-width: min(30rem, calc(100% - 22rem));
+  transform: translateX(-50%);
+}
+
+@media (max-width: 640px) {
+  /* Between the Panels button and Back to chat. */
+  [data-vn-root]:has([data-vn-waiting]:not([hidden])) [data-vn-status-stack] {
+    left: calc(max(0.85rem, env(safe-area-inset-left)) + 3.4rem);
+    justify-content: flex-start;
+    max-width: calc(100% - 13.6rem);
+    transform: none;
+  }
+}
+
+/* A preview is only a look: its badges stay out of the way, errors excepted. */
+[data-vn-root]:has([data-vn-waiting][data-vn-waiting-preview]:not([hidden])) [data-vn-status-stack] > :not([data-vn-badge-kind="error"]) {
+  display: none;
 }
 
 [data-vn-waiting][data-vn-waiting-closing] {
@@ -241,7 +271,18 @@ export const VN_WAITING_CSS = `
   z-index: 2;
   left: var(--vn-scene-left);
   bottom: var(--vn-scene-bottom);
-  width: min(26rem, calc(100% - 4rem));
+  /* 38%: the line-up starts 3rem past it, so the words never run under a figure. */
+  width: min(26rem, 38%, calc(100% - 4rem));
+}
+
+/* A long place name stays two lines, so the words never grow into the recap. */
+[data-vn-waiting-info] [data-vn-scene-title],
+[data-vn-cast-header] > h2 {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 
 [data-vn-waiting-info] [data-vn-scene-title] {
@@ -318,6 +359,17 @@ export const VN_WAITING_CSS = `
   white-space: nowrap;
 }
 
+@media (max-width: 640px) {
+  /* Left of Back to chat, wrapping when it must. */
+  [data-vn-waiting-preview-note] {
+    left: var(--vn-scene-left);
+    max-width: calc(100% - var(--vn-scene-left) - 8.5rem);
+    border-radius: 0.8rem;
+    transform: none;
+    white-space: normal;
+  }
+}
+
 /* Avatars: a round face (or an initial) in the speaker's colour. */
 [data-vn-avatar] {
   display: inline-block;
@@ -370,8 +422,11 @@ export const VN_WAITING_CSS = `
 [data-vn-waiting-figure] {
   position: relative;
   display: flex;
+  /* Exactly one slot: bubbles and name tags are sized from it. */
+  flex: 0 0 var(--vn-figure-slot);
   flex-direction: column;
   align-items: center;
+  min-width: 0;
   padding: 0;
   border: 0;
   background: none;
@@ -443,6 +498,9 @@ export const VN_WAITING_CSS = `
   font-weight: 600;
   transform: translateX(-50%);
   white-space: nowrap;
+  max-width: max(var(--vn-figure-slot), 4.5rem);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 [data-vn-bubble] {
@@ -451,15 +509,33 @@ export const VN_WAITING_CSS = `
   bottom: calc(100% + 0.9rem);
   left: 50%;
   /* Its slot and most of the gap: neighbouring bubbles never overlap. */
-  width: min(var(--vn-bubble-max, 17rem), max(var(--vn-figure-slot) + 0.6 * var(--vn-lineup-gap), 7rem));
+  --vn-bubble-w: min(var(--vn-bubble-max, 17rem), var(--vn-figure-slot) + 0.6 * var(--vn-lineup-gap));
+  /*
+   * Kept inside the line-up: an edge figure's bubble shifts inward (its tail
+   * still points at the figure). Figures sit one slot apart, so the centre is known.
+   */
+  --vn-bubble-center: calc((var(--vn-figure-order, 0) + 0.5) * var(--vn-figure-slot) + var(--vn-figure-order, 0) * var(--vn-lineup-gap));
+  --vn-bubble-shift: calc(max(0px, var(--vn-bubble-w) / 2 - var(--vn-bubble-center)) - max(0px, var(--vn-bubble-center) + var(--vn-bubble-w) / 2 - 100cqw));
+  width: var(--vn-bubble-w);
   padding: 0.55rem 0.8rem 0.65rem;
   border-radius: 1rem;
   background: #fbf3df;
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.35);
   color: #2a2218;
   text-align: left;
-  transform: translateX(-50%);
+  transform: translateX(calc(-50% + var(--vn-bubble-shift)));
   transition: opacity 200ms ease, transform 200ms ease;
+}
+
+/* Too narrow for every bubble at once: one figure speaks at a time, with room to read. */
+[data-vn-lineup][data-vn-lineup-crowded] [data-vn-bubble] {
+  --vn-bubble-w: min(var(--vn-bubble-max, 17rem), 100cqw);
+  display: none;
+}
+
+[data-vn-lineup][data-vn-lineup-crowded] [data-vn-waiting-figure][data-vn-figure-speaking] [data-vn-bubble] {
+  z-index: 2;
+  display: block;
 }
 
 [data-vn-bubble]::after {
@@ -469,6 +545,7 @@ export const VN_WAITING_CSS = `
   left: 50%;
   border: 0.55rem solid transparent;
   border-top-color: #fbf3df;
+  left: calc(50% - var(--vn-bubble-shift, 0px));
   transform: translateX(-50%);
 }
 
@@ -478,7 +555,7 @@ export const VN_WAITING_CSS = `
 
 [data-vn-bubble][data-vn-bubble-state="out"] {
   opacity: 0;
-  transform: translateX(-50%) translateY(4px) scale(0.95);
+  transform: translateX(calc(-50% + var(--vn-bubble-shift))) translateY(4px) scale(0.95);
 }
 
 [data-vn-bubble-chip] {
@@ -537,7 +614,7 @@ export const VN_WAITING_CSS = `
 }
 
 /* A voice in the head has no picture: a warm lamp glow instead. */
-[data-vn-card-figure][data-vn-card-empty="true"]::after {
+[data-vn-card-figure][data-vn-card-empty="voice"]::after {
   content: "";
   position: absolute;
   right: 10%;
@@ -545,6 +622,30 @@ export const VN_WAITING_CSS = `
   width: 70%;
   height: 50%;
   background: radial-gradient(closest-side, rgba(255, 186, 92, 0.42), rgba(255, 186, 92, 0));
+}
+
+[data-vn-card-initial] {
+  display: none;
+}
+
+/* Anyone else without a picture: their initial in a large ring in their colour. */
+[data-vn-card-figure][data-vn-card-empty="true"] [data-vn-card-initial] {
+  position: absolute;
+  right: 18%;
+  bottom: 22%;
+  display: grid;
+  width: min(13rem, 60%);
+  aspect-ratio: 1;
+  place-items: center;
+  border: 3px solid var(--vn-figure-color, var(--vn-scene-gold));
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 40%, color-mix(in srgb, var(--vn-figure-color, var(--vn-scene-gold)) 24%, transparent), rgba(8, 9, 15, 0.7));
+  box-shadow: 0 0 0 10px color-mix(in srgb, var(--vn-figure-color, var(--vn-scene-gold)) 14%, transparent), 0 20px 50px rgba(0, 0, 0, 0.4);
+  color: var(--vn-figure-color, var(--vn-scene-gold));
+  font-family: var(--vn-scene-serif);
+  font-size: clamp(3rem, 6 * var(--vn-vw, 1vw), 6rem);
+  font-weight: 600;
+  animation: vn-scene-rise 380ms ease-out both;
 }
 
 [data-vn-recap-card] {
@@ -886,6 +987,17 @@ export const VN_WAITING_CSS = `
   display: none;
 }
 
+[data-vn-waiting][data-vn-backdrop="tidy"]:not([data-vn-recap="off"]) [data-vn-waiting-info] [data-vn-scene-title] {
+  display: block;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+[data-vn-waiting][data-vn-backdrop="tidy"]:not([data-vn-recap="off"]) [data-vn-waiting-sent-text] {
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+}
+
 [data-vn-waiting][data-vn-backdrop="tidy"] [data-vn-lineup] {
   top: 34%;
   left: var(--vn-scene-left);
@@ -1179,6 +1291,69 @@ export const VN_WAITING_CSS = `
 
 [data-vn-waiting][data-vn-backdrop="daylight"] [data-vn-recap-card] {
   top: calc(var(--vn-scene-top) + 9rem);
+  border-color: rgba(30, 100, 200, 0.16);
+  border-top-color: var(--vn-figure-color, #1e7bff);
+  background: #fff;
+  box-shadow: 0 14px 34px rgba(20, 38, 77, 0.18);
+}
+
+[data-vn-waiting][data-vn-backdrop="daylight"] [data-vn-recap-kicker] { color: #1e64c8; }
+[data-vn-waiting][data-vn-backdrop="daylight"] :is([data-vn-recap-name], [data-vn-film-name]) { color: color-mix(in srgb, var(--vn-figure-color, #1e7bff) 62%, #14203a); }
+[data-vn-waiting][data-vn-backdrop="daylight"] :is([data-vn-recap-chip], [data-vn-film-chip]) { color: #22314f; }
+[data-vn-waiting][data-vn-backdrop="daylight"] [data-vn-recap-line] { color: #14203a; }
+[data-vn-waiting][data-vn-backdrop="daylight"] [data-vn-recap-dots] > li { background: rgba(20, 38, 77, 0.2); }
+[data-vn-waiting][data-vn-backdrop="daylight"] [data-vn-recap-dots] > li[data-vn-active] { background: #1e7bff; }
+
+/* The picture stands between the card and the status column, clear of both. */
+[data-vn-waiting][data-vn-backdrop="daylight"] [data-vn-card-figure],
+[data-vn-daylight-hero] {
+  right: calc(var(--vn-scene-right) + min(22rem, 100% - 4rem) + 1rem);
+  left: auto;
+  width: min(34%, 30rem);
+}
+
+[data-vn-daylight-hero] > img {
+  width: 100%;
+  object-fit: contain;
+  object-position: bottom center;
+}
+
+/* Below the Now loading banner, on a light strip. */
+[data-vn-waiting][data-vn-backdrop="daylight"] [data-vn-film] {
+  top: calc(16% + 5rem);
+  background: #eaf3ff;
+  box-shadow: 0 10px 30px rgba(20, 40, 80, 0.18);
+}
+
+[data-vn-waiting][data-vn-backdrop="daylight"] [data-vn-film]::before,
+[data-vn-waiting][data-vn-backdrop="daylight"] [data-vn-film]::after {
+  background: repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.75) 0 0.55rem, transparent 0.55rem 1.3rem) center / auto 0.42rem no-repeat, #1e7bff;
+}
+
+[data-vn-waiting][data-vn-backdrop="daylight"] [data-vn-film-card] {
+  border-color: rgba(30, 100, 200, 0.18);
+  background: #fff;
+  color: #14203a;
+}
+
+[data-vn-waiting][data-vn-backdrop="daylight"] [data-vn-film-card]:is(:hover, :focus-visible, [data-vn-film-selected]) {
+  border-color: #1e7bff;
+  background: #fff;
+}
+
+[data-vn-waiting][data-vn-backdrop="daylight"] [data-vn-film-text] { color: #22314f; }
+[data-vn-waiting][data-vn-backdrop="daylight"] [data-vn-film-count] { color: rgba(20, 32, 58, 0.5); }
+
+[data-vn-waiting][data-vn-backdrop="daylight"] [data-vn-film-recap] {
+  top: calc(16% + 5rem + 12.3rem);
+  color: #2a3d63;
+  font-weight: 600;
+}
+
+/* Half-body pictures that stop above the screen's bottom fade out instead of ending in a hard line. */
+[data-vn-waiting]:is([data-vn-backdrop="daylight"], [data-vn-backdrop="cast"]) [data-vn-figure-img] {
+  -webkit-mask-image: linear-gradient(to bottom, #000 82%, transparent 99%);
+  mask-image: linear-gradient(to bottom, #000 82%, transparent 99%);
 }
 
 /* Cast introduction: violet dark, everyone filling in from a silhouette. */
@@ -1272,18 +1447,20 @@ export const VN_WAITING_CSS = `
 [data-vn-interaction-action] {
   min-height: 1.9rem;
   padding: 0.22rem 0.75rem;
-  border: 1px solid var(--vn-chrome-border);
+  border: 1px solid var(--vn-float-border);
   border-radius: 999px;
-  background: var(--vn-chrome-bg);
+  background: var(--vn-float-bg);
   color: var(--vn-chrome-text);
   cursor: pointer;
   font-size: 0.8rem;
   backdrop-filter: blur(0.6rem);
 }
 
-[data-vn-interaction-action]:hover:not(:disabled) {
-  background: var(--vn-chrome-hover);
-  color: var(--vn-text);
+/* The hover tint goes over the button's own backdrop, never instead of it. */
+[data-vn-interaction-action]:hover:not(:disabled),
+[data-vn-reply-open]:hover {
+  border-color: color-mix(in srgb, var(--vn-accent) 70%, transparent);
+  background: linear-gradient(var(--vn-chrome-hover), var(--vn-chrome-hover)), var(--vn-float-bg);
 }
 
 [data-vn-interaction-action]:focus-visible,
@@ -1309,11 +1486,12 @@ export const VN_WAITING_CSS = `
   padding: 0.5rem 1.1rem;
   border: 1px solid color-mix(in srgb, var(--vn-accent) 55%, transparent);
   border-radius: 999px;
-  background: var(--vn-chrome-bg);
+  background: var(--vn-float-bg);
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.35);
-  color: var(--vn-text);
+  color: var(--vn-chrome-text);
   cursor: pointer;
   font-weight: 600;
+  transition: background-color 140ms ease, border-color 140ms ease;
 }
 
 @media (hover: none) and (pointer: coarse) {
@@ -1357,7 +1535,7 @@ export const VN_WAITING_CSS = `
   [data-vn-waiting-sent-text] { -webkit-line-clamp: 2; line-clamp: 2; }
 
   [data-vn-lineup] {
-    top: 40%;
+    top: 32%;
     right: 0.5rem;
     left: 0.5rem;
   }
@@ -1458,9 +1636,28 @@ export const VN_WAITING_CSS = `
   /* Their picture stands on the card, clear of the status text below. */
   [data-vn-waiting][data-vn-backdrop="daylight"] [data-vn-card-figure],
   [data-vn-waiting][data-vn-backdrop="cast"] [data-vn-card-figure] {
+    right: 0;
     bottom: calc(var(--vn-scene-bottom) + 9.5rem);
+    width: 78%;
     height: 52%;
   }
+
+  /* One figure above the status, fading out at its foot. */
+  [data-vn-daylight-hero] {
+    right: 10%;
+    bottom: calc(var(--vn-scene-bottom) + 9.5rem);
+    width: 80%;
+    height: 50%;
+  }
+
+  [data-vn-daylight-hero] > img,
+  [data-vn-waiting]:is([data-vn-backdrop="daylight"], [data-vn-backdrop="cast"]) [data-vn-card-img] {
+    -webkit-mask-image: linear-gradient(to bottom, #000 82%, transparent 99%);
+    mask-image: linear-gradient(to bottom, #000 82%, transparent 99%);
+  }
+
+  [data-vn-waiting][data-vn-backdrop="daylight"] [data-vn-film] { top: auto; }
+  [data-vn-waiting][data-vn-backdrop="daylight"] [data-vn-film-recap] { top: auto; }
 }
 
 @media (max-height: 560px) and (min-width: 641px) {
@@ -1489,8 +1686,8 @@ export const VN_WAITING_CSS = `
   100% { transform: scale(1, 1); }
 }
 @keyframes vn-bubble-pop {
-  from { opacity: 0; transform: translateX(-50%) translateY(6px) scale(0.86); }
-  to { opacity: 1; transform: translateX(-50%) scale(1); }
+  from { opacity: 0; transform: translateX(calc(-50% + var(--vn-bubble-shift))) translateY(6px) scale(0.86); }
+  to { opacity: 1; transform: translateX(calc(-50% + var(--vn-bubble-shift))) scale(1); }
 }
 @keyframes vn-film-scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
 @keyframes vn-daylight-banner { from { opacity: 0; transform: skewX(-14deg) translateX(-110%); } to { opacity: 1; transform: skewX(-14deg); } }
@@ -1508,37 +1705,69 @@ export const VN_WAITING_CSS = `
 @keyframes vn-film-zoom-in {
   from { opacity: 0; transform: scale(0.82) translateY(1rem); }
 }
+/* The same filter list at both ends, so the browser blends black into colour instead of snapping. */
 @keyframes vn-silhouette-fill {
-  from { filter: brightness(0) drop-shadow(0 0 1.2px rgba(255, 255, 255, 0.5)); }
-  to { filter: drop-shadow(0 0 1.2px #fff) drop-shadow(0 0 1.2px #fff) drop-shadow(0 10px 18px rgba(0, 0, 0, 0.45)); }
+  from { filter: brightness(0) drop-shadow(0 0 1.2px rgba(255, 255, 255, 0.5)) drop-shadow(0 0 1.2px rgba(255, 255, 255, 0)) drop-shadow(0 10px 18px rgba(0, 0, 0, 0)); }
+  to { filter: brightness(1) drop-shadow(0 0 1.2px #fff) drop-shadow(0 0 1.2px #fff) drop-shadow(0 10px 18px rgba(0, 0, 0, 0.45)); }
 }
 
 [data-vn-opening][data-vn-opening-motion="false"],
 [data-vn-opening][data-vn-opening-motion="false"] *,
+[data-vn-opening][data-vn-opening-motion="false"] *::before,
+[data-vn-opening][data-vn-opening-motion="false"] *::after,
 [data-vn-waiting][data-vn-waiting-motion="false"],
-[data-vn-waiting][data-vn-waiting-motion="false"] * {
+[data-vn-waiting][data-vn-waiting-motion="false"] *,
+[data-vn-waiting][data-vn-waiting-motion="false"] *::before,
+[data-vn-waiting][data-vn-waiting-motion="false"] *::after {
   animation: none !important;
   transition: none !important;
 }
 
+/* Still: every card once, scrolled by hand inside a strip whose edges stay put. */
 [data-vn-waiting][data-vn-waiting-motion="false"] [data-vn-film] {
-  overflow-x: auto;
   mask-image: none;
+}
+
+[data-vn-waiting][data-vn-waiting-motion="false"] [data-vn-film-track] {
+  right: 0;
+  width: auto;
+  padding-right: 0.7rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+[data-vn-waiting][data-vn-waiting-motion="false"] [data-vn-film-copy] {
+  display: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
   [data-vn-opening],
   [data-vn-opening] *,
+  [data-vn-opening] *::before,
+  [data-vn-opening] *::after,
   [data-vn-location],
   [data-vn-waiting],
-  [data-vn-waiting] * {
+  [data-vn-waiting] *,
+  [data-vn-waiting] *::before,
+  [data-vn-waiting] *::after {
     animation: none !important;
     transition: none !important;
   }
 
   [data-vn-film] {
-    overflow-x: auto;
     mask-image: none;
+  }
+
+  [data-vn-film-track] {
+    right: 0;
+    width: auto;
+    padding-right: 0.7rem;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  [data-vn-film-copy] {
+    display: none;
   }
 }
 `;

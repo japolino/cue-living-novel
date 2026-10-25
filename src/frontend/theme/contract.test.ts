@@ -59,6 +59,8 @@ test("chrome tokens are declared on the root so presets re-derive them", () => {
     "--vn-chrome-bg",
     "--vn-chrome-border",
     "--vn-chrome-text",
+    "--vn-float-bg",
+    "--vn-float-border",
     "--vn-panel-bg",
     "--vn-panel-solid",
     "--vn-overlay-text",
@@ -67,6 +69,11 @@ test("chrome tokens are declared on the root so presets re-derive them", () => {
   ]) {
     assert.match(rootRule, new RegExp(`${token}\\s*:`), `${token} lives on [data-vn-root]`);
   }
+});
+
+test("the root uses the font a preset sets on it", () => {
+  const rootRule = VN_BASE_CSS.match(/\n\[data-vn-root\] \{[\s\S]*?\n\}/)?.[0] ?? "";
+  assert.match(rootRule, /font-family:\s*var\(--vn-font-family\)/);
 });
 
 test("entrance animations never pin transform, so hover and press feedback still moves", () => {

@@ -60,6 +60,10 @@ textarea {
   --vn-chrome-border: rgba(255, 255, 255, 0.18);
   --vn-chrome-text: var(--vn-muted-text);
   --vn-chrome-hover: rgba(255, 255, 255, 0.1);
+  /* Buttons standing on the scene by themselves (Your turn's actions, Reply,
+     Whole reply): the toolbar's look, unless a preset's toolbar has no box. */
+  --vn-float-bg: var(--vn-chrome-bg);
+  --vn-float-border: var(--vn-chrome-border);
   --vn-control-radius: 999px;
   --vn-panel-bg: rgba(14, 13, 24, 0.86);
   --vn-panel-solid: #12101d;
@@ -84,6 +88,9 @@ textarea {
   min-height: calc(100 * var(--vn-dvh, 1dvh));
   overflow: hidden;
   background: #08090d;
+  /* Again here: a preset sets --vn-font-family on the root, after :host has
+     already resolved it. */
+  font-family: var(--vn-font-family);
   touch-action: manipulation;
 }
 
@@ -968,6 +975,23 @@ button[data-vn-badge]:active {
   list-style: none;
 }
 
+/* Suggestions scrolled out of view fade at that end, so a cut-off list
+   shows there is more (data-vn-overflow, set by the stage). */
+[data-vn-choice-list][data-vn-overflow="below"] {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 2.2rem), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 2.2rem), transparent);
+}
+
+[data-vn-choice-list][data-vn-overflow="above"] {
+  -webkit-mask-image: linear-gradient(to top, #000 calc(100% - 2.2rem), transparent);
+  mask-image: linear-gradient(to top, #000 calc(100% - 2.2rem), transparent);
+}
+
+[data-vn-choice-list][data-vn-overflow="both"] {
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 2.2rem, #000 calc(100% - 2.2rem), transparent);
+  mask-image: linear-gradient(to bottom, transparent, #000 2.2rem, #000 calc(100% - 2.2rem), transparent);
+}
+
 /*
  * CYOA choices. A lit edge on the left (inset shadow, so presets keep both
  * pseudo-elements free) grows on hover and focus, the row slides a little
@@ -1353,6 +1377,12 @@ button[data-vn-badge]:active {
     padding: 0.3rem 0.4rem 0.3rem 0.75rem;
     font-size: 0.85rem;
   }
+}
+
+/* The location label or status badges would sit over the reply area's column
+   (phones, narrow windows): it starts below them (measured by the stage). */
+[data-vn-root][data-vn-top-crowded] [data-vn-interaction] {
+  padding-top: max(3.75rem, env(safe-area-inset-top), calc(var(--vn-top-reach, 0px) + 0.75rem));
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -1893,6 +1923,54 @@ button[data-vn-badge]:active {
 [data-vn-backlog-close]:focus-visible {
   outline: 2px solid var(--vn-focus-ring);
   outline-offset: 2px;
+}
+
+/* "Whole reply": History also shows what has not been read yet (pressed). */
+[data-vn-backlog-script] {
+  flex: none;
+  min-height: 2.1rem;
+  margin-left: auto;
+  padding: 0.3rem 0.9rem;
+  border: 1px solid var(--vn-float-border);
+  border-radius: var(--vn-control-radius);
+  background: var(--vn-float-bg);
+  color: var(--vn-chrome-text);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 140ms ease, transform 140ms ease;
+}
+
+[data-vn-backlog-script]:hover {
+  border-color: var(--vn-accent);
+  background: linear-gradient(var(--vn-chrome-hover), var(--vn-chrome-hover)), var(--vn-float-bg);
+}
+
+[data-vn-backlog-script][aria-pressed="true"] {
+  border-color: var(--vn-accent);
+  background: var(--vn-accent);
+  color: var(--vn-accent-contrast);
+}
+
+[data-vn-backlog-script]:active {
+  transform: scale(0.96);
+}
+
+[data-vn-backlog-script]:focus-visible {
+  outline: 2px solid var(--vn-focus-ring);
+  outline-offset: 2px;
+}
+
+@media (max-width: 640px) {
+  /* Phones: the header starts below "Back to chat" rather than beside it, so
+     a preset's wider button never covers Close. */
+  [data-vn-backlog-header] {
+    margin-top: 3.4rem;
+    padding-right: 0;
+  }
 }
 
 [data-vn-backlog-content] {
