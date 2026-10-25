@@ -40,6 +40,15 @@ describe("provisional turn hold", () => {
     expect(reduceVnStage(state, { type: "previous" }).currentParagraphIndex).toBe(0);
   });
 
+  test("rereading the text before its plan keeps the scene it shows", () => {
+    const image = { url: "/api/v1/images/scene", alt: "", requestId: "scene" };
+    const shown = { ...run(loaded(), { type: "advance" }), displayedImage: image };
+    expect(reduceVnStage(shown, { type: "previous" }).displayedImage).toEqual(image);
+    // A planned turn's earlier paragraph gets its own image from the host.
+    const plannedShown = { ...run(loaded(planned()), { type: "advance" }), displayedImage: image };
+    expect(reduceVnStage(plannedShown, { type: "previous" }).displayedImage).toBeNull();
+  });
+
   test("a planned turn loads with no hold", () => {
     const state = loaded(planned());
     expect(state.planHold).toBeNull();

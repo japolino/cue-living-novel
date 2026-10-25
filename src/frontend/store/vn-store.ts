@@ -357,8 +357,11 @@ export const reduceVnStage = (
       if (!selectVnStageView(state).canGoBack) return state;
       // Rereading during an error keeps the error card (and phase) visible.
       const phase = state.phase === "error" ? "error" : "revealing";
+      // The host shows the earlier paragraph's image. Text waiting for its plan
+      // has none: it keeps the scene it shows.
+      const images = state.planHold !== null ? {} : { displayedImage: null, pendingImage: null, imageError: null };
       return { ...state, currentParagraphIndex: state.currentParagraphIndex - 1, phase,
-        turnFinished: false, showRerollPrompt: false, displayedImage: null, pendingImage: null, imageError: null };
+        turnFinished: false, showRerollPrompt: false, ...images };
     }
 
     case "present-user-paragraph": {

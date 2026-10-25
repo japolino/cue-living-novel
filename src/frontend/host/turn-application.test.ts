@@ -97,4 +97,18 @@ describe("applyTurn", () => {
     h.receive({ type: "vn_turn", turn: planned() });
     expect(h.speech()).toBe(reading);
   });
+
+  test("going back during the text before the plan keeps the scene image", async () => {
+    const h = await open();
+    const asset = { jobId: "j1", cueId: "c1", paragraphIndex: 0, status: "generated" as const, imageUrl: "/api/v1/images/old-scene" };
+    h.state(planned({ messageId: "m0", sourceFingerprint: "fp0", assets: [asset] }));
+    await flush(30);
+    expect(h.sceneImage()).toBe("/api/v1/images/old-scene");
+    // The next reply's text keeps the previous scene until its plan brings one.
+    h.receive({ type: "vn_turn_text", turn: text() });
+    h.next();
+    h.previous();
+    await flush(30);
+    expect(h.sceneImage()).toBe("/api/v1/images/old-scene");
+  });
 });

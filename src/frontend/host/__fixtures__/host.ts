@@ -110,6 +110,8 @@ export function bootHost(options: { chatId?: string; config?: Partial<VisualNove
     play: () => query("[data-dock] button")!.dispatchEvent(new FakeEvent("click")),
     sceneImage: () => query("[data-vn-scene-image][data-vn-layer='active']")?.getAttribute("src") ?? null,
     continueDisabled: () => Boolean(query("[data-vn-continue]")?.disabled),
+    /** Back one paragraph, as a click on the stage's button. */
+    previous: () => query("[data-vn-control='previous']")!.dispatchEvent(new FakeEvent("click")),
     /** Continue, as a click on the stage's button. */
     next: () => query("[data-vn-continue]")!.dispatchEvent(new FakeEvent("click")),
     destroy: () => { cleanup(); restore(); },
