@@ -219,7 +219,7 @@ The frontend loads a provisional turn like a turn although its status is `planni
 
 How far the reader can get ahead of the plan is `planHold` (`PROVISIONAL_PLAN_HOLD` in `src/frontend/host/controller.ts`; Infinity, so they read on). At the hold the stage shows **Preparing the scene…**, sets `data-vn-plan-pending` and disables Continue; auto play and skip stop there and resume after the upgrade. The final paragraph's acknowledgement always waits for the plan, which brings the choices.
 
-Speech waits for the plan by default: a provisional turn has no speech cursor, and with speech auto play on, auto play waits too, so no paragraph goes unspoken. With `speakBeforePlan` (Speech settings, "Read before the scene is ready", off by default) provisional paragraphs are read with their settled speaker's voice, the narrator's otherwise, and the upgrade does not read the paragraph on screen again.
+Speech waits for the plan by default: a provisional turn has no speech cursor, and with speech auto play on, auto play waits too, so no paragraph goes unspoken. With `speakBeforePlan` (Speech settings, "Read before the scene is ready", off by default) provisional paragraphs are read with their settled speaker's voice, the narrator's otherwise. The upgrade does not read the paragraph on screen again once its speech has started (loading or playing); a paragraph never started (auto play off, the narrator muted) takes the plan's speaker for the next Play.
 
 ## Reveal and input state
 

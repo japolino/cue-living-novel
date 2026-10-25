@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { TurnView } from "../../protocol.js";
+import { DEFAULT_SPEECH_SETTINGS, type SpeechSettings } from "../../speech-config.js";
 import { bootHost, flush, type HostHarness } from "./__fixtures__/host.js";
 
 /** How the running host applies the text before the plan and the planned turn (applyTurn). */
@@ -15,8 +16,8 @@ const planned = (overrides: Partial<TurnView> = {}) => base({ paragraphSpeakers:
 let host: HostHarness | null = null;
 afterEach(() => { host?.destroy(); host = null; });
 
-async function open(): Promise<HostHarness> {
-  host = bootHost();
+async function open(speech?: Partial<SpeechSettings>): Promise<HostHarness> {
+  host = bootHost(speech ? { config: { speech: { ...DEFAULT_SPEECH_SETTINGS, enabled: true, ...speech } } } : {});
   host.state(null);
   host.toggle();
   host.state(null);
@@ -76,5 +77,24 @@ describe("applyTurn", () => {
     expect(h.audio.some((src) => src.includes("thunder.mp3"))).toBe(false);
     // Its music still plays.
     expect(h.audio.some((src) => src.includes("storm.mp3"))).toBe(true);
+  });
+
+  test("Read before the scene is ready: a paragraph never read aloud takes the plan's speaker", async () => {
+    const h = await open({ speakBeforePlan: true, narrator: { connectionId: "tts", voice: "narrator" } });
+    h.receive({ type: "vn_turn_text", turn: text() });
+    expect(h.speech()).toContain("Narrator");
+    // Auto play is off: nobody pressed Play before the plan landed.
+    h.receive({ type: "vn_turn", turn: planned() });
+    expect(h.speech()).toContain("Mira");
+  });
+
+  test("Read before the scene is ready: a paragraph already being read is not started again", async () => {
+    const h = await open({ speakBeforePlan: true, narrator: { connectionId: "tts", voice: "narrator" } });
+    h.receive({ type: "vn_turn_text", turn: text() });
+    h.play();
+    const reading = h.speech();
+    expect(reading).toBe("Fetching audio…");
+    h.receive({ type: "vn_turn", turn: planned() });
+    expect(h.speech()).toBe(reading);
   });
 });

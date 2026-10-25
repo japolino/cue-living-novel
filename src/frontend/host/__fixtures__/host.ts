@@ -15,7 +15,9 @@ function installHostGlobals(audio: string[]): () => void {
   const restoreDocument = installFakeDocument();
   const g = globalThis as Globals;
   const doc = g.document as Globals;
-  const previous = { ...Object.fromEntries(["window", "ResizeObserver", "MutationObserver", "Audio", "Image", "addEventListener", "removeEventListener"].map((key) => [key, g[key]])) };
+  const previous = { ...Object.fromEntries(["window", "ResizeObserver", "MutationObserver", "Audio", "Image", "fetch", "addEventListener", "removeEventListener"].map((key) => [key, g[key]])) };
+  // Host requests (TTS profiles, synthesis) stay pending: tests see what starts, not what answers.
+  g.fetch = () => new Promise<Response>(() => {});
   doc.addEventListener = () => {};
   doc.removeEventListener = () => {};
   doc.hidden = false;
@@ -102,6 +104,10 @@ export function bootHost(options: { chatId?: string; config?: Partial<VisualNove
     },
     badges: () => root.querySelectorAll("[data-vn-badge]").map((badge) => badge.textContent.trim()),
     flash: () => query("[data-vn-flash]")?.getAttribute("data-vn-flash") ?? null,
+    /** The speech dock's status line ("Speech ready — Mira"). */
+    speech: () => query("[data-status]")?.textContent ?? "",
+    /** The speech dock's Play button. */
+    play: () => query("[data-dock] button")!.dispatchEvent(new FakeEvent("click")),
     sceneImage: () => query("[data-vn-scene-image][data-vn-layer='active']")?.getAttribute("src") ?? null,
     continueDisabled: () => Boolean(query("[data-vn-continue]")?.disabled),
     /** Continue, as a click on the stage's button. */

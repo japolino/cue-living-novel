@@ -580,8 +580,14 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   let speech: SpeechController;
   let speechDock: SpeechDock;
 
-  /** The paragraph whose speech cursor came from a provisional turn (speakBeforePlan); the upgrade leaves it be. */
-  let provisionalSpeechAt: number | null = null;
+  /**
+   * The text before the plan read aloud (speakBeforePlan): the speech cursor
+   * that came from it, and the one whose speech actually started (loading or
+   * playing). The upgrade leaves a started paragraph be and gives any other
+   * the plan's speaker.
+   */
+  let provisionalCursorKey: string | null = null;
+  let provisionalSpokenKey: string | null = null;
   const isSpeechHoldingAuto = (): boolean => {
     if (!speech) return false;
     const s = speech.getStatus();
@@ -595,7 +601,9 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     // The text before the plan is read only with speakBeforePlan; otherwise speech waits for the plan.
     const speakable = view && (view.status === "ready" || (view.provisional && configRef.current?.speech.speakBeforePlan));
     const cursor = speakable ? speechCursorFor(view, paragraphIndex) : null;
-    provisionalSpeechAt = cursor && view?.provisional ? paragraphIndex : null;
+    const key = cursor && view?.provisional ? `${view.sourceFingerprint}:${paragraphIndex}` : null;
+    if (key !== provisionalCursorKey) provisionalSpokenKey = null;
+    provisionalCursorKey = key;
     speech?.setCursor(cursor);
   };
   const onVisibilityChanged = (): void => {
@@ -722,6 +730,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     transport: createSpeechTransport(),
     onStatus: (status) => {
       speechDock.setStatus(status);
+      if (provisionalCursorKey && (status.kind === "loading" || status.kind === "playing")) provisionalSpokenKey = provisionalCursorKey;
       if (status.kind === "loading" || status.kind === "playing" || status.kind === "paused") {
         stage.holdAutoPlay();
       } else if (active) {
@@ -1216,8 +1225,9 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
         const cursor = decision.paragraphIndex;
         // Speech first, so auto play that resumes with the plan waits on it. A
         // paragraph already read aloud before the plan is not read again.
-        if (provisionalSpeechAt !== cursor) syncSpeechCursor(next, cursor);
-        provisionalSpeechAt = null;
+        if (provisionalSpokenKey !== `${next.sourceFingerprint}:${cursor}`) syncSpeechCursor(next, cursor);
+        provisionalCursorKey = null;
+        provisionalSpokenKey = null;
         panels.setTurn(next, cursor);
         // The opening paragraph the plan reached right away plays its moment,
         // sound effect included; otherwise only its music: the moment has passed.
