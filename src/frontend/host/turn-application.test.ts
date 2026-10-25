@@ -120,4 +120,34 @@ describe("applyTurn", () => {
     h.next();
     expect(h.text()).toBe(texts[2]!);
   });
+
+  test("the upgrade shows the scene image the plan brings for the reader's paragraph", async () => {
+    const h = await open();
+    h.receive({ type: "vn_turn_text", turn: text() });
+    h.next();
+    const asset = { jobId: "j1", cueId: "c1", paragraphIndex: 0, status: "generated" as const, imageUrl: "/api/v1/images/new-scene" };
+    h.receive({ type: "vn_turn", turn: planned({ assets: [asset] }) });
+    await flush(30);
+    expect(h.sceneImage()).toBe("/api/v1/images/new-scene");
+  });
+
+  test("while the reader's own line shows, a late text never replaces the planned turn waiting behind it", async () => {
+    const h = await open();
+    h.state(planned({ messageId: "m0", sourceFingerprint: "fp0" }));
+    h.next();
+    h.next();
+    h.next();
+    h.reply("I nod.");
+    expect(h.text()).toBe("I nod.");
+    h.receive({ type: "vn_turn", turn: planned() });
+    h.receive({ type: "vn_turn_text", turn: text() });
+    // Past their own line, the reader gets the planned reply, not its text.
+    h.next();
+    expect(h.text()).toBe(texts[0]!);
+    expect(h.speaker()).toBe("Mira");
+    expect(h.badges()).not.toContain("Preparing the scene…");
+    h.next();
+    h.next();
+    expect(h.continueDisabled()).toBe(false);
+  });
 });

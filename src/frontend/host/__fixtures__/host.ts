@@ -110,6 +110,13 @@ export function bootHost(options: { chatId?: string; config?: Partial<VisualNove
     play: () => query("[data-dock] button")!.dispatchEvent(new FakeEvent("click")),
     sceneImage: () => query("[data-vn-scene-image][data-vn-layer='active']")?.getAttribute("src") ?? null,
     continueDisabled: () => Boolean(query("[data-vn-continue]")?.disabled),
+    /** Type a reply into the composer and send it. */
+    reply: (content: string) => {
+      const input = query("[data-vn-input]")!;
+      (input as unknown as { value: string }).value = content;
+      input.dispatchEvent(new FakeEvent("input"));
+      query("[data-vn-input-form]")!.dispatchEvent(new FakeEvent("submit"));
+    },
     /** Back one paragraph, as a click on the stage's button. */
     previous: () => query("[data-vn-control='previous']")!.dispatchEvent(new FakeEvent("click")),
     /** Continue, as a click on the stage's button. */
