@@ -403,7 +403,10 @@ wanted: it keeps one pose across the expressions.
   library says "may show two figures" or "may show scenery behind" and
   Regenerate draws a new one. The check's result is stored per image
   (`twoFigures`, `scenery`; null until checked, and `scenery` stays null for
-  a cut without a mask).
+  a cut without a mask). Only the first cut of a render the backend just
+  stored can bring the regeneration (it keeps those raw ids in memory): a
+  Re-cut, the stage's Retry of a failed cut or save, or a cut after a
+  backend restart keeps the render and shows the flag.
 - **Waiting for the idle's check.** With anchoring, expressions already
   wait for the idle render; they now also wait for its first check (the
   cut-out), at most `IDLE_CHECK_WAIT_MS` (25 s) from the render, so a slow or

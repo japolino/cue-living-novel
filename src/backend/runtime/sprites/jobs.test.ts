@@ -757,6 +757,48 @@ describe("sprite jobs: scenery check", () => {
     expect(f.log.some((line) => line.startsWith(`sprite ${setKey}/idle: scenery -> regenerate with a new set seed`))).toBe(true);
   });
 
+  test("a user Re-cut never regenerates, even of a render whose first cut ran no check", async () => {
+    const f = setup();
+    await f.service.prepareCast("u1", [MIRA], spriteConfig());
+    await f.service.settle("u1");
+    const setKey = spriteSetKeyFor(MIRA, f.styleKey);
+    // First cuts from an older page: no check, so both flags stay null (as on legacy images).
+    for (let guard = 0; guard < 20; guard += 1) {
+      const pending = f.cutRequests().filter((request) => !f.answered.has(request.requestId));
+      if (!pending.length) break;
+      for (const request of pending) { f.answered.add(request.requestId); f.answerCut(request); }
+      await f.service.settle("u1");
+    }
+    const raw = (await f.library()).sets[setKey]!.images.smile!.rawImageId!;
+    expect((await f.library()).sets[setKey]!.images.smile).toMatchObject({ status: "ready", twoFigures: null, scenery: null });
+    await f.service.action("u1", { type: "vn_sprite_action", action: "recut", setKey, expression: "smile" }, { config: spriteConfig() });
+    await f.answerAll(() => true, () => true);
+    await f.service.settle("u1");
+    expect(f.calls).toHaveLength(SPRITE_HOT_SET.length);
+    expect(f.deleted).not.toContain(raw);
+    expect((await f.library()).sets[setKey]!.images.smile).toMatchObject({ status: "ready", rawImageId: raw, twoFigures: true, scenery: true, autoRetried: false });
+  });
+
+  test("the stage's Retry of a failed cut keeps the render it cuts again", async () => {
+    const f = setup();
+    await f.service.prepareCast("u1", [MIRA], spriteConfig());
+    await f.service.settle("u1");
+    const setKey = spriteSetKeyFor(MIRA, f.styleKey);
+    // The first cuts are clean, but saving them fails: the renders stay, unchecked for the next cut.
+    f.setFailUpload(true);
+    await f.answerAll();
+    await f.service.settle("u1");
+    expect((await f.library()).sets[setKey]!.images.smile!.status).toBe("failed");
+    f.setFailUpload(false);
+    const raw = (await f.library()).sets[setKey]!.images.smile!.rawImageId!;
+    await f.service.retryFailed("u1", sampleStaging(f.styleKey), spriteConfig());
+    await f.answerAll(() => false, (request) => request.expression === "smile");
+    await f.service.settle("u1");
+    // Retry also renders the staged turn's plates; the smile is not rendered again.
+    expect(f.callsBy().filter((entry) => entry.name === label(setKey, "smile"))).toHaveLength(1);
+    expect((await f.library()).sets[setKey]!.images.smile).toMatchObject({ status: "ready", rawImageId: raw, scenery: true });
+  });
+
   test("a cut without the check (basic, or one the workflow made) is kept and stays unchecked", async () => {
     const f = setup();
     await f.service.prepareCast("u1", [MIRA], spriteConfig());

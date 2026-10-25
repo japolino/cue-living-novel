@@ -237,6 +237,12 @@ export class SpriteService {
   private readonly cutTasks = new Set<Promise<void>>();
   /** When each fresh idle render (by raw image id) started waiting for its duplicate check. */
   private readonly idleCheckSince = new Map<string, number>();
+  /**
+   * Sprite renders (raw image ids) whose first cut-out has not come back yet:
+   * only their first cut can bring the automatic regeneration, never a
+   * Re-cut or a Retry. In memory: after a restart the cut is only checked.
+   */
+  private readonly freshRenders = new Set<string>();
   readonly insetBridge: NovelAiInsetBridge;
   /** NovelAI V5 insets NovelAI rejected (novelAiInsetKey): plain renders until the backend restarts. */
   private readonly insetOff = new Set<string>();
@@ -1514,11 +1520,21 @@ export class SpriteService {
       return () => this.broadcastPlate(userId, plate);
     });
     if (orphan) await this.deleteImage(userId, imageId);
+    else if (work.kind === "sprite") this.markFresh(imageId);
     if (stale && work.kind === "sprite") this.deps.log?.(`sprite ${work.setKey}/${work.expression}: its idle changed while it rendered -> requeued as an inset of the current idle`, userId);
     if (requeued.length && work.kind === "sprite") this.deps.log?.(`sprite ${work.setKey}/idle: new idle render -> requeued inset expressions made from the old one: ${requeued.join(", ")}`, userId);
     broadcast?.();
     for (const id of doomed) await this.deleteImage(userId, id);
     return stale;
+  }
+
+  private markFresh(imageId: string): void {
+    this.freshRenders.add(imageId);
+    while (this.freshRenders.size > 256) {
+      const oldest = this.freshRenders.values().next().value;
+      if (oldest === undefined) break;
+      this.freshRenders.delete(oldest);
+    }
   }
 
   /**
@@ -1586,6 +1602,9 @@ export class SpriteService {
     };
     const first = current();
     if (!first) return;
+    // The render's first cut-out (any later one is a Re-cut or a Retry).
+    const fresh = this.freshRenders.has(target.imageId);
+    if (outcome.ok) this.freshRenders.delete(target.imageId);
     if (first.status === "ready") {
       // A silent upgrade re-cut, tried only once: it replaces a basic cut with
       // a model's, or a provisional Best cut with the Studio model's; anything
@@ -1621,11 +1640,12 @@ export class SpriteService {
       void this.pump(userId);
       return;
     }
-    // Duplicate and scenery checks: a fresh render that looks like two
-    // figures, or kept scenery drawn behind the character, gets one automatic
-    // regeneration between them (a flagged retry is kept and shown).
+    // Duplicate and scenery checks: the first cut of a fresh render that looks
+    // like two figures, or kept scenery drawn behind the character, gets one
+    // automatic regeneration between them (a flagged retry is kept and
+    // shown). A Re-cut or Retry keeps the render it cuts.
     const flag = outcome.meta.twoFigures === true ? "two figures" : outcome.meta.scenery === true ? "scenery" : null;
-    if (first.status === "cutting" && flag && first.twoFigures === null && first.scenery === null && !first.autoRetried) {
+    if (fresh && first.status === "cutting" && flag && first.twoFigures === null && first.scenery === null && !first.autoRetried) {
       await this.regenerateFlagged(userId, target, flag);
       return;
     }
