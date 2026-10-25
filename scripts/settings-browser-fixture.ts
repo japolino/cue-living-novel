@@ -70,6 +70,7 @@ const fixture = {
   patches: [] as Array<Partial<VisualNovelConfig>>,
   ackMode: (query.get("ack") ?? "sync") as "sync" | "manual",
   previews: 0,
+  panelTools: 0,
   refreshes: 0,
   scans: [] as string[],
   savedSystemOneKeys: [] as string[],
@@ -98,6 +99,7 @@ const panelOptions: SettingsPanelOptions = {
     if (fixture.ackMode === "sync") queueMicrotask(() => panel.setSaveStatus({ kind: "saved" }));
   },
   onOpenPreview: () => { fixture.previews += 1; },
+  onOpenPanelTools: () => { fixture.panelTools += 1; },
   onRefreshConnections: () => { fixture.refreshes += 1; },
   onSaveSystemOneKey: (key) => { fixture.savedSystemOneKeys.push(key); panel.setSystemOneKeyStatus(true); },
   onClearSystemOneKey: () => { fixture.clearedSystemOneKeys += 1; panel.setSystemOneKeyStatus(false); },

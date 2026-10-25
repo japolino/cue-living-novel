@@ -249,7 +249,7 @@ The overlay feature-detects the staging component override API. If that API is a
 
 ### Pinned status cards and inline HTML
 
-Open **Panels** at the top left of Cue. The button shows only when the chat has something for it: a card in the reply so far, a pinned card or a status rule. Newly planned replies expose complete HTML/SVG blocks when their paragraph is reached. Choose **Pin this card** for a saved snapshot, or **Keep it updated** for a uniquely identified status source. Drag the title, drag the lower-right resize handle, or use arrow keys on the title; Shift + arrows resizes. Positions and pins are stored per chat in this browser. **Reset positions** recovers misplaced cards; **Unpin all** removes saved cards.
+Open **Panels** at the top left of Cue. The button shows only when the chat has something for it: a card in the reply so far, a pinned card, a status rule or a SimTracker card to capture. Without any, **Advanced → Panels → Open Panels tools** in the **Cue** settings tab opens Cue with the drawer on its advanced tools. Newly planned replies expose complete HTML/SVG blocks when their paragraph is reached. Choose **Pin this card** for a saved snapshot, or **Keep it updated** for a uniquely identified status source. Drag the title, drag the lower-right resize handle, or use arrow keys on the title; Shift + arrows resizes. Positions and pins are stored per chat in this browser. **Reset positions** recovers misplaced cards; **Unpin all** removes saved cards.
 
 SimTracker is optional. Panels shows available cards from the current reply first; **Advanced tools** holds SimTracker capture, pasted HTML, and status template rules. Opening or closing advanced tools does not disable saved rules or pinned updates.
 
@@ -263,7 +263,7 @@ Rules do not change filtering. **Ignored tags** hides whole blocks from dialogue
 
 Frames allow CSS layouts, SVG drawings, and CSS-only checkbox/radio interactions, but no scripts or navigation. Remote images/fonts are blocked unless explicitly enabled for that frame. A content update rebuilds that card's frame; other cards retain their state. Followed values from previous turns are hidden until the source appears in the current turn. Snapshot pins deliberately remain visible.
 
-For stock SimTracker, let its card render in normal chat, open Cue, then choose **Capture SimTracker snapshot**. This captures markup and checkbox state, not JavaScript behavior. Live updates require the companion adapter in [integrations/simtracker-vn-bridge.ts](./integrations/simtracker-vn-bridge.ts), wired to SimTracker's own template output. It is not installed into SimTracker automatically. The adapter must return only the requested chat/message/swipe's cards, call `refresh()` after updates, and `destroy()` on teardown. No DOM nodes are moved between extensions.
+For stock SimTracker, let its card render in normal chat, open Cue, open **Panels** (it shows for the card), then choose **Capture SimTracker snapshot** under **Advanced tools**. This captures markup and checkbox state, not JavaScript behavior. Live updates require the companion adapter in [integrations/simtracker-vn-bridge.ts](./integrations/simtracker-vn-bridge.ts), wired to SimTracker's own template output. It is not installed into SimTracker automatically. The adapter must return only the requested chat/message/swipe's cards, call `refresh()` after updates, and `destroy()` on teardown. No DOM nodes are moved between extensions.
 
 ### Game engine extensions
 

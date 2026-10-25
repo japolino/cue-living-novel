@@ -747,6 +747,10 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   const settingsPanel: (VisualNovelSettingsPanel & SettingsFeedbackTarget) | null = settingsHandle ? new VisualNovelSettingsPanel({
     mount: settingsHandle.root,
     onOpenPreview: () => { if (!active) toggleVisualNovel(); },
+    onOpenPanelTools: () => {
+      if (!active) toggleVisualNovel();
+      if (active) panels.openTools();
+    },
     onRefreshConnections: () => requestConnectionCatalog(),
     onSaveSystemOneKey: (key) => ctx.sendToBackend({ type: "vn_set_system_one_key", key }),
     onClearSystemOneKey: () => ctx.sendToBackend({ type: "vn_clear_system_one_key" }),

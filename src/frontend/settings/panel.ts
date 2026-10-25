@@ -110,6 +110,8 @@ export type SettingsPanelOptions = {
   /** Receives partial patches. Every control calls this when it changes; Advanced text fields when committed and valid. */
   onSave: (patch: Partial<VisualNovelConfig>) => void;
   onOpenPreview: () => void;
+  /** Open Cue with the Panels drawer on its Advanced tools (the stage shows no Panels button until a chat has a card). */
+  onOpenPanelTools?: () => void;
   onRefreshConnections: () => void;
   onSaveSystemOneKey?: (key: string) => void;
   onClearSystemOneKey?: () => void;
@@ -831,6 +833,10 @@ export class VisualNovelSettingsPanel {
               <label data-field ${find("Music storage folder", "audio directory folder scoped storage")}><span>Music storage folder</span><input name="audioDirectory" type="text" placeholder="audio" /><small>Folder inside the extension's scoped Lumiverse storage, scanned for music and sound effects.</small></label>
               <label data-check ${find("Verbose debug logging", "debug log console verbose")}><input name="debugLogging" type="checkbox" /><span>Verbose debug logging<small>Writes host events, planning, assets and anchoring to the Lumiverse log and browser console.</small>${more("While on, story text, the raw planner response and resolved character, wardrobe and environment state are written to the log.")}</span></label>
             `, { id: "storage", find: "" })}
+            ${group("Panels", `
+              <div data-actions><button type="button" data-open-panel-tools>Open Panels tools</button></div>
+              <small>Capture a SimTracker card, paste rendered HTML or SVG, or add a status template rule. The stage shows its Panels button once a chat has a card, a pin or a rule.</small>
+            `, { id: "panels", find: find("Open Panels tools", "panels simtracker capture paste html svg status template rule pin card tracker") })}
             ${group("Reset and setup", `
               <div data-actions>
                 <button type="button" data-reset>Reset defaults</button>
@@ -1274,6 +1280,9 @@ export class VisualNovelSettingsPanel {
     for (const button of this.root.querySelectorAll("[data-open-preview]")) {
       button.addEventListener("click", () => this.options.onOpenPreview());
     }
+    const panelTools = this.root.querySelector<HTMLButtonElement>("[data-open-panel-tools]")!;
+    panelTools.hidden = !this.options.onOpenPanelTools;
+    panelTools.addEventListener("click", () => this.options.onOpenPanelTools?.());
     for (const button of this.root.querySelectorAll("[data-refresh-connections]")) {
       button.addEventListener("click", () => {
         for (const kind of ["planner", "image"] as const) {

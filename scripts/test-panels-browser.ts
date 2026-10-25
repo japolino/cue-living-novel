@@ -28,6 +28,17 @@ try {
   assert.match(await page.locator(".drawer").innerText(), /No cards to pin yet/);
   await page.getByRole("button", { name: "Close", exact: true }).click();
   assert.equal(await page.locator(".launcher").isVisible(), false, "closed with nothing to pin: the button goes");
+  // A SimTracker card in the chat can be captured: the button shows for it.
+  await page.evaluate(() => { const { dock } = (window as any).fixture; dock.onCapture = () => [{ title: "SimTracker", html: "<div>HP 3</div>" }]; dock.setCursor(0); });
+  assert.equal(await page.locator(".launcher").isVisible(), true, "a capturable SimTracker card shows the button");
+  await page.evaluate(() => { const { dock } = (window as any).fixture; dock.onCapture = undefined; dock.setCursor(0); });
+  assert.equal(await page.locator(".launcher").isVisible(), false);
+  // Settings' Open Panels tools: the drawer opens on Advanced tools (capture, paste, rules) with no card at all.
+  await page.evaluate(() => (window as any).fixture.dock.openTools());
+  assert.equal(await page.getByRole("button", { name: "Capture SimTracker snapshot" }).isVisible(), true, "the tools open without a card");
+  assert.equal(await page.locator("details[data-panel-advanced]").evaluate((node) => (node as HTMLDetailsElement).open), true);
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+  assert.equal(await page.locator(".launcher").isVisible(), false);
   await page.evaluate(() => (window as any).fixture.dock.setCursor(1));
   await page.getByRole("button", { name: /^Panels/ }).click();
   await mkdir(".cache", { recursive: true });

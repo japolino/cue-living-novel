@@ -481,6 +481,10 @@ try {
   // Open preview is wired everywhere.
   await settings.locator("[data-topbar] [data-open-preview]").click();
   assert.equal((await fixture(page)).previews, 1);
+  // Panels tools are reachable from Advanced even when the stage shows no Panels button.
+  await tab("Advanced").click();
+  await settings.getByRole("button", { name: "Open Panels tools" }).click();
+  assert.equal(await page.evaluate(() => (window as any).settingsFixture.panelTools), 1);
 
   await page.screenshot({ path: ".cache/ux-redesign/settings-desktop.png" });
   assert.match(await settings.locator('select[name="imageConnectionId"] option[data-missing]').innerText(), /no longer exists \(gone\)/);
