@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { CLICK_EFFECTS, DEFAULT_CONFIG, THEME_PRESET_IDS, SCENE_IMAGE_FITS, EFFECT_INTENSITIES, normalizeConfig, textEffectModeFor } from "../../config.js";
+import { CLICK_EFFECTS, DEFAULT_CONFIG, SPRITE_SIZE_MATCH_MODES, THEME_PRESET_IDS, SCENE_IMAGE_FITS, EFFECT_INTENSITIES, normalizeConfig, textEffectModeFor } from "../../config.js";
 import {
   AUTO_PLAY_STEPS,
   BUDGET_PRESETS,
@@ -39,6 +39,9 @@ import {
   searchSettings,
   spriteMotionHold,
   CLICK_EFFECT_OPTIONS,
+  SPRITE_SIZE_MATCH_OPTIONS,
+  describePercent,
+  normalizeSpriteSizeMatch,
   normalizeClickEffect,
   describeInterfaceVolume,
   type SettingsSearchEntry,
@@ -436,6 +439,16 @@ describe("character motion and the Motion setting", () => {
     expect(spriteMotionHold("gentle", true)).toContain("reduced motion");
     expect(spriteMotionHold("full", false)).toBeNull();
     expect(spriteMotionHold("gentle", false)).toBeNull();
+  });
+});
+
+describe("character size settings", () => {
+  test("one choice per mode, default keep heights; unknowns fall back; percents read plainly", () => {
+    expect(SPRITE_SIZE_MATCH_OPTIONS.map((option) => option.value)).toEqual([...SPRITE_SIZE_MATCH_MODES]);
+    expect(normalizeSpriteSizeMatch("heads")).toBe("heads");
+    expect(normalizeSpriteSizeMatch("huge")).toBe(DEFAULT_CONFIG.spriteSizeMatch);
+    expect(describePercent(12.5)).toBe("12.5%");
+    expect(describePercent(160)).toBe("160%");
   });
 });
 

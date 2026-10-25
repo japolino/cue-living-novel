@@ -41,19 +41,26 @@ own expression and there is no picture cap.
 | `spriteTransitions` | `"expressive"` \| `"soft"` \| `"classic"` | `"expressive"` | at once (everyday, sprite mode only) |
 | `spriteAtmosphere` | boolean | `true` | at once (everyday, sprite mode only) |
 | `spriteOutline` | `0`–`6` (px) | `0` | at once (everyday, sprite mode only) |
+| `spriteOutlineColor` | `"#rrggbb"` | `"#ffffff"` | at once (everyday, sprite mode only) |
 | `spriteFocusBlur` | boolean | `true` | at once (everyday, sprite mode only) |
 | `clickEffect` | `"sparks-pop"` \| `"sparks"` \| `"off"` | `"sparks"` | at once (everyday, both modes) |
 | `spritePressBounce` | boolean | `true` | at once (everyday, sprite mode only) |
 | `interfaceSounds` | boolean | `false` | at once (everyday, both modes) |
 | `interfaceSoundVolume` | `0`–`1` | `0.4` | at once (everyday, both modes) |
 | `innerVoices` | comma-separated names, ≤ 2000 chars | `""` | when you leave the field (everyday, both modes) |
+| `spriteSizeMatch` | `"heights"` \| `"heads"` \| `"off"` | `"heights"` | at once (everyday, sprite mode only) |
+| `spriteSizeMatchFace` | `5`–`30` (% of a standing figure, steps of 0.5) | `15` | at once (everyday, sprite mode only) |
+| `spriteSizeMatchMax` / `spriteSizeMatchMin` | `100`–`250` / `30`–`100` (% of the unmatched size) | `160` / `60` | at once (everyday, sprite mode only) |
+| `spriteSizeMatchCenter` | `0`–`100` (%) | `100` | at once (everyday, sprite mode only) |
 
-The ten puppet keys (`VisualNovelSpritePuppet`, `spritePuppetSettings`)
+The eleven puppet keys (`VisualNovelSpritePuppet`, `spritePuppetSettings`)
 reach the stage through `VnStage.setSpritePuppet`; see "Puppet motion",
 "Puppet acting", "Puppet physics", "Puppet transitions" and "Puppet
 atmosphere". The five stage feel keys (`VisualNovelStageFeel`,
 `stageFeelSettings`) reach it through `VnStage.setStageFeel`; see
-"Stage feel".
+"Stage feel". The five size matching keys (`VisualNovelSpriteSizeMatch`,
+`spriteSizeMatchSettings`) reach it through `VnStage.setSpriteSizeMatch`;
+see "Size matching".
 
 ### Image size (`spriteImageSize`)
 
@@ -719,6 +726,7 @@ layers, crossfaded) → ambient overlay (behind sprites) → `[data-vn-sprites]`
   0.15 s (`SPRITE_ENTER_MS`, `vn-sprite-enter`); reduced motion fades only.
 - Expression and pose change: 0.2 s crossfade between two image layers per
   actor (`SPRITE_CROSSFADE_MS`).
+- Size matching: every face drawn at one size; see "Size matching".
 - Focus: the speaker is bright, on top and, when others share the stage,
   3% larger (`--vn-sprite-zoom` on `[data-vn-sprite-body]`, around the
   feet; the slot clamp includes it). Others drop to 50% brightness and,
@@ -753,6 +761,46 @@ layers, crossfaded) → ambient overlay (behind sprites) → `[data-vn-sprites]`
 - While a cut-out model downloads, the stage shows its progress as a status
   line ("Downloading the cut-out model: 12 MB of 88 MB", `cutoutDownloadNote`).
 - Previous/History navigation re-applies the paragraph's stage.
+
+### Size matching (`sprite-layer.ts`, `spriteSizeMatch`)
+
+Pictures come framed differently: Cue's own cut at the thighs, a close-up
+expression, a card's full-body or bust picture. Sized by the figure alone,
+their faces differ a lot (in the fixture sets, from 15% to 22% of the
+figure). Size matching zooms each image so its face is
+`spriteSizeMatchFace` percent of a standing figure's height
+(`--vn-sprite-figure-h`), from the detected face box or the framing
+estimate (`spriteFaceSpot`):
+
+- `spriteSizeMatchZoom` = face share / (face height × 1 / bbox height),
+  clamped to `spriteSizeMatchMin`..`spriteSizeMatchMax` percent of the
+  unmatched size. The default 15% keeps Cue's own thigh-up sprites at about
+  their old size; a close-up shrinks to the same face size, so an
+  expression change keeps the head the same size.
+- The zoom is `--vn-sprite-match` on the actor and its image layer. With
+  matching on (`data-vn-size-match` on the layer), everyone stands on one
+  shared height (`--vn-sprite-match-h`) instead of each picture being
+  limited by its own slot width (a wide picture would otherwise get a
+  smaller face). The slot width limits that shared height once: the widest
+  figure, over every ready expression of the actors on stage
+  (`--vn-sprite-widest`, `spriteMatchedWidth`), just fits its slot, so a
+  crowded phone trio stays as roomy as before and an expression change
+  resizes nobody. A figure never grows past 98% of the stage height, so a
+  full-body picture keeps its head on screen.
+- "heights" (default): feet stay on the floor, so height differences show.
+  "heads": the taller figures also sink (`--vn-sprite-lift`, standing-figure
+  heights, from `spriteHeadLift`) until every face top is on the lowest
+  one's line; nobody rises, so no figure floats or shows a cut-off bottom.
+  "off": each picture is sized by its figure, as before.
+- `spriteSizeMatchCenter` moves the anchor so the face nears the slot
+  centre (`--vn-sprite-face-shift`, image widths, flipped for mirrored
+  figures); emotes and the ground band ride on the anchor, so they follow.
+- Changing a setting resizes everyone at once (`SpriteLayer.setSizeMatch`);
+  the snapshot reports each actor's `match` and `lift`.
+
+Browser check: `bun run test:sprite-size` (desktop and phone: matched face
+heights within 4%, a close-up keeps the face size, "off" differs, "heads"
+lines up face tops without lifting anybody, the outline in a chosen colour).
 
 ### Stage feel (`click-sparks.ts`, `interface-sounds.ts`, `inner-voice.ts`, `feel-css.ts`)
 
@@ -1060,8 +1108,12 @@ Under Look (sprite mode only, `[data-sprites-look]`): "Character motion"
 Head movement, Acting, Hair and cloth physics, Weather and light on
 characters, and Expression changes: Match the emotion / Soft / Simple fade,
 all disabled at 0; Press a character to make it bounce) and
-"Character look" (outline 0–6 px, "Off" at 0; Blur characters who are not
-speaking). All save at once. Under Motion "Still", or the system's reduced
+"Character look" (outline 0–6 px, "Off" at 0; Outline colour, disabled
+while the outline is off; Blur characters who are not speaking), then
+"Character size" (Match face sizes: Same face size, keep heights / Same
+face size, heads in line / Off; Face size, Largest zoom, Smallest zoom and
+Centre faces in their place, disabled while off; Default sizes puts them
+back). All save at once. Under Motion "Still", or the system's reduced
 motion, "Character motion" reads as not applying (`data-inactive`) with a
 note (`spriteMotionHold`, `[data-motion-note]`); the choices are kept.
 Right after them, in both modes, "Stage feel": Click effect (Sparks + ! /

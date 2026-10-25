@@ -13,6 +13,10 @@ import {
   spriteFaceVars,
   spriteGeometry,
   spriteGeometryVars,
+  spriteFaceShift,
+  spriteFaceTop,
+  spriteHeadLift,
+  spriteSizeMatchZoom,
   spriteDimmedKeys,
   spriteFigureBox,
   spriteMirrored,
@@ -32,6 +36,7 @@ import {
   type SpriteSetView,
   type SpriteTurnView,
 } from "../../shared/sprites";
+import { DEFAULT_CONFIG, spriteSizeMatchSettings, type VisualNovelSpriteSizeMatch } from "../../config";
 
 const actor = (characterKey: string, patch: Partial<SpriteActorStage> = {}): SpriteActorStage => ({
   characterKey, expression: "idle", slot: "center", facing: "viewer", focus: false, motion: "none", emote: "none", intensity: 3, ...patch,
@@ -365,7 +370,7 @@ describe("SpriteLayer DOM", () => {
     expect(snap.puppet).toEqual({ strength: 1, running: false, scale: 1 });
     expect(container.style["--vn-sprite-breath"]).toBe("1");
     expect(container.dataset.vnSpriteBlur).toBe("true");
-    layer.setPuppet({ spriteMotion: 50, spriteBreathing: false, spriteSway: true, spriteHeadMotion: true, spriteActing: true, spritePhysics: false, spriteOutline: 3, spriteFocusBlur: false, spriteTransitions: "soft", spriteAtmosphere: false });
+    layer.setPuppet({ spriteMotion: 50, spriteBreathing: false, spriteSway: true, spriteHeadMotion: true, spriteActing: true, spritePhysics: false, spriteOutline: 3, spriteFocusBlur: false, spriteTransitions: "soft", spriteAtmosphere: false, spriteOutlineColor: "#2b1d3a" });
     expect(container.style["--vn-sprite-breath"]).toBe("0");
     expect(container.style["--vn-sprite-talk-amp"]).toBe("0.5");
     expect(container.dataset.vnSpriteBlur).toBe("false");
@@ -734,5 +739,95 @@ describe("SpriteLayer spotlight and press", () => {
     expect(layer.press("aoi")).toBe(false);
     await wait(SPRITE_PRESS_MS + 80);
     expect(byKey("ren").dataset.vnSpritePress).toBeUndefined();
+  });
+});
+
+describe("size matching (every face at one size)", () => {
+  const match = (patch: Partial<VisualNovelSpriteSizeMatch> = {}): VisualNovelSpriteSizeMatch => ({ ...spriteSizeMatchSettings(DEFAULT_CONFIG), ...patch });
+  // A full figure (feet in the picture) and a waist-up one cut by the bottom edge.
+  const full = spriteGeometry({ bbox: [0.25, 0.04, 0.5, 0.94], width: 832, height: 1216 });
+  const bust = spriteGeometry({ bbox: [0.1, 0.1, 0.8, 0.9], width: 832, height: 1216 });
+
+  test("the zoom puts the face at the chosen share of a standing figure, within the limits", () => {
+    // Face 0.1 of the image tall in a figure 0.94 tall: 0.1064 of the figure, so 15% needs 1.41x.
+    const spot = { dx: 0, top: 0.8, bottom: 0.7, w: 0.1, source: "detected" as const };
+    expect(spriteSizeMatchZoom(match(), full, spot)).toBeCloseTo(0.15 / (0.1 / 0.94), 5);
+    expect(spriteSizeMatchZoom(match({ spriteSizeMatchMax: 110 }), full, spot)).toBe(1.1);
+    // A big face is shrunk, but not below the smallest zoom.
+    const big = { dx: 0, top: 0.8, bottom: 0.4, w: 0.3, source: "detected" as const };
+    expect(spriteSizeMatchZoom(match(), bust, big)).toBe(0.6);
+    expect(spriteSizeMatchZoom(match({ spriteSizeMatch: "off" }), full, spot)).toBe(1);
+    // The framing estimate of a figure cut at the thighs (Cue's own framing, face 20% of it) shrinks a little.
+    const thighs = spriteGeometry({ bbox: [0.1, 0.02, 0.8, 0.98], width: 832, height: 1216 });
+    const estimate = spriteFaceSpot({ bbox: [0.1, 0.02, 0.8, 0.98], width: 832, height: 1216 }, thighs);
+    expect(spriteSizeMatchZoom(match(), thighs, estimate)).toBeCloseTo(0.75, 2);
+  });
+
+  test("the face moves toward the slot centre by the chosen share", () => {
+    const spot = { dx: 0.08, top: 0.8, bottom: 0.7, w: 0.1, source: "detected" as const };
+    expect(spriteFaceShift(match(), spot)).toBeCloseTo(-0.08, 6);
+    expect(spriteFaceShift(match({ spriteSizeMatchCenter: 50 }), spot)).toBeCloseTo(-0.04, 6);
+    expect(spriteFaceShift(match({ spriteSizeMatch: "off" }), spot)).toBe(0);
+  });
+
+  test("heads: the taller figures sink to the lowest face top; nobody rises; other modes stay put", () => {
+    const tops = new Map([["mira", 0.92], ["ren", 0.8], ["aoi", 0.85]]);
+    const heads = spriteHeadLift("heads", tops);
+    expect(heads.get("mira")).toBeCloseTo(-0.12, 6);
+    expect(heads.get("ren")).toBe(0);
+    expect(heads.get("aoi")).toBeCloseTo(-0.05, 6);
+    expect([...spriteHeadLift("heights", tops).values()]).toEqual([0, 0, 0]);
+    expect(spriteHeadLift("heads", new Map([["mira", 0.9]])).get("mira")).toBe(0);
+    expect(spriteFaceTop(full, { dx: 0, top: 0.8, bottom: 0.7, w: 0.1, source: "detected" }, 1.2)).toBeCloseTo((0.8 / 0.94) * 1.2, 6);
+  });
+
+  describe("on the stage", () => {
+    let restore: () => void;
+    let container: FakeNode;
+    let layer: SpriteLayer;
+    const byKey = (key: string) => container.querySelector(`[data-vn-sprite][data-vn-sprite-key="${key}"]`)!;
+    beforeEach(() => {
+      restore = installFakeDocument();
+      container = new FakeNode("div");
+      layer = new SpriteLayer({ container: () => container as unknown as HTMLElement });
+      layer.setEnabled(true);
+    });
+    afterEach(() => { layer.destroy(); restore(); });
+
+    test("each image gets its zoom and face shift; heads mode sinks the taller one; off undoes it at once", () => {
+      const sets = {
+        // Mira's face is small (zoomed up); Ren's is big (zoomed down).
+        mira: set("set_mira", "Mira", [ready("idle", "/mira/idle.png", { bbox: [0.25, 0.04, 0.5, 0.94], face: [0.42, 0.08, 0.12, 0.08] })]),
+        ren: set("set_ren", "Ren", [ready("idle", "/ren/idle.png", { bbox: [0.1, 0.1, 0.8, 0.9], face: [0.3, 0.15, 0.3, 0.2] })]),
+      };
+      layer.setTurn(turnView([{ actors: [actor("mira", { slot: "left" }), actor("ren", { slot: "right" })], plateKey: null, light: "day" }], sets));
+      layer.show(0, { animate: false });
+      const zoom = (key: string) => Number(byKey(key).style["--vn-sprite-match"]);
+      expect(zoom("mira")).toBeGreaterThan(1);
+      expect(zoom("ren")).toBeLessThan(1);
+      // The active image layer carries the same vars (its size comes from them).
+      expect(byKey("mira").querySelector("[data-vn-sprite-image][data-vn-sprite-layer='active']")!.style["--vn-sprite-match"]).toBe(byKey("mira").style["--vn-sprite-match"]);
+      // Mira's face centre is 0.48 - 0.5 = -0.02 image widths off: moved back by that.
+      expect(byKey("mira").style["--vn-sprite-face-shift"]).toBe("0.02");
+      expect(byKey("mira").style["--vn-sprite-lift"]).toBe("0");
+      // The widest figure on stage limits everyone's shared height (each set here has one ready expression).
+      const widths = ["mira", "ren"].map((key) => Number(byKey(key).style["--vn-sprite-match"]) * Number(byKey(key).style["--vn-sprite-s"]) * Number(byKey(key).style["--vn-sprite-bw"]) * Number(byKey(key).style["--vn-sprite-a"]));
+      expect(Number(container.style["--vn-sprite-widest"])).toBeCloseTo(Math.max(...widths), 3);
+      const snapshot = () => Object.fromEntries(layer.snapshot().actors.map((a) => [a.characterKey, [a.match, a.lift]]));
+      expect(snapshot().mira![1]).toBe(0);
+
+      layer.setSizeMatch(match({ spriteSizeMatch: "heads" }));
+      const lifts = layer.snapshot().actors.map((a) => a.lift);
+      expect(lifts.filter((lift) => lift < 0)).toHaveLength(1);
+      expect(lifts.filter((lift) => lift === 0)).toHaveLength(1);
+      expect(Math.min(...lifts)).toBeLessThan(0);
+
+      layer.setSizeMatch(match({ spriteSizeMatch: "off" }));
+      expect(byKey("mira").style["--vn-sprite-match"]).toBe("1");
+      expect(byKey("ren").style["--vn-sprite-match"]).toBe("1");
+      expect(byKey("mira").style["--vn-sprite-face-shift"]).toBe("0");
+      expect(layer.snapshot().actors.map((a) => a.lift)).toEqual([0, 0]);
+      expect(layer.getSizeMatch().spriteSizeMatch).toBe("off");
+    });
   });
 });

@@ -19,7 +19,7 @@ import {
   type PuppetPose,
   type PuppetPoseInput,
 } from "./sprite-puppet-rig";
-import { OUTLINE_ALPHA_HIGH, OUTLINE_ALPHA_LOW, outlineOffsets, silhouetteInPlace } from "./sprite-outline";
+import { OUTLINE_ALPHA_HIGH, OUTLINE_ALPHA_LOW, outlineOffsets, outlineRgb, silhouetteInPlace } from "./sprite-outline";
 
 // The fixture's Mira: full body, detected face (scripts/sprite-stage-browser-fixture.ts).
 const image = { bbox: [0.0865, 0.0214, 0.7716, 0.9786] as [number, number, number, number], width: 416, height: 608, face: [0.3669, 0.16, 0.2343, 0.1497] as [number, number, number, number] };
@@ -242,5 +242,13 @@ describe("sticker outline", () => {
     expect(pixels[11]).toBe(255);
     expect(pixels[15]).toBeGreaterThan(0);
     expect(pixels[15]).toBeLessThan(255);
+  });
+
+  test("the silhouette takes the outline colour", () => {
+    expect(outlineRgb("#2b1d3a")).toEqual([0x2b, 0x1d, 0x3a]);
+    expect(outlineRgb("nope")).toEqual([255, 255, 255]);
+    const pixels = new Uint8ClampedArray([10, 20, 30, 255]);
+    silhouetteInPlace(pixels, outlineRgb("#ff8000"));
+    expect([...pixels]).toEqual([255, 128, 0, 255]);
   });
 });

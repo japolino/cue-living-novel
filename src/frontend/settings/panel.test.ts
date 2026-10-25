@@ -168,6 +168,28 @@ describe("settings panel markup", () => {
     expect(source).toContain("if (this.root.activeElement !== voices) voices.value = config.innerVoices;");
   });
 
+  test("character size and outline colour: in Look, saved at once, synced, knobs off while matching is off", () => {
+    for (const name of ["spriteOutlineColor", "spriteSizeMatch", "spriteSizeMatchFace", "spriteSizeMatchMax", "spriteSizeMatchMin", "spriteSizeMatchCenter"]) {
+      expect(source).toContain(`case "${name}": return { ${name}: `);
+      expect(advancedKeys).not.toContain(name);
+    }
+    for (const name of ["spriteOutlineColor", "spriteSizeMatchFace", "spriteSizeMatchMax", "spriteSizeMatchMin", "spriteSizeMatchCenter"]) {
+      expect(names.filter((candidate) => candidate === name)).toEqual([name]);
+    }
+    expect(source.match(/optionList\("spriteSizeMatch"/g)).toHaveLength(1);
+    expect(source).toContain('<input name="spriteOutlineColor" type="color" />');
+    expect(source).toContain('this.setRadio("spriteSizeMatch", config.spriteSizeMatch);');
+    expect(source).toContain('input.disabled = config.spriteSizeMatch === "off";');
+    expect(source).toContain("outlineColor.disabled = config.spriteOutline <= 0;");
+    // Right after Character look, inside the Look pane.
+    const look = source.slice(source.indexOf('${pane("look"'), source.indexOf('${pane("pictures"'));
+    expect(look.indexOf('id: "character-size"')).toBeGreaterThan(look.indexOf('id: "sprite-look"'));
+    // Its own group id: "sprite-size" is Advanced → Image size (hidden for NovelAI).
+    expect(source.match(/id: "sprite-size"/g)).toHaveLength(1);
+    expect(look.indexOf('name="spriteOutlineColor"')).toBeLessThan(look.indexOf('id: "sprite-look"'));
+    expect(source).toContain("const patch = spriteSizeMatchSettings(DEFAULT_CONFIG);");
+  });
+
   test("character motion reads as not applying under Motion Still or reduced motion, with a note", () => {
     expect(source).toContain('<p data-motion-note hidden></p>');
     expect(source).toContain("spriteMotionHold(config.effectIntensity,");
