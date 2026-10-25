@@ -10,7 +10,10 @@ import {
   SCENE_IMAGE_FITS,
   SPRITE_EXPRESSION_COUNT_VALUES,
   SPRITE_IMAGE_SIZES,
+  SPRITE_MOTION_MAX,
+  SPRITE_OUTLINE_MAX,
   THEME_PRESET_IDS,
+  spritePuppetSettings,
 } from "./config";
 
 test("configuration normalizes unsafe ranges", () => {
@@ -285,4 +288,28 @@ test("configuration preserves and normalizes originalReference and originalCreat
   const defaults = normalizeConfig({});
   assert.equal(defaults.originalReference, false);
   assert.equal(defaults.originalCreationName, "");
+});
+
+test("sprite puppet settings default on (no outline) and clamp to their ranges", () => {
+  const defaults = normalizeConfig({});
+  assert.equal(defaults.spriteMotion, 100);
+  assert.equal(defaults.spriteBreathing, true);
+  assert.equal(defaults.spriteSway, true);
+  assert.equal(defaults.spriteHeadMotion, true);
+  assert.equal(defaults.spriteOutline, 0);
+  assert.equal(defaults.spriteFocusBlur, true);
+  assert.equal(defaults.spriteActing, false);
+  assert.equal(defaults.spritePhysics, true);
+  assert.equal(normalizeConfig({ spriteActing: true }).spriteActing, true);
+  assert.equal(normalizeConfig({ spriteActing: "yes" }).spriteActing, false);
+  assert.equal(normalizeConfig({ spritePhysics: "off" }).spritePhysics, true);
+  const clamped = normalizeConfig({ spriteMotion: 400, spriteOutline: 9.6, spriteBreathing: false, spriteSway: "no", spriteFocusBlur: false });
+  assert.equal(clamped.spriteMotion, SPRITE_MOTION_MAX);
+  assert.equal(clamped.spriteOutline, SPRITE_OUTLINE_MAX);
+  assert.equal(clamped.spriteBreathing, false);
+  assert.equal(clamped.spriteSway, true);
+  assert.equal(clamped.spriteFocusBlur, false);
+  assert.equal(normalizeConfig({ spriteMotion: -5, spriteOutline: "2" }).spriteMotion, 0);
+  assert.equal(normalizeConfig({ spriteOutline: "2" }).spriteOutline, 2);
+  assert.deepEqual(Object.keys(spritePuppetSettings(defaults)).sort(), ["spriteActing", "spriteBreathing", "spriteFocusBlur", "spriteHeadMotion", "spriteMotion", "spriteOutline", "spritePhysics", "spriteSway"]);
 });

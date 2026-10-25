@@ -100,6 +100,7 @@ import {
   type VisualNovelEffectIntensity,
   type VisualNovelPresentationMode,
   type VisualNovelSceneImageFit,
+  type VisualNovelSpritePuppet,
   type VisualNovelTextEffectMode,
   type VisualNovelThemePreset,
 } from "../../config.js";
@@ -920,6 +921,11 @@ export class VnStage {
     if (next === this.spriteNote) return;
     this.spriteNote = next;
     this.renderStatus();
+  }
+
+  /** Sprite puppet motion, outline and focus blur (sprite-layer.ts `setPuppet`). */
+  setSpritePuppet(settings: VisualNovelSpritePuppet): void {
+    this.spriteLayer.setPuppet(settings);
   }
 
   /**
@@ -2504,11 +2510,14 @@ export class VnStage {
           if (current.letter) {
             current.letter.removeAttribute(TYPEWRITER_PENDING_ATTRIBUTE);
             charIdx = current.fullText.length;
+            this.spriteLayer.typed(current.fullText);
             return;
           }
           const code = current.fullText.codePointAt(charIdx) ?? 0;
           charIdx += code > 0xffff ? 2 : 1;
           current.node.textContent = current.fullText.slice(0, charIdx);
+          // The speaking sprite follows the words (sprite-layer.ts `typed`).
+          this.spriteLayer.typed(current.fullText.slice(charIdx - (code > 0xffff ? 2 : 1), charIdx));
           if (current.rest) {
             if (charIdx < current.fullText.length) {
               current.rest.textContent = current.fullText.slice(charIdx);

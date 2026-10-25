@@ -116,6 +116,10 @@ const css = (page: Page, selector: string, props: string[], pseudo?: string) => 
   return Object.fromEntries(props.map((p) => [p, cs.getPropertyValue(p).trim()]));
 }, { selector, props, pseudo });
 
+const attr = (page: Page, selector: string, name: string) => page.evaluate(({ selector, name }) =>
+  document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!.querySelector(selector)?.getAttribute(name) ?? null,
+{ selector, name });
+
 /** Uniform scale of a computed transform / scale value. */
 const scaleOf = (value: string | undefined): number => {
   if (!value || value === "none") return 1;
@@ -184,8 +188,13 @@ try {
       const l = await layers(page);
       assert.equal(l.backZ, "5", `${ambient}: grade overlay above the sprites`);
       assert.equal(l.front?.display ?? "none", "none", `${ambient}: no front particles for a grade`);
-      const filter = (await css(page, "[data-vn-sprite-image][data-vn-sprite-layer='active']", ["filter"]))!.filter;
-      if (ambient !== "vignette_dark") assert.notEqual(filter, "none", `${ambient}: sprites graded (${filter})`);
+      // A plain layer is graded by its CSS filter; on the puppet canvas (filter none) the shader
+      // applies the same grade, which it reads from --vn-sprite-air-filter (sprite-puppet.ts `look`).
+      const active = "[data-vn-sprite-image][data-vn-sprite-layer='active']";
+      const graded = (await css(page, active, ["filter", "--vn-sprite-air-filter"]))!;
+      const puppet = (await attr(page, active, "data-vn-sprite-canvas")) === "puppet";
+      const filter = (puppet ? graded["--vn-sprite-air-filter"] : graded.filter) || "none";
+      if (ambient !== "vignette_dark") assert.notEqual(filter, "none", `${ambient}: sprites graded (${puppet ? "puppet shader" : "CSS"}: ${filter})`);
       await shot(page, `grade-${ambient}`);
     }
 
@@ -526,7 +535,9 @@ try {
       await gpu.close();
     }
 
-    const s = await probe(browser, {}, rainTrio, "rain");
+    // Software GL gets the CSS sprites, as in production: the puppet refuses a software renderer
+    // (the fixture allows it only for the puppet's own checks).
+    const s = await probe(browser, { puppet: "css" }, rainTrio, "rain");
     const ref = await probe(browser, { mode: "scene" }, sceneRain, "rain");
     report.push(`software frames, rain + 3 sprites + front: ${fmt(s)}`);
     report.push(`software frames, scene-mode rain (reference): ${fmt(ref)}`);

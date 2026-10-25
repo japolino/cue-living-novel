@@ -34,6 +34,16 @@ own expression and there is no picture cap.
 | `keyIllustrations` | `"off"` \| `"few"` (≤ 1 per reply) | `"off"` | at once (everyday, sprite mode only) |
 | `spriteImageSize` | `"standard"` \| `"upscaled"` | `"standard"` | at once (Advanced, both modes; hidden for NovelAI) |
 | `spriteExpressionCount` | `4` \| `8` \| `12` | `4` | at once (Advanced, sprite mode only) |
+| `spriteMotion` | `0`–`150` (%) | `100` | at once (everyday, sprite mode only) |
+| `spriteBreathing` / `spriteSway` / `spriteHeadMotion` | boolean | `true` | at once (everyday, sprite mode only) |
+| `spriteActing` | boolean | `false` | at once (everyday, sprite mode only) |
+| `spritePhysics` | boolean | `true` | at once (everyday, sprite mode only) |
+| `spriteOutline` | `0`–`6` (px) | `0` | at once (everyday, sprite mode only) |
+| `spriteFocusBlur` | boolean | `true` | at once (everyday, sprite mode only) |
+
+The eight puppet keys (`VisualNovelSpritePuppet`, `spritePuppetSettings`)
+reach the stage through `VnStage.setSpritePuppet`; see "Puppet motion",
+"Puppet acting" and "Puppet physics".
 
 ### Image size (`spriteImageSize`)
 
@@ -684,10 +694,16 @@ layers, crossfaded) → ambient overlay (behind sprites) → `[data-vn-sprites]`
 - Slot layout for 1, 2 or 3 actors; sprites bottom-anchored, sized from the
   stage height and the cut-out bbox; slot changes animate.
 - Expression change: crossfade between two image layers per actor.
-- Focus: the speaker is bright and on top; others dim slightly.
+- Focus: the speaker is bright, on top and, when others share the stage,
+  3.5% larger (`--vn-sprite-zoom` on `[data-vn-sprite-body]`, around the
+  feet; the slot clamp includes it). Others dim slightly and, with
+  `spriteFocusBlur`, blur by 1.2 px.
 - Motion and emotes: CSS/inline SVG, scaled by intensity, respect effect
-  intensity and reduced motion. Idle breathing and a small talking bob while
-  the focused speaker's line types out.
+  intensity and reduced motion. Idle motion and the talking head come from
+  the PNG puppet ("Puppet motion"); without it, CSS idle breathing and a
+  small talking bob while the focused speaker's line types out. A staged
+  one-shot motion wins over the talking bob (the motion rules are more
+  specific than the bob since the puppet change).
 - Emote placement: from the image's face box (`face`, see "Face boxes"):
   blush on the cheek line (62% down the face box, 0.9 face widths wide),
   side marks at the temple toward the stage centre, gloom over the forehead,
@@ -706,6 +722,156 @@ layers, crossfaded) → ambient overlay (behind sprites) → `[data-vn-sprites]`
   line ("Downloading the cut-out model: 12 MB of 88 MB", `cutoutDownloadNote`).
 - Previous/History navigation re-applies the paragraph's stage.
 
+### Puppet motion (`sprite-puppet.ts`, `sprite-puppet-rig.ts`, `sprite-outline.ts`)
+
+Cut-outs move like a PNG puppet instead of a rigid picture: the image is
+drawn as a warped mesh, so the chest breathes, the body sways from the feet
+and the head tilts and bobs around the neck while the feet stay planted.
+
+- **Rig** (`puppetRig`, pure): from the cut-out bbox and the face box
+  (`spot`, the same `--vn-sprite-face-*` geometry the emotes use). Neck
+  pivot 0.1 face heights above the face box bottom, chest centre 1.15 face
+  heights below it (at least 8% of the figure up), chest band 1.5 face
+  widths × 0.85 face heights. Units are image heights from the bbox
+  bottom-centre, y up.
+- **Pose** (`puppetPose`, pure): breathing (lift and widen in the chest band,
+  3.9–4.6 s per breath), sway (two slow waves, quadratic from the feet, so
+  the top moves most), head tilt and bob (slow waves plus a little sway
+  coupling). Each actor has its own phase (`puppetPhase`, a hash of the
+  key), so two figures never move in step. `spriteMotion` scales it all
+  (0–150%); the Motion setting (`effectIntensity`) "gentle" multiplies by
+  0.55 and "off" (Still) stops the puppet; the three toggles ease each part
+  in or out.
+- **Speaker reaction**: when the focused speaker's line starts, a nod
+  (500 ms) or, for smile / laughing / surprised / happy / excited / smug, a
+  bounce (750 ms), skipped while a staged motion plays. While the text
+  types, the head moves with the words (syllable dips ≈ 2.7 Hz with phrase
+  swells, a small tilt jitter) instead of the CSS bob. Text before its plan
+  (a provisional turn) has no staging, so nobody is on stage while it types;
+  when the plan lands mid-line (`VnStage.upgradeTurn`), the speaker steps in
+  with the reaction and follows the rest of the line. A plan that lands after
+  the line has typed brings the speaker in without one.
+- **Displacement** (`puppetDisplace`): one pure function moves the mesh
+  vertices on the CPU (24 × 36 grid) and places the emotes:
+  `[data-vn-sprite-marks]` gets a `translate` from the face offset (x flipped
+  for a mirrored figure) while an emote shows, so marks ride on the head.
+  Actions, the marks box and the slot transitions keep working because the
+  puppet only replaces what is drawn inside `[data-vn-sprite-image]`.
+- **Renderer**: one WebGL context (WebGL2, else WebGL1) on an offscreen
+  canvas for all sprites; each image layer is drawn there and copied into a
+  2D `<canvas>` inside its layer (`data-vn-sprite-canvas="puppet"`; the
+  `<img>` stays for layout, hidden). Backing size: CSS size × device pixel
+  ratio (≤ 2), never above the image's own pixels, at most 2048 px. The
+  fragment shader repeats the CSS look in order: the layer's light filter
+  (as a colour matrix: brightness, contrast, saturate, grayscale, sepia,
+  invert, hue-rotate), the tint (`::after` colour and blend: normal,
+  multiply, screen, overlay, soft-light), the rim light (`::before`), the
+  mood grade (`--vn-sprite-air-filter`). These are read from computed
+  styles every 150 ms, or every frame while they change or lightning
+  flashes. The dim blur of `spriteFocusBlur` is a 9-tap blur in the shader,
+  so no CSS `filter: blur()` re-runs on a per-frame canvas.
+- **Outline** (`spriteOutline`, 1–6 px): baked once per image and size into
+  a white sticker border (alpha threshold, then the white silhouette drawn
+  at ring offsets, then the image on top), cached (8 bakes, 8 textures);
+  re-baked on resize. No per-frame `drop-shadow`. On the CSS path the baked
+  canvas replaces the `<img>` (`data-vn-sprite-canvas="outline"`) and keeps
+  the light filter and lightning.
+- **One loop**: a single `requestAnimationFrame` loop for all actors. It runs
+  only while an actor is in puppet mode, and pauses while the page is
+  hidden, the stage is off screen (IntersectionObserver) or a key-moment
+  illustration covers the sprites.
+- **Fallback to CSS** (`data-vn-puppet="css"`, today's breathing and bob):
+  no WebGL, a software renderer (SwiftShader, llvmpipe, …: too slow for a
+  full-height sprite every frame; `puppetGlOptions.allowSoftware` lets the
+  browser checks use it anyway), a tainted image, `spriteMotion` 0, effect
+  intensity "off", or prefers-reduced-motion. A lost context also falls
+  back until the next refresh. `--vn-sprite-breath` and
+  `--vn-sprite-talk-amp` scale the CSS keyframes by the same settings.
+- **Cost**: pose and mesh (24 × 36 grid, every acting and physics term on)
+  take ≈ 0.19 ms per layer per frame in JavaScript (bun micro-benchmark);
+  with hardware WebGL the rest is one draw and one copy per layer (before
+  acting, one actor held 13.3 ms frames, the display's 75 Hz, on an RTX
+  3060). Under SwiftShader in headless Chromium a frame costs ≈ 50 ms,
+  mostly rasterizing and copying in software, which is why software GL is
+  refused.
+- **Checks**: `sprite-puppet-rig.test.ts` (rig, pose, mesh, colour matrices,
+  outline offsets), `sprite-puppet-acting.test.ts` (moods, voice, gestures,
+  the 2.5D turn, shoulders, posture, trails, springs, wind);
+  `bun run test:sprite-stage` asserts puppet mode, that the head band moves
+  more than the feet, the marks following the head, the nod, the outline,
+  settings, the pauses, the CSS fallback and a plan that lands mid-line
+  (`fx.load(p, { provisional: true })`, then `fx.plan()`), plus acting and
+  physics (see below), and writes `.cache/sprite-stage/puppet-frames.png` and
+  `puppet-diff.png` (four frames 0.25 s apart and their differences ×12).
+
+### Puppet acting (`sprite-puppet-acting.ts`, `spriteActing`)
+
+The reference overlays breathe, sway and bob on every line the same way.
+With Acting on, Cue's puppet acts: what the body does depends on how the
+character feels, what it is saying, and who else is talking. It is off by
+default (Settings → Look → Character motion → Acting), so a new install
+keeps the calmer idle motion of "Puppet motion".
+
+- **Mood posture**: each staged expression has a body (`PUPPET_MOODS`, one
+  per hot-set id; rare ids use `spriteFallbackExpression`), scaled by the
+  staging intensity (1..5 → 0.55..1.4 of the distance from neutral) and
+  eased in over ≈ 0.6 s. Sad slumps above the waist with the head down,
+  breathing slow and deep; angry draws up, raises the shoulders and huffs
+  with a slight tremble; surprised straightens with the chin up and a held
+  breath; embarrassed hunches with the head down and tilted; scared
+  trembles with raised shoulders and quick shallow breaths; laughing gets
+  bursts of chuckles in the chest; crying gets irregular sobbing catches;
+  thinking holds a tilt; smug lifts the chin. The requested expression
+  drives the body even while its image is not ready yet (the stand-in face
+  shows; the body already tells the emotion). Breath and sway clocks are
+  integrated per actor, so a faster breath never jumps in phase.
+- **The voice follows the text**: the typewriter reports each revealed
+  character (`VnStage` → `SpriteLayer.typed` → `SpritePuppet.typed`, the
+  only vn-stage.ts change besides `setSpritePuppet`). The speaker's head
+  dips once per syllable (a vowel group in Latin, Greek and Cyrillic text;
+  every kana, kanji and Hangul syllable), stressed at word starts; a comma
+  settles it and takes a small breath; a full stop dips it; "!" punches
+  (a quick dip and stretch); "?" tilts the head and lifts the chin a
+  little, held for a moment; "…" or "..." droops it; "~" wiggles. When no
+  text arrives (instant text), the generic talking motion runs instead.
+- **Attention**: listeners turn their heads toward whoever speaks (a 2.5D
+  yaw: the middle of the face shifts more than its outline) and their
+  torso a little; the speaker half-turns to the nearest listener. With
+  nobody speaking, each character glances at the nearest other one (or
+  aside, alone) every 7–14 s. Heads move on an underdamped spring, so a
+  turn overshoots a hair and settles. Directions are converted to each
+  figure's own image space (a mirrored figure turns the other way).
+- **Listener reactions**: after the speaker's full stop a listener nods
+  (at most every 2.2 s); at "!" it starts a little, at "?" it tilts its head
+  (each at most every 4 s), with a per-character delay of 0.15–0.45 s.
+- **Emote reactions** (`PUPPET_EMOTE_GESTURE`): the body answers the mark:
+  "!" jolts, sweat flinches and looks away, anger puffs up and trembles,
+  gloom slumps, "?" tilts, heart and sparkle hop, music grooves, "…" droops.
+- **Staged motions** (`PUPPET_MOTION_GESTURE`): on top of the CSS move, the
+  head and posture act them out: nod is a real head nod, shake turns the
+  head left and right, turn_away turns head and tilt away, lean_in and
+  step_back bend the posture and pitch the head, sink slumps, tremble shakes.
+- Off (`spriteActing: false`, the default): the idle motion and the line-start nod or
+  bounce only, as in "Puppet motion".
+
+### Puppet physics (`sprite-puppet-physics.ts`, `spritePhysics`)
+
+- **Follow-through**: each figure's anchor (the `[data-vn-sprite-body]`
+  point, which carries the slot moves, the staged CSS motions and the
+  entrance) is tracked on screen every frame; its velocity changes kick two
+  damped springs: the body's loose mass (≈ 1.5 Hz, damping 0.3) and the hair
+  (≈ 2.3 Hz, damping 0.22, also kicked by the head's own nods and turns).
+  The body spring shears the figure (the top trails a slot move) and
+  squashes it on a landing, then stretches it on the rebound; hems, sleeves
+  and wide hair trail sideways (the spine and the feet stay); hair at the
+  sides and over the crown trails most at its tips. Offsets are capped
+  (0.03 and 0.025 image heights); a jump of more than a quarter image
+  height in one frame (a new layout) resets instead of swinging.
+- **Wind**: the weather ambient blows (`heavy_rain` 1, `sakura` 0.45, `rain`
+  0.35, `snow` 0.25): a steady lean of the loose parts and the hair toward
+  the stage's right, with gusts and flutter, per-character phase.
+- Off (`spritePhysics: false`): no trails, no squash, no wind.
+
 ## Settings (frontend)
 
 Presentation mode control; cut-out quality; model status (absent /
@@ -719,6 +885,13 @@ models: whether the Studio model is downloaded (else **Download Studio
 model**), its background download, and why Best cuts instead (**Try Studio
 again**); a device that cannot run it gets Best's status, never the Studio
 download. A model the browser did not store says it downloads again.
+Under Look (sprite mode only, `[data-sprites-look]`): "Character motion"
+(intensity 0–150% in steps of 10, "Still" at 0; Breathing, Body sway,
+Head movement, Acting, Hair and cloth physics, disabled at 0) and
+"Character look" (outline 0–6 px, "Off" at 0; Blur characters who are not
+speaking). All save at once. Under Motion "Still", or the system's reduced
+motion, "Character motion" reads as not applying (`data-inactive`) with a
+note (`spriteMotionHold`, `[data-motion-note]`); the choices are kept.
 
 ## Cut-out (frontend)
 
@@ -1063,6 +1236,7 @@ Code map:
 | Cut-out | `src/frontend/sprites/cutout/**` (`kernel.ts` is the DOM-free algorithm), `cut-service.ts` (crop of inset renders) |
 | NovelAI V5 inset canvas | `src/frontend/sprites/inset-service.ts`, `canvas-tools.ts`; probe `scripts/novelai-v5-inset-probe.ts` |
 | Stage | `src/frontend/stage/sprite-layer.ts`, `src/frontend/theme/sprite-css.ts`, VnStage sprite API |
+| Puppet | `src/frontend/stage/sprite-puppet.ts` (WebGL renderer, loop, attention, physics tracking), `sprite-puppet-rig.ts` (pure rig / pose / mesh / colour), `sprite-puppet-acting.ts` (moods, voice, gestures), `sprite-puppet-physics.ts` (springs, wind), `sprite-outline.ts` |
 | Settings | `src/frontend/settings/sprite-library.ts`, sprite controls in `panel.ts` / `model.ts` |
 | Browser checks | `bun run test:sprite-stage`, `bun run test:sprite-cutout` |
 
@@ -1226,7 +1400,9 @@ Stage:
 
 ## Not in v1
 
-Mouth/blink variants (lip flap), face-only repaint for expression variants,
+Mouth/blink variants (lip flap; the puppet moves the head while talking but
+the mouth stays as painted), hair or cloth secondary motion in the puppet,
+face-only repaint for expression variants,
 persona sprite, a per-image natural orientation. Known gap: after switching back to scene mode, a
 sprite-planned turn is replanned only on the next reply, swipe or refresh.
 (Wave 2 added key-moment illustrations with two-character interactions, the

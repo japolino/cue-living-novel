@@ -75,6 +75,21 @@ describe("settings panel markup", () => {
     expect(source).toContain('case "spriteModelUrl": return parseSpriteModelUrl(text());');
   });
 
+  test("sprite puppet: motion, its parts, acting, physics, outline and focus blur save at once, sprite mode only", () => {
+    for (const name of ["spriteMotion", "spriteBreathing", "spriteSway", "spriteHeadMotion", "spriteActing", "spritePhysics", "spriteOutline", "spriteFocusBlur"]) {
+      expect(names.filter((candidate) => candidate === name)).toEqual([name]);
+      expect(source).toContain(`case "${name}": return { ${name}: `);
+      expect(advancedKeys).not.toContain(name);
+    }
+    expect(source).toContain('this.root.querySelector<HTMLElement>("[data-sprites-look]")!.hidden = !sprites;');
+  });
+
+  test("character motion reads as not applying under Motion Still or reduced motion, with a note", () => {
+    expect(source).toContain('<p data-motion-note hidden></p>');
+    expect(source).toContain("spriteMotionHold(config.effectIntensity,");
+    expect(source).toContain('motionGroup.toggleAttribute("data-inactive", hold !== null);');
+  });
+
   test("System One mode, URL and model save live; no Apply or Discard remains", () => {
     expect(advancedKeys).not.toContain("systemOneMode");
     expect(advancedKeys).not.toContain("systemOneApiUrl");
@@ -89,6 +104,7 @@ describe("settings panel markup", () => {
   const picturesPane = source.slice(source.indexOf('${pane("pictures"'), source.indexOf('${pane("sound"'));
 
   test("image size: one control for both modes, in Advanced (saved at once), hidden for NovelAI", () => {
+
     expect(source.match(/optionList\("spriteImageSize"/g)).toHaveLength(1);
     expect(source).toContain('case "spriteImageSize": return { spriteImageSize: normalizeSpriteImageSize(target.value) };');
     expect(source).toContain('this.setRadio("spriteImageSize", config.spriteImageSize);');

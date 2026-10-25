@@ -17,6 +17,13 @@
  * faces the plate's light, weather and mood grades tint the characters, and
  * lightning turns them into rim-lit silhouettes. Parallax, the front ambient
  * layer and the plate drift live in effects-css.ts ("SPRITE MODE DEPTH").
+ *
+ * PNG puppet (sprite-puppet.ts): with WebGL and motion on, each image layer
+ * draws its figure into a canvas through a warped vertex grid, with the
+ * light, tint, rim, mood grade, outline and focus blur in the same pass;
+ * the img, the CSS rim and tint, and the CSS breathing and talking bob stand
+ * down for that actor (`data-vn-puppet="gl"`). Otherwise the canvas only
+ * shows a baked sticker outline, or stays hidden.
  */
 export const VN_SPRITE_CSS = `
 [data-vn-sprites] {
@@ -119,8 +126,9 @@ export const VN_SPRITE_CSS = `
 
 [data-vn-sprite] {
   position: absolute;
-  /* The slot anchor, pulled in so the whole figure stays on stage. */
-  --vn-sprite-half-w: calc(var(--vn-sprite-img-w) * var(--vn-sprite-bw, 1) / 2);
+  /* The slot anchor, pulled in so the whole figure stays on stage (the
+     speaker's zoom included). */
+  --vn-sprite-half-w: calc(var(--vn-sprite-img-w) * var(--vn-sprite-bw, 1) / 2 * var(--vn-sprite-zoom, 1));
   left: clamp(var(--vn-sprite-half-w), var(--vn-sprite-x, 50%), calc(100% - var(--vn-sprite-half-w)));
   bottom: 0;
   width: 0;
@@ -138,9 +146,16 @@ export const VN_SPRITE_CSS = `
 
 [data-vn-sprite][data-vn-sprite-order="1"] { z-index: 2; }
 [data-vn-sprite][data-vn-sprite-order="2"] { z-index: 1; }
-/* The speaker stands in front and in full light; the others dim slightly. */
+/* The speaker stands in front, in full light and a little larger when
+   others share the stage; the others dim slightly, and blur a little with
+   spriteFocusBlur (data-vn-sprite-blur). The puppet blurs in its own pass,
+   so a CSS blur never re-runs on its per-frame canvas. */
 [data-vn-sprite][data-vn-sprite-focus="true"] { z-index: 4; }
+[data-vn-sprites]:not([data-vn-sprite-count="1"]) [data-vn-sprite][data-vn-sprite-focus="true"] { --vn-sprite-zoom: 1.035; }
 [data-vn-sprite][data-vn-sprite-dim="true"] { filter: brightness(0.68) saturate(0.8); }
+[data-vn-sprites][data-vn-sprite-blur="true"] [data-vn-sprite]:not([data-vn-puppet="gl"])[data-vn-sprite-dim="true"] {
+  filter: brightness(0.68) saturate(0.8) blur(1.2px);
+}
 [data-vn-sprite][data-vn-sprite-facing="left"] { --vn-sprite-dir: -1; }
 [data-vn-sprite][data-vn-sprite-facing="right"] { --vn-sprite-dir: 1; }
 
@@ -155,6 +170,13 @@ export const VN_SPRITE_CSS = `
   bottom: 0;
   width: 0;
   height: 0;
+}
+
+/* Speaker zoom around the anchor (one-shot motions use transform, the
+   talking bob translate, so they compose). */
+[data-vn-sprite-body] {
+  scale: var(--vn-sprite-zoom, 1);
+  transition: scale 420ms cubic-bezier(0.33, 1, 0.68, 1);
 }
 
 /* Mirror around the figure's bottom-centre (see SPRITE_NATURAL_FACING). */
@@ -213,6 +235,31 @@ export const VN_SPRITE_CSS = `
   filter: var(--vn-sprite-light-filter, none);
   transition: filter 600ms ease;
 }
+
+/* ---- PNG puppet canvas (sprite-puppet.ts) --------------------------------
+   "outline": a static canvas with the baked sticker outline, lit like the
+   img. "puppet": the warped figure, redrawn every frame with its light,
+   tint, rim and mood grade done in the shader, so no CSS filter, tint or
+   rim runs on it. The img stays (hidden) for decoding and its computed
+   filter; the pseudo-elements stay (hidden) so the puppet can read the
+   light presets and the lightning flicker back from them. */
+[data-vn-sprite-image] > canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+[data-vn-sprite-image] > canvas[hidden] { display: none; }
+[data-vn-sprite-image][data-vn-sprite-canvas] > img { visibility: hidden; }
+[data-vn-sprite-image][data-vn-sprite-canvas="outline"] > canvas {
+  filter: var(--vn-sprite-light-filter, none);
+  transition: filter 600ms ease;
+}
+[data-vn-sprite-image][data-vn-sprite-canvas="puppet"] { filter: none; }
+[data-vn-sprite-image][data-vn-sprite-canvas="puppet"]::before,
+[data-vn-sprite-image][data-vn-sprite-canvas="puppet"]::after { visibility: hidden; }
 
 /* Coloured light: a tint masked by the cut-out itself, blended onto it. */
 [data-vn-sprite-image]::after {
@@ -462,11 +509,12 @@ export const VN_SPRITE_CSS = `
     animation: vn-sprite-exit 420ms ease-in both;
   }
 
-  /* Idle breathing: a slow rise of the chest line, around the feet. */
-  [data-vn-sprite][data-vn-sprite-state="shown"] [data-vn-sprite-figure],
-  [data-vn-sprite][data-vn-sprite-state="entering"] [data-vn-sprite-figure],
-  [data-vn-sprite][data-vn-sprite-state="shown"] [data-vn-sprite-marks]:has(> [data-vn-sprite-emote]:not([hidden])),
-  [data-vn-sprite][data-vn-sprite-state="entering"] [data-vn-sprite-marks]:has(> [data-vn-sprite-emote]:not([hidden])) {
+  /* Idle breathing (CSS fallback; the puppet breathes in its warp): a slow
+     rise of the chest line, around the feet, scaled by spriteMotion. */
+  [data-vn-sprite]:not([data-vn-puppet="gl"])[data-vn-sprite-state="shown"] [data-vn-sprite-figure],
+  [data-vn-sprite]:not([data-vn-puppet="gl"])[data-vn-sprite-state="entering"] [data-vn-sprite-figure],
+  [data-vn-sprite]:not([data-vn-puppet="gl"])[data-vn-sprite-state="shown"] [data-vn-sprite-marks]:has(> [data-vn-sprite-emote]:not([hidden])),
+  [data-vn-sprite]:not([data-vn-puppet="gl"])[data-vn-sprite-state="entering"] [data-vn-sprite-marks]:has(> [data-vn-sprite-emote]:not([hidden])) {
     animation: vn-sprite-breathe 4.6s ease-in-out infinite;
   }
   [data-vn-sprite][data-vn-sprite-order="1"] [data-vn-sprite-figure],
@@ -474,21 +522,23 @@ export const VN_SPRITE_CSS = `
   [data-vn-sprite][data-vn-sprite-order="2"] [data-vn-sprite-figure],
   [data-vn-sprite][data-vn-sprite-order="2"] [data-vn-sprite-marks] { animation-delay: -3.1s; }
 
-  /* Talking bob while the speaker's line types out. */
-  [data-vn-sprite][data-vn-sprite-talking="true"] [data-vn-sprite-body] {
+  /* Talking bob while the speaker's line types out (CSS fallback; the
+     puppet nods or bounces, then moves the head while the text types). */
+  [data-vn-sprite]:not([data-vn-puppet="gl"])[data-vn-sprite-talking="true"] [data-vn-sprite-body] {
     animation: vn-sprite-talk 300ms ease-in-out infinite alternate;
   }
 
-  /* One-shot motions (SPRITE_MOTIONS), scaled by --vn-sprite-m. */
-  [data-vn-sprite-body][data-vn-sprite-motion="hop"] { animation: vn-sprite-hop 560ms cubic-bezier(0.3, 0.7, 0.4, 1) both; }
-  [data-vn-sprite-body][data-vn-sprite-motion="bounce"] { animation: vn-sprite-bounce 820ms ease-out both; }
-  [data-vn-sprite-body][data-vn-sprite-motion="shake"] { animation: vn-sprite-shake 520ms linear both; }
-  [data-vn-sprite-body][data-vn-sprite-motion="tremble"] { animation: vn-sprite-tremble 1100ms linear both; }
-  [data-vn-sprite-body][data-vn-sprite-motion="step_back"] { animation: vn-sprite-step-back 760ms cubic-bezier(0.25, 1, 0.5, 1) both; }
-  [data-vn-sprite-body][data-vn-sprite-motion="lean_in"] { animation: vn-sprite-lean-in 820ms ease-in-out both; }
-  [data-vn-sprite-body][data-vn-sprite-motion="nod"] { animation: vn-sprite-nod 720ms ease-in-out both; }
-  [data-vn-sprite-body][data-vn-sprite-motion="turn_away"] { animation: vn-sprite-turn-away 900ms ease-in-out both; }
-  [data-vn-sprite-body][data-vn-sprite-motion="sink"] { animation: vn-sprite-sink 1100ms cubic-bezier(0.4, 0, 0.2, 1) both; }
+  /* One-shot motions (SPRITE_MOTIONS), scaled by --vn-sprite-m. They win over
+     the talking bob while they run, so a speaker's staged motion shows. */
+  [data-vn-sprite][data-vn-sprite-key] [data-vn-sprite-body][data-vn-sprite-motion="hop"] { animation: vn-sprite-hop 560ms cubic-bezier(0.3, 0.7, 0.4, 1) both; }
+  [data-vn-sprite][data-vn-sprite-key] [data-vn-sprite-body][data-vn-sprite-motion="bounce"] { animation: vn-sprite-bounce 820ms ease-out both; }
+  [data-vn-sprite][data-vn-sprite-key] [data-vn-sprite-body][data-vn-sprite-motion="shake"] { animation: vn-sprite-shake 520ms linear both; }
+  [data-vn-sprite][data-vn-sprite-key] [data-vn-sprite-body][data-vn-sprite-motion="tremble"] { animation: vn-sprite-tremble 1100ms linear both; }
+  [data-vn-sprite][data-vn-sprite-key] [data-vn-sprite-body][data-vn-sprite-motion="step_back"] { animation: vn-sprite-step-back 760ms cubic-bezier(0.25, 1, 0.5, 1) both; }
+  [data-vn-sprite][data-vn-sprite-key] [data-vn-sprite-body][data-vn-sprite-motion="lean_in"] { animation: vn-sprite-lean-in 820ms ease-in-out both; }
+  [data-vn-sprite][data-vn-sprite-key] [data-vn-sprite-body][data-vn-sprite-motion="nod"] { animation: vn-sprite-nod 720ms ease-in-out both; }
+  [data-vn-sprite][data-vn-sprite-key] [data-vn-sprite-body][data-vn-sprite-motion="turn_away"] { animation: vn-sprite-turn-away 900ms ease-in-out both; }
+  [data-vn-sprite][data-vn-sprite-key] [data-vn-sprite-body][data-vn-sprite-motion="sink"] { animation: vn-sprite-sink 1100ms cubic-bezier(0.4, 0, 0.2, 1) both; }
 
   /* Emote pop-in, then a small loop per mark. */
   [data-vn-sprite-emote][data-vn-sprite-emote-pop="true"] {
@@ -509,7 +559,8 @@ export const VN_SPRITE_CSS = `
   /* Lightning (data-vn-lightning on the scene, sprite mode): the plate
      flashes behind the characters, so they drop to silhouettes with a cold
      rim on the side of the bolt (upper right). */
-  [data-vn-scene][data-vn-lightning] [data-vn-sprite-image] img {
+  [data-vn-scene][data-vn-lightning] [data-vn-sprite-image] img,
+  [data-vn-scene][data-vn-lightning] [data-vn-sprite-image][data-vn-sprite-canvas="outline"] > canvas {
     animation: vn-sprite-lightning-shade 550ms linear both;
   }
   [data-vn-scene][data-vn-lightning] [data-vn-sprite-image]::before {
@@ -536,6 +587,7 @@ export const VN_SPRITE_CSS = `
   [data-vn-sprites][data-vn-sprite-count="3"] [data-vn-sprite] {
     transition: filter 200ms ease, opacity 200ms ease;
   }
+  [data-vn-sprite-body] { transition: none; }
   [data-vn-sprite] *,
   [data-vn-sprite-emote] {
     animation: none !important;
@@ -552,11 +604,11 @@ export const VN_SPRITE_CSS = `
 }
 @keyframes vn-sprite-breathe {
   0%, 100% { scale: 1 1; }
-  50% { scale: 1.004 1.009; }
+  50% { scale: calc(1 + 0.004 * var(--vn-sprite-breath, 1)) calc(1 + 0.009 * var(--vn-sprite-breath, 1)); }
 }
 @keyframes vn-sprite-talk {
   from { translate: 0 0; }
-  to { translate: 0 calc(var(--vn-sprite-img-h) * -0.0055 * var(--vn-sprite-fx, 1)); }
+  to { translate: 0 calc(var(--vn-sprite-img-h) * -0.0055 * var(--vn-sprite-fx, 1) * var(--vn-sprite-talk-amp, 1)); }
 }
 @keyframes vn-sprite-hop {
   0% { transform: none; }

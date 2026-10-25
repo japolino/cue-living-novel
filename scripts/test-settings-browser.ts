@@ -174,6 +174,11 @@ try {
   await settings.locator('input[name="presentationMode"][value="sprites"]').check();
   assert.deepEqual(await lastPatch(page), { presentationMode: "sprites" }, "presentation mode is an everyday patch");
   assert.equal(await settings.locator("[data-sprites-only]").isVisible(), true, "sprite controls appear with sprites");
+  // Motion is Still (set above): Character motion reads as not applying, with a note; its choices stay.
+  const characterMotion = settings.locator('[data-group-id="sprite-motion"]');
+  assert.equal(await characterMotion.getAttribute("data-inactive"), "", "Motion Still: character motion reads as not applying");
+  assert.match(await characterMotion.locator("[data-motion-note]").evaluate((element) => (element as HTMLElement).hidden ? "" : element.textContent ?? ""), /Still/);
+  assert.equal(await characterMotion.locator('input[name="spriteBreathing"]').isChecked(), true, "the choices are kept");
   assert.equal(await budgetGroup.getAttribute("data-inactive"), "", "pictures per reply reads as not applying");
   assert.equal(await budgetGroup.locator("[data-scene-note]").isVisible(), true);
   assert.equal(await settings.locator('input[name="budgetPreset"][value="custom"]').isChecked(), true, "the budget keeps its value in sprite mode");

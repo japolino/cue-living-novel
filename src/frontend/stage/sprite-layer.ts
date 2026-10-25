@@ -5,8 +5,10 @@
  * `[data-vn-sprites]` layer of the VN stage: one `[data-vn-sprite]` per actor,
  * bottom-anchored in a slot, sized from the stage height and the cut-out bbox.
  * Expression changes crossfade between two image layers per actor; motions,
- * emotes, light, focus, idle breathing and the talking bob are CSS driven
- * (src/frontend/theme/sprite-css.ts) through data attributes set here.
+ * emotes, light and focus are CSS driven (src/frontend/theme/sprite-css.ts)
+ * through data attributes set here. Idle motion and the speaker's reaction
+ * come from the PNG puppet (sprite-puppet.ts: a WebGL warp per image layer),
+ * or from the CSS breathing and talking bob when it cannot run.
  *
  * The layer owns no plate: the stage paints plates through its scene image
  * layers and asks `plateFor(index)` which one to show.
@@ -36,6 +38,9 @@ import {
   type SpriteSlot,
   type SpriteTurnView,
 } from "../../shared/sprites.js";
+import { DEFAULT_CONFIG, spritePuppetSettings, type VisualNovelSpritePuppet } from "../../config.js";
+import { SpritePuppet, type PuppetImage, type PuppetMode } from "./sprite-puppet.js";
+import { puppetReactionFor, type PuppetPose } from "./sprite-puppet-rig.js";
 
 /** Natural orientation assumed for every cut-out (see the file comment). */
 export const SPRITE_NATURAL_FACING: Exclude<SpriteFacing, "viewer"> = "left";
@@ -463,6 +468,12 @@ export type SpriteActorSnapshot = {
   talking: boolean;
   /** How emotes are placed: from a detected face, the framing estimate, or null (no image yet). */
   face: SpriteFaceSpot["source"] | null;
+  /** "gl": the PNG puppet draws it; "css": the img and the CSS idle motion. */
+  puppet: PuppetMode;
+  /** The puppet's last pose (null in CSS mode). */
+  pose: PuppetPose | null;
+  /** 0..1: how much the speaker's head follows the typed text now. */
+  voice: number;
 };
 
 export type SpriteLayerSnapshot = {
@@ -474,6 +485,8 @@ export type SpriteLayerSnapshot = {
   plateKey: string | null;
   actors: SpriteActorSnapshot[];
   badges: SpriteStatusBadge[];
+  /** Puppet motion strength in effect (0 = still) and whether its frame loop runs now. */
+  puppet: { strength: number; running: boolean };
 };
 
 type ActorEntry = {
@@ -534,6 +547,8 @@ export class SpriteLayer {
   /** URL of the key illustration the sprites are hidden under, or null. */
   private illustration: string | null = null;
   private illustrationFade: { cancel(): void } | null = null;
+  private puppetSettings: VisualNovelSpritePuppet = spritePuppetSettings(DEFAULT_CONFIG);
+  private readonly puppet = new SpritePuppet({ container: () => this.container() });
 
   constructor(private readonly options: SpriteLayerOptions) {}
 
@@ -610,6 +625,7 @@ export class SpriteLayer {
     this.illustrationFade = null;
     const style = container.style as CSSStyleDeclaration | undefined;
     if (style) style.opacity = hide ? "0" : "";
+    this.puppet.setPaused(hide);
     const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
     if (animate && !reduced && wasHidden !== hide && typeof container.animate === "function") {
       this.illustrationFade = container.animate(
@@ -697,10 +713,31 @@ export class SpriteLayer {
     this.options.onStatusChange?.();
   }
 
-  /** Talking bob on the focused speaker while the line types out. */
+  /** The focused speaker reacts and talks (puppet head motion, or the CSS bob) while the line types out. */
   setTalking(talking: boolean): void {
     this.talking = talking;
     for (const entry of this.actors.values()) this.syncTalking(entry);
+  }
+
+  /**
+   * PNG-puppet settings (config `spriteMotion`, `spriteBreathing`,
+   * `spriteSway`, `spriteHeadMotion`, `spriteOutline`, `spriteFocusBlur`).
+   * The CSS fallback reads the motion strength and the blur choice from
+   * the layer's custom properties.
+   */
+  setPuppet(settings: VisualNovelSpritePuppet): void {
+    this.puppetSettings = spritePuppetSettings(settings);
+    if (this.containerEl) this.applyPuppetVars(this.containerEl);
+    this.puppet.setSettings(this.puppetSettings);
+  }
+
+  getPuppet(): VisualNovelSpritePuppet {
+    return { ...this.puppetSettings };
+  }
+
+  /** Text the typewriter just revealed: the speaking puppet follows it (syllables, punctuation). */
+  typed(text: string): void {
+    if (this.talking) this.puppet.typed(text);
   }
 
   snapshot(): SpriteLayerSnapshot {
@@ -724,6 +761,9 @@ export class SpriteLayer {
         intensity: entry.stage.intensity,
         talking: entry.talking,
         face: entry.url ? entry.faceSource : null,
+        puppet: this.puppet.modeFor(entry.key) ?? "css",
+        pose: this.puppet.poseFor(entry.key),
+        voice: this.puppet.voiceActive(entry.key),
       });
     }
     actors.sort((a, b) => a.x - b.x);
@@ -735,6 +775,7 @@ export class SpriteLayer {
       plateKey: this.index >= 0 ? effectivePlateKey(view, this.index) : null,
       actors,
       badges: this.badges(),
+      puppet: { strength: this.puppet.strength(), running: this.puppet.isRunning() },
     };
   }
 
@@ -744,14 +785,28 @@ export class SpriteLayer {
     this.illustrationFade = null;
     for (const entry of this.actors.values()) this.disposeActor(entry);
     this.actors.clear();
+    this.puppet.destroy();
     this.destroyed = true;
   }
 
   /* ---- internals ----------------------------------------------------- */
 
   private container(): HTMLElement {
-    this.containerEl ??= this.options.container();
+    if (!this.containerEl) {
+      this.containerEl = this.options.container();
+      this.applyPuppetVars(this.containerEl);
+    }
     return this.containerEl;
+  }
+
+  /** CSS fallback knobs: idle breathing and talking bob strength, and the focus blur. */
+  private applyPuppetVars(container: HTMLElement): void {
+    const strength = this.puppetSettings.spriteMotion / 100;
+    setVars(container, {
+      "--vn-sprite-breath": String(this.puppetSettings.spriteBreathing ? strength : 0),
+      "--vn-sprite-talk-amp": String(strength),
+    });
+    container.dataset.vnSpriteBlur = this.puppetSettings.spriteFocusBlur ? "true" : "false";
   }
 
   private applyStage(stage: SpriteParagraphStage | null, animate: boolean): void {
@@ -780,6 +835,7 @@ export class SpriteLayer {
       }
       entry.stage = actor;
       entry.x = x;
+      this.puppet.setMood(actor.characterKey, actor.expression, actor.intensity);
       const el = entry.el;
       el.dataset.vnSpriteSlot = actor.slot;
       el.dataset.vnSpriteOrder = String(order);
@@ -801,6 +857,7 @@ export class SpriteLayer {
       if (animate) this.playMotion(entry, actor.motion);
       this.syncTalking(entry);
     });
+    this.puppet.refresh();
   }
 
   private createActor(key: string): ActorEntry {
@@ -834,6 +891,7 @@ export class SpriteLayer {
     marks.append(emote);
     body.append(figure, marks);
     el.append(body);
+    this.puppet.attach({ key, el, body, marks, layers });
     return {
       key, el, body, figure, marks, emote, layers, faceSource: null, active: 0, url: null, shownExpression: null,
       stage: { characterKey: key, expression: "idle", slot: "center", facing: "viewer", focus: false, motion: "none", emote: "none", intensity: 3 },
@@ -858,12 +916,15 @@ export class SpriteLayer {
     const geometry = spriteGeometry(image);
     const spot = spriteFaceSpot(image, geometry);
     const vars = { ...spriteGeometryVars(geometry), ...spriteFaceVars(spot) };
+    const puppetImage: PuppetImage = { url: image.url, geometry, spot };
     entry.faceSource = spot.source;
     if (entry.url === image.url) {
       entry.shownExpression = image.expression;
       setVars(entry.layers[entry.active], vars);
       setVars(entry.el, vars);
       entry.el.dataset.vnSpriteFace = spot.source;
+      // A face found later moves the puppet's neck pivot too.
+      if (entry.layers[entry.active].dataset.vnEmpty === "false") this.puppet.fill(entry.layers[entry.active], puppetImage);
       return;
     }
     const token = ++entry.token;
@@ -873,8 +934,8 @@ export class SpriteLayer {
     const apply = () => {
       if (this.destroyed || token !== entry.token) return;
       entry.el.dataset.vnSpriteFace = spot.source;
-      if (firstImage) this.paintFirst(entry, image.url, image.expression, vars, enter);
-      else this.crossfade(entry, image.url, image.expression, vars);
+      if (firstImage) this.paintFirst(entry, puppetImage, image.expression, vars, enter);
+      else this.crossfade(entry, puppetImage, image.expression, vars);
     };
     if (this.loaded.has(image.url) || !this.options.loadImage) {
       this.loaded.add(image.url);
@@ -891,12 +952,13 @@ export class SpriteLayer {
     );
   }
 
-  private fillLayer(layer: HTMLElement, url: string, expression: string, vars: Record<string, string>): void {
+  private fillLayer(layer: HTMLElement, image: PuppetImage, expression: string, vars: Record<string, string>): void {
     const img = layer.querySelector("img") as HTMLImageElement | null;
-    if (img && img.getAttribute("src") !== url) img.setAttribute("src", url);
+    if (img && img.getAttribute("src") !== image.url) img.setAttribute("src", image.url);
     layer.dataset.vnEmpty = "false";
     layer.dataset.vnSpriteExpression = expression;
-    setVars(layer, { ...vars, "--vn-sprite-mask": cssUrl(url) });
+    setVars(layer, { ...vars, "--vn-sprite-mask": cssUrl(image.url) });
+    this.puppet.fill(layer, image);
   }
 
   private emptyLayer(layer: HTMLElement): void {
@@ -904,12 +966,13 @@ export class SpriteLayer {
     img?.removeAttribute("src");
     layer.dataset.vnEmpty = "true";
     delete layer.dataset.vnSpriteExpression;
+    this.puppet.empty(layer);
   }
 
-  private paintFirst(entry: ActorEntry, url: string, expression: string, vars: Record<string, string>, enter: boolean): void {
+  private paintFirst(entry: ActorEntry, image: PuppetImage, expression: string, vars: Record<string, string>, enter: boolean): void {
     const layer = entry.layers[entry.active];
-    this.fillLayer(layer, url, expression, vars);
     layer.dataset.vnSpriteLayer = "active";
+    this.fillLayer(layer, image, expression, vars);
     entry.layers[entry.active === 0 ? 1 : 0].dataset.vnSpriteLayer = "idle";
     setVars(entry.el, vars);
     if (entry.enterTimer) clearTimeout(entry.enterTimer);
@@ -926,13 +989,13 @@ export class SpriteLayer {
     }
   }
 
-  private crossfade(entry: ActorEntry, url: string, expression: string, vars: Record<string, string>): void {
+  private crossfade(entry: ActorEntry, image: PuppetImage, expression: string, vars: Record<string, string>): void {
     const next: 0 | 1 = entry.active === 0 ? 1 : 0;
     const incoming = entry.layers[next];
     const outgoing = entry.layers[entry.active];
-    this.fillLayer(incoming, url, expression, vars);
     incoming.dataset.vnSpriteLayer = "active";
     outgoing.dataset.vnSpriteLayer = "leaving";
+    this.fillLayer(incoming, image, expression, vars);
     entry.active = next;
     setVars(entry.el, vars);
     if (entry.el.dataset.vnSpriteState === "waiting") entry.el.dataset.vnSpriteState = "shown";
@@ -962,6 +1025,7 @@ export class SpriteLayer {
     entry.emote.dataset.vnSpriteEmotePlace = SPRITE_EMOTE_PLACE[emote as Exclude<SpriteEmote, "none">];
     delete entry.emote.dataset.vnSpriteEmotePop;
     if (animate) {
+      this.puppet.emote(entry.key, emote);
       reflow(entry.emote);
       entry.emote.dataset.vnSpriteEmotePop = "true";
       entry.emoteTimer = setTimeout(() => {
@@ -978,6 +1042,7 @@ export class SpriteLayer {
     if (motion === "none") return;
     reflow(entry.body);
     entry.body.dataset.vnSpriteMotion = motion;
+    this.puppet.motion(entry.key, motion);
     entry.motionTimer = setTimeout(() => {
       entry.motionTimer = null;
       delete entry.body.dataset.vnSpriteMotion;
@@ -991,6 +1056,9 @@ export class SpriteLayer {
     if (entry.talking === speaking) return;
     entry.talking = speaking;
     entry.el.dataset.vnSpriteTalking = speaking ? "true" : "false";
+    // A staged one-shot motion already is the reaction to this line.
+    const reaction = speaking && !entry.body.dataset.vnSpriteMotion ? puppetReactionFor(entry.shownExpression) : null;
+    this.puppet.setTalking(entry.key, speaking, reaction);
   }
 
   private exitActor(entry: ActorEntry, animate: boolean): void {
@@ -1029,6 +1097,7 @@ export class SpriteLayer {
     }
     entry.exitTimer = entry.motionTimer = entry.emoteTimer = entry.enterTimer = entry.fadeTimer = null;
     entry.token += 1;
+    this.puppet.detach(entry.key, entry.el);
     entry.el.remove();
   }
 
