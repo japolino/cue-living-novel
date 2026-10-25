@@ -750,7 +750,14 @@ the cut-out keeps the image's own alpha: no model, no flood fill, only the
 bbox and the duplicate check (no scenery check: there is no second mask).
 It reports quality "best" (so it is never
 queued for a basic → best re-cut). This lets a ComfyUI workflow cut on the
-GPU (see "Server-side cut in ComfyUI" below). Images with a few transparent
+GPU (see "Server-side cut in ComfyUI" below). So that such a source loads no
+model, `cutSprite` reads the image's header first (`mayBeTransparent`: a PNG
+with an alpha channel or a tRNS chunk, a WebP with alpha): one that may be
+transparent is cut without a model first (with the face model only), and
+Best or Studio loads only when it is not pre-cut. Studio selected with the
+workflow's cut-out on therefore never starts the Studio download. A source
+whose header did not tell but turns out pre-cut after the Studio model
+loaded ends the Studio attempt like a good Studio cut. Images with a few transparent
 pixels on an opaque frame still count as on white. The check runs on the
 image the cut-out gets, so a NovelAI V5 inset render is judged after its
 crop, on the repainted half alone (on the whole canvas, the opaque reference
