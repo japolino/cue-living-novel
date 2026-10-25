@@ -16,10 +16,10 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: (request) => {
   return new Response('<html><body style="margin:0"><script type="module" src="/fixture.js"></script></body></html>', { headers: { "Content-Type": "text/html" } });
 } });
 
-type Fixture = { patches: Array<Record<string, unknown>>; config: Record<string, unknown>; previews: number; refreshes: number; scans: string[]; savedSystemOneKeys: string[]; clearedSystemOneKeys: number };
+type Fixture = { patches: Array<Record<string, unknown>>; config: Record<string, unknown>; previews: number; refreshes: number; scans: string[]; decisionChecks: number; decisionOpens: number };
 const fixture = (page: Page) => page.evaluate(() => {
-  const { patches, config, previews, refreshes, scans, savedSystemOneKeys, clearedSystemOneKeys } = (window as any).settingsFixture;
-  return { patches, config, previews, refreshes, scans, savedSystemOneKeys, clearedSystemOneKeys } as Fixture;
+  const { patches, config, previews, refreshes, scans, decisionChecks, decisionOpens } = (window as any).settingsFixture;
+  return { patches, config, previews, refreshes, scans, decisionChecks, decisionOpens } as Fixture;
 });
 const lastPatch = async (page: Page) => (await fixture(page)).patches.at(-1);
 type SpriteFixture = { spriteActions: Array<Record<string, unknown>>; libraryRequests: number; modelPrepares: number; modelClears: number };
@@ -409,8 +409,10 @@ try {
   assert.equal(await settings.locator("[data-apply-bar], [data-draft-bar], [data-discard]").count(), 0, "no Apply or Discard anywhere");
   await openTab("Connections");
   assert.equal(await settings.locator('[data-pane="connections"] [data-readiness]').count(), 1, "one readiness widget in Connections");
-  // System One: Connections has the key and an on/off switch; Compare, the URL and the model are in Advanced.
-  assert.equal(await settings.locator('[data-pane="connections"] [name="systemOneMode"], [data-pane="connections"] [name="systemOneApiUrl"], [data-pane="connections"] [name="systemOneModel"]').count(), 0);
+  // System One: Connections has an on/off switch and Lumiverse's Decision connection; Compare is in Advanced.
+  // Cue keeps no key, URL or model of its own.
+  assert.equal(await settings.locator('[data-pane="connections"] [name="systemOneMode"]').count(), 0);
+  assert.equal(await settings.locator('[name="systemOneApiKey"], [name="systemOneApiUrl"], [name="systemOneModel"]').count(), 0);
   const systemOneOn = settings.locator('[name="systemOneOn"]');
   assert.equal(await systemOneOn.isChecked(), false, "off by default");
   await systemOneOn.check();
@@ -420,26 +422,29 @@ try {
   await openTab("Advanced");
   await settings.locator('[name="systemOneMode"]').selectOption("compare");
   assert.deepEqual(await lastPatch(page), { systemOneMode: "compare" }, "Compare saves at once");
-  await settings.locator('[name="systemOneModel"]').fill("jev-2");
-  await settings.locator('[name="systemOneModel"]').press("Tab");
-  assert.deepEqual(await lastPatch(page), { systemOneModel: "jev-2" }, "the model saves when the field is left");
   await openTab("Connections");
   assert.equal(await systemOneOn.isChecked(), true, "comparing counts as on in Connections");
-  await settings.locator('[name="systemOneApiKey"]').fill("test-key-123");
-  await settings.locator('[data-save-system-one-key]').click();
-  assert.deepEqual((await fixture(page)).savedSystemOneKeys, ["test-key-123"]);
-  assert.equal(await settings.locator('[name="systemOneApiKey"]').inputValue(), "");
-  assert.equal((await fixture(page)).patches.some((patch) => "systemOneApiKey" in patch), false, "the key is never part of settings");
-  // The host tests the key and turns System One on; the panel follows and says so.
+  // The status line names Lumiverse's setting; Check again asks the host, the other button opens Lumiverse's Connections.
+  const decisionStatus = settings.locator("[data-decision-status]");
+  assert.match(await decisionStatus.innerText(), /Checking Lumiverse's Decision connection/);
+  await page.evaluate(() => {
+    (window as any).settingsFixture.panel.setDecisionStatus("No default Decision connection. In Lumiverse, open Connections → Decision models, add a connection and set it as default. Until then, System One does not run and Cue uses the story reader.");
+  });
+  assert.match(await decisionStatus.innerText(), /Connections → Decision models/);
+  await settings.locator("[data-check-decisions]").click();
+  assert.equal((await fixture(page)).decisionChecks, 1, "Check again asks the host");
+  assert.match(await decisionStatus.innerText(), /Checking/);
+  await settings.locator("[data-open-decision-connections]").click();
+  assert.equal((await fixture(page)).decisionOpens, 1, "Open Lumiverse Connections asks the host");
   await page.evaluate(() => {
     const f = (window as any).settingsFixture;
     f.config = { ...f.config, systemOneMode: "on" };
     f.panel.setConfig(f.config);
-    f.panel.setSystemOneKeyStatus(true, "Key saved and tested. System One is on.");
+    f.panel.setDecisionStatus("Uses \"Jev\" (jev-latest), Lumiverse's default Decision connection.");
   });
   assert.equal(await settings.locator('[name="systemOneMode"]').inputValue(), "on", "the mode follows the host");
   assert.equal(await systemOneOn.isChecked(), true, "the switch follows the host");
-  assert.match(await settings.locator("[data-system-one-key-status]").innerText(), /tested\. System One is on/);
+  assert.match(await decisionStatus.innerText(), /Uses "Jev" \(jev-latest\)/);
   await tab("Advanced").focus(); await page.keyboard.press("Enter");
   const params = settings.locator('[name="imageParameters"]');
   const beforeTyping = (await fixture(page)).patches.length;

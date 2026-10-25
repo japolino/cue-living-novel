@@ -6,7 +6,7 @@ import { ContinuityStateSchema, SceneStateSchema } from "../../shared/contracts.
 import { emptySingleCharacter } from "../core/visual-state.js";
 import { clearAudioCatalogCache, scanAudioCatalog } from "./audio-catalog.js";
 import { planTurn } from "./planner.js";
-import { systemOneEndpoint } from "./system-one.js";
+import { decisionConnectionStatus, decisionErrorText } from "./system-one.js";
 import { storyCheckReply } from "./__fixtures__/story-check";
 
 const continuity = ContinuityStateSchema.parse({ revision: 1, characters: {}, facts: {} });
@@ -31,22 +31,23 @@ const decisions = {
   },
 };
 
-function spindle(raw: () => Promise<unknown>, logs: string[], response: unknown, withKey = true): SpindleAPI {
+function spindle(raw: () => Promise<unknown>, logs: string[], response: unknown, connected = true, toasts: string[] = []): SpindleAPI {
   return {
-    enclave: { get: async () => withKey ? "test-secret" : null },
-    cors: async (url: string, request: { method: string; headers: Record<string, string>; body: string }) => {
-      assert.equal(url, "https://api.typesafe.ai/v1/systemone");
-      assert.equal(request.method, "POST");
-      assert.equal(request.headers.Authorization, "Bearer test-secret");
-      const body = JSON.parse(request.body);
-      assert.equal(body.model, "jev-latest");
-      if (body.questions.scene_start) assert.equal(body.state.previousScene.location, "Library");
-      else {
-        assert.equal(body.state.previousScene.environment.location, "Library");
-        assert.equal(body.questions.expression_0.type, "choice");
-      }
-      return { status: 200, body: JSON.stringify(response) };
+    decisions: {
+      evaluate: async (body: { state: any; questions: any; model?: string; connection_id?: string }) => {
+        // Lumiverse picks its default Decision connection: Cue sends no connection, key or model.
+        assert.equal(body.connection_id, undefined);
+        assert.equal(body.model, undefined);
+        if (!connected) throw new Error("No default Decision connection configured");
+        if (body.questions.scene_start) assert.equal(body.state.previousScene.location, "Library");
+        else {
+          assert.equal(body.state.previousScene.environment.location, "Library");
+          assert.equal(body.questions.expression_0.type, "choice");
+        }
+        return structuredClone(response);
+      },
     },
+    toast: { warning: (line: string) => toasts.push(line) },
     generate: { raw: async (request: unknown) => storyCheckReply(request) ?? raw() },
     storage: { list: async () => ["music/calm.mp3"] },
     log: { warn: (line: string) => logs.push(line), info: (line: string) => logs.push(line) },
@@ -80,18 +81,34 @@ test("compare mode records decisions without changing the story-reader result", 
   assert.ok(logs.some((line) => line.includes("System One compare")));
 });
 
-test("missing extension API key falls back to the ordinary planner", async () => {
+test("no default Decision connection falls back to the ordinary planner and says where to set one, once", async () => {
   let plannerCalls = 0;
-  const result = await planTurn(spindle(async () => { plannerCalls++; throw new Error("planner unavailable"); }, [], decisions, false), input("on"));
+  const toasts: string[] = [];
+  const logs: string[] = [];
+  const api = spindle(async () => { plannerCalls++; throw new Error("planner unavailable"); }, logs, decisions, false, toasts);
+  const result = await planTurn(api, input("on"));
   assert.equal(plannerCalls, 2);
   assert.equal(result.usedFallback, true);
+  assert.ok(logs.some((line) => line.startsWith("System One decision failed; using story reader:") && line.includes("No default Decision connection.")));
+  await planTurn(api, input("on"));
+  assert.deepEqual(toasts, ["No default Decision connection. In Lumiverse, open Connections → Decision models, add a connection and set it as default. Until then, Cue uses the story reader."]);
 });
 
-test("System One endpoint accepts HTTPS and local HTTP, but rejects remote HTTP and credentials", () => {
-  assert.equal(systemOneEndpoint("https://gateway.example/api/v1"), "https://gateway.example/api/v1/systemone");
-  assert.equal(systemOneEndpoint("http://localhost:8080/v1/systemone"), "http://localhost:8080/v1/systemone");
-  assert.throws(() => systemOneEndpoint("http://gateway.example"), /HTTPS/);
-  assert.throws(() => systemOneEndpoint("https://user:pass@gateway.example"), /credentials/);
+test("System One's connection is Lumiverse's default Decision connection", async () => {
+  const connection = (patch: Record<string, unknown>) => ({ id: "d1", name: "Jev", provider: "typesafe", api_url: "", model: "jev-latest", is_default: true, has_api_key: true, default_parameters: {}, metadata: {}, created_at: 1, updated_at: 1, ...patch });
+  const api = (list: () => Promise<unknown[]>) => ({ decisions: { listConnections: list } }) as unknown as SpindleAPI;
+  assert.deepEqual(await decisionConnectionStatus(api(async () => [connection({ id: "d0", is_default: false }), connection({})])), { state: "ready", name: "Jev", model: "jev-latest" });
+  assert.deepEqual(await decisionConnectionStatus(api(async () => [connection({ is_default: false })])), {
+    state: "missing",
+    error: "No default Decision connection. In Lumiverse, open Connections → Decision models, add a connection and set it as default.",
+  });
+  assert.match((await decisionConnectionStatus(api(async () => [connection({ has_api_key: false })]))).error ?? "", /"Jev" has no API key. Add it in Lumiverse: Connections → Decision models\./);
+  assert.deepEqual(await decisionConnectionStatus({} as SpindleAPI), { state: "unavailable", error: "This Lumiverse has no Decision models. Update Lumiverse to use System One." });
+  assert.deepEqual(await decisionConnectionStatus(api(async () => { throw new Error("PERMISSION_DENIED: decisions — Decision model permission not granted"); })), {
+    state: "unavailable",
+    error: "Cue needs the Decision models permission. Grant it to Cue in Lumiverse's Extensions panel.",
+  });
+  assert.equal(decisionErrorText(new Error("TypeSafe decision evaluation failed (401): bad key")), "TypeSafe decision evaluation failed (401): bad key");
 });
 
 test("a detected scene change keeps the prose planner in charge", async () => {
@@ -133,15 +150,15 @@ test("classifier continuation covers expressions beyond the image cap and holds 
   assert.deepEqual(result.plan.visualCues.map((cue) => [cue.paragraphIndex, cue.poseExpressionId]), [[0, "listen"], [2, "smile"], [4, "listen"]]);
 });
 
-test("off, compare, missing key, invalid response, and native art preserve the original cue budget", async () => {
+test("off, compare, no Decision connection, invalid response, and native art preserve the original cue budget", async () => {
   const response = structuredClone(decisions) as any;
   response.answers.expression_1 = { type: "choice", choice: "smile", confidence: 0.95, probabilities: { smile: 0.95 } };
-  for (const scenario of ["off", "compare", "missing-key", "invalid", "native", "uncertain"] as const) {
+  for (const scenario of ["off", "compare", "no-connection", "invalid", "native", "uncertain"] as const) {
     const args = input(scenario === "compare" ? "compare" : "on");
     args.content = "Mira waits.\n\nMira smiles.";
     args.config = { ...args.config, maxImagesPerTurn: 1, generateImages: true, useNativeCardImages: scenario === "native", systemOneMode: scenario === "off" ? "off" : args.config.systemOneMode };
     const result = await planTurn(spindle(async () => { throw new Error("use deterministic fallback"); }, [],
-      scenario === "invalid" ? {} : scenario === "uncertain" ? { ...response, answers: {} } : response, scenario !== "missing-key"), args);
+      scenario === "invalid" ? {} : scenario === "uncertain" ? { ...response, answers: {} } : response, scenario !== "no-connection"), args);
     assert.equal(result.plan.classifierVisuals, undefined, scenario);
     assert.equal(result.plan.visualCues.length, 1, scenario);
   }

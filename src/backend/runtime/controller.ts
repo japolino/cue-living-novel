@@ -40,7 +40,7 @@ import {
   type MessageResolutionCache
 } from "./message-text.js";
 import { loadConnectionCatalog } from "./connections.js";
-import { SYSTEM_ONE_KEY, testSystemOneKey } from "./system-one.js";
+import { decisionConnectionStatus, LEGACY_SYSTEM_ONE_KEY } from "./system-one.js";
 import {
   clearAudioCatalogCache,
   normalizeAudioStoragePrefix,
@@ -65,7 +65,6 @@ import {
   saveTurnRecord,
   turnPath,
   updateConfig,
-  changeConfig,
   type StoredChatState,
   type StoredTurnRecord,
   type TurnBaseline
@@ -1879,36 +1878,23 @@ async function handleFrontendMessage(spindle: SpindleAPI, request: FrontendReque
       spindle.sendToFrontend({ type: "vn_connection_catalog", ...catalog }, userId);
       return;
     }
-    case "vn_get_system_one_key_status":
-      spindle.sendToFrontend({ type: "vn_system_one_key_status", saved: await spindle.enclave.has(SYSTEM_ONE_KEY, userId) }, userId);
-      return;
-    case "vn_set_system_one_key": {
-      // Saving a key is turning System One on: one test call, then mode On.
-      const key = request.key.trim();
-      if (!key || key.length > 8192) throw new Error("Enter a valid System One API key");
-      await spindle.enclave.put(SYSTEM_ONE_KEY, key, userId);
-      const config = await loadConfig(spindle, userId);
+    case "vn_get_decision_status": {
+      // System One uses Lumiverse's Decision connection; the key Cue kept before goes.
       try {
-        await testSystemOneKey(spindle, { key, config });
+        if (await spindle.enclave.has(LEGACY_SYSTEM_ONE_KEY, userId)) await spindle.enclave.delete(LEGACY_SYSTEM_ONE_KEY, userId);
       } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        dbg(spindle, userId, `System One key test failed: ${reason}`);
-        spindle.sendToFrontend({ type: "vn_system_one_key_status", saved: true, test: "failed", error: reason }, userId);
-        return;
+        dbg(spindle, userId, `old System One key not removed: ${errorText(error)}`);
       }
-      // An explicit Compare stays Compare; only Off turns On. Read again after
-      // the test: a mode chosen while it ran wins.
-      const turnedOn = await changeConfig(spindle, (current) => current.systemOneMode === "off" ? { systemOneMode: "on" } : null, userId);
-      if (turnedOn.changed) spindle.sendToFrontend({ type: "vn_config", config: turnedOn.config }, userId);
-      spindle.sendToFrontend({ type: "vn_system_one_key_status", saved: true, test: "passed" }, userId);
+      spindle.sendToFrontend({ type: "vn_decision_status", status: await decisionConnectionStatus(spindle, userId) }, userId);
       return;
     }
-    case "vn_clear_system_one_key": {
-      // Without a key System One cannot answer, so it turns off with it.
-      await spindle.enclave.delete(SYSTEM_ONE_KEY, userId);
-      const turnedOff = await changeConfig(spindle, (current) => current.systemOneMode !== "off" ? { systemOneMode: "off" } : null, userId);
-      if (turnedOff.changed) spindle.sendToFrontend({ type: "vn_config", config: turnedOff.config }, userId);
-      spindle.sendToFrontend({ type: "vn_system_one_key_status", saved: false }, userId);
+    case "vn_open_decision_connections": {
+      // Cue's settings sit in Lumiverse's Settings, which covers the drawer.
+      const scope = userId ? { userId } : undefined;
+      const ui = (spindle as Partial<SpindleAPI>).ui;
+      if (typeof ui?.openDrawerTab !== "function") throw new Error("this Lumiverse cannot open it for Cue");
+      await ui.closeSettings?.(scope);
+      await ui.openDrawerTab("connections", scope);
       return;
     }
     case "vn_set_config": {

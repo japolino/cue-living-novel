@@ -158,7 +158,11 @@ export function buildCase(reply: EvalReply, options: { keyMomentsEverywhere?: bo
   const classifierInput = options.keyMomentsEverywhere === false
     ? base
     : { ...base, keyMomentParagraphs: reply.paragraphs.map((_, index) => index) };
-  const batches = buildSpriteRequests(classifierInput, MODEL);
+  // Cue leaves the model to Lumiverse's Decision connection; the eval talks to Jev itself.
+  const batches = buildSpriteRequests(classifierInput).map((batch) => {
+    const body = { model: MODEL, ...batch.body };
+    return { ...batch, body, bytes: new TextEncoder().encode(JSON.stringify(body)).length };
+  });
   const names = new Map([...context.pool.members.values()].map((member) => [member.characterKey, member.name] as const));
   return { reply, plan, input, context, deterministic, classifierInput, batches, labels: resolveLabels(reply), names };
 }

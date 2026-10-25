@@ -15,7 +15,7 @@ import {
   shouldPreserveImage,
   speechHoldsInterfaceSounds,
   stageTurnInput,
-  systemOneKeyMessage,
+  decisionStatusMessage,
   viewStateMessages,
   type VisualStageThemeTarget,
 } from "./controller";
@@ -65,8 +65,6 @@ const baseConfig: VisualNovelConfig = {
   originalCreationName: "",
   parserConnectionId: null,
   systemOneMode: "off",
-  systemOneApiUrl: "https://api.typesafe.ai",
-  systemOneModel: "jev-latest",
   parserParameters: {},
   imageConnectionId: null,
   imageModel: "",
@@ -117,24 +115,18 @@ const baseConfig: VisualNovelConfig = {
   sfxVolume: 0.8,
 };
 
-describe("systemOneKeyMessage", () => {
-  test("a passed test says System One is on (or comparing); a failed one says why and that it stayed off", () => {
-    expect(systemOneKeyMessage({ saved: true, test: "passed" }, "on")).toBe("Key saved and tested. System One is on.");
-    expect(systemOneKeyMessage({ saved: true, test: "passed" }, "compare")).toBe("Key saved and tested. System One compares with the story reader.");
-    expect(systemOneKeyMessage({ saved: true, test: "failed", error: "System One request failed (401)" }, "off"))
-      .toBe("Key saved, but the test call failed: System One request failed (401). System One was not turned on.");
+describe("decisionStatusMessage", () => {
+  test("ready names Lumiverse's default Decision connection and its model", () => {
+    expect(decisionStatusMessage({ state: "ready", name: "Jev", model: "jev-latest" })).toBe("Uses \"Jev\" (jev-latest), Lumiverse's default Decision connection.");
+    expect(decisionStatusMessage({ state: "ready", name: "Jev", model: "" })).toBe("Uses \"Jev\", Lumiverse's default Decision connection.");
   });
 
-  test("a failed test with System One already on says it stays on and that the story reader answers meanwhile", () => {
-    expect(systemOneKeyMessage({ saved: true, test: "failed", error: "System One request failed (401)" }, "on"))
-      .toBe("Key saved, but the test call failed: System One request failed (401). System One stays on; until the key works, Cue uses the story reader.");
-    expect(systemOneKeyMessage({ saved: true, test: "failed", error: "timeout" }, "compare"))
-      .toBe("Key saved, but the test call failed: timeout. System One stays on; until the key works, Cue uses the story reader.");
-  });
-
-  test("a plain status keeps the panel's own saved / not saved line", () => {
-    expect(systemOneKeyMessage({ saved: true }, "on")).toBeUndefined();
-    expect(systemOneKeyMessage({ saved: false }, "off")).toBeUndefined();
+  test("missing or unavailable says what to set up in Lumiverse and that the story reader answers meanwhile", () => {
+    expect(decisionStatusMessage({ state: "missing", error: "No default Decision connection. In Lumiverse, open Connections → Decision models, add a connection and set it as default." }))
+      .toBe("No default Decision connection. In Lumiverse, open Connections → Decision models, add a connection and set it as default. Until then, System One does not run and Cue uses the story reader.");
+    expect(decisionStatusMessage({ state: "missing" })).toContain("Connections → Decision models");
+    expect(decisionStatusMessage({ state: "unavailable", error: "This Lumiverse has no Decision models. Update Lumiverse to use System One." }))
+      .toBe("This Lumiverse has no Decision models. Update Lumiverse to use System One. Until then, System One does not run and Cue uses the story reader.");
   });
 });
 

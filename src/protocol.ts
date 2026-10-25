@@ -23,9 +23,10 @@ export type FrontendRequest =
   | { type: "vn_get_connection_catalog" }
   /** A cut-out model finished downloading in this browser: cuts made without it are re-cut now. */
   | { type: "vn_sprite_cutout_ready" }
-  | { type: "vn_get_system_one_key_status" }
-  | { type: "vn_set_system_one_key"; key: string }
-  | { type: "vn_clear_system_one_key" }
+  /** Which of Lumiverse's Decision connections System One uses (answered by `vn_decision_status`). */
+  | { type: "vn_get_decision_status" }
+  /** Show Lumiverse's Connections drawer, where Decision models are set up. */
+  | { type: "vn_open_decision_connections" }
   | { type: "vn_set_config"; patch: Partial<VisualNovelConfig>; chatId?: string }
   | { type: "vn_submit"; chatId: string; content: string; requestId: string }
   | { type: "vn_asset_ready"; chatId: string; messageId: string; jobId: string; sourceFingerprint: string }
@@ -191,6 +192,19 @@ export type ConnectionCatalogOption = {
   isDefault: boolean;
 };
 
+/**
+ * System One's connection: Lumiverse's default Decision connection.
+ * "ready": set up (`name`, `model`); "missing": no default one; "unavailable":
+ * there is one but it cannot be used, or this Lumiverse has no Decision
+ * models. `error` says what to do in Lumiverse.
+ */
+export type DecisionStatus = {
+  state: "ready" | "missing" | "unavailable";
+  name?: string;
+  model?: string;
+  error?: string;
+};
+
 export type ConnectionCatalogErrors = {
   planner?: string;
   image?: string;
@@ -201,8 +215,7 @@ export type BackendResponse =
   | { type: "vn_panel_template"; requestId: string; chatId: string; template?: string; error?: string }
   | { type: "vn_state"; chatId: string; config: VisualNovelConfig; turn: TurnView | null }
   | { type: "vn_config"; config: VisualNovelConfig }
-  /** `test` is set after a save: the one test call passed (System One turned on) or failed (`error` says why). */
-  | { type: "vn_system_one_key_status"; saved: boolean; test?: "passed" | "failed"; error?: string }
+  | { type: "vn_decision_status"; status: DecisionStatus }
   | {
     type: "vn_connection_catalog";
     planner: ConnectionCatalogOption[];

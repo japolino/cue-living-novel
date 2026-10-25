@@ -217,6 +217,13 @@ test("configuration defaults textSpeed and autoPlayDelay; the old skipMode is dr
   assert.equal("skipMode" in config, false);
 });
 
+test("System One's own URL and model are dropped: a saved config loads and keeps its mode", () => {
+  const config = normalizeConfig({ systemOneMode: "compare", systemOneApiUrl: "https://gateway.example/v1", systemOneModel: "jev-1.13.0" });
+  assert.equal(config.systemOneMode, "compare");
+  assert.equal("systemOneApiUrl" in config, false);
+  assert.equal("systemOneModel" in config, false);
+});
+
 test("configuration preserves audioDirectory, bgmVolume, and sfxVolume", () => {
   const config = normalizeConfig({
     audioDirectory: "/path/to/audio",

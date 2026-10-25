@@ -1,7 +1,7 @@
 import type { SpindleFrontendContext } from "lumiverse-spindle-types";
 import { spritePuppetSettings, stageFeelSettings, textEffectModeFor, type VisualNovelConfig, type VisualNovelEffectIntensity, type VisualNovelPresentationMode, type VisualNovelSpritePuppet, type VisualNovelStageFeel, type VisualNovelTextEffectMode } from "../../config.js";
 import { REFERENCE_IMAGE_MAX_BYTES, REFERENCE_IMAGE_MIMES } from "../../protocol.js";
-import type { AssetView, BackendResponse, ConnectionCatalogOption, FrontendRequest, TurnView } from "../../protocol.js";
+import type { AssetView, BackendResponse, ConnectionCatalogOption, DecisionStatus, FrontendRequest, TurnView } from "../../protocol.js";
 import { AudioEngine, VnStage, isAmbientEffect, isStageEffect, type VnReadingFlow } from "../stage/index.js";
 import type { AmbientEffect, StageEffect } from "../store/index.js";
 import { VisualNovelSettingsPanel } from "../settings/panel.js";
@@ -85,22 +85,16 @@ export function speechHoldsInterfaceSounds(status: Pick<SpeechStatus, "kind"> | 
 }
 
 /**
- * The status line under the System One key after a save: the one test call
- * passed (and the mode the backend left, normally On) or failed and why.
- * Undefined keeps the panel's plain saved / not saved line.
+ * The status line under Use System One: the Decision connection it asks
+ * (Lumiverse's default one), or what to set up in Lumiverse first.
  */
-export function systemOneKeyMessage(
-  status: { saved: boolean; test?: "passed" | "failed"; error?: string },
-  mode: "off" | "compare" | "on" | undefined,
-): string | undefined {
-  if (status.test === "passed") return mode === "compare" ? "Key saved and tested. System One compares with the story reader." : "Key saved and tested. System One is on.";
-  if (status.test === "failed") {
-    const failed = `Key saved, but the test call failed: ${status.error ?? "no answer"}.`;
-    return mode === "on" || mode === "compare"
-      ? `${failed} System One stays on; until the key works, Cue uses the story reader.`
-      : `${failed} System One was not turned on.`;
+export function decisionStatusMessage(status: DecisionStatus): string {
+  if (status.state === "ready") {
+    const model = status.model ? ` (${status.model})` : "";
+    return `Uses "${status.name ?? "Decision connection"}"${model}, Lumiverse's default Decision connection.`;
   }
-  return undefined;
+  const reason = status.error ?? "No default Decision connection. In Lumiverse, open Connections → Decision models, add a connection and set it as default.";
+  return `${reason} Until then, System One does not run and Cue uses the story reader.`;
 }
 
 /**
@@ -555,7 +549,7 @@ export function turnWithPlate<T extends Pick<TurnView, "sprites">>(turn: T, plat
 export type SettingsFeedbackTarget = {
   setConfig(config: VisualNovelConfig): void;
   setConnectionCatalog(kind: "planner" | "image", state: ConnectionCatalogFeedback): void;
-  setSystemOneKeyStatus(saved: boolean, message?: string): void;
+  setDecisionStatus(message: string): void;
   setAudioStatus(message: string): void;
   /** Acknowledged save result: "saved" only after the backend echoes `vn_config`. */
   setSaveStatus?(status: { kind: "saved" } | { kind: "error"; error: string }): void;
@@ -889,8 +883,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       if (active) panels.openTools();
     },
     onRefreshConnections: () => requestConnectionCatalog(),
-    onSaveSystemOneKey: (key) => ctx.sendToBackend({ type: "vn_set_system_one_key", key }),
-    onClearSystemOneKey: () => ctx.sendToBackend({ type: "vn_clear_system_one_key" }),
+    onCheckDecisions: () => ctx.sendToBackend({ type: "vn_get_decision_status" }),
+    onOpenDecisionConnections: () => ctx.sendToBackend({ type: "vn_open_decision_connections" }),
     onScanAudio: (directory) => {
       ctx.sendToBackend({ type: "vn_scan_audio", directory });
     },
@@ -953,6 +947,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
         settingsPanel?.setConfig(next);
       }
       ctx.sendToBackend({ type: "vn_set_config", patch, chatId: chatId() });
+      // Turning System One on: check Lumiverse's Decision connection again (it may have been set up since).
+      if (patch.systemOneMode && patch.systemOneMode !== "off") ctx.sendToBackend({ type: "vn_get_decision_status" });
     },
     // Sprite mode: library actions and requests go to the backend; the cut-out
     // model lives in this browser, so its buttons call the cut-out module.
@@ -1389,8 +1385,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       settingsPanel?.setConnectionCatalog("image", states.image);
       return;
     }
-    if (type === "vn_system_one_key_status" && message.type === "vn_system_one_key_status") {
-      settingsPanel?.setSystemOneKeyStatus(message.saved, systemOneKeyMessage(message, configRef.current?.systemOneMode));
+    if (type === "vn_decision_status" && message.type === "vn_decision_status") {
+      settingsPanel?.setDecisionStatus(decisionStatusMessage(message.status));
       return;
     }
     if (type === "vn_sprite_library" && message.type === "vn_sprite_library") {
@@ -1570,8 +1566,10 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
         settingsPanel?.setSaveStatus?.({ kind: "error", error: message.error });
         return;
       }
-      if (message.operation === "vn_set_system_one_key" || message.operation === "vn_clear_system_one_key" || message.operation === "vn_get_system_one_key_status") {
-        settingsPanel?.setSystemOneKeyStatus(false, message.error);
+      if (message.operation === "vn_get_decision_status" || message.operation === "vn_open_decision_connections") {
+        settingsPanel?.setDecisionStatus(message.operation === "vn_open_decision_connections"
+          ? `Could not open Lumiverse's Connections: ${message.error}. Open Connections → Decision models yourself.`
+          : decisionStatusMessage({ state: "unavailable", error: message.error }));
         return;
       }
       if (message.operation === "vn_get_connection_catalog") {
@@ -1618,7 +1616,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   });
 
   requestConnectionCatalog();
-  ctx.sendToBackend({ type: "vn_get_system_one_key_status" });
+  ctx.sendToBackend({ type: "vn_get_decision_status" });
   requestState({ boot: true });
   ctx.ready();
 

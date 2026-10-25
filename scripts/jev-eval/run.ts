@@ -8,9 +8,8 @@
  *   bun run scripts/jev-eval/run.ts --repeat=3      # re-send the first 3 replies' bodies (determinism)
  *   bun run scripts/jev-eval/run.ts --only=id1,id2
  */
-import { systemOneEndpoint } from "../../src/backend/runtime/system-one.js";
 import { SPRITE_REQUEST_BYTE_LIMIT } from "../../src/backend/runtime/system-one-sprites.js";
-import { buildCase, EVAL_CONFIG } from "./build.js";
+import { buildCase } from "./build.js";
 import { ANSWERS_DIR, REPEAT_DIR, bodyHash, readCached, readKey, writeCached, type CachedAnswer } from "./common.js";
 import { REPLIES } from "./dataset/index.js";
 
@@ -35,7 +34,8 @@ if (!key) {
   console.log("skip: no Jev key (set CUE_JEV_KEY or CUE_JEV_KEY_FILE, or put it in ~/.cue-secrets/jev.key)");
   process.exit(0);
 }
-const endpoint = systemOneEndpoint(EVAL_CONFIG.systemOneApiUrl);
+// Jev's own endpoint (Cue itself asks Lumiverse's Decision connection).
+const endpoint = "https://api.typesafe.ai/v1/systemone";
 const dir = repeat ? REPEAT_DIR : ANSWERS_DIR;
 const pending = jobs.filter((job) => !readCached(dir, job.hash));
 console.log(`to send: ${pending.length} (${jobs.length - pending.length} cached) -> ${dir}`);

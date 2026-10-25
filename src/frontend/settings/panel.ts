@@ -140,8 +140,10 @@ export type SettingsPanelOptions = {
   /** Open Cue with the Panels drawer on its Advanced tools (the stage shows no Panels button until a chat has a card). */
   onOpenPanelTools?: () => void;
   onRefreshConnections: () => void;
-  onSaveSystemOneKey?: (key: string) => void;
-  onClearSystemOneKey?: () => void;
+  /** Ask the backend which of Lumiverse's Decision connections System One uses (the answer comes as `setDecisionStatus`). */
+  onCheckDecisions?: () => void;
+  /** Show Lumiverse's Connections drawer, where Decision models are set up. */
+  onOpenDecisionConnections?: () => void;
   onScanAudio?: (directory: string) => Promise<{ bgmCount: number; sfxCount: number } | void> | void;
   /** Import user-picked audio files into the extension's scoped storage. */
   onImportAudio?: (files: readonly File[]) => Promise<void> | void;
@@ -810,8 +812,8 @@ export class VisualNovelSettingsPanel {
               <div data-actions><small>Chosen in Pictures, next to where pictures come from.</small><button type="button" data-goto="pictures" data-goto-target="imageConnectionId">Go to Pictures</button></div>
             `, { find: "" })}
             ${group("System One", `
-              <label data-check ${find("Use System One", "jev typesafe on off decisions")}><input name="systemOneOn" type="checkbox" /><span>Use System One for presentation and familiar scenes<small>Comparing only, the API URL and the model are in Advanced.</small>${more("Jev makes bounded speaker, expression, audio, and scene decisions.")}</span></label>
-              <div data-field ${find("System One API key", "jev key secret password")}><span>API key</span><input name="systemOneApiKey" type="password" autocomplete="new-password" placeholder="Enter key" /><div data-actions><button type="button" data-save-system-one-key>Save key</button><button type="button" data-clear-system-one-key>Remove key</button><small data-system-one-key-status>Checking saved key…</small></div><small>The key saves at once, encrypted for this extension. It is never part of Cue settings. Saving it makes one small test call and turns System One on; removing it turns System One off.</small></div>
+              <label data-check ${find("Use System One", "jev typesafe on off decisions")}><input name="systemOneOn" type="checkbox" /><span>Use System One for presentation and familiar scenes<small>Comparing only is in Advanced.</small>${more("Jev makes bounded speaker, expression, audio, and scene decisions.")}</span></label>
+              <div data-field ${find("Decision connection", "jev system one decision model connection key url lumiverse")}><span>Decision connection</span><div data-actions><button type="button" data-check-decisions>Check again</button><button type="button" data-open-decision-connections>Open Lumiverse Connections</button><small data-decision-status>Checking Lumiverse's Decision connection…</small></div><small>System One asks Lumiverse's default Decision connection. Its key, URL and model are set in Lumiverse (Connections → Decision models), not in Cue.</small></div>
             `, { help: "Optional. Saves as you change it.", find: find("System One", "jev") })}
           `)}
 
@@ -891,10 +893,6 @@ export class VisualNovelSettingsPanel {
             `, { id: "filtering" })}
             ${group("Models and parameters", `
               <label data-field ${find("System One decisions", "jev typesafe mode compare")}><span>System One decisions</span><select name="systemOneMode"><option value="off">Off</option><option value="compare">Compare with story reader</option><option value="on">Use for presentation and familiar scenes</option></select>${more("Compare logs agreement with the story reader without changing the turn.")}</label>
-              <div data-row>
-                <label data-field ${find("System One API URL", "jev endpoint url")}><span>System One API URL</span><input name="systemOneApiUrl" type="url" placeholder="https://api.typesafe.ai" /><small>Requests go through Lumiverse's HTTP proxy.</small></label>
-                <label data-field ${find("System One model", "jev model")}><span>System One model</span><input name="systemOneModel" type="text" placeholder="jev-latest" /></label>
-              </div>
               <div data-row>
                 <label data-field ${find("Image model override", "image model checkpoint")}><span>Image model override</span><input name="imageModel" type="text" placeholder="Use the selected connection model" /><small data-image-model-hint>Leave blank to use the model configured on the selected image connection.</small></label>
                 <label data-field ${find("Images at the same time", "concurrency parallel images")}><span>Images generated at the same time</span><input name="imageConcurrency" type="number" min="1" max="6" step="1" /></label>
@@ -1340,18 +1338,12 @@ export class VisualNovelSettingsPanel {
       this.commitFocused();
     });
     this.root.querySelector("[data-undo]")?.addEventListener("click", () => this.undo());
-    this.root.querySelector<HTMLButtonElement>("[data-save-system-one-key]")?.addEventListener("click", () => {
-      const field = this.control<HTMLInputElement>("systemOneApiKey");
-      const key = field.value.trim();
-      if (!key) { this.setSystemOneKeyStatus(false, "Enter a key first."); return; }
-      this.setSystemOneKeyStatus(false, "Saving and testing the key…");
-      this.options.onSaveSystemOneKey?.(key);
-      field.value = "";
+    this.root.querySelector<HTMLButtonElement>("[data-check-decisions]")?.addEventListener("click", () => {
+      this.setDecisionStatus("Checking Lumiverse's Decision connection…");
+      this.options.onCheckDecisions?.();
     });
-    this.root.querySelector<HTMLButtonElement>("[data-clear-system-one-key]")?.addEventListener("click", () => {
-      this.setSystemOneKeyStatus(false, "Removing key…");
-      this.options.onClearSystemOneKey?.();
-      this.control<HTMLInputElement>("systemOneApiKey").value = "";
+    this.root.querySelector<HTMLButtonElement>("[data-open-decision-connections]")?.addEventListener("click", () => {
+      this.options.onOpenDecisionConnections?.();
     });
     this.form.addEventListener("keydown", (event) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
@@ -1586,8 +1578,6 @@ export class VisualNovelSettingsPanel {
       case "maxImagesPerTurn": return { maxImagesPerTurn: clamp(Math.round(Number(target.value)), 0, 12, DEFAULT_CONFIG.maxImagesPerTurn) };
       case "systemOneMode": return { systemOneMode: target.value === "compare" || target.value === "on" ? target.value : "off" };
       case "systemOneOn": return { systemOneMode: checked ? "on" : "off" };
-      case "systemOneApiUrl": return { systemOneApiUrl: target.value.trim() || DEFAULT_CONFIG.systemOneApiUrl };
-      case "systemOneModel": return { systemOneModel: target.value.trim() || DEFAULT_CONFIG.systemOneModel };
       case "novelAiSteps":
       case "novelAiGuidance":
       case "novelAiSampler":
@@ -2023,10 +2013,6 @@ export class VisualNovelSettingsPanel {
   private syncEveryday(config: VisualNovelConfig): void {
     this.control<HTMLSelectElement>("systemOneMode").value = config.systemOneMode;
     this.control<HTMLInputElement>("systemOneOn").checked = config.systemOneMode !== "off";
-    for (const name of ["systemOneApiUrl", "systemOneModel"] as const) {
-      const input = this.control<HTMLInputElement>(name);
-      if (this.root.activeElement !== input) input.value = config[name];
-    }
     this.control<HTMLInputElement>("generateChoices").checked = config.generateChoices;
     this.control<HTMLInputElement>("autoEnter").checked = config.autoEnter;
     this.control<HTMLInputElement>("replyBoxAtEnd").checked = config.replyBoxAtEnd;
@@ -2397,9 +2383,10 @@ export class VisualNovelSettingsPanel {
     }
   }
 
-  setSystemOneKeyStatus(saved: boolean, message?: string): void {
-    const status = this.root.querySelector<HTMLElement>("[data-system-one-key-status]");
-    if (status) status.textContent = message ?? (saved ? "API key saved." : "No API key saved.");
+  /** The line under Use System One: Lumiverse's Decision connection, or what to set up there. */
+  setDecisionStatus(message: string): void {
+    const status = this.root.querySelector<HTMLElement>("[data-decision-status]");
+    if (status) status.textContent = message;
   }
 
   private renderConnectionSelects(kind: ConnectionCatalogKind, selectedId: string | null): void {

@@ -190,9 +190,12 @@ export type VisualNovelConfig = {
   /** Suggested replies at Your turn when the reply has no choices of its own (above the reply box). */
   generateChoices: boolean;
   parserConnectionId: string | null;
+  /**
+   * System One asks Lumiverse's default Decision connection. The URL and
+   * model Cue kept before (`systemOneApiUrl`, `systemOneModel`) are dropped
+   * on load.
+   */
   systemOneMode: "off" | "compare" | "on";
-  systemOneApiUrl: string;
-  systemOneModel: string;
   parserParameters: Record<string, unknown>;
   imageConnectionId: string | null;
   imageModel: string;
@@ -308,8 +311,6 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   generateChoices: true,
   parserConnectionId: null,
   systemOneMode: "off",
-  systemOneApiUrl: "https://api.typesafe.ai",
-  systemOneModel: "jev-latest",
   parserParameters: {},
   imageConnectionId: null,
   imageModel: "",
@@ -581,8 +582,6 @@ export function normalizeConfig(value: unknown): VisualNovelConfig {
     generateChoices: bool(input.generateChoices, DEFAULT_CONFIG.generateChoices),
     parserConnectionId: nullableString(input.parserConnectionId),
     systemOneMode: input.systemOneMode === "compare" || input.systemOneMode === "on" ? input.systemOneMode : "off",
-    systemOneApiUrl: stringValue(input.systemOneApiUrl, DEFAULT_CONFIG.systemOneApiUrl).trim() || DEFAULT_CONFIG.systemOneApiUrl,
-    systemOneModel: stringValue(input.systemOneModel, DEFAULT_CONFIG.systemOneModel).trim() || DEFAULT_CONFIG.systemOneModel,
     parserParameters: record(input.parserParameters),
     imageConnectionId: nullableString(input.imageConnectionId),
     imageModel: stringValue(input.imageModel, DEFAULT_CONFIG.imageModel),

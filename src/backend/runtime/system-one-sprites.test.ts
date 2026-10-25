@@ -17,7 +17,7 @@ import {
 import { KEY_MOMENT_THRESHOLDS } from "./sprites/key-moments.js";
 
 type Question = { type: "noul" | "choice" | "score"; instructions: string; criteria?: unknown };
-type Body = { model: string; state: Record<string, any>; questions: Record<string, Question> };
+type Body = { state: Record<string, any>; questions: Record<string, Question> };
 type Answers = Record<string, unknown>;
 
 /** Low-confidence default answers: the first option at 0.1, noul 0.5, score 0.2 confidence. */
@@ -34,33 +34,45 @@ const choice = (value: string, confidence: number) => ({ type: "choice", choice:
 const noul = (value: number) => ({ type: "noul", noul: value });
 const score = (value: number, confidence: number) => ({ type: "score", score: value, legend: {}, probabilities: {}, confidence });
 
-type Mock = { spindle: SpindleAPI; bodies: Body[]; logs: string[]; maxInFlight: () => number };
+type Mock = { spindle: SpindleAPI; bodies: Body[]; logs: string[]; toasts: string[]; maxInFlight: () => number };
 
-function mockSpindle(answer: (body: Body, call: number) => Answers | Promise<Answers> | { status: number; body: string }, options: { key?: string | null } = {}): Mock {
+/**
+ * Lumiverse's Decision API. `answer` returns answers, or an HTTP reply that
+ * the host turns into its result (2xx JSON) or its error (other statuses).
+ */
+function mockSpindle(answer: (body: Body, call: number) => Answers | Promise<Answers> | { status: number; body: string }, options: { connected?: boolean } = {}): Mock {
   const bodies: Body[] = [];
   const logs: string[] = [];
+  const toasts: string[] = [];
   let inFlight = 0;
   let max = 0;
   const spindle = {
-    enclave: { get: async () => (options.key === undefined ? "test-secret" : options.key) },
-    cors: async (url: string, request: { method: string; headers: Record<string, string>; body: string }) => {
-      assert.equal(url, "https://api.typesafe.ai/v1/systemone");
-      assert.equal(request.method, "POST");
-      assert.equal(request.headers.Authorization, "Bearer test-secret");
-      assert.ok(new TextEncoder().encode(request.body).length <= SPRITE_REQUEST_BYTE_LIMIT, "body within the byte budget");
-      const body = JSON.parse(request.body) as Body;
-      bodies.push(body);
-      inFlight += 1;
-      max = Math.max(max, inFlight);
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      inFlight -= 1;
-      const result = await answer(body, bodies.length - 1);
-      if (result && typeof (result as { status?: unknown }).status === "number" && typeof (result as { body?: unknown }).body === "string") return result;
-      return { status: 200, body: JSON.stringify({ model: "jev-1.13.0", answers: result, usage: { input_tokens: 300, output_tokens: 20 } }) };
+    decisions: {
+      evaluate: async (input: Body & { model?: string; connection_id?: string; userId?: string }) => {
+        // Lumiverse picks its default Decision connection: Cue sends no connection, key or model.
+        assert.equal(input.connection_id, undefined);
+        assert.equal(input.model, undefined);
+        if (options.connected === false) throw new Error("No default Decision connection configured");
+        const body = { state: input.state, questions: input.questions };
+        assert.ok(new TextEncoder().encode(JSON.stringify(body)).length <= SPRITE_REQUEST_BYTE_LIMIT, "body within the byte budget");
+        bodies.push(structuredClone(body));
+        inFlight += 1;
+        max = Math.max(max, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        inFlight -= 1;
+        const result = await answer(body, bodies.length - 1);
+        if (result && typeof (result as { status?: unknown }).status === "number" && typeof (result as { body?: unknown }).body === "string") {
+          const reply = result as { status: number; body: string };
+          if (reply.status < 200 || reply.status >= 300) throw new Error(`TypeSafe decision evaluation failed (${reply.status}): ${reply.body}`);
+          try { return JSON.parse(reply.body); } catch { throw new Error("TypeSafe decision evaluation failed: Invalid Decision response"); }
+        }
+        return { model: "jev-1.13.0", answers: result, usage: { input_tokens: 300, output_tokens: 20 } };
+      },
     },
+    toast: { warning: (line: string) => toasts.push(line) },
     log: { warn: (line: string) => logs.push(line), info: (line: string) => logs.push(line) },
   } as unknown as SpindleAPI;
-  return { spindle, bodies, logs, maxInFlight: () => max };
+  return { spindle, bodies, logs, toasts, maxInFlight: () => max };
 }
 
 const on = { systemOneMode: "on" as const };
@@ -86,14 +98,18 @@ function withAnswers(overrides: (body: Body, set: (paragraph: number, name: stri
   };
 }
 
-test("System One off or no saved key: deterministic staging, no request", async () => {
+test("System One off: no request; no default Decision connection: deterministic staging and a toast naming Lumiverse's setting", async () => {
   const plan = duoPlan();
   const expected = deterministicSpriteStaging(stagingInput(plan));
   const off = mockSpindle(() => { throw new Error("must not call"); });
   assert.deepEqual(await buildSpriteStaging(off.spindle, stagingInput(plan)), expected);
-  const noKey = mockSpindle(() => { throw new Error("must not call"); }, { key: null });
-  assert.deepEqual(await buildSpriteStaging(noKey.spindle, stagingInput(plan, { config: on })), expected);
-  assert.equal(off.bodies.length + noKey.bodies.length, 0);
+  const unset = mockSpindle(() => { throw new Error("must not call"); }, { connected: false });
+  assert.deepEqual(await buildSpriteStaging(unset.spindle, stagingInput(plan, { config: on })), expected);
+  assert.equal(off.bodies.length + unset.bodies.length, 0);
+  assert.equal(off.toasts.length, 0);
+  assert.deepEqual(unset.toasts, ["No default Decision connection. In Lumiverse, open Connections → Decision models, add a connection and set it as default. Until then, Cue uses the story reader."]);
+  const noApi = { log: { warn: () => {}, info: () => {} }, toast: { warning: () => {} } } as unknown as SpindleAPI;
+  assert.deepEqual(await buildSpriteStaging(noApi, stagingInput(plan, { config: on })), expected, "a Lumiverse without Decision models");
 });
 
 test("question design: safe default first, closed catalogues, typed questions per candidate", async () => {
@@ -104,7 +120,6 @@ test("question design: safe default first, closed catalogues, typed questions pe
   assertStagingInvariants(staging, 4);
   assert.equal(mock.bodies.length, 1);
   const body = mock.bodies[0]!;
-  assert.equal(body.model, "jev-latest");
   assert.deepEqual(Object.keys(body.state.paragraphs), ["p0", "p1", "p2", "p3"]);
   const questions = body.questions;
   // p0: Mira speaks (4 questions, no presence question); Kai is not a candidate yet.
@@ -288,8 +303,7 @@ test("failures fall back to deterministic staging and never throw", async () => 
     ["not json", mockSpindle(() => ({ status: 200, body: "<html>" })), {}],
     ["wrong shape", mockSpindle(() => ({ status: 200, body: JSON.stringify({ result: [] }) })), {}],
     ["timeout", mockSpindle(() => new Promise<Answers>(() => {})), { classifierTimeoutMs: 30 }],
-    ["model missing", mockSpindle((body) => lowAnswers(body)), { config: { ...on, systemOneModel: " " } } as Partial<SpriteStagingInput>],
-    ["bad url", mockSpindle((body) => lowAnswers(body)), { config: { ...on, systemOneApiUrl: "http://remote.example" } } as Partial<SpriteStagingInput>],
+    ["no Decision connection", mockSpindle((body) => lowAnswers(body), { connected: false }), {}],
   ];
   for (const [name, mock, extra] of scenarios) {
     const { config, ...rest } = extra as { config?: object };
@@ -489,7 +503,7 @@ test("applySpriteAnswers takes candidate thresholds (calibration harness)", () =
     scenes: [{ index: 0, startParagraph: 0, location: "Library", timeOfDay: "evening", weather: null, lighting: "lamplight", description: "", light: staging.paragraphs[0]!.light, plateKey: "k", plateKnown: true }],
     knownPlates: [], previousPlateKey: null, cast: [{ key: "mira", name: "Mira", attire: null }],
   };
-  const [batch] = buildSpriteRequests(input, "jev-latest");
+  const [batch] = buildSpriteRequests(input);
   const answers = { p1_c0_motion: { type: "choice", choice: "nod", confidence: 0.7 } };
   const strict: SpriteStagingOverrides = { paragraphs: new Map(), sceneLight: new Map(), scenePlate: new Map() };
   applySpriteAnswers(strict, batch!.meta, answers);

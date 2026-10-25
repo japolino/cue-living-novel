@@ -17,7 +17,7 @@ import {
   SPRITE_INTERACTION_TAGS,
   SPRITE_INTERACTIONS,
 } from "../../shared/sprites.js";
-import { SYSTEM_ONE_KEY, systemOneEndpoint } from "./system-one.js";
+import { sendDecision, warnDecisionSetup } from "./system-one.js";
 import { KEY_MOMENT_THRESHOLDS, type KeyMomentAnswer } from "./sprites/key-moments.js";
 
 /**
@@ -35,8 +35,9 @@ import { KEY_MOMENT_THRESHOLDS, type KeyMomentAnswer } from "./sprites/key-momen
 export const SPRITE_BATCH_PARAGRAPHS = 7;
 /**
  * Request body budget in bytes. The presentation classifier enforces the
- * API's 64 KiB body limit; we stay below it with headroom. 60 KB of JSON is
- * far below the 64k-token request limit, so bytes are the binding limit.
+ * API's 64 KiB body limit; we stay below it with headroom (Lumiverse adds the
+ * model id). 60 KB of JSON is far below the 64k-token request limit, so bytes
+ * are the binding limit.
  */
 export const SPRITE_REQUEST_BYTE_LIMIT = 60_000;
 /**
@@ -48,7 +49,7 @@ export const SPRITE_REQUEST_BYTE_LIMIT = 60_000;
 export const MAX_CLASSIFIED_PARAGRAPHS = 105;
 /** Per-request deadline; Jev answers in 70-500 ms, the rest is network. */
 export const SPRITE_CLASSIFIER_TIMEOUT_MS = 8_000;
-/** Base delay before the single retry of a 429/529 answer. */
+/** Base delay before the single retry of a 429/529 answer (Lumiverse's error names the status). */
 export const SPRITE_RETRY_DELAY_MS = 250;
 /** Paragraph text sent per paragraph. */
 export const SPRITE_PARAGRAPH_TEXT_LIMIT = 2_000;
@@ -271,7 +272,8 @@ type QuestionMeta =
 
 export type SpriteRequestBatch = {
   paragraphs: number[];
-  body: Record<string, unknown>;
+  /** What Cue asks Lumiverse's Decision connection: `state` and `questions` (Lumiverse adds the model). */
+  body: { state: Record<string, unknown>; questions: Record<string, Question> };
   questions: Record<string, Question>;
   meta: Map<string, QuestionMeta>;
   bytes: number;
@@ -409,7 +411,7 @@ function sceneQuestions(
 }
 
 /** Split the turn into requests: at most 7 paragraphs and SPRITE_REQUEST_BYTE_LIMIT bytes each. */
-export function buildSpriteRequests(input: Omit<SpriteClassifierInput, "config" | "signal" | "userId">, model: string): SpriteRequestBatch[] {
+export function buildSpriteRequests(input: Omit<SpriteClassifierInput, "config" | "signal" | "userId">): SpriteRequestBatch[] {
   const castIndex = new Map(input.cast.map((member, index) => [member.key, index] as const));
   const castByKey = new Map(input.cast.map((member) => [member.key, member] as const));
   const scenesByIndex = new Map(input.scenes.map((scene) => [scene.index, scene] as const));
@@ -465,7 +467,6 @@ export function buildSpriteRequests(input: Omit<SpriteClassifierInput, "config" 
       .filter((candidate) => candidate.onStage && !candidate.speaking)
       .map((candidate) => candidate.name);
     const body = {
-      model,
       state: {
         task: "Visual novel staging. Characters are shown as cut-out sprites over an empty background picture. Decide, per paragraph, who is visible and how each visible character looks.",
         cast: [...castKeys].map((key) => {
@@ -657,9 +658,10 @@ function withDeadline<T>(promise: Promise<T>, ms: number, signal: AbortSignal | 
 }
 
 /**
- * Ask Jev. Returns null when System One is off or no key is saved, or when
- * every request failed. Throws on abort and on configuration errors (the
- * caller falls back to deterministic staging).
+ * Ask Jev through Lumiverse's default Decision connection. Returns null when
+ * System One is off or every request failed (the first failure for a missing
+ * Decision connection says so once, in a toast). Throws on abort (the caller
+ * falls back to deterministic staging).
  */
 export async function classifySpriteStaging(
   spindle: SpindleAPI,
@@ -668,30 +670,31 @@ export async function classifySpriteStaging(
 ): Promise<{ overrides: SpriteStagingOverrides; stats: SpriteClassifierStats } | null> {
   if (input.config.systemOneMode === "off") return null;
   if (input.signal?.aborted) throw abortError();
-  const key = await spindle.enclave.get(SYSTEM_ONE_KEY, input.userId);
-  if (!key) return null;
-  const model = input.config.systemOneModel.trim();
-  if (!model) throw new Error("System One model is missing");
-  const endpoint = systemOneEndpoint(input.config.systemOneApiUrl);
-  const batches = buildSpriteRequests(input, model);
+  const batches = buildSpriteRequests(input);
   if (!batches.length) return null;
   const started = Date.now();
   const timeoutMs = options.timeoutMs ?? SPRITE_CLASSIFIER_TIMEOUT_MS;
-  const send = async (body: string) => withDeadline(Promise.resolve(spindle.cors(endpoint, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body,
-  })), timeoutMs, input.signal) as Promise<{ status: number; body: string } | null | undefined>;
-  const results = await Promise.allSettled(batches.map(async (batch) => {
-    const body = JSON.stringify(batch.body);
-    let response = await send(body);
-    // Rate limited or overloaded: one short, jittered retry (the API asks for backoff).
-    if (response && (response.status === 429 || response.status === 529)) {
-      await withDeadline(new Promise((resolve) => setTimeout(resolve, SPRITE_RETRY_DELAY_MS + Math.floor(Math.random() * SPRITE_RETRY_DELAY_MS))), timeoutMs, input.signal);
-      response = await send(body);
+  const send = async (batch: SpriteRequestBatch) => {
+    // Each try has its own deadline; the abort reaches Lumiverse, which cancels the request.
+    const controller = new AbortController();
+    const stop = () => controller.abort();
+    input.signal?.addEventListener("abort", stop, { once: true });
+    try {
+      return await withDeadline(sendDecision(spindle, batch.body, { ...(input.userId ? { userId: input.userId } : {}), signal: controller.signal }), timeoutMs, input.signal);
+    } finally {
+      input.signal?.removeEventListener("abort", stop);
+      controller.abort();
     }
-    if (!response || response.status < 200 || response.status >= 300) throw new Error(`System One request failed (${response?.status ?? "no response"})`);
-    return ResponseSchema.parse(JSON.parse(response.body));
+  };
+  const results = await Promise.allSettled(batches.map(async (batch) => {
+    try {
+      return ResponseSchema.parse(await send(batch));
+    } catch (error) {
+      // Rate limited or overloaded: one short, jittered retry (the API asks for backoff).
+      if (input.signal?.aborted || !/\((?:429|529)\)/.test(error instanceof Error ? error.message : String(error))) throw error;
+      await withDeadline(new Promise((resolve) => setTimeout(resolve, SPRITE_RETRY_DELAY_MS + Math.floor(Math.random() * SPRITE_RETRY_DELAY_MS))), timeoutMs, input.signal);
+      return ResponseSchema.parse(await send(batch));
+    }
   }));
   if (input.signal?.aborted) throw abortError();
   const overrides: SpriteStagingOverrides = { paragraphs: new Map(), sceneLight: new Map(), scenePlate: new Map() };
@@ -723,6 +726,9 @@ export async function classifySpriteStaging(
   } catch {
     // logging must never break staging
   }
-  if (failedRequests === batches.length) return null;
+  if (failedRequests === batches.length) {
+    warnDecisionSetup(spindle, lastError, input.userId);
+    return null;
+  }
   return { overrides, stats };
 }

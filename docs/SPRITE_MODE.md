@@ -646,7 +646,8 @@ intensity), the plate key, and the light preset.
   `poseExpressionId` or the deterministic selector; light from the scene's
   time of day / lighting words; motion and emote "none" except simple,
   conservative cues.
-- **Classifier** (System One on, key saved): one request per 7 paragraphs,
+- **Classifier** (System One on; requests go to Lumiverse's default Decision
+  connection through `spindle.decisions`): one request per 7 paragraphs,
   questions in parallel. Per paragraph and cast member: present (yes/no),
   expression (choice, `keep_current` first — Jev leans to the first option),
   motion and emote (choice, `none` first), intensity (score 1–5). Per scene:

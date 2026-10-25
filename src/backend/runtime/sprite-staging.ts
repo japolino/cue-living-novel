@@ -1033,8 +1033,8 @@ export function spriteClassifierInput(context: SpriteStagingContext, determinist
 }
 
 /**
- * Classifier staging when System One is configured (mode not "off" and a key
- * is saved), else deterministic. Never throws: any classifier failure falls
+ * Classifier staging when System One is on or comparing (it asks Lumiverse's
+ * default Decision connection), else deterministic. Never throws: any classifier failure falls
  * back to deterministicSpriteStaging (a failed request only loses its own
  * paragraphs; they keep their deterministic staging).
  */
