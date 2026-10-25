@@ -447,7 +447,7 @@ function pane(id: SettingsSectionId, body: string, extra = ""): string {
 const VOICE_SEARCH_ENTRIES: ReadonlyArray<{ label: string; keywords: string }> = [
   { label: "Read each paragraph aloud", keywords: "speech tts voice enable speak read aloud choir audio autoplay auto-play" },
   { label: "Mute narrator", keywords: "speech mute narrator dialogue only choir" },
-  { label: "Sound from Choir", keywords: "choir sound effects ambience music freesound incompetech" },
+  { label: "Read before the scene is ready", keywords: "speech read early before plan narrator" },
   { label: "Open Choir voice setup", keywords: "speech choir voices narrator character cast" },
 ];
 

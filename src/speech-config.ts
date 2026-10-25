@@ -8,8 +8,9 @@
  *
  * Older saved configs may still carry the retired Lumiverse TTS-profile fields
  * (narrator, characterDefault, characters, deliveryMode, deliveryTag,
- * deliveryAllProviders) and the retired autoplay and volume; normalization
- * drops them. Read aloud used to wait for Play unless autoplay was on, and now
+ * deliveryAllProviders), the retired autoplay and volume, and the retired
+ * choirSound (Choir's sound now always wins while it is on, see
+ * `choirPlaysSound`); normalization drops them. Read aloud used to wait for Play unless autoplay was on, and now
  * reads (and pays for) every paragraph, so a saved config that had read aloud
  * on with autoplay off comes back with read aloud off. The next save drops the
  * legacy field, so this happens once.
@@ -26,19 +27,12 @@ export type SpeechSettings = {
    * for the plan, which knows every paragraph's speaker.
    */
   speakBeforePlan: boolean;
-  /**
-   * Use Choir's sound effects, ambience and music; Cue's own pack audio stays
-   * quiet while Choir's sound is on. On by default; it only takes effect when
-   * the installed Choir can switch its sound for Cue.
-   */
-  choirSound: boolean;
 };
 
 export const DEFAULT_SPEECH_SETTINGS: SpeechSettings = {
   enabled: false,
   muteNarrator: false,
   speakBeforePlan: false,
-  choirSound: true,
 };
 
 export function normalizeSpeechSettings(value: unknown): SpeechSettings {
@@ -50,6 +44,5 @@ export function normalizeSpeechSettings(value: unknown): SpeechSettings {
     enabled: raw.enabled === true && !manualOnly,
     muteNarrator: raw.muteNarrator === true,
     speakBeforePlan: raw.speakBeforePlan === true,
-    choirSound: raw.choirSound !== false,
   };
 }

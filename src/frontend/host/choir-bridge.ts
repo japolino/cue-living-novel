@@ -88,14 +88,6 @@ export class ChoirBridge {
     this.api?.stop();
   }
 
-  canControlSound(): boolean {
-    return typeof this.api?.setSoundEnabled === "function";
-  }
-
-  setSoundEnabled(on: boolean): void {
-    this.api?.setSoundEnabled?.(on);
-  }
-
   /**
    * Whether Choir's own switches let it play sound in this chat: music, or
    * effects and ambience with a Freesound key (Choir skips those without one).
@@ -105,6 +97,11 @@ export class ChoirBridge {
     if (!config) return false;
     return config.enableMusic === true
       || ((config.enableSfx !== false || config.enableAmbience !== false) && Boolean(config.freesoundApiKey));
+  }
+
+  /** Whether Choir reads new replies in the chat by itself (its Auto switch), Cue's read aloud or not. */
+  readsByItself(): boolean {
+    return this.api?.getConfig?.()?.auto === true;
   }
 
   getMusic(): ChoirMusic | null {

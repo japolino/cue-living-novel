@@ -185,14 +185,6 @@ describe("lifecycle boundaries and late statuses", () => {
     expect(controller.getStatus().kind).toBe("off");
   });
 
-  test("switching Sound from Choir does not stop the paragraph", () => {
-    const { choir, controller } = rig();
-    controller.setCursor(cursor());
-    controller.setSettings(enabled({ choirSound: false }));
-    expect(choir.requests[0]!.request.signal?.aborted).toBe(false);
-    expect(choir.stopCalls).toBe(0);
-  });
-
   test("turning Read before the scene is ready on or off does not stop the paragraph", () => {
     const { choir, controller } = rig();
     controller.setCursor(cursor());

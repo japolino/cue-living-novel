@@ -61,13 +61,14 @@ function base64FromBytes(bytes: Uint8Array): string {
 }
 
 /**
- * Sound comes from Choir when speech is on, the user turned on "Sound from
- * Choir", the installed Choir can switch its sound for Cue and Choir's own
- * switches have sound on in this chat; otherwise Cue plays its own audio
- * packs, so the two never leave Cue silent.
+ * Sound comes from Choir whenever Choir has its own sound on in this chat
+ * (music, or effects and ambience with its Freesound key) and reads here:
+ * through Cue's read aloud, or by itself (Choir's Auto). Cue's own audio
+ * packs stay quiet then, so the two never play over each other; otherwise Cue
+ * plays its packs, so the two never leave Cue silent.
  */
-export function choirPlaysSound(speech: SpeechSettings | undefined, choir: Pick<ChoirBridge, "isAvailable" | "canControlSound" | "soundEnabled">): boolean {
-  return Boolean(speech?.enabled && speech.choirSound) && choir.isAvailable() && choir.canControlSound() && choir.soundEnabled();
+export function choirPlaysSound(speech: SpeechSettings | undefined, choir: Pick<ChoirBridge, "isAvailable" | "soundEnabled" | "readsByItself">): boolean {
+  return choir.isAvailable() && choir.soundEnabled() && (Boolean(speech?.enabled) || choir.readsByItself());
 }
 
 /**
@@ -971,7 +972,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   const speechSettings = settingsHandle ? new SpeechSettingsSection({
     mount: settingsPanel?.voiceMount() ?? settingsHandle.root,
     onSave: (speechPatch) => {
-      // Applied at once, like the panel's onSave, so Sound from Choir silences the pack without waiting for the echo.
+      // Applied at once, like the panel's onSave, so turning read aloud on hands the sound to Choir without waiting for the echo.
       if (configRef.current) {
         configRef.current = { ...configRef.current, speech: speechPatch };
         syncSoundSource();
@@ -981,8 +982,6 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     onOpenChoir: () => choirBridge.openDrawer(),
     isChoirAvailable: () => choirBridge.isAvailable(),
     onMuteNarratorChange: (muted) => choirBridge.setNarratorMuted(muted),
-    canControlChoirSound: () => choirBridge.canControlSound(),
-    onChoirSoundChange: (on) => choirBridge.setSoundEnabled(on),
   }) : null;
   choirBridge.onAvailabilityChange((available) => {
     settingsPanel?.setVoiceAvailable(available);

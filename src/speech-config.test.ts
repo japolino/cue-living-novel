@@ -4,8 +4,8 @@ import { DEFAULT_CONFIG, normalizeConfig } from "./config.js";
 import { DEFAULT_SPEECH_SETTINGS, normalizeSpeechSettings } from "./speech-config.js";
 
 describe("read-aloud settings normalization", () => {
-  test("read aloud and reading before the plan are OFF by default; Sound from Choir is on", () => {
-    expect(DEFAULT_SPEECH_SETTINGS).toEqual({ enabled: false, muteNarrator: false, speakBeforePlan: false, choirSound: true });
+  test("read aloud and reading before the plan are OFF by default", () => {
+    expect(DEFAULT_SPEECH_SETTINGS).toEqual({ enabled: false, muteNarrator: false, speakBeforePlan: false });
   });
 
   test("a config without a speech block normalizes to the defaults (existing users stay off)", () => {
@@ -26,10 +26,9 @@ describe("read-aloud settings normalization", () => {
     expect(normalizeSpeechSettings({ muteNarrator: 1 }).muteNarrator).toBe(false);
   });
 
-  test("Sound from Choir stays on unless it was turned off", () => {
-    expect(normalizeSpeechSettings({}).choirSound).toBe(true);
-    expect(normalizeSpeechSettings({ choirSound: true }).choirSound).toBe(true);
-    expect(normalizeSpeechSettings({ choirSound: false }).choirSound).toBe(false);
+  test("Read before the scene is ready requires a literal true", () => {
+    expect(normalizeSpeechSettings({ speakBeforePlan: true }).speakBeforePlan).toBe(true);
+    expect(normalizeSpeechSettings({ speakBeforePlan: "true" }).speakBeforePlan).toBe(false);
   });
 
   test("read aloud that was on with autoplay off comes back off: nothing is read (or paid for) until it is turned on again", () => {
@@ -42,7 +41,7 @@ describe("read-aloud settings normalization", () => {
     expect(normalizeConfig({ speech: { enabled: true, autoplay: false } }).speech.enabled).toBe(false);
   });
 
-  test("the retired TTS-profile, delivery, autoplay and volume fields are dropped", () => {
+  test("the retired TTS-profile, delivery, autoplay, volume and Sound from Choir fields are dropped", () => {
     const speech = normalizeSpeechSettings({
       enabled: true,
       autoplay: true,
@@ -55,6 +54,6 @@ describe("read-aloud settings normalization", () => {
       deliveryAllProviders: true,
       choirSound: false,
     });
-    expect(speech).toEqual({ enabled: true, muteNarrator: false, speakBeforePlan: false, choirSound: false });
+    expect(speech).toEqual({ enabled: true, muteNarrator: false, speakBeforePlan: false });
   });
 });

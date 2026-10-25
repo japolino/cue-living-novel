@@ -92,7 +92,7 @@ describe("ChoirBridge companion", () => {
       hasUserActivation: () => false,
     });
 
-    controller.setSettings({ ...DEFAULT_SPEECH_SETTINGS, enabled: true, muteNarrator: true, choirSound: false });
+    controller.setSettings({ ...DEFAULT_SPEECH_SETTINGS, enabled: true, muteNarrator: true });
 
     controller.setActive(true);
     controller.setVisible(true);
@@ -233,23 +233,26 @@ describe("ChoirBridge sound control and music", () => {
     return win;
   }
 
-  test("an older Choir without setSoundEnabled cannot control sound", () => {
+  test("an older Choir without getConfig or getMusic reports no sound and no track", () => {
     const bridge = new ChoirBridge(fakeWindow({}));
     expect(bridge.isAvailable()).toBe(true);
-    expect(bridge.canControlSound()).toBe(false);
+    expect(bridge.soundEnabled()).toBe(false);
+    expect(bridge.readsByItself()).toBe(false);
     expect(bridge.getMusic()).toBeNull();
-    bridge.setSoundEnabled(true);
     bridge.destroy();
   });
 
-  test("setSoundEnabled is forwarded to Choir", () => {
-    const calls: boolean[] = [];
-    const bridge = new ChoirBridge(fakeWindow({ setSoundEnabled: (on) => { calls.push(on); } }));
-    expect(bridge.canControlSound()).toBe(true);
-    bridge.setSoundEnabled(true);
-    bridge.setSoundEnabled(false);
-    expect(calls).toEqual([true, false]);
-    bridge.destroy();
+  test("readsByItself follows Choir's Auto switch", () => {
+    const reads = (config: Record<string, unknown> | null) => {
+      const bridge = new ChoirBridge(fakeWindow({ getConfig: () => config }));
+      const result = bridge.readsByItself();
+      bridge.destroy();
+      return result;
+    };
+    expect(reads({ auto: true })).toBe(true);
+    expect(reads({ auto: false })).toBe(false);
+    expect(reads({})).toBe(false);
+    expect(reads(null)).toBe(false);
   });
 
   test("onMusicChange reports the current track, each change, and null when Choir leaves", () => {
@@ -297,17 +300,24 @@ describe("ChoirBridge sound control and music", () => {
 });
 
 describe("choirPlaysSound", () => {
-  const capable = { isAvailable: () => true, canControlSound: () => true, soundEnabled: () => true };
-  const on = { ...DEFAULT_SPEECH_SETTINGS, enabled: true, choirSound: true };
+  const choir = { isAvailable: () => true, soundEnabled: () => true, readsByItself: () => false };
+  const on = { ...DEFAULT_SPEECH_SETTINGS, enabled: true };
 
-  test("Choir plays sound only with speech on, the toggle on and a capable Choir whose sound is on", () => {
-    expect(choirPlaysSound(on, capable)).toBe(true);
-    expect(choirPlaysSound({ ...on, enabled: false }, capable)).toBe(false);
-    expect(choirPlaysSound({ ...on, choirSound: false }, capable)).toBe(false);
-    expect(choirPlaysSound(on, { ...capable, isAvailable: () => false })).toBe(false);
-    expect(choirPlaysSound(on, { ...capable, canControlSound: () => false })).toBe(false);
+  test("Choir's sound wins whenever it is on and Choir reads here: through read aloud or by itself", () => {
+    expect(choirPlaysSound(on, choir)).toBe(true);
+    // Choir's Auto reads the chat with Cue's read aloud off: its music would play over Cue's.
+    expect(choirPlaysSound({ ...on, enabled: false }, { ...choir, readsByItself: () => true })).toBe(true);
+    expect(choirPlaysSound(undefined, { ...choir, readsByItself: () => true })).toBe(true);
+    // A saved config from before keeps no switch that could hold Choir's sound off.
+    expect(choirPlaysSound({ ...on, choirSound: false } as typeof on, choir)).toBe(true);
+  });
+
+  test("otherwise Cue's own pack plays: Choir missing, its sound off, or nothing reading", () => {
+    expect(choirPlaysSound(on, { ...choir, isAvailable: () => false })).toBe(false);
     // Choir's own switches are off (or no Freesound key): the pack keeps playing.
-    expect(choirPlaysSound(on, { ...capable, soundEnabled: () => false })).toBe(false);
-    expect(choirPlaysSound(undefined, capable)).toBe(false);
+    expect(choirPlaysSound(on, { ...choir, soundEnabled: () => false })).toBe(false);
+    // Neither Cue's read aloud nor Choir's Auto: Choir plays nothing here.
+    expect(choirPlaysSound({ ...on, enabled: false }, choir)).toBe(false);
+    expect(choirPlaysSound(undefined, choir)).toBe(false);
   });
 });

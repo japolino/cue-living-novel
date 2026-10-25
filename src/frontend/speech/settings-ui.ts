@@ -14,9 +14,6 @@ export type SpeechSettingsSectionOptions = {
   onOpenChoir?: (() => void) | undefined;
   isChoirAvailable?: (() => boolean) | undefined;
   onMuteNarratorChange?: ((muted: boolean) => void) | undefined;
-  /** True when the installed Choir can switch its sound on and off for Cue. */
-  canControlChoirSound?: (() => boolean) | undefined;
-  onChoirSoundChange?: ((on: boolean) => void) | undefined;
 };
 
 const SECTION_CSS = `${SETTINGS_TOKENS_CSS}
@@ -151,20 +148,12 @@ export class SpeechSettingsSection {
       "A reply's text shows before its scene plan. Off: reading starts once the plan says who speaks. On: reading starts at once, and a paragraph whose speaker the text does not name is read as narration.",
       (checked) => this.save((next) => { next.speakBeforePlan = checked; }),
     );
-    const speechCard = card("Read aloud", enable, muteNarrator, beforePlan);
+    const soundNote = document.createElement("p");
+    soundNote.className = "muted";
+    soundNote.setAttribute("data-speech-field", "choir-sound-note");
+    soundNote.textContent = "While Choir has its own sound on (its SFX, Ambience or Music switches) and reads here, Choir plays the sound effects, ambience and music, and Cue's own stay quiet.";
+    const speechCard = card("Read aloud", enable, muteNarrator, beforePlan, soundNote);
     speechCard.querySelector("header")!.append(summaryState);
-    if (this.options.canControlChoirSound?.()) {
-      speechCard.append(checkRow(
-        "choir-sound",
-        settings.choirSound,
-        "Sound from Choir",
-        "On by default. While read aloud is on, Choir plays Freesound sound effects, looping ambience and incompetech music with each paragraph, and Cue's own music and sound effects stay quiet. Off keeps Cue's own sound.",
-        (checked) => {
-          this.options.onChoirSoundChange?.(checked);
-          this.save((next) => { next.choirSound = checked; });
-        },
-      ));
-    }
 
     const openChoir = document.createElement("button");
     openChoir.type = "button";

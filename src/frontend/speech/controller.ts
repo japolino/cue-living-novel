@@ -99,7 +99,7 @@ export class SpeechController {
     if (this.disposed) return;
     const previous = this.settings;
     this.settings = next;
-    // Sound from Choir changes what Choir plays around the voice, not the voice.
+    // Only these change what is read; reading before the plan only changes when.
     if (previous.enabled !== next.enabled || previous.muteNarrator !== next.muteNarrator) {
       this.stop("settings-changed");
     }

@@ -10,7 +10,9 @@ so Cue stores no voice, provider or key.
 - Settings live in the **Cue** settings tab, **Voice** (`src/frontend/speech/settings-ui.ts`),
   persisted in the extension config as `config.speech` (`src/speech-config.ts`):
   `enabled` (Read each paragraph aloud, off by default), `muteNarrator`
-  (dialogue only) and `choirSound` (Sound from Choir, on by default). The Voice
+  (dialogue only) and `speakBeforePlan` (Read before the scene is ready, off
+  by default). The retired `choirSound` is dropped: Choir's sound replaces
+  Cue's whenever it is on (see "Sound from Choir" in the README). The Voice
   section is shown only while Choir is present in the page. A config saved
   while read aloud still had an autoplay switch, with read aloud on and
   autoplay off, comes back with read aloud off: nothing is read until it is

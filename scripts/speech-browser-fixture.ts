@@ -17,8 +17,6 @@ const fixture = {
   patches: [] as SpeechSettings[],
   statuses: [] as SpeechStatus[],
   muteCalls: [] as boolean[],
-  choirSoundCalls: [] as boolean[],
-  choirCanControlSound: false,
   /** Settles the paragraph Choir is reading, with a late "playing" first when asked. */
   finishParagraph: null as ((lateStatus?: boolean) => void) | null,
   config: normalizeSpeechSettings({}),
@@ -40,9 +38,6 @@ const choirApi: ChoirBridgeApi = {
     };
   }),
 };
-Object.defineProperty(choirApi, "setSoundEnabled", {
-  get: () => fixture.choirCanControlSound ? (on: boolean) => { fixture.choirSoundCalls.push(on); } : undefined,
-});
 (window as unknown as { __CHOIR_API__: ChoirBridgeApi }).__CHOIR_API__ = choirApi;
 const choirBridge = new ChoirBridge(window);
 
@@ -80,8 +75,6 @@ const section = new SpeechSettingsSection({
   onOpenChoir: () => {},
   isChoirAvailable: () => choirBridge.isAvailable(),
   onMuteNarratorChange: (muted) => choirBridge.setNarratorMuted(muted),
-  canControlChoirSound: () => choirBridge.canControlSound(),
-  onChoirSoundChange: (on) => choirBridge.setSoundEnabled(on),
 });
 apply(fixture.config);
 

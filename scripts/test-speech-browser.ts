@@ -8,7 +8,8 @@ import assert from "node:assert/strict";
  * default-off zero Choir calls, the Choir-only card (no TTS-profile pickers),
  * enable + save echo, manual Play/Pause/Stop, reading each new paragraph once
  * the page had a gesture, a late status after the view closes, Mute narrator,
- * Sound from Choir (on by default), the card without Choir, and the music
+ * the note that Choir's sound replaces Cue's, Read before the scene is ready,
+ * the card without Choir, and the music
  * credit. The external-request guard fails the run if anything tries to
  * leave the page.
  */
@@ -26,11 +27,10 @@ type Snapshot = {
   patches: Array<Record<string, unknown>>;
   statuses: Array<{ kind: string; message?: string }>;
   muteCalls: boolean[];
-  choirSoundCalls: boolean[];
 };
 const snap = (page: Page): Promise<Snapshot> => page.evaluate(`(() => {
-  const { paragraphs, stopCalls, patches, statuses, muteCalls, choirSoundCalls } = window.speechFixture;
-  return JSON.parse(JSON.stringify({ paragraphs, stopCalls, patches, statuses, muteCalls, choirSoundCalls }));
+  const { paragraphs, stopCalls, patches, statuses, muteCalls } = window.speechFixture;
+  return JSON.parse(JSON.stringify({ paragraphs, stopCalls, patches, statuses, muteCalls }));
 })()`) as Promise<Snapshot>;
 const fx = (page: Page, script: string) => page.evaluate(`(() => { const f = window.speechFixture; ${script} })()`);
 
@@ -107,16 +107,15 @@ try {
   assert.deepEqual(s.muteCalls, [true], "the switch mutes Choir's narrator");
   assert.equal(s.patches.at(-1)!.muteNarrator, true, "muteNarrator saved");
 
-  // 8) Sound from Choir: shown only when the installed Choir can switch its sound; on by default.
-  const choirSound = card.locator('[data-speech-field="choir-sound"]');
-  assert.equal(await choirSound.count(), 0, "no Sound from Choir switch on a Choir without sound control");
-  await fx(page, `f.choirCanControlSound = true; f.section.refresh();`);
-  assert.equal(await choirSound.isChecked(), true, "Sound from Choir is on by default");
-  await choirSound.uncheck();
+  // 8) Choir's sound wins while it is on: no switch for it, a note says so. Read before the scene is ready saves.
+  assert.equal(await card.locator('[data-speech-field="choir-sound"]').count(), 0, "no Sound from Choir switch");
+  assert.match(await card.locator('[data-speech-field="choir-sound-note"]').innerText(), /Cue's own stay quiet/, "the card says Choir's sound replaces Cue's");
+  const beforePlan = card.locator('[data-speech-field="speak-before-plan"]');
+  assert.equal(await beforePlan.isChecked(), false, "Read before the scene is ready is off by default");
+  await beforePlan.check();
   s = await snap(page);
-  assert.deepEqual(s.choirSoundCalls, [false], "the switch turns Choir's sound off");
-  assert.equal(s.patches.at(-1)!.choirSound, false, "choirSound saved");
-  assert.equal(await choirSound.isChecked(), false, "the switch stays off after the save echo");
+  assert.equal(s.patches.at(-1)!.speakBeforePlan, true, "speakBeforePlan saved");
+  assert.equal(await beforePlan.isChecked(), true, "the switch stays on after the save echo");
 
   // 9) Without Choir the card says so and offers no switches.
   const noChoir = page.locator("[data-no-choir-section] .vn-speech-settings");
@@ -133,7 +132,7 @@ try {
   assert.equal(await credit.isVisible(), false, "credit hides when the music stops");
 
   assert.deepEqual(external, [], "nothing ever left the page");
-  console.log("Read-aloud browser checks passed: Choir-only card, default-off zero Choir calls, enable save echo, manual Play/Pause/Stop, each new paragraph read after a gesture, late status after close, Mute narrator, Sound from Choir on by default, card without Choir, music credit, no external requests.");
+  console.log("Read-aloud browser checks passed: Choir-only card, default-off zero Choir calls, enable save echo, manual Play/Pause/Stop, each new paragraph read after a gesture, late status after close, Mute narrator, Choir's sound note and Read before the scene is ready, card without Choir, music credit, no external requests.");
 } finally {
   await browser?.close();
   server.stop(true);
