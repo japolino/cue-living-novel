@@ -11,6 +11,7 @@
     "test": "bun test --isolate",
     "test:panels": "bun run ./scripts/test-panels-browser.ts",
     "test:settings": "bun run ./scripts/test-settings-browser.ts",
+    "test:character-settings": "bun run ./scripts/test-character-settings-browser.ts",
     "test:reading": "bun run ./scripts/test-reading-browser.ts",
     "test:scene-flow": "bun run ./scripts/test-scene-flow-browser.ts",
     "test:speech": "bun run ./scripts/test-speech-browser.ts",

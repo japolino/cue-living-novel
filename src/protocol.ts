@@ -1,4 +1,4 @@
-import type { VisualNovelConfig } from "./config.js";
+import { CHARACTER_SCOPED_KEYS, isCharacterScopedKey, type CharacterConfigOverride, type CharacterScopedKey, type VisualNovelConfig } from "./config.js";
 import type { PanelArtifact } from "./shared/panels.js";
 import type { CueImageRequest, CueImageResult } from "./shared/cue-images.js";
 import type { NovelAiInsetLayoutId, PixelRect } from "./shared/novelai-inset.js";
@@ -27,7 +27,19 @@ export type FrontendRequest =
   | { type: "vn_get_decision_status" }
   /** Show Lumiverse's Connections drawer, where Decision models are set up. */
   | { type: "vn_open_decision_connections" }
-  | { type: "vn_set_config"; patch: Partial<VisualNovelConfig>; chatId?: string }
+  /**
+   * Save settings. Without `character`: the shared settings. With it: the
+   * character's own (only CHARACTER_SCOPED_KEYS; a patch with any other key is
+   * refused, and so is a character that is no longer the chat's). Answered
+   * with `vn_config` for `chatId`.
+   */
+  | { type: "vn_set_config"; patch: Partial<VisualNovelConfig>; chatId?: string; character?: CharacterConfigTarget }
+  /**
+   * The character's own values for `keys` (all of them when absent) are
+   * dropped, so those settings follow the shared ones again. Answered with
+   * `vn_config` for `chatId`.
+   */
+  | { type: "vn_reset_character_config"; chatId: string; characterId: string; keys?: CharacterScopedKey[] }
   | { type: "vn_submit"; chatId: string; content: string; requestId: string }
   | { type: "vn_asset_ready"; chatId: string; messageId: string; jobId: string; sourceFingerprint: string }
   | { type: "vn_cancel"; chatId: string }
@@ -184,6 +196,38 @@ export type TurnView = {
   provisional?: boolean;
 };
 
+/** Which character a save or reset is for: the open chat's character card id. */
+export type CharacterConfigTarget = { characterId: string };
+
+/** A chat's settings in two layers, for the Settings scope switch ("All characters" / "<name> only"). */
+export type CharacterConfigView = {
+  chatId: string;
+  characterId: string;
+  /** The character card's name, as Settings shows it. */
+  name: string;
+  /** The shared settings, used by every character without its own value. */
+  shared: VisualNovelConfig;
+  /** The character's own values: only CHARACTER_SCOPED_KEYS, only those that differ. */
+  overrides: CharacterConfigOverride;
+};
+
+/** A request's `character` field when it is well formed, else null. */
+export function characterConfigTarget(value: unknown): CharacterConfigTarget | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const id = (value as { characterId?: unknown }).characterId;
+  return typeof id === "string" && id.trim() && id.length <= 200 ? { characterId: id } : null;
+}
+
+/**
+ * A reset request's `keys`: undefined (every own value), or the listed
+ * per-character keys. A list that names anything else is malformed (null).
+ */
+export function characterResetKeys(value: unknown): CharacterScopedKey[] | undefined | null {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > CHARACTER_SCOPED_KEYS.length) return null;
+  return value.every((key) => typeof key === "string" && isCharacterScopedKey(key)) ? [...new Set(value as CharacterScopedKey[])] : null;
+}
+
 export type ConnectionCatalogOption = {
   id: string;
   name: string;
@@ -213,8 +257,19 @@ export type ConnectionCatalogErrors = {
 export type BackendResponse =
   | { type: "vn_external_image"; result: CueImageResult }
   | { type: "vn_panel_template"; requestId: string; chatId: string; template?: string; error?: string }
-  | { type: "vn_state"; chatId: string; config: VisualNovelConfig; turn: TurnView | null }
-  | { type: "vn_config"; config: VisualNovelConfig }
+  /**
+   * `config` is what the chat uses: the shared settings with its character's
+   * own on top. `characterScope` (null: no chat, or a chat without a
+   * character) carries both layers for Settings.
+   */
+  | { type: "vn_state"; chatId: string; config: VisualNovelConfig; turn: TurnView | null; characterScope?: CharacterConfigView | null }
+  /**
+   * After a save. With `chatId`, `config` is that chat's config and
+   * `characterScope` its layers, as on `vn_state`. Without either,
+   * `config` is the shared settings alone and the frontend keeps the
+   * character's own values it knows on top.
+   */
+  | { type: "vn_config"; config: VisualNovelConfig; chatId?: string; characterScope?: CharacterConfigView | null }
   | { type: "vn_decision_status"; status: DecisionStatus }
   | {
     type: "vn_connection_catalog";

@@ -318,6 +318,8 @@ SimTracker is optional. Panels shows available cards from the current reply firs
 
 Settings are split into sections — **Reading**, **Look**, **Pictures**, **Sound**, **Voice**, **Connections** and **Advanced** — shown as a side rail on wide screens and a tab strip on narrow ones; the search box at the top jumps to any setting, and the last open section is remembered. Every setting saves as you change it; text fields save when you leave them (or press Ctrl+S). After an **Advanced** change (prompts, story-reader context, model overrides, JSON parameters, text filtering, custom CSS) **Undo** is offered for a few seconds. JSON and URL fields save only when they are valid: an invalid one keeps its text, is marked, and the section shows how many fields are not saved.
 
+**Settings for one character.** While a chat with a character card is open, the top of Settings shows **Settings for: All characters / <name> only**. Choose **<name> only**, and what you change is saved for that card alone: every chat with it uses it, every other card keeps the shared settings. That covers the look and reading settings: theme and layout, pictures or sprites and key moments, picture fit, text size and speed, motion and text effects, custom CSS and display regex rules, the reply box, opening card, place label and waiting screen, character motion, look and size, and stage feel. Settings every character shares (connections, where pictures come from and their models and prompts, sound, voices, System One, storage and logs) are dimmed there with a note. A setting the character has its own value for is marked, with **Use shared** beside it; **Use shared settings for <name>** (click twice to confirm) drops them all. A group chat or the home screen has only the shared settings, and Settings goes back to **All characters** whenever another chat opens. Saves from before this keep working exactly as they were.
+
 For a regex status template, expand **Add status template rule**, enter the pattern without slash delimiters, flags, and the multiline HTML replacement. Captures through `$36` and named captures are supported and escaped. Host macros in replacements are resolved through Lumiverse without committing variable changes. Use **Refresh live sources** after changing language variables. Rules operate on the first 200,000 source characters and reveal at the end of the turn. Multiple matches offer snapshots only, to avoid following the wrong character.
 
 Rules do not change filtering. **Ignored tags** hides whole blocks from dialogue and image planning; **Display regex rules** affects dialogue only. Recognized ignored status tags remain available as plain-text cards. Complete HTML blocks are extracted separately before narrative planning. Previously cached plans may not contain panel sources.
@@ -341,6 +343,7 @@ Browser regression checks:
 ```powershell
 bunx playwright install chromium
 bun run test:panels
+bun run test:character-settings
 ```
 
 ```powershell

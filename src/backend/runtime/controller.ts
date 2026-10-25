@@ -11,8 +11,9 @@ import {
   ChoiceSchema,
   type AssetJob
 } from "../../shared/contracts.js";
-import type { FrontendRequest, AssetView, TurnView } from "../../protocol.js";
-import type { VisualNovelConfig } from "../../config.js";
+import { characterConfigTarget, characterResetKeys, type FrontendRequest, type AssetView, type TurnView } from "../../protocol.js";
+import { characterOverrideWith, characterOverrideWithout, unscopedKeys, type VisualNovelConfig } from "../../config.js";
+import { chatCharacter, loadChatConfig, loadConfigScope } from "./config-scope.js";
 import { SpriteCastMemberSchema, SpriteStagingSchema, type SpriteCastMember, type SpriteParagraphStage, type SpriteStaging } from "../../shared/sprites.js";
 import { characterAppearanceKey, type CharacterRegistry } from "../../shared/identity.js";
 import { buildSpriteStaging, deterministicSpriteStaging, isPersonaName, sanitizeStoredStaging } from "./sprite-staging.js";
@@ -65,6 +66,8 @@ import {
   saveTurnRecord,
   turnPath,
   updateConfig,
+  changeConfig,
+  changeCharacterConfig,
   type StoredChatState,
   type StoredTurnRecord,
   type TurnBaseline
@@ -108,9 +111,11 @@ export function spriteService(spindle: SpindleAPI): SpriteService {
     service = new SpriteService(spindle, {
       isViewOpen: (userId) => views.openChat(userId) !== null,
       openChatId: (userId) => views.openChat(userId),
+      // The open chat's config: its character may show the story another way.
       loadConfig: async (userId) => {
-        const config = await loadConfig(spindle, userId);
-        rememberDebugFlag(userId, config);
+        const chatId = views.openChat(userId);
+        const config = await loadChatConfig(spindle, userId, chatId);
+        rememberDebugFlag(userId, config, chatId);
         return config;
       },
       log: (line, userId) => dbg(spindle, userId, line),
@@ -284,7 +289,7 @@ function openView(spindle: SpindleAPI, userId: string | undefined, chatId: strin
     abortChatWork(spindle, userId, displaced, "The visual novel view moved to another chat.");
   }
   // Sprite mode: queued library work resumes while a view is open.
-  if (!wasOpen && spriteModeCached(userId)) {
+  if (!wasOpen && spriteModeCached(userId, chatId)) {
     void spriteService(spindle).onViewOpened(userId).catch((error) => {
       spindle.log.warn(`Sprite queue resume failed: ${errorText(error)}`);
     });
@@ -312,8 +317,8 @@ function closeView(spindle: SpindleAPI, userId: string | undefined, chatId: stri
  * (vn_get_state, vn_retry_turn, choices) never pass through here.
  */
 async function allowAutomaticWork(spindle: SpindleAPI, userId: string | undefined, chatId: string, trigger: string): Promise<boolean> {
-  const config = await loadConfig(spindle, userId);
-  rememberDebugFlag(userId, config);
+  const config = await loadChatConfig(spindle, userId, chatId);
+  rememberDebugFlag(userId, config, chatId);
   if (!config.enabled) {
     dbg(spindle, userId, `skipped ${trigger}: extension disabled (enabled=false) chat=${chatId}`);
     return false;
@@ -424,19 +429,34 @@ export function sanitizeAudioImportPath(relativePath: string): string | null {
   return parts.join("/");
 }
 
-function rememberDebugFlag(userId: string | undefined, config: { debugLogging: boolean; presentationMode?: VisualNovelConfig["presentationMode"] }): void {
+function rememberDebugFlag(
+  userId: string | undefined,
+  config: { debugLogging: boolean; presentationMode?: VisualNovelConfig["presentationMode"] },
+  chatId?: string | null
+): void {
   debugFlags.set(userId ?? "owner", config.debugLogging);
-  if (config.presentationMode) presentationModes.set(userId ?? "owner", config.presentationMode);
+  if (!config.presentationMode) return;
+  presentationModes.set(userId ?? "owner", config.presentationMode);
+  if (!chatId) return;
+  const key = runtimeKey(userId, chatId);
+  chatPresentationModes.delete(key);
+  chatPresentationModes.set(key, config.presentationMode);
+  if (chatPresentationModes.size > CHAT_MODE_CACHE_LIMIT) chatPresentationModes.delete(chatPresentationModes.keys().next().value!);
 }
 
 /**
- * Last presentation mode seen per user (refreshed on every config load, like
- * the debug flag). Lets synchronous decisions (stored-turn reuse, view
- * building) follow the mode without an extra storage read in scene mode.
+ * Last presentation mode seen per user, and per chat (a character can have
+ * its own), refreshed on every config load like the debug flag. Lets
+ * synchronous decisions (stored-turn reuse, view building) follow the mode
+ * without an extra storage read in scene mode. A chat not loaded yet falls
+ * back to the user's last mode.
  */
 const presentationModes = new Map<string, VisualNovelConfig["presentationMode"]>();
-function spriteModeCached(userId: string | undefined): boolean {
-  return presentationModes.get(userId ?? "owner") === "sprites";
+const chatPresentationModes = new Map<string, VisualNovelConfig["presentationMode"]>();
+const CHAT_MODE_CACHE_LIMIT = 500;
+function spriteModeCached(userId: string | undefined, chatId?: string | null): boolean {
+  const mode = (chatId ? chatPresentationModes.get(runtimeKey(userId, chatId)) : undefined) ?? presentationModes.get(userId ?? "owner");
+  return mode === "sprites";
 }
 
 function dbg(spindle: SpindleAPI, userId: string | undefined, message: string): void {
@@ -583,12 +603,13 @@ async function buildTurnView(
   userId: string | undefined,
   config?: VisualNovelConfig
 ): Promise<TurnView> {
-  const background = await cardBackgroundUrl(spindle, record.plan.key.chatId, userId);
+  const chatId = record.plan.key.chatId;
+  const background = await cardBackgroundUrl(spindle, chatId, userId);
   const plain = await turnViewWithAudio(spindle, record);
   const view = background ? { ...plain, cardBackgroundUrl: background } : plain;
-  if (config ? config.presentationMode !== "sprites" : !spriteModeCached(userId)) return view;
+  if (config ? config.presentationMode !== "sprites" : !spriteModeCached(userId, chatId)) return view;
   try {
-    const effective = config ?? await loadConfig(spindle, userId);
+    const effective = config ?? await loadChatConfig(spindle, userId, chatId);
     if (effective.presentationMode !== "sprites") return view;
     const service = spriteService(spindle);
     const staging = await stagingForRecord(spindle, record, effective, userId);
@@ -839,10 +860,11 @@ export async function sendState(
   // No active chat (home screen): whatever view was open is gone. Close it
   // before the first await so a reply landing meanwhile is already gated.
   if (!chatId) closeOpenView(spindle, userId, "no_active_chat");
-  const config = await loadConfig(spindle, userId);
-  rememberDebugFlag(userId, config);
+  // The chat's config (its character's own settings on top), plus both layers for Settings.
+  const { config, characterScope } = await loadConfigScope(spindle, userId, chatId);
+  rememberDebugFlag(userId, config, chatId);
   if (!chatId) {
-    spindle.sendToFrontend({ type: "vn_state", chatId: "", config, turn: null }, userId);
+    spindle.sendToFrontend({ type: "vn_state", chatId: "", config, turn: null, characterScope: null }, userId);
     return;
   }
   // Only an explicit flag changes the view state. A state request that says
@@ -918,7 +940,8 @@ export async function sendState(
     type: "vn_state",
     chatId,
     config,
-    turn: shown && !stale ? await buildTurnView(spindle, shown, userId, config) : null
+    turn: shown && !stale ? await buildTurnView(spindle, shown, userId, config) : null,
+    characterScope
   }, userId);
   if (resumed && chatState.activeTurnPath) launchResumedPictures(spindle, resumed, chatState.activeTurnPath, userId);
   if (waitingResume && record) {
@@ -1011,8 +1034,8 @@ async function startAssets(
   userId?: string,
   options: { bypassJobIds?: Iterable<string> } = {}
 ): Promise<void> {
-  const config = await loadConfig(spindle, userId);
-  rememberDebugFlag(userId, config);
+  const config = await loadChatConfig(spindle, userId, record.plan.key.chatId);
+  rememberDebugFlag(userId, config, record.plan.key.chatId);
   if (!config.generateImages || record.jobs.length === 0) return;
   // The view may have closed between planning and this batch start; a closed
   // view means nobody sees (or pays for) these images.
@@ -1179,7 +1202,7 @@ async function resumeAfterSettle(
 ): Promise<void> {
   const key = runtimeKey(userId, chatId);
   if (assetSettles.has(key) || !views.isOpen(userId, chatId)) return;
-  const config = await loadConfig(spindle, userId);
+  const config = await loadChatConfig(spindle, userId, chatId);
   if (!config.enabled) return;
   const chatState = await loadChatState(spindle, chatId, userId);
   const path = chatState.activeTurnPath;
@@ -1209,7 +1232,7 @@ async function requeueKeyIllustrations(
   options: { bypassCache: boolean }
 ): Promise<{ record: StoredTurnRecord; bypassJobIds: Set<string> } | null> {
   if (!isSpritePlannedRecord(record) || record.jobs.length === 0) return null;
-  const config = await loadConfig(spindle, userId);
+  const config = await loadChatConfig(spindle, userId, record.plan.key.chatId);
   if (keyIllustrationCap(config) === 0 || config.presentationMode !== "sprites") return null;
   const running = assetControllers.get(runtimeKey(userId, record.plan.key.chatId));
   if (running && !running.signal.aborted) return null;
@@ -1314,7 +1337,7 @@ async function processAssistantMessage(
   if (!options?.retry && !options?.forceRegenerate && existing && relation === "current") {
     // Sprite mode never runs scene jobs, so their state does not matter; a
     // turn planned for sprites has no scene jobs and is replanned in scene mode.
-    const spriteMode = spriteModeCached(userId);
+    const spriteMode = spriteModeCached(userId, chatId);
     const hasIncompleteJobs = spriteMode
       ? false
       : existing.jobs.some(
@@ -1341,10 +1364,10 @@ async function processAssistantMessage(
   const scheduled = planningQueue.enqueue(userId, chatId, message.id, async (operation) => {
     const planningStartedAt = Date.now();
     const [config, messages] = await Promise.all([
-      loadConfig(spindle, userId),
+      loadChatConfig(spindle, userId, chatId),
       spindle.chat.getMessages(chatId) as Promise<NormalizedChatMessage[]>
     ]);
-    rememberDebugFlag(userId, config);
+    rememberDebugFlag(userId, config, chatId);
     // Greeting replacement: the same stored message re-resolved to a different
     // scene while it is the chat's only assistant turn. The durable identity
     // state (frozen protagonist, registry, appearance roster, scene lineage)
@@ -1742,8 +1765,8 @@ async function retryTurn(
     }
   }
 
-  const config = await loadConfig(spindle, userId);
-  rememberDebugFlag(userId, config);
+  const config = await loadChatConfig(spindle, userId, chatId);
+  rememberDebugFlag(userId, config, chatId);
   const characterAppearance = await loadCharacterAppearance(spindle, userId, chatId);
 
   // Sprite mode: a usable stored turn keeps its plan; Retry re-queues the
@@ -1849,6 +1872,60 @@ async function retryTurn(
   }
 }
 
+/**
+ * The open chat's character, when it is still `characterId`. A save or reset
+ * meant for another character (the chat changed meanwhile) is refused.
+ */
+async function openChatCharacter(
+  spindle: SpindleAPI,
+  chatId: string,
+  characterId: string,
+  userId: string | undefined
+): Promise<{ id: string; name: string }> {
+  const character = chatId ? await chatCharacter(spindle, chatId, userId) : null;
+  if (!character || character.id !== characterId) {
+    throw new Error("The open chat's character changed, so this was not saved. Open the chat again and retry.");
+  }
+  return character;
+}
+
+/**
+ * Answer a settings change with `vn_config` for the chat: the config it uses
+ * and both layers for Settings. Without a chat, the shared config alone.
+ * `restageSprites`: a change into sprite mode restages the open chat's
+ * current turn at once.
+ */
+async function sendChatConfig(
+  spindle: SpindleAPI,
+  userId: string | undefined,
+  chatId: string,
+  options: { restageSprites: boolean }
+): Promise<void> {
+  const { config, characterScope } = await loadConfigScope(spindle, userId, chatId);
+  rememberDebugFlag(userId, config, chatId);
+  spindle.sendToFrontend(chatId ? { type: "vn_config", config, chatId, characterScope } : { type: "vn_config", config }, userId);
+  if (!options.restageSprites || config.presentationMode !== "sprites" || !chatId || !views.isOpen(userId, chatId)) return;
+  const chatState = await loadChatState(spindle, chatId, userId);
+  const record = await loadTurnRecord(spindle, chatState.activeTurnPath, userId).catch(() => null);
+  if (record && record.plan.key.chatId === chatId) {
+    spindle.sendToFrontend({ type: "vn_turn", turn: await buildTurnView(spindle, record, userId, config) }, userId);
+  }
+}
+
+/**
+ * A character save or reset that fails still answers with the chat's real
+ * layers first (best effort), so Settings and the stage drop what they showed
+ * ahead of the save; the error follows as `vn_error`.
+ */
+async function resyncOnFailure(spindle: SpindleAPI, userId: string | undefined, chatId: string, work: () => Promise<void>): Promise<void> {
+  try {
+    await work();
+  } catch (error) {
+    await sendChatConfig(spindle, userId, chatId, { restageSprites: false }).catch(() => {});
+    throw error;
+  }
+}
+
 async function handleFrontendMessage(spindle: SpindleAPI, request: FrontendRequest, userId: string): Promise<void> {
   if (request.type === "vn_external_image") { await externalImages(spindle).request(request.request, userId); return; }
   if (request.type === "vn_external_image_cancel") { externalImages(spindle).cancel(request.request, userId); return; }
@@ -1898,21 +1975,45 @@ async function handleFrontendMessage(spindle: SpindleAPI, request: FrontendReque
       return;
     }
     case "vn_set_config": {
-      const config = await updateConfig(spindle, request.patch, userId);
-      rememberDebugFlag(userId, config);
-      dbg(spindle, userId, `config saved (${Object.keys(request.patch).length} field(s) in patch)`);
-      if (request.patch.audioDirectory !== undefined) {
-        void scanAudioCatalog(spindle, config.audioDirectory);
-      }
-      spindle.sendToFrontend({ type: "vn_config", config }, userId);
-      // Switching to sprite mode restages the open chat's current turn at once.
-      if (request.patch.presentationMode === "sprites" && typeof request.chatId === "string" && request.chatId && views.isOpen(userId, request.chatId)) {
-        const chatState = await loadChatState(spindle, request.chatId, userId);
-        const record = await loadTurnRecord(spindle, chatState.activeTurnPath, userId).catch(() => null);
-        if (record && record.plan.key.chatId === request.chatId) {
-          spindle.sendToFrontend({ type: "vn_turn", turn: await buildTurnView(spindle, record, userId, config) }, userId);
+      const chatId = typeof request.chatId === "string" ? request.chatId : "";
+      const patch = request.patch && typeof request.patch === "object" ? request.patch : {};
+      if (request.character !== undefined) {
+        // Settings in "<name> only" scope: the character's own values.
+        await resyncOnFailure(spindle, userId, chatId, async () => {
+          const target = characterConfigTarget(request.character);
+          if (!target) throw new Error("This save names no character, so nothing was saved.");
+          const shared = unscopedKeys(patch);
+          if (shared.length) throw new Error(`Shared by all characters, so not saved for one character: ${shared.join(", ")}.`);
+          const character = await openChatCharacter(spindle, chatId, target.characterId, userId);
+          const saved = await changeCharacterConfig(spindle, character, (sharedConfig, current) => characterOverrideWith(sharedConfig, current, patch), userId);
+          dbg(spindle, userId, `config saved for character ${character.id} (${Object.keys(patch).length} field(s) in patch, ${Object.keys(saved.overrides).length} own value(s))`);
+        });
+      } else {
+        const config = await updateConfig(spindle, patch, userId);
+        dbg(spindle, userId, `config saved (${Object.keys(patch).length} field(s) in patch)`);
+        if (patch.audioDirectory !== undefined) {
+          void scanAudioCatalog(spindle, config.audioDirectory);
         }
       }
+      // Switching to sprite mode restages the open chat's current turn at once.
+      await sendChatConfig(spindle, userId, chatId, { restageSprites: patch.presentationMode === "sprites" });
+      return;
+    }
+    case "vn_reset_character_config": {
+      // "Use shared" on one setting, or "Use shared settings for <name>" (no keys).
+      const chatId = typeof request.chatId === "string" ? request.chatId : "";
+      let before: VisualNovelConfig | null = null;
+      await resyncOnFailure(spindle, userId, chatId, async () => {
+        const target = characterConfigTarget({ characterId: request.characterId });
+        const keys = characterResetKeys(request.keys);
+        if (!target || keys === null) throw new Error("This reset names no character or an unknown setting, so nothing changed.");
+        const character = await openChatCharacter(spindle, chatId, target.characterId, userId);
+        before = await loadChatConfig(spindle, userId, chatId);
+        const reset = await changeCharacterConfig(spindle, character, (_shared, current) => characterOverrideWithout(current, keys), userId);
+        dbg(spindle, userId, `character ${character.id} back on shared settings (${keys ? keys.join(", ") : "all"}), ${Object.keys(reset.overrides).length} own value(s) left`);
+      });
+      // Back on the shared settings may mean back in sprite mode: restage at once.
+      await sendChatConfig(spindle, userId, chatId, { restageSprites: (before as VisualNovelConfig | null)?.presentationMode !== "sprites" });
       return;
     }
     case "vn_scan_audio": {
@@ -2031,8 +2132,9 @@ async function handleFrontendMessage(spindle: SpindleAPI, request: FrontendReque
       return;
     }
     case "vn_sprite_action": {
-      const config = await loadConfig(spindle, userId);
-      rememberDebugFlag(userId, config);
+      const actionChatId = typeof request.chatId === "string" && request.chatId ? request.chatId : views.openChat(userId);
+      const config = await loadChatConfig(spindle, userId, actionChatId);
+      rememberDebugFlag(userId, config, actionChatId);
       dbg(spindle, userId, `sprite action ${request.action}${request.setKey ? ` set=${request.setKey}` : ""}${request.expression ? ` expression=${request.expression}` : ""}${request.plateKey ? ` plate=${request.plateKey}` : ""}`);
       await spriteService(spindle).action(userId, request, {
         config,

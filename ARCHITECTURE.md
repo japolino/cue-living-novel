@@ -386,6 +386,7 @@ Lumiverse chat messages are canonical. Paragraphs, choices, scenes, cues, and as
 
 ```text
 config.json
+config-characters.json
 character-appearance.json
 character-appearance-migrated.json
 chats/<chat-id>/state.json
@@ -397,6 +398,14 @@ turns/<chat-id>/<assistant-message-id>/<swipe-id>.json
 ```
 
 Per-path writes are serialized because `userStorage` has no transaction or compare-and-swap operation. Chat state points to the active turn and carries the latest accepted scene and terminal continuity. The visual-state record holds the frozen protagonist identity and the latest environment descriptor; the portrait record holds each character's canonical reference image ID and data; the appearance map remembers canonical tags per character name across chats.
+
+### Settings saved per character
+
+`config.json` holds the shared settings. `config-characters.json` holds the settings a character card has of its own: `{ schemaVersion: 1, characters: { "<card id>": { name, overrides, updatedAt } } }`, where `overrides` is a partial config with only keys from `CHARACTER_SCOPED_KEYS` (src/config.ts: look, reading flow, text effects and motion, sprite look and motion, stage feel) and only values that differed from the shared ones when saved. Connections, models, image generation and its prompts, storage, volumes, voices, logging and secrets are never per character. The config a chat uses is `effectiveConfig(shared, overrides)` = `normalizeConfig({ ...shared, ...overrides })`; with no own values it is the shared config object itself, so saves from before this feature load exactly as before (no file: no chat lookup at all).
+
+`src/backend/runtime/config-scope.ts` resolves a chat's card (`chats.get`, cached per chat) and is the only way chat-scoped work reads its config (`loadChatConfig`): planning, pictures, the sprite service (the open chat's config), external date images and the views sent to the frontend. Machine-wide reads (System One key, audio import) keep `loadConfig`. Both files are written in the same per-user queue (`changeConfig` / `changeCharacterConfig`), so a character save and a shared save never overwrite each other; a character file that cannot be read loads as no own settings but is never overwritten.
+
+`vn_state` and `vn_config` carry the chat's config plus `characterScope` (`{ chatId, characterId, name, shared, overrides }`, null without a character). A save in Settings' "<name> only" scope is `vn_set_config` with `character: { characterId }`; the backend refuses shared keys and a character that is no longer the chat's, answering with the real layers before the error. `vn_reset_character_config` drops one, some or all own values. The frontend keeps the two layers (`src/frontend/settings/character-scope.ts`), applies saves at once, and falls back to the shared layer on a chat switch until the new chat's state arrives.
 
 ## Image pipeline
 

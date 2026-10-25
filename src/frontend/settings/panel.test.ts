@@ -13,7 +13,8 @@ import {
   normalizeWaitingRecap,
   openingCardMinFrom,
 } from "./reading-flow";
-import { WAITING_BACKDROPS, WAITING_RECAPS } from "../../config.js";
+import { CHARACTER_SCOPED_KEYS, WAITING_BACKDROPS, WAITING_RECAPS } from "../../config.js";
+import { settingKeyForControl } from "./character-scope";
 
 describe("theme preset settings options", () => {
   test("the selector exposes exactly the canonical presets", () => {
@@ -280,5 +281,60 @@ describe("settings panel markup", () => {
   test("there are no network assets in the panel styles", () => {
     expect(source).not.toMatch(/url\(\s*["']?https?:/i);
     expect(source).not.toMatch(/@import/i);
+  });
+});
+
+describe("settings panel: settings saved per character", () => {
+  const source = readFileSync(new URL("./panel.ts", import.meta.url), "utf8");
+  const names = [...source.matchAll(/name="([A-Za-z]+)"/g)].map((match) => match[1]!);
+  const listed = [...source.matchAll(/(?:optionList|segments)\("([A-Za-z]+)"/g)].map((match) => match[1]!);
+  const controls = new Set([...names, ...listed, ...(source.includes("${group(\"Theme\", themeTiles()") ? ["themePreset"] : [])]);
+  const scopeBar = source.slice(source.indexOf("<section data-scope"), source.indexOf("</section>", source.indexOf("<section data-scope")));
+
+  test("the scope switch sits at the top, outside the form, with plain choices", () => {
+    expect(source.indexOf("<div data-topbar>")).toBeLessThan(source.indexOf("<section data-scope"));
+    expect(source.indexOf("<section data-scope")).toBeLessThan(source.indexOf("<section data-setup"));
+    expect(source.indexOf("<section data-scope")).toBeLessThan(source.indexOf("<form"));
+    expect(scopeBar).toContain(">All characters</label>");
+    expect(scopeBar).toContain("<span data-scope-name></span> only");
+    expect(names.filter((name) => name === "settingsScope")).toHaveLength(2);
+    expect(scopeBar).toContain("data-scope-clear");
+    // Hidden until the host names the open chat's character.
+    expect(source).toContain("bar.hidden = !view;");
+  });
+
+  test("every per-character setting has a control in the panel, so its marker has a place", () => {
+    for (const key of CHARACTER_SCOPED_KEYS) {
+      expect([...controls].some((name) => settingKeyForControl(name) === key)).toBe(true);
+    }
+  });
+
+  test("saves in \"<name> only\" carry the character; shared settings there are refused, not saved", () => {
+    expect(source).toContain("this.options.onSave(patch, { characterId: character.characterId });");
+    expect(source).toContain("if (character && unscopedKeys(patch).length > 0)");
+    expect(source).toContain("That setting is shared by all characters. Choose All characters at the top to change it.");
+  });
+
+  test("shared settings are locked by the one key list, with a note; Reset defaults stays shared", () => {
+    expect(source).toContain("controlIsPerCharacter(control.name)");
+    expect(source).toContain('child.setAttribute("inert", "");');
+    expect(source).toContain("Shared by all characters. Choose All characters at the top to change these.");
+    expect(source).toContain('{ id: "maintenance", sharedOnly: true,');
+    expect(source).not.toMatch(/const [A-Z_]*CHARACTER[A-Z_]* = \[/);
+  });
+
+  test("own values get a marker and a way back; the whole character has one too, confirmed by a second click", () => {
+    expect(source).toContain("Only for ${view.name}");
+    expect(source).toContain("${view.name} has its own value");
+    expect(source).toContain('button.textContent = "Use shared";');
+    expect(source).toContain("button.dataset.useShared = key;");
+    expect(source).toContain("clear.textContent = `Use shared settings for ${view.name}`;");
+    expect(source).toContain("Confirm: use shared settings for ${view.name}?");
+    expect(source).toContain("this.options.onResetCharacter(view.characterId, keys);");
+  });
+
+  test("another character starts on All characters; the setup guide waits in \"<name> only\"", () => {
+    expect(source).toContain('if (!scope || scope.characterId !== this.scopeView?.characterId) this.editing = "shared";');
+    expect(source).toContain("card.hidden = characterScope || this.sessionSetupHidden || this.setupDone();");
   });
 });

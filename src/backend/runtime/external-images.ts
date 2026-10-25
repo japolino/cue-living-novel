@@ -8,8 +8,9 @@ import { planTurn } from "./planner.js";
 import { generateAssets, prepareAssetJobs } from "./images.js";
 import { resolveNativeCardJobs } from "./native-assets.js";
 import type { SceneState } from "../../shared/contracts.js";
-import { loadConfig, loadChatState, loadCharacterAppearance, loadCharacterRegistry, loadSingleCharacterState,
+import { loadChatState, loadCharacterAppearance, loadCharacterRegistry, loadSingleCharacterState,
   mergePlannerCharacters, saveCharacterRegistry, mergeCharacterAppearanceFromState } from "./storage.js";
+import { loadChatConfig } from "./config-scope.js";
 
 const pipeline = { plan: planTurn, prepare: prepareAssetJobs, generate: generateAssets };
 export function createExternalImages(spindle: SpindleAPI, deps = pipeline, timeoutMs = 300_000) {
@@ -61,7 +62,8 @@ export function createExternalImages(spindle: SpindleAPI, deps = pipeline, timeo
     try {
       // The host scopes this read to the initiating user; no private Warp settings are read.
       if (!await spindle.chats.get(r.chatId, userId)) throw new Error("The date's chat is no longer available.");
-      const config = await loadConfig(spindle, userId);
+      // The date's chat config: its character may have settings of its own.
+      const config = await loadChatConfig(spindle, userId, r.chatId);
       if (!current()) return;
       if (!config.enabled || (!config.generateImages && !config.useNativeCardImages)) throw new Error("Enable Cue and image generation in Cue's settings to illustrate dates.");
       if (!config.useNativeCardImages && config.maxImagesPerTurn === 0) throw new Error("Cue's image budget is zero. Increase it in Cue's settings to illustrate dates.");
@@ -107,7 +109,7 @@ export function createExternalImages(spindle: SpindleAPI, deps = pipeline, timeo
       scenes.set(scope, plan.scenes[0]!);
       if (scenes.size > 128) scenes.delete(scenes.keys().next().value!);
       const ready = async (imageUrl: string) => {
-        const display = await loadConfig(spindle, userId).catch(() => config);
+        const display = await loadChatConfig(spindle, userId, r.chatId).catch(() => config);
         if (current()) finish({ ...identity(r), status: "ready", imageUrl, fit: display.sceneImageFit });
       };
       if (config.useNativeCardImages) {

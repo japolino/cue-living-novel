@@ -11,9 +11,12 @@ import {
   normalizeOutlineColor,
   normalizeSpriteTransitions,
   spriteSizeMatchSettings,
+  unscopedKeys,
+  type CharacterScopedKey,
   type VisualNovelConfig,
   type VisualNovelPromptPreset,
 } from "../../config.js";
+import { controlIsPerCharacter, scopeHelp, settingKeyForControl, type CharacterScopeView } from "./character-scope.js";
 import {
   AUTO_PLAY_STEPS,
   BUDGET_PRESETS,
@@ -138,10 +141,17 @@ export type { SpriteLibraryAction } from "./sprite-library.js";
 
 export type SaveStatus = { kind: "saved" } | { kind: "error"; error: string };
 
+export type { CharacterScopeView } from "./character-scope.js";
+
 export type SettingsPanelOptions = {
   mount: HTMLElement;
-  /** Receives partial patches. Every control calls this when it changes; Advanced text fields when committed and valid. */
-  onSave: (patch: Partial<VisualNovelConfig>) => void;
+  /**
+   * Receives partial patches. Every control calls this when it changes; Advanced text fields when committed and valid.
+   * `character` is set while Settings edits one character's own values ("<name> only").
+   */
+  onSave: (patch: Partial<VisualNovelConfig>, character?: { characterId: string }) => void;
+  /** "Use shared" on one setting (`keys`), or "Use shared settings for <name>" (no keys). */
+  onResetCharacter?: (characterId: string, keys?: CharacterScopedKey[]) => void;
   onOpenPreview: () => void;
   /** Open Cue and show the waiting screen with the reply on the stage. */
   onPreviewWaiting?: () => void;
@@ -398,6 +408,23 @@ input, select, textarea, button { scroll-margin: 4.5rem 0 8.5rem; }
 [data-scene-only][data-inactive] > header h3 { color: var(--set-muted); }
 [data-group-id="sprite-motion"][data-inactive] > :not(header):not([data-motion-note]) { opacity: .5; }
 [data-readiness] progress { width: 100%; height: .45rem; margin-top: .35rem; accent-color: var(--set-accent); }
+
+/* Settings saved per character: the scope switch, own values, shared settings */
+[data-scope] { display: grid; gap: .45rem; padding: .7rem .9rem .8rem; border: 1px solid color-mix(in srgb, var(--set-accent) 45%, var(--set-border)); border-radius: var(--set-radius); background: color-mix(in srgb, var(--set-accent) 7%, var(--set-surface)); }
+[data-scope-head] { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem .8rem; }
+[data-scope-head] > b { font-weight: 650; }
+[data-scope-name] { overflow-wrap: anywhere; }
+[data-scope-clear][data-confirming] { border-color: var(--set-danger); color: var(--set-danger); background: transparent; }
+:is([data-field], label[data-check], fieldset)[data-own]:not([data-dirty]) { position: relative; }
+:is([data-field], label[data-check], fieldset)[data-own]:not([data-dirty])::before { content: ""; position: absolute; left: -.6rem; top: .2rem; bottom: .2rem; width: 3px; border-radius: 3px; background: var(--set-accent); }
+[data-own-marker] { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .6rem; font-size: .8rem; font-weight: 600; color: var(--set-accent); }
+[data-own-marker] > span { overflow-wrap: anywhere; }
+[data-own-marker] button { min-height: 2rem; padding: .1rem .75rem; font-size: .78rem; }
+[data-shared-note] { display: flex; gap: .45rem; align-items: baseline; padding: .4rem .65rem; border-radius: .55rem; background: var(--set-hover); color: var(--set-muted); font-size: .84rem; }
+[data-shared-note]::before { content: "i"; flex: none; display: grid; place-items: center; width: 1.05rem; height: 1.05rem; border: 1.5px solid currentColor; border-radius: 50%; font: 700 .68rem/1 Georgia, serif; }
+[data-shared-lock] { opacity: .5; }
+[data-shared-field]::after { content: "Shared by all characters"; grid-column: 1 / -1; display: block; font-size: .78rem; font-weight: 500; color: var(--set-muted); }
+@media (pointer: coarse) { [data-own-marker] button { min-height: 2.75rem; } }
 ${SPRITE_LIBRARY_CSS}
 `;
 
@@ -454,9 +481,13 @@ function more(html: string): string {
 /** Shown on scene-only controls while character sprites are on. */
 const SCENE_NOTE = `<p data-scene-note hidden>Used only with scene pictures. Your choice is kept for when you switch back.</p>`;
 
-function group(title: string, body: string, options: { id?: string; help?: string; find?: string; sceneOnly?: boolean } = {}): string {
+/**
+ * `sharedOnly`: a group without controls of its own whose buttons change the
+ * shared settings (a group of controls is shared when none of them is per character).
+ */
+function group(title: string, body: string, options: { id?: string; help?: string; find?: string; sceneOnly?: boolean; sharedOnly?: boolean } = {}): string {
   const help = options.help ? `<small>${options.help}</small>` : "";
-  return `<section data-group${options.id ? ` data-group-id="${options.id}"` : ""}${options.sceneOnly ? " data-scene-only" : ""} ${options.find ?? find(title)}><header data-group-head><h3>${esc(title)}</h3>${help}</header>${options.sceneOnly ? SCENE_NOTE : ""}${body}</section>`;
+  return `<section data-group${options.id ? ` data-group-id="${options.id}"` : ""}${options.sceneOnly ? " data-scene-only" : ""}${options.sharedOnly ? " data-shared-only" : ""} ${options.find ?? find(title)}><header data-group-head><h3>${esc(title)}</h3>${help}</header>${options.sceneOnly ? SCENE_NOTE : ""}${body}</section>`;
 }
 
 function optionList(name: string, options: ReadonlyArray<{ value: string; label: string; help: string }>): string {
@@ -520,6 +551,13 @@ export class VisualNovelSettingsPanel {
     planner: { status: "idle", options: [] },
     image: { status: "idle", options: [] },
   };
+  /** The open chat's character and both layers (null: only the shared settings exist here). */
+  private scopeView: CharacterScopeView | null = null;
+  /** Which layer the controls edit: every character's, or the open chat's character's own. */
+  private editing: "shared" | "character" = "shared";
+  /** The config the open chat uses, as the host last gave it. */
+  private hostConfig: VisualNovelConfig = DEFAULT_CONFIG;
+  private scopeClearTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: SettingsPanelOptions) {
     this.options = options;
@@ -543,6 +581,7 @@ export class VisualNovelSettingsPanel {
       ...(options.onRequestSpriteLibrary ? { onRequest: () => options.onRequestSpriteLibrary?.() } : {}),
     });
     this.wire();
+    this.wireScope();
     this.wireNavigation();
     this.wireSearch();
     this.renderSetupVisibility();
@@ -570,6 +609,18 @@ export class VisualNovelSettingsPanel {
         <span data-status role="status" aria-live="polite"></span>
         <button type="button" data-open-preview>Open Cue</button>
       </div>
+
+      <section data-scope aria-labelledby="scope-title" hidden>
+        <div data-scope-head>
+          <b id="scope-title">Settings for</b>
+          <div data-segments role="radiogroup" aria-labelledby="scope-title">
+            <label><input type="radio" name="settingsScope" value="shared" checked />All characters</label>
+            <label><input type="radio" name="settingsScope" value="character" /><span><span data-scope-name></span> only</span></label>
+          </div>
+        </div>
+        <small data-scope-help></small>
+        <div data-actions data-scope-actions hidden><button type="button" data-scope-clear></button></div>
+      </section>
 
       <section data-setup aria-labelledby="setup-title" hidden>
         <header>
@@ -943,7 +994,7 @@ export class VisualNovelSettingsPanel {
                 <button type="button" data-quiet data-show-setup>Show setup guide</button>
               </div>
               <small>Reset returns every setting to its default and saves at once. Your saved prompt presets and music folder are kept.</small>
-            `, { id: "maintenance", find: find("Reset defaults", "reset defaults setup guide onboarding start over") })}
+            `, { id: "maintenance", sharedOnly: true, find: find("Reset defaults", "reset defaults setup guide onboarding start over") })}
           `, " data-advanced-settings")}
 
           <div data-undo-toast role="status" hidden>
@@ -1770,8 +1821,17 @@ export class VisualNovelSettingsPanel {
   }
 
   private save(patch: Partial<VisualNovelConfig>, savedMessage = "Saved"): void {
+    const character = this.editingCharacter();
+    if (character && unscopedKeys(patch).length > 0) {
+      // Shared settings are locked in "<name> only"; a stray one is put back, not saved.
+      this.config = this.shownConfig();
+      this.syncFromConfig(this.config);
+      this.setStatus("That setting is shared by all characters. Choose All characters at the top to change it.", "error");
+      return;
+    }
     try {
-      this.options.onSave(patch);
+      if (character) this.options.onSave(patch, { characterId: character.characterId });
+      else this.options.onSave(patch);
     } catch (error) {
       this.setStatus(error instanceof Error ? error.message : String(error), "error");
       return;
@@ -1987,8 +2047,24 @@ export class VisualNovelSettingsPanel {
   /* Sync from config                                                        */
   /* ---------------------------------------------------------------------- */
 
-  /** Host-driven update. Advanced controls with unapplied drafts keep their draft text. */
-  setConfig(config: VisualNovelConfig): void {
+  /**
+   * Host-driven update. Advanced controls with unapplied drafts keep their draft text.
+   * `config` is the config the open chat uses; `scope` its layers while the chat
+   * has a character (null: none; left out: unchanged), so Settings can offer
+   * "<name> only". The controls show the layer being edited.
+   */
+  setConfig(config: VisualNovelConfig, scope?: CharacterScopeView | null): void {
+    if (scope !== undefined) {
+      // Another character starts on the shared settings, like a fresh Settings.
+      if (!scope || scope.characterId !== this.scopeView?.characterId) this.editing = "shared";
+      this.scopeView = scope;
+    }
+    this.hostConfig = config;
+    this.applyShownConfig(this.shownConfig());
+    this.renderScope();
+  }
+
+  private applyShownConfig(config: VisualNovelConfig): void {
     const incoming = config.imageParameters ?? {};
     for (const [k, v] of Object.entries(this.pendingEverydayFields)) {
       if (incoming[k] === v) {
@@ -2007,6 +2083,210 @@ export class VisualNovelSettingsPanel {
       }
     }
     this.syncFromConfig(this.config);
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* Settings saved per character                                            */
+  /* ---------------------------------------------------------------------- */
+
+  /** The character whose own values the controls edit, or null (every character's). */
+  private editingCharacter(): CharacterScopeView | null {
+    return this.editing === "character" ? this.scopeView : null;
+  }
+
+  /** The layer being edited: the chat's config in "<name> only", else the shared settings. */
+  private shownConfig(): VisualNovelConfig {
+    if (!this.scopeView || this.editing === "character") return this.hostConfig;
+    return this.scopeView.shared;
+  }
+
+  private wireScope(): void {
+    const bar = this.root.querySelector<HTMLElement>("[data-scope]")!;
+    bar.addEventListener("change", (event) => {
+      const target = event.target;
+      if (target instanceof HTMLInputElement && target.name === "settingsScope") this.switchScope(target.value === "character" ? "character" : "shared");
+    });
+    const clear = this.root.querySelector<HTMLButtonElement>("[data-scope-clear]")!;
+    clear.addEventListener("click", () => {
+      const view = this.scopeView;
+      if (!view) return;
+      // Dropping every own value is a second click within four seconds, like Reset defaults.
+      if (!clear.hasAttribute("data-confirming")) {
+        clear.setAttribute("data-confirming", "");
+        clear.textContent = `Confirm: use shared settings for ${view.name}?`;
+        if (this.scopeClearTimer) clearTimeout(this.scopeClearTimer);
+        this.scopeClearTimer = setTimeout(() => this.renderScope(), 4000);
+        return;
+      }
+      if (this.scopeClearTimer) { clearTimeout(this.scopeClearTimer); this.scopeClearTimer = null; }
+      clear.removeAttribute("data-confirming");
+      this.resetCharacter(undefined, `${view.name} uses the shared settings again.`);
+    });
+    // "Use shared" beside a setting with an own value.
+    this.root.addEventListener("click", (event) => {
+      const button = event.target instanceof Element ? event.target.closest<HTMLButtonElement>("[data-use-shared]") : null;
+      const key = button?.dataset.useShared;
+      if (!key || !this.scopeView) return;
+      this.resetCharacter([key as CharacterScopedKey], `${this.scopeView.name} uses the shared value again.`);
+    });
+  }
+
+  private resetCharacter(keys: CharacterScopedKey[] | undefined, savedMessage: string): void {
+    const view = this.scopeView;
+    if (!view || !this.options.onResetCharacter) return;
+    this.hideUndo();
+    try {
+      this.options.onResetCharacter(view.characterId, keys);
+    } catch (error) {
+      this.setStatus(error instanceof Error ? error.message : String(error), "error");
+      return;
+    }
+    this.setStatus("Saving…", "saving");
+    this.pendingSavedMessage = savedMessage;
+  }
+
+  private switchScope(next: "shared" | "character"): void {
+    if (next === this.editing || (next === "character" && !this.scopeView)) {
+      this.renderScope();
+      return;
+    }
+    // Typed Advanced text belongs to the layer it was typed in: valid text saves there first.
+    if (this.drafts.size > 0) this.commitAdvanced([...this.drafts]);
+    this.drafts.clear();
+    this.invalid.clear();
+    this.hideUndo();
+    this.refreshStatus();
+    this.editing = next;
+    this.pendingEverydayFields = {};
+    this.config = this.shownConfig();
+    this.syncFromConfig(this.config);
+    this.renderScope();
+  }
+
+  /** The scope switch, the own-value markers, and the locks on shared settings. */
+  private renderScope(): void {
+    const view = this.scopeView;
+    if (!view) this.editing = "shared";
+    const characterScope = this.editing === "character" && view !== null;
+    const bar = this.root.querySelector<HTMLElement>("[data-scope]")!;
+    bar.hidden = !view;
+    this.root.querySelector<HTMLElement>("[data-shell]")!.toggleAttribute("data-character-scope", characterScope);
+    if (this.scopeClearTimer) { clearTimeout(this.scopeClearTimer); this.scopeClearTimer = null; }
+    const clear = this.root.querySelector<HTMLButtonElement>("[data-scope-clear]")!;
+    clear.removeAttribute("data-confirming");
+    if (view) {
+      for (const name of bar.querySelectorAll<HTMLElement>("[data-scope-name]")) name.textContent = view.name;
+      this.setRadio("settingsScope", this.editing);
+      bar.querySelector<HTMLElement>("[data-scope-help]")!.textContent = scopeHelp(view, this.editing);
+      const own = Object.keys(view.overrides).length;
+      this.root.querySelector<HTMLElement>("[data-scope-actions]")!.hidden = own === 0 || !this.options.onResetCharacter;
+      clear.textContent = `Use shared settings for ${view.name}`;
+    }
+    this.renderSharedLocks(characterScope);
+    this.renderOwnMarkers();
+    this.renderSetupVisibility();
+  }
+
+  /** Named controls inside `container`, by the setting they edit. */
+  private namedControls(container: ParentNode): Array<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement> {
+    return [...container.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("input[name], select[name], textarea[name]")];
+  }
+
+  /** The field a control belongs to: its step fieldset, its own field, or its group. */
+  private fieldFor(control: Element): HTMLElement | null {
+    const field = control.closest<HTMLElement>("fieldset, [data-field], label[data-check]");
+    return field?.parentElement?.closest<HTMLElement>("fieldset") ?? field ?? control.closest<HTMLElement>("[data-group]");
+  }
+
+  /**
+   * In "<name> only", settings every character shares cannot change: whole
+   * sections and groups of them get a note and stop responding, and a shared
+   * field in a mixed group is dimmed and labelled.
+   */
+  private renderSharedLocks(on: boolean): void {
+    for (const element of this.root.querySelectorAll<HTMLElement>("[data-shared-lock]")) {
+      element.removeAttribute("inert");
+      element.removeAttribute("data-shared-lock");
+      element.removeAttribute("data-shared-field");
+    }
+    for (const note of this.root.querySelectorAll("[data-shared-note]")) note.remove();
+    if (!on) return;
+    const lock = (container: HTMLElement, head: Element | null): void => {
+      const note = document.createElement("p");
+      note.setAttribute("data-shared-note", "");
+      note.textContent = "Shared by all characters. Choose All characters at the top to change these.";
+      if (head) head.after(note);
+      else container.prepend(note);
+      for (const child of container.children) {
+        if (child === head || child === note || !(child instanceof HTMLElement)) continue;
+        child.setAttribute("inert", "");
+        child.setAttribute("data-shared-lock", "");
+      }
+    };
+    for (const pane of this.root.querySelectorAll<HTMLElement>("[data-pane]")) {
+      if (!this.namedControls(pane).some((control) => controlIsPerCharacter(control.name))) {
+        lock(pane, pane.querySelector(":scope > [data-pane-head]"));
+        continue;
+      }
+      for (const group of pane.querySelectorAll<HTMLElement>("[data-group]")) {
+        const controls = this.namedControls(group);
+        const scoped = controls.filter((control) => controlIsPerCharacter(control.name));
+        if (group.hasAttribute("data-shared-only") || (controls.length > 0 && scoped.length === 0)) {
+          lock(group, group.querySelector(":scope > [data-group-head]"));
+          continue;
+        }
+        for (const control of controls) {
+          if (scoped.includes(control)) continue;
+          const field = this.fieldFor(control);
+          if (!field || field === group) continue;
+          field.setAttribute("inert", "");
+          field.setAttribute("data-shared-lock", "");
+          field.setAttribute("data-shared-field", "");
+        }
+      }
+    }
+  }
+
+  /** A marker and "Use shared" beside each setting the open chat's character has of its own. */
+  private renderOwnMarkers(): void {
+    for (const marker of this.root.querySelectorAll("[data-own-marker]")) marker.remove();
+    for (const field of this.root.querySelectorAll("[data-own]")) field.removeAttribute("data-own");
+    const view = this.scopeView;
+    if (!view) return;
+    const own = new Set(Object.keys(view.overrides));
+    if (own.size === 0) return;
+    const firstControl = new Map<string, Element>();
+    for (const control of this.namedControls(this.form)) {
+      const key = settingKeyForControl(control.name);
+      if (own.has(key) && !firstControl.has(key)) firstControl.set(key, control);
+    }
+    const characterScope = this.editing === "character";
+    for (const [key, control] of firstControl) {
+      const field = this.fieldFor(control);
+      if (!field) continue;
+      const marker = document.createElement("div");
+      marker.setAttribute("data-own-marker", "");
+      const text = document.createElement("span");
+      text.textContent = characterScope ? `Only for ${view.name}` : `${view.name} has its own value`;
+      marker.append(text);
+      if (this.options.onResetCharacter) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.dataset.useShared = key;
+        button.textContent = "Use shared";
+        button.setAttribute("aria-label", `Use the shared value for ${view.name}`);
+        marker.append(button);
+      }
+      if (field.hasAttribute("data-group")) {
+        const head = field.querySelector(":scope > [data-group-head]");
+        if (head) head.after(marker);
+        else field.prepend(marker);
+      } else {
+        field.setAttribute("data-own", "");
+        if (field instanceof HTMLFieldSetElement) field.append(marker);
+        else field.after(marker);
+      }
+    }
   }
 
   private syncFromConfig(config: VisualNovelConfig): void {
@@ -2524,8 +2804,10 @@ export class VisualNovelSettingsPanel {
 
   private renderSetupVisibility(): void {
     const card = this.root.querySelector<HTMLElement>("[data-setup]")!;
-    card.hidden = this.sessionSetupHidden || this.setupDone();
-    this.root.querySelector<HTMLElement>("[data-show-setup]")!.hidden = !card.hidden;
+    // The setup guide sets up every character's settings: it waits while one character's are edited.
+    const characterScope = this.editingCharacter() !== null;
+    card.hidden = characterScope || this.sessionSetupHidden || this.setupDone();
+    this.root.querySelector<HTMLElement>("[data-show-setup]")!.hidden = characterScope || !(this.sessionSetupHidden || this.setupDone());
   }
 
   /* ---------------------------------------------------------------------- */
@@ -2561,7 +2843,7 @@ export class VisualNovelSettingsPanel {
   }
 
   destroy(): void {
-    for (const timer of [this.statusTimer, this.resetTimer, this.saveTimer, this.sampleTimer, this.flashTimer, this.copyTimer, this.cutoutConfirmTimer, this.libraryTimer]) if (timer) clearTimeout(timer);
+    for (const timer of [this.statusTimer, this.resetTimer, this.saveTimer, this.sampleTimer, this.flashTimer, this.copyTimer, this.cutoutConfirmTimer, this.libraryTimer, this.scopeClearTimer]) if (timer) clearTimeout(timer);
     this.spriteLibrary.destroy();
     this.resizeObserver?.disconnect();
     this.host.remove();

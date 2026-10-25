@@ -626,6 +626,152 @@ function migrateRetired(input: Record<string, unknown>): Record<string, unknown>
   return next;
 }
 
+/* ------------------------------------------------------------------ *
+ * Settings saved per character.
+ *
+ * A reader can give one character card its own look and reading settings
+ * (Settings, "<name> only"); every other card keeps the shared ones. The
+ * config a chat uses is the shared config with its character's own values on
+ * top (`effectiveConfig`). A character's own values are a partial patch that
+ * holds only keys from CHARACTER_SCOPED_KEYS, and only those that differ from
+ * the shared value when they were saved.
+ * ------------------------------------------------------------------ */
+
+/**
+ * The settings one character can have of its own: everything that shapes how
+ * that story looks and reads. Connections, models, image generation and its
+ * prompts, storage, sound volumes, read aloud, logging and anything secret
+ * stay shared by every character. A new key is one line here; the settings
+ * panel gives it a marker and a way back to the shared value by itself.
+ */
+export const CHARACTER_SCOPED_KEYS = [
+  // Look: layout and theme, pictures or sprites, picture fit, text size, motion, the reader's CSS.
+  "themePreset",
+  "presentationMode",
+  "keyIllustrations",
+  "sceneImageFit",
+  "textScale",
+  "effectIntensity",
+  "customCss",
+  // Reading: pace, the reply box, the opening card, the waiting screen, dialogue formatting.
+  "textSpeed",
+  "autoPlayDelay",
+  "generateChoices",
+  "replyBoxAtEnd",
+  "openingCard",
+  "openingCardMinMs",
+  "cardBackground",
+  "locationLabel",
+  "playOnArrival",
+  "waitingBackdrop",
+  "waitingRecap",
+  "displayRegexRules",
+  // Sprites: puppet look and motion, the outline and its colour.
+  "spriteMotion",
+  "spriteBreathing",
+  "spriteSway",
+  "spriteHeadMotion",
+  "spriteActing",
+  "spritePhysics",
+  "spriteOutline",
+  "spriteOutlineColor",
+  "spriteFocusBlur",
+  "spriteTransitions",
+  "spriteAtmosphere",
+  // Sprites: every face at one size.
+  "spriteSizeMatch",
+  "spriteSizeMatchFace",
+  "spriteSizeMatchMax",
+  "spriteSizeMatchMin",
+  "spriteSizeMatchCenter",
+  // Stage feel.
+  "clickEffect",
+  "spritePressBounce",
+  "interfaceSounds",
+  "interfaceSoundVolume",
+  "innerVoices",
+] as const satisfies readonly (keyof VisualNovelConfig)[];
+
+export type CharacterScopedKey = (typeof CHARACTER_SCOPED_KEYS)[number];
+
+/** One character's own settings: only per-character keys, only values that differ from the shared ones. */
+export type CharacterConfigOverride = Partial<Pick<VisualNovelConfig, CharacterScopedKey>>;
+
+const CHARACTER_SCOPED = new Set<string>(CHARACTER_SCOPED_KEYS);
+
+export function isCharacterScopedKey(key: string): key is CharacterScopedKey {
+  return CHARACTER_SCOPED.has(key);
+}
+
+/** Keys of a patch that cannot be saved for one character. */
+export function unscopedKeys(patch: Record<string, unknown>): string[] {
+  return Object.keys(patch).filter((key) => !isCharacterScopedKey(key));
+}
+
+function sameValue(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+/**
+ * A stored override reduced to per-character keys with valid values. Keys
+ * that are not per character are dropped, and so is a value that does not
+ * normalize (a retired theme, a word where a number belongs): that setting
+ * follows the shared value again instead of jumping to the default. Numbers
+ * out of range are clamped as in `normalizeConfig`.
+ */
+export function normalizeCharacterOverride(value: unknown): CharacterConfigOverride {
+  const input = record(value);
+  const present = CHARACTER_SCOPED_KEYS.filter((key) => input[key] !== undefined);
+  if (present.length === 0) return {};
+  const normalized = normalizeConfig(Object.fromEntries(present.map((key) => [key, input[key]])));
+  const result: Record<string, unknown> = {};
+  for (const key of present) {
+    const fallback = DEFAULT_CONFIG[key];
+    // A value that normalizes to the default only counts when it was the default.
+    if (!sameValue(normalized[key], fallback) || sameValue(input[key], fallback)) result[key] = normalized[key];
+  }
+  return result as CharacterConfigOverride;
+}
+
+/**
+ * The settings a chat uses: the shared config with its character's own values
+ * on top. Without own values this is `shared` itself, so a chat whose
+ * character has none reads exactly as before.
+ */
+export function effectiveConfig(shared: VisualNovelConfig, override: unknown): VisualNovelConfig {
+  const own = normalizeCharacterOverride(override);
+  return Object.keys(own).length === 0 ? shared : normalizeConfig({ ...shared, ...own });
+}
+
+/**
+ * A character's own values after a save in that character's scope: each
+ * per-character key of `patch` is set, and one that now matches the shared
+ * value is dropped, so the override only ever holds what differs. Other keys
+ * of `patch` are ignored (the backend refuses such a save first).
+ */
+export function characterOverrideWith(
+  shared: VisualNovelConfig,
+  current: unknown,
+  patch: Partial<VisualNovelConfig>,
+): CharacterConfigOverride {
+  const own: Record<string, unknown> = { ...normalizeCharacterOverride(current) };
+  const scopedPatch = Object.fromEntries(Object.entries(patch).filter(([key]) => isCharacterScopedKey(key)));
+  const merged = normalizeConfig({ ...shared, ...own, ...scopedPatch });
+  for (const key of Object.keys(scopedPatch) as CharacterScopedKey[]) {
+    if (sameValue(merged[key], shared[key])) delete own[key];
+    else own[key] = merged[key];
+  }
+  return own as CharacterConfigOverride;
+}
+
+/** A character's own values without `keys` (all of them when `keys` is absent): those follow the shared settings again. */
+export function characterOverrideWithout(current: unknown, keys?: readonly string[]): CharacterConfigOverride {
+  if (!keys) return {};
+  const own: Record<string, unknown> = { ...normalizeCharacterOverride(current) };
+  for (const key of keys) delete own[key];
+  return own as CharacterConfigOverride;
+}
+
 export function normalizeConfig(value: unknown): VisualNovelConfig {
   const input = migrateRetired(record(value));
   const themePreset = (THEME_PRESET_IDS as readonly string[]).includes(input.themePreset as string)

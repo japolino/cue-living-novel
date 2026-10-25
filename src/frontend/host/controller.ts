@@ -6,6 +6,15 @@ import { AudioEngine, VnStage, isAmbientEffect, isStageEffect, type VnReadingFlo
 import type { AmbientEffect, StageEffect } from "../store/index.js";
 import { VisualNovelSettingsPanel } from "../settings/panel.js";
 import { cutoutDownloadNote } from "../settings/model.js";
+import {
+  layersAfterReset,
+  layersAfterSave,
+  layersFromBackend,
+  layersOnChatSwitch,
+  scopeViewOf,
+  type CharacterScopeView,
+  type ConfigLayers,
+} from "../settings/character-scope.js";
 import { DEFAULT_SPRITE_FACE_MODEL_URL, DEFAULT_SPRITE_MODEL_URL, spriteModelF16Url } from "../../shared/sprites.js";
 import {
   clearCutoutModel,
@@ -550,7 +559,8 @@ export function turnWithPlate<T extends Pick<TurnView, "sprites">>(turn: T, plat
  * has not adopted the redesign feedback yet.
  */
 export type SettingsFeedbackTarget = {
-  setConfig(config: VisualNovelConfig): void;
+  /** `scope`: the open chat's character and both layers, for "<name> only" (null: none). */
+  setConfig(config: VisualNovelConfig, scope?: CharacterScopeView | null): void;
   setConnectionCatalog(kind: "planner" | "image", state: ConnectionCatalogFeedback): void;
   setDecisionStatus(message: string): void;
   setAudioStatus(message: string): void;
@@ -625,7 +635,10 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   app.setVisible(false);
 
   let active = false;
+  // The open chat's config (its character's own settings on top of the shared ones).
   const configRef: { current: VisualNovelConfig | null } = { current: null };
+  // ...and the layers it is made of, for Settings' "<name> only".
+  let configLayers: ConfigLayers | null = null;
   // Browser-console mirror of the backend "listening" trace. Gated by the same
   // debugLogging setting; shows every backend message the frontend listens to.
   const vnDebug = (...parts: unknown[]): void => {
@@ -938,20 +951,19 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       ctx.sendToBackend({ type: "vn_import_audio_done", fileCount: sent });
       settingsPanel?.setAudioStatus(`Sent ${sent} file(s)${skipped ? `, skipped ${skipped}` : ""}; scanning…`);
     },
-    onSave: (patch) => {
-      const current = configRef.current;
-      if (current) {
-        const next = { ...current, ...patch };
-        configRef.current = next;
-        pushConfigToStage(next);
-        audioEngine.setBgmVolume(next.bgmVolume);
-        audioEngine.setSfxVolume(next.sfxVolume);
-        syncSoundSource();
-        settingsPanel?.setConfig(next);
+    onSave: (patch, character) => {
+      // Applied at once; the backend's vn_config confirms. "<name> only" changes that character's own values.
+      if (configLayers) {
+        const forCharacter = Boolean(character && configLayers.scope?.characterId === character.characterId);
+        applyLocalLayers(layersAfterSave(configLayers, patch, forCharacter));
       }
-      ctx.sendToBackend({ type: "vn_set_config", patch, chatId: chatId() });
+      ctx.sendToBackend({ type: "vn_set_config", patch, chatId: chatId(), ...(character ? { character: { characterId: character.characterId } } : {}) });
       // Turning System One on: check Lumiverse's Decision connection again (it may have been set up since).
       if (patch.systemOneMode && patch.systemOneMode !== "off") ctx.sendToBackend({ type: "vn_get_decision_status" });
+    },
+    onResetCharacter: (characterId, keys) => {
+      if (configLayers?.scope?.characterId === characterId) applyLocalLayers(layersAfterReset(configLayers, keys));
+      ctx.sendToBackend({ type: "vn_reset_character_config", chatId: chatId(), characterId, ...(keys ? { keys } : {}) });
     },
     // Sprite mode: library actions and requests go to the backend; the cut-out
     // model lives in this browser, so its buttons call the cut-out module.
@@ -1038,8 +1050,10 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     mount: settingsPanel?.voiceMount() ?? settingsHandle.root,
     onSave: (speechPatch) => {
       // Applied at once, like the panel's onSave, so turning read aloud on hands the sound to Choir without waiting for the echo.
-      if (configRef.current) {
-        configRef.current = { ...configRef.current, speech: speechPatch };
+      // Voices are shared by every character.
+      if (configLayers) {
+        configLayers = layersAfterSave(configLayers, { speech: speechPatch }, false);
+        configRef.current = configLayers.config;
         syncSoundSource();
       }
       ctx.sendToBackend({ type: "vn_set_config", patch: { speech: speechPatch }, chatId: chatId() });
@@ -1070,6 +1084,17 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     const changed = stagePresentationMode !== null && stagePresentationMode !== config.presentationMode;
     stagePresentationMode = config.presentationMode;
     if (changed && turn) void syncImageForParagraph(stage.getState().currentParagraphIndex);
+  }
+
+  /** Use these layers now, before the backend answers (a save, a reset, a chat switch). */
+  function applyLocalLayers(next: ConfigLayers): void {
+    configLayers = next;
+    configRef.current = next.config;
+    pushConfigToStage(next.config);
+    audioEngine.setBgmVolume(next.config.bgmVolume);
+    audioEngine.setSfxVolume(next.config.sfxVolume);
+    syncSoundSource();
+    settingsPanel?.setConfig(next.config, scopeViewOf(next));
   }
 
   // Sprite cut-outs: the backend cannot read image bytes, so the logged-in
@@ -1402,8 +1427,10 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       return;
     }
     if (type === "vn_state" && message.type === "vn_state") {
-      configRef.current = message.config;
-      imageBridge.fit(message.config.sceneImageFit);
+      // The chat's config, with its character's own settings on top when it has any.
+      configLayers = layersFromBackend(configLayers, message, chatId());
+      configRef.current = configLayers.config;
+      imageBridge.fit(configRef.current.sceneImageFit);
       pushConfigToStage(configRef.current);
       audioEngine.setBgmVolume(configRef.current.bgmVolume);
       audioEngine.setSfxVolume(configRef.current.sfxVolume);
@@ -1411,7 +1438,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       speech.setSettings(configRef.current.speech);
       syncSpeechDock();
       speechSettings?.setConfig(configRef.current.speech);
-      settingsPanel?.setConfig(configRef.current);
+      settingsPanel?.setConfig(configRef.current, scopeViewOf(configLayers));
       refreshCachedCutoutModel(configRef.current.spriteModelUrl);
       // The home screen has no chat to show.
       if (configRef.current?.autoEnter && !active && chatId()) activate();
@@ -1436,10 +1463,11 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       return;
     }
     if (type === "vn_config" && message.type === "vn_config") {
-      imageBridge.fit(message.config.sceneImageFit);
       // The echo of a persisted config is the only save acknowledgment the
       // transport offers; "saved" is claimed here and nowhere earlier.
-      configRef.current = message.config;
+      configLayers = layersFromBackend(configLayers, message, chatId());
+      configRef.current = configLayers.config;
+      imageBridge.fit(configRef.current.sceneImageFit);
       pushConfigToStage(configRef.current);
       audioEngine.setBgmVolume(configRef.current.bgmVolume);
       audioEngine.setSfxVolume(configRef.current.sfxVolume);
@@ -1447,7 +1475,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       speech.setSettings(configRef.current.speech);
       syncSpeechDock();
       speechSettings?.setConfig(configRef.current.speech);
-      settingsPanel?.setConfig(configRef.current);
+      settingsPanel?.setConfig(configRef.current, scopeViewOf(configLayers));
       refreshCachedCutoutModel(configRef.current.spriteModelUrl);
       settingsPanel?.setSaveStatus?.({ kind: "saved" });
       return;
@@ -1565,7 +1593,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       return;
     }
     if (type === "vn_error" && message.type === "vn_error") {
-      if (message.operation === "vn_set_config") {
+      if (message.operation === "vn_set_config" || message.operation === "vn_reset_character_config") {
         settingsPanel?.setSaveStatus?.({ kind: "error", error: message.error });
         return;
       }
@@ -1597,6 +1625,9 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     turnOpeningBgm = null;
     speech.onChatChanged();
     stage.reset();
+    // The last chat's character settings stop here; the new chat's state brings its own.
+    const shared = layersOnChatSwitch(configLayers);
+    if (shared && shared !== configLayers) applyLocalLayers(shared);
     // Leaving for the home screen closes the stage instead of covering it.
     if (active && !chatId()) deactivate();
     requestState();
