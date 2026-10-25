@@ -32,10 +32,20 @@ describe("read-aloud settings normalization", () => {
     expect(normalizeSpeechSettings({ choirSound: false }).choirSound).toBe(false);
   });
 
+  test("read aloud that was on with autoplay off comes back off: nothing is read (or paid for) until it is turned on again", () => {
+    expect(normalizeSpeechSettings({ enabled: true, autoplay: false }).enabled).toBe(false);
+    expect(normalizeSpeechSettings({ enabled: true, autoplay: "true" }).enabled).toBe(false);
+    expect(normalizeSpeechSettings({ enabled: true, autoplay: true }).enabled).toBe(true);
+    // Once saved again the legacy field is gone, so turning it on sticks.
+    const saved = normalizeSpeechSettings({ ...normalizeSpeechSettings({ enabled: true, autoplay: false }), enabled: true });
+    expect(normalizeSpeechSettings(saved).enabled).toBe(true);
+    expect(normalizeConfig({ speech: { enabled: true, autoplay: false } }).speech.enabled).toBe(false);
+  });
+
   test("the retired TTS-profile, delivery, autoplay and volume fields are dropped", () => {
     const speech = normalizeSpeechSettings({
       enabled: true,
-      autoplay: false,
+      autoplay: true,
       volume: 0.4,
       narrator: { connectionId: "conn-1", voice: "Zephyr" },
       characterDefault: { connectionId: "conn-2", voice: "" },

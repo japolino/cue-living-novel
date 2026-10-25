@@ -11,7 +11,10 @@ so Cue stores no voice, provider or key.
   persisted in the extension config as `config.speech` (`src/speech-config.ts`):
   `enabled` (Read each paragraph aloud, off by default), `muteNarrator`
   (dialogue only) and `choirSound` (Sound from Choir, on by default). The Voice
-  section is shown only while Choir is present in the page.
+  section is shown only while Choir is present in the page. A config saved
+  while read aloud still had an autoplay switch, with read aloud on and
+  autoplay off, comes back with read aloud off: nothing is read until it is
+  turned on again.
 - Voices are cast in Choir: **Open Choir voice setup** opens Choir's drawer.
   Cue has no voice pickers.
 - Reading: with read aloud on, each new paragraph is sent to Choir as it

@@ -9,7 +9,10 @@
  * Older saved configs may still carry the retired Lumiverse TTS-profile fields
  * (narrator, characterDefault, characters, deliveryMode, deliveryTag,
  * deliveryAllProviders) and the retired autoplay and volume; normalization
- * drops them.
+ * drops them. Read aloud used to wait for Play unless autoplay was on, and now
+ * reads (and pays for) every paragraph, so a saved config that had read aloud
+ * on with autoplay off comes back with read aloud off. The next save drops the
+ * legacy field, so this happens once.
  */
 
 export type SpeechSettings = {
@@ -35,8 +38,9 @@ export function normalizeSpeechSettings(value: unknown): SpeechSettings {
   const raw = value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+  const manualOnly = "autoplay" in raw && raw.autoplay !== true;
   return {
-    enabled: raw.enabled === true,
+    enabled: raw.enabled === true && !manualOnly,
     muteNarrator: raw.muteNarrator === true,
     choirSound: raw.choirSound !== false,
   };
