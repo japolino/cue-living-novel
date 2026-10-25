@@ -114,6 +114,14 @@ export interface VnStageState {
   planHold: number | null;
 }
 
+/** Where a scene of the turn takes place; it starts at `startParagraph`. */
+export interface VnScene {
+  startParagraph: number;
+  location: string;
+  timeOfDay: string | null;
+  weather: string | null;
+}
+
 export interface VnTurnInput {
   paragraphs: readonly VnParagraph[];
   /** Suggested replies, shown above the reply box at Your turn. */
@@ -123,6 +131,12 @@ export interface VnTurnInput {
   ambient?: AmbientEffect | null;
   /** Sprite mode staging for this turn (`TurnView.sprites`); the stage keeps it, the store ignores it. */
   sprites?: SpriteTurnView | null;
+  /** The turn's scenes (`TurnView.scenes`); the stage keeps them for the opening card and location label. */
+  scenes?: readonly VnScene[];
+  /** The card's own background picture (`TurnView.cardBackgroundUrl`), for the opening card and waiting screen. */
+  cardBackgroundUrl?: string | null;
+  /** Who writes the replies (the card's name), for "… is writing the next scene". */
+  writer?: string;
   /**
    * Set for a provisional turn (text before the plan): the paragraph index the
    * reader waits at until the plan lands (clamped to the final paragraph).
@@ -140,6 +154,8 @@ export type VnStageAction =
   | { type: "upgrade-turn"; turn: VnTurnInput }
   | { type: "advance" }
   | { type: "previous" }
+  /** Read the reply again from its first paragraph (Your turn's From the start). */
+  | { type: "restart" }
   | { type: "set-draft"; draft: string }
   | { type: "set-phase"; phase: VnPhase }
   /** End a "planning" phase that a retry of the same turn left behind, keeping the cursor. */
@@ -357,6 +373,21 @@ export const reduceVnStage = (
       const images = state.planHold !== null ? {} : { displayedImage: null, pendingImage: null, imageError: null };
       return { ...state, currentParagraphIndex: state.currentParagraphIndex - 1, phase,
         turnFinished: false, showRerollPrompt: false, ...images };
+    }
+
+    case "restart": {
+      if (state.paragraphs.length === 0 || state.isUserTurn || state.planHold !== null) return state;
+      if (state.phase !== "revealing" && state.phase !== "awaiting-input" && state.phase !== "error") return state;
+      return {
+        ...state,
+        currentParagraphIndex: 0,
+        phase: state.phase === "error" ? "error" : "revealing",
+        turnFinished: false,
+        showRerollPrompt: false,
+        displayedImage: null,
+        pendingImage: null,
+        imageError: null,
+      };
     }
 
     case "present-user-paragraph": {

@@ -123,6 +123,24 @@ export const THEME_PRESET_IDS = [
 
 export type VisualNovelThemePreset = (typeof THEME_PRESET_IDS)[number];
 
+/**
+ * The card shown when a reply opens, while its pictures are prepared:
+ * "title" (the scene's place, time and weather over the card's background
+ * picture) or "off".
+ */
+export const OPENING_CARD_MODES = ["title", "off"] as const;
+export type VisualNovelOpeningCard = (typeof OPENING_CARD_MODES)[number];
+/** The opening card shows at least this long (ms), unless the reader taps. */
+export const OPENING_CARD_MIN_MS_MAX = 5000;
+/**
+ * The waiting screen while the next reply is written: the backdrop, and what
+ * it recalls of the reply just read on top (see docs and waiting-screen.ts).
+ */
+export const WAITING_BACKDROPS = ["card", "tidy", "daylight", "cast", "off"] as const;
+export type VisualNovelWaitingBackdrop = (typeof WAITING_BACKDROPS)[number];
+export const WAITING_RECAPS = ["auto", "lineup", "cards", "film", "off"] as const;
+export type VisualNovelWaitingRecap = (typeof WAITING_RECAPS)[number];
+
 /** A named prompt preset: a positive (prefix) and a negative block. */
 export type VisualNovelPromptPreset = {
   id: string;
@@ -219,6 +237,22 @@ export type VisualNovelConfig = {
   sfxVolume: number;
   /** Default-off speech (TTS) settings. See src/speech-config.ts. */
   speech: SpeechSettings;
+  /** The card shown when a reply opens ("title" or "off"). */
+  openingCard: VisualNovelOpeningCard;
+  /** The opening card shows at least this long (ms, 0..OPENING_CARD_MIN_MS_MAX). */
+  openingCardMinMs: number;
+  /** The opening card and the waiting screen use the card's own background picture (`bg`, `background`, `배경`). */
+  cardBackground: boolean;
+  /** The scene's place, time and weather stay at the top left while reading. */
+  locationLabel: boolean;
+  /** The waiting screen's backdrop. */
+  waitingBackdrop: VisualNovelWaitingBackdrop;
+  /** What the waiting screen recalls of the reply just read. */
+  waitingRecap: VisualNovelWaitingRecap;
+  /** A new reply starts by itself when it is ready; off: the opening card waits for a tap. */
+  playOnArrival: boolean;
+  /** Your turn opens the reply box; off: the box waits behind a Reply button. */
+  replyBoxAtEnd: boolean;
 };
 
 export const DEFAULT_CONFIG: VisualNovelConfig = {
@@ -282,6 +316,14 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   bgmVolume: 0.7,
   sfxVolume: 0.5,
   speech: DEFAULT_SPEECH_SETTINGS,
+  openingCard: "title",
+  openingCardMinMs: 1500,
+  cardBackground: true,
+  locationLabel: true,
+  waitingBackdrop: "card",
+  waitingRecap: "auto",
+  playOnArrival: true,
+  replyBoxAtEnd: true,
 };
 
 function record(value: unknown): Record<string, unknown> {
@@ -297,6 +339,11 @@ function nullableString(value: unknown): string | null {
 
 function stringValue(value: unknown, fallback: string): string {
   return typeof value === "string" ? value : fallback;
+}
+
+/** `value` when it is one of `options`, else `fallback`. */
+function oneOf<T extends string>(value: unknown, options: readonly T[], fallback: T): T {
+  return typeof value === "string" && (options as readonly string[]).includes(value) ? value as T : fallback;
 }
 
 function bool(value: unknown, fallback: boolean): boolean {
@@ -516,5 +563,13 @@ export function normalizeConfig(value: unknown): VisualNovelConfig {
     bgmVolume: floatBetween(input.bgmVolume, 0, 1, DEFAULT_CONFIG.bgmVolume),
     sfxVolume: floatBetween(input.sfxVolume, 0, 1, DEFAULT_CONFIG.sfxVolume),
     speech: normalizeSpeechSettings(input.speech),
+    openingCard: oneOf(input.openingCard, OPENING_CARD_MODES, DEFAULT_CONFIG.openingCard),
+    openingCardMinMs: integer(input.openingCardMinMs, 0, OPENING_CARD_MIN_MS_MAX, DEFAULT_CONFIG.openingCardMinMs),
+    cardBackground: bool(input.cardBackground, DEFAULT_CONFIG.cardBackground),
+    locationLabel: bool(input.locationLabel, DEFAULT_CONFIG.locationLabel),
+    waitingBackdrop: oneOf(input.waitingBackdrop, WAITING_BACKDROPS, DEFAULT_CONFIG.waitingBackdrop),
+    waitingRecap: oneOf(input.waitingRecap, WAITING_RECAPS, DEFAULT_CONFIG.waitingRecap),
+    playOnArrival: bool(input.playOnArrival, DEFAULT_CONFIG.playOnArrival),
+    replyBoxAtEnd: bool(input.replyBoxAtEnd, DEFAULT_CONFIG.replyBoxAtEnd),
   };
 }

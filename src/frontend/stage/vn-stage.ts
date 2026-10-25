@@ -19,11 +19,15 @@ import {
   type StageEffect,
   type VnParagraph,
   type VnStageAction,
+  type VnScene,
   type VnStageState,
   type VnTurnInput,
 } from "../store";
 import { generateAmbientMarkup, generateCueEffectMarkup, generateFrontAmbientMarkup } from "./procedural-particles.js";
 import { SpriteLayer, type SpriteLayerSnapshot } from "./sprite-layer.js";
+import { buildWaitingRecap, sceneAt, USER_PARAGRAPH_PREFIX } from "./recap.js";
+import { LocationLabel, OpeningCard } from "./scene-card.js";
+import { WaitingScreen } from "./waiting-screen.js";
 import { measurePlateLight } from "./sprite-depth.js";
 import type { PlateView, SpriteIllustrationView, SpriteImageView, SpriteTurnView } from "../../shared/sprites.js";
 
@@ -95,8 +99,10 @@ type TypewriterNode = {
 
 export const TEXT_SHAKE_HEURISTIC_REGEX = /\*\s*(?:thud|slam|crash|smack|shake)[!?.,]*\s*\*/i;
 import {
+  DEFAULT_CONFIG,
   TEXT_SCALE_MAX,
   TEXT_SCALE_MIN,
+  type VisualNovelConfig,
   type VisualNovelEffectIntensity,
   type VisualNovelPresentationMode,
   type VisualNovelSceneImageFit,
@@ -140,7 +146,28 @@ export interface VnStageCallbacks {
   onSwipe?: () => void | Promise<void>;
   /** Sprite mode: Try again on "Could not prepare <name>" (the set's failed images again). */
   onSpriteRetry?: (setKey: string) => void;
+  /** The opening card closed and reading starts (the host plays the first paragraph's sound and voice now). */
+  onReadingStart?: () => void;
 }
+
+/** The settings that shape how a reply opens, waits and ends (see config.ts). */
+export type VnReadingFlow = Pick<VisualNovelConfig,
+  "openingCard" | "openingCardMinMs" | "cardBackground" | "locationLabel" | "waitingBackdrop" | "waitingRecap" | "playOnArrival" | "replyBoxAtEnd">;
+
+/**
+ * The stage on its own (tests, the demo) opens replies straight away; the
+ * host passes the reader's settings (setReadingFlow), where the card is on.
+ */
+export const DEFAULT_READING_FLOW: VnReadingFlow = {
+  openingCard: "off",
+  openingCardMinMs: DEFAULT_CONFIG.openingCardMinMs,
+  cardBackground: DEFAULT_CONFIG.cardBackground,
+  locationLabel: DEFAULT_CONFIG.locationLabel,
+  waitingBackdrop: DEFAULT_CONFIG.waitingBackdrop,
+  waitingRecap: DEFAULT_CONFIG.waitingRecap,
+  playOnArrival: DEFAULT_CONFIG.playOnArrival,
+  replyBoxAtEnd: DEFAULT_CONFIG.replyBoxAtEnd,
+};
 
 export interface VnStageOptions extends VnStageCallbacks {
   mount: HTMLElement;
@@ -238,6 +265,11 @@ const THEME_MARKUP = `
       <div data-vn-interaction-heading>
         <h2 id="vn-interaction-title" data-vn-interaction-title>Your turn</h2>
         <p data-vn-interaction-hint></p>
+        <div data-vn-interaction-actions>
+          <button data-vn-interaction-action="previous" type="button">Previous</button>
+          <button data-vn-interaction-action="restart" type="button">From the start</button>
+          <button data-vn-interaction-action="close" type="button" aria-label="Close the reply box">Close</button>
+        </div>
       </div>
       <div data-vn-game-choices hidden aria-label="Game moves"></div>
       <ol data-vn-choice-list hidden aria-label="Suggested replies"></ol>
@@ -246,10 +278,12 @@ const THEME_MARKUP = `
         <button data-vn-submit type="submit"><span data-vn-submit-label>Send</span><span data-vn-submit-icon aria-hidden="true"><svg viewBox="0 0 16 16" width="16" height="16" focusable="false" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 8h10" /><path d="M8.5 4l4 4-4 4" /></svg></span></button>
       </form>
     </section>
+    <button data-vn-reply-open type="button" hidden>Reply</button>
 
     <div data-vn-backlog hidden aria-modal="true" role="dialog" aria-label="History">
       <div data-vn-backlog-header>
         <h3 data-vn-backlog-title>History</h3>
+        <button data-vn-backlog-script type="button" aria-pressed="false" title="Show the whole reply, also what you have not read yet">Whole reply</button>
         <button data-vn-backlog-close type="button" aria-label="Close history"><svg viewBox="0 0 16 16" width="14" height="14" focusable="false" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4l8 8" /><path d="M12 4l-8 8" /></svg></button>
       </div>
       <div data-vn-backlog-content tabindex="0"></div>
@@ -582,6 +616,25 @@ export class VnStage {
   private lightningTimer: ReturnType<typeof setTimeout> | null = null;
   /** Plate URL whose light side was last requested (stale answers are dropped). */
   private plateLightUrl: string | null = null;
+  private flow: VnReadingFlow = { ...DEFAULT_READING_FLOW };
+  /** Built on first use (most stages never show one of them). */
+  private openingCardEl: OpeningCard | null = null;
+  private locationLabelEl: LocationLabel | null = null;
+  private waitingScreenEl: WaitingScreen | null = null;
+  /** The scenes of the turn on the stage, and of the one before (a provisional turn has none yet). */
+  private scenes: readonly VnScene[] = [];
+  private lastScene: VnScene | null = null;
+  private cardBackgroundUrl: string | null = null;
+  private writer = "";
+  /** What the reader last sent, until the next reply loads. */
+  private lastSent: string | null = null;
+  /** Your turn's reply box is closed behind the Reply button. */
+  private replyCollapsed = false;
+  private readonly replyOpenButton: HTMLButtonElement;
+  private readonly interactionActions: HTMLElement;
+  private readonly backlogScriptButton: HTMLButtonElement;
+  /** History shows the whole reply (also what is not read yet) instead of what was read. */
+  private backlogScript = false;
 
   constructor(options: VnStageOptions) {
     this.state = options.initialState ?? createInitialVnStageState();
@@ -684,6 +737,9 @@ export class VnStage {
     this.backlogModal = queryRequired(this.themeRoot, "[data-vn-backlog]");
     this.backlogClose = queryRequired(this.themeRoot, "[data-vn-backlog-close]");
     this.backlogContent = queryRequired(this.themeRoot, "[data-vn-backlog-content]");
+    this.backlogScriptButton = queryRequired(this.themeRoot, "[data-vn-backlog-script]");
+    this.replyOpenButton = queryRequired(this.themeRoot, "[data-vn-reply-open]");
+    this.interactionActions = queryRequired(this.themeRoot, "[data-vn-interaction-actions]");
 
     if (typeof ResizeObserver === "function") {
       this.dialogueObserver = new ResizeObserver(() => {
@@ -705,6 +761,59 @@ export class VnStage {
 
   getState(): Readonly<VnStageState> {
     return this.state;
+  }
+
+  /** How a reply opens, waits and ends (config: opening card, location label, waiting screen, playback). */
+  setReadingFlow(flow: VnReadingFlow): void {
+    const before = this.flow;
+    this.flow = { ...flow };
+    if (before.waitingBackdrop !== flow.waitingBackdrop || before.waitingRecap !== flow.waitingRecap || before.cardBackground !== flow.cardBackground) {
+      if (this.waitingOpen() && !this.waitingPreview()) this.waitingScreenEl?.dismiss();
+    }
+    this.syncSceneChrome();
+  }
+
+  /** The opening card is up: reading has not started yet. */
+  isOpeningCardOpen(): boolean {
+    return this.cardOpen();
+  }
+
+  /** Show the opening card of the reply on the stage again (Settings: Replay). */
+  replayOpeningCard(): void {
+    if (this.destroyed || this.state.paragraphs.length === 0 || this.state.isUserTurn) return;
+    this.showOpeningCard(true);
+  }
+
+  /** Show the waiting screen with the reply on the stage, until a tap (Settings: Preview). */
+  previewWaitingScreen(): void {
+    if (this.destroyed) return;
+    this.waitingScreen.show(this.waitingRecap(), {
+      backdrop: this.flow.waitingBackdrop === "off" ? "card" : this.flow.waitingBackdrop,
+      recap: this.flow.waitingRecap,
+      preview: true,
+      motion: this.sceneMotion(),
+    }, `${this.writer || "The story"} is writing the next scene\u2026`);
+    this.waitingScreen.element.setAttribute("tabindex", "-1");
+    this.waitingScreen.element.focus({ preventScroll: true });
+  }
+
+  /** Read the reply again from its first paragraph. */
+  restart(): void {
+    if (this.destroyed || this.isBacklogOpen) return;
+    const before = this.state;
+    this.isSkipping = false;
+    this.clearAllTimers();
+    this.isTyping = false;
+    this.activeTextNodes = [];
+    this.updateControlButtons();
+    this.ambientOverride = this.state.ambient;
+    const first = this.state.paragraphs[0];
+    const ambient = first ? (first.ambient !== undefined ? first.ambient : first.cue?.ambient) : undefined;
+    if (ambient === null || isAmbientEffect(ambient)) this.ambientOverride = ambient;
+    this.currentRenderedParagraphId = "";
+    this.dispatch({ type: "restart" });
+    if (this.state === before) return;
+    this.callbacks.onPrevious?.(0);
   }
 
   getElement(): HTMLElement {
@@ -824,10 +933,18 @@ export class VnStage {
   }
 
   private renderBacklog(): void {
-    this.backlogContent.innerHTML = this.backlogEntries
+    this.backlogScriptButton.setAttribute("aria-pressed", String(this.backlogScript));
+    const entries = this.backlogScript
+      ? this.state.paragraphs.map((paragraph) => ({
+        speaker: paragraph.speaker,
+        formatted: this.formatParagraph(paragraph),
+        unread: !this.readParagraphIds.has(paragraph.id),
+      }))
+      : this.backlogEntries.map((entry) => ({ ...entry, unread: false }));
+    this.backlogContent.innerHTML = entries
       .map(
         (entry) => `
-        <div data-vn-backlog-item>
+        <div data-vn-backlog-item${entry.unread ? " data-vn-backlog-unread" : ""}>
           ${entry.speaker ? `<span data-vn-backlog-speaker>${escapeHtml(entry.speaker)}</span>` : ""}
           <p data-vn-backlog-text>${entry.formatted}</p>
         </div>
@@ -837,7 +954,8 @@ export class VnStage {
     // History shows effects frozen (colours and sizes kept, no motion).
     this.syncBacklogTextEffects();
     applyTextEffects(this.backlogContent);
-    this.backlogContent.scrollTop = this.backlogContent.scrollHeight;
+    // The whole reply reads from its start; History ends at the latest line.
+    this.backlogContent.scrollTop = this.backlogScript ? 0 : this.backlogContent.scrollHeight;
   }
 
   closeBacklog(): void {
@@ -1360,12 +1478,28 @@ export class VnStage {
     this.queuedPlateUrl = null;
     this.queuedIllustrationUrl = null;
     this.failedPlateUrls.clear();
+    this.openingCardEl?.dismiss();
+    this.waitingScreenEl?.dismiss();
+    this.scenes = [];
+    this.lastScene = null;
+    this.cardBackgroundUrl = null;
+    this.lastSent = null;
     this.updateControlButtons();
     this.updateContinueButton();
     this.dispatch({ type: "reset" });
   }
 
   loadTurn(turn: VnTurnInput): void {
+    this.applyTurnLoad(turn, true);
+  }
+
+  /** `opening`: a new reply opens (the opening card may show); false for the planned text replacing its draft. */
+  private applyTurnLoad(turn: VnTurnInput, opening: boolean): void {
+    this.rememberTurnScenes(turn);
+    this.lastSent = null;
+    this.waitingScreenEl?.hide();
+    if (opening && turn.paragraphs.length > 0 && this.flow.openingCard === "title" && !this.isSkipping) this.showOpeningCard(false, turn);
+    else if (this.cardOpen()) this.openingCard.close();
     this.resetZoom();
     this.ambientOverride = undefined;
     this.errorDetails = null;
@@ -1414,9 +1548,10 @@ export class VnStage {
    */
   upgradeTurn(turn: VnTurnInput): boolean {
     if (!canUpgradeTurn(this.state, turn)) {
-      this.loadTurn({ ...turn, preserveImage: true });
+      this.applyTurnLoad({ ...turn, preserveImage: true }, false);
       return true;
     }
+    this.rememberTurnScenes(turn);
     this.spriteLayer.setTurn(turn.sprites ?? null);
     // The persistent ambient in effect at the reader's paragraph, as on rewind.
     this.ambientOverride = undefined;
@@ -1435,6 +1570,7 @@ export class VnStage {
       if (effect && isStageEffect(effect)) this.triggerEffect(effect);
     }
     this.refreshBacklogEntries();
+    if (this.cardOpen()) this.openingCard.update(this.openingCardContent());
     // Auto play (or skip) held at the plan carries on.
     if (this.isSkipping && !this.isTyping) this.scheduleSkipAdvance();
     else this.checkAutoPlay();
@@ -1458,10 +1594,11 @@ export class VnStage {
   }
 
   presentUserParagraph(text: string, speaker: string = "You"): void {
+    this.lastSent = text;
     this.dispatch({
       type: "present-user-paragraph",
       paragraph: {
-        id: `user-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        id: `${USER_PARAGRAPH_PREFIX}${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         text,
         speaker,
       },
@@ -2089,6 +2226,29 @@ export class VnStage {
       this.closeBacklog();
     });
 
+    this.backlogScriptButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      this.backlogScript = !this.backlogScript;
+      this.renderBacklog();
+    });
+
+    this.interactionActions.addEventListener("click", (event) => {
+      const button = event.target instanceof Element ? event.target.closest<HTMLButtonElement>("[data-vn-interaction-action]") : null;
+      if (!button || button.disabled) return;
+      event.stopPropagation();
+      const action = button.dataset.vnInteractionAction;
+      if (action === "previous") this.previous();
+      else if (action === "restart") this.restart();
+      else if (action === "close") this.setReplyCollapsed(true);
+    });
+
+    this.replyOpenButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      this.setReplyCollapsed(false, true);
+    });
+
+
+
     this.backlogModal.addEventListener("click", (event) => {
       if (event.target === this.backlogModal) {
         this.closeBacklog();
@@ -2129,6 +2289,19 @@ export class VnStage {
       // Shortcuts work from buttons too (a focused suggestion, a toolbar
       // control), never while typing; Enter and Space still press a button.
       if (isTextEntryTarget(event.target)) return;
+      if (this.waitingPreview()) return;
+      if (this.cardOpen()) {
+        // The card is the first thing to read: any reading key starts; S starts and skips.
+        if (event.key === "Escape" || event.key === "Enter" || event.key === " " || event.key === "ArrowRight") {
+          event.preventDefault();
+          this.openingCard.close();
+        } else if (event.key === "s" || event.key === "S") {
+          event.preventDefault();
+          this.openingCard.close();
+          this.toggleSkip(true);
+        }
+        return;
+      }
       if (/^[1-9]$/.test(event.key)) {
         const choice = selectVnStageView(this.state).showChoices ? this.state.choices[Number(event.key) - 1] : undefined;
         if (choice && !choice.disabled) {
@@ -2246,6 +2419,15 @@ export class VnStage {
   /** `fromReader`: a tap, Continue or a key, which pages a long paragraph before moving on. */
   private advance(fromReader = false): void {
     if (this.isBacklogOpen) return;
+    if (this.cardOpen()) {
+      if (fromReader) this.openingCard.close();
+      return;
+    }
+    // Your turn with the reply box closed: a tap or Enter opens it.
+    if (fromReader && this.replyCollapsed && this.state.phase === "awaiting-input") {
+      this.setReplyCollapsed(false, true);
+      return;
+    }
     if (this.isTyping) {
       this.completeTypewriter();
       return;
@@ -2358,8 +2540,13 @@ export class VnStage {
     this.updateContinueButton();
     this.syncSprites();
 
+    // Your turn opens with the reply box, or behind the Reply button (replyBoxAtEnd off).
+    if (previousPhase !== "awaiting-input" && this.state.phase === "awaiting-input") {
+      this.replyCollapsed = !this.flow.replyBoxAtEnd && this.state.paragraphs.length > 0;
+    }
     this.renderStatus();
     this.renderInteraction(view.showChoices, view.showComposer, view.isBusy);
+    this.syncSceneChrome();
     // Your turn shows the paragraph's last lines above the reply area (phones keep three).
     if (previousPhase !== "awaiting-input" && this.state.phase === "awaiting-input") {
       this.dialogueText.scrollTop = this.dialogueText.scrollHeight;
@@ -2368,7 +2555,7 @@ export class VnStage {
 
     // Your turn: the reply box takes focus so the reader can type at once
     // (not on touch-only devices, where it would open the keyboard).
-    if (previousPhase !== "awaiting-input" && this.state.phase === "awaiting-input" && !isTouchOnly()) {
+    if (previousPhase !== "awaiting-input" && this.state.phase === "awaiting-input" && !isTouchOnly() && !this.replyCollapsed) {
       queueMicrotask(() => {
         if (this.destroyed || this.state.phase !== "awaiting-input") return;
         this.input.focus({ preventScroll: true });
@@ -2666,6 +2853,15 @@ export class VnStage {
       this.currentRenderedParagraphId === paragraph.id &&
       this.currentRenderedFormatted === formatted
     ) {
+      return;
+    }
+    if (this.cardOpen() && this.state.currentParagraphIndex === 0 && !this.isRewinding) {
+      // Reading starts when the card closes (onOpeningCardClosed): no typing,
+      // effects or History entry yet.
+      this.clearTypewriter();
+      this.dialogueText.innerHTML = "";
+      this.currentRenderedParagraphId = "";
+      this.currentRenderedFormatted = "";
       return;
     }
     if (this.isUpgrading && this.currentRenderedParagraphId === paragraph.id) {
@@ -3009,11 +3205,24 @@ export class VnStage {
     isBusy: boolean,
   ): void {
     const showGame = showComposer && this.gameChoices.length > 0;
-    this.interaction.hidden = !showComposer;
+    const sending = this.state.phase === "submitting";
+    const collapsed = showComposer && this.replyCollapsed;
+    this.interaction.hidden = !(showComposer || sending) || collapsed;
+    this.replyOpenButton.hidden = !collapsed;
+    const label = this.submitButton.querySelector<HTMLElement>("[data-vn-submit-label]");
+    const sendText = sending ? "Sending\u2026" : "Send";
+    if (label && label.textContent !== sendText) label.textContent = sendText;
+    const hasReply = this.state.paragraphs.length > 0;
+    this.interactionActions.hidden = !hasReply;
+    for (const button of this.interactionActions.querySelectorAll<HTMLButtonElement>("[data-vn-interaction-action]")) {
+      const action = button.dataset.vnInteractionAction;
+      button.disabled = sending || (action === "previous" && !selectVnStageView(this.state).canGoBack)
+        || (action === "restart" && (this.state.planHold !== null || this.state.isUserTurn === true));
+    }
     this.choiceList.hidden = !showChoices;
     this.gameChoiceList.hidden = !showGame;
     this.renderGameChoices(showGame, isBusy || this.gameBusy);
-    this.inputForm.hidden = !showComposer;
+    this.inputForm.hidden = !(showComposer || sending);
     const picks = [showGame ? "a move" : "", showChoices ? "a suggestion" : ""].filter(Boolean).join(" or ");
     // Nothing to read yet (an empty chat): the reply box starts the story.
     const firstMessage = this.state.paragraphs.length === 0;
@@ -3057,5 +3266,166 @@ export class VnStage {
     if (this.input.value !== this.state.draft) this.input.value = this.state.draft;
     this.input.disabled = isBusy;
     this.submitButton.disabled = isBusy || this.state.draft.trim().length === 0;
+  }
+
+  /** Close Your turn's reply box behind the Reply button, or open it again (`focus`: into the box). */
+  private setReplyCollapsed(collapsed: boolean, focus = false): void {
+    if (this.replyCollapsed === collapsed) return;
+    this.replyCollapsed = collapsed;
+    const view = selectVnStageView(this.state);
+    this.renderInteraction(view.showChoices, view.showComposer, view.isBusy);
+    if (collapsed) {
+      this.replyOpenButton.focus({ preventScroll: true });
+    } else if (focus && this.state.phase === "awaiting-input") {
+      this.input.focus({ preventScroll: true });
+      this.replyFocusedAt = performance.now();
+    }
+  }
+
+  private get openingCard(): OpeningCard {
+    if (!this.openingCardEl) {
+      const card = new OpeningCard(() => this.onOpeningCardClosed());
+      card.element.addEventListener("click", (event) => {
+        event.stopPropagation();
+        card.close();
+      });
+      this.root.append(card.element);
+      this.openingCardEl = card;
+    }
+    return this.openingCardEl;
+  }
+
+  private get waitingScreen(): WaitingScreen {
+    if (!this.waitingScreenEl) {
+      this.waitingScreenEl = new WaitingScreen({ onClose: () => this.root.focus({ preventScroll: true }) });
+      this.root.insertBefore(this.waitingScreenEl.element, this.openingCardEl?.element ?? null);
+    }
+    return this.waitingScreenEl;
+  }
+
+  private get locationLabel(): LocationLabel {
+    if (!this.locationLabelEl) {
+      this.locationLabelEl = new LocationLabel();
+      this.root.insertBefore(this.locationLabelEl.element, this.statusStack);
+    }
+    return this.locationLabelEl;
+  }
+
+  private cardOpen(): boolean {
+    return this.openingCardEl?.isOpen() ?? false;
+  }
+
+  private waitingOpen(): boolean {
+    return this.waitingScreenEl?.isOpen() ?? false;
+  }
+
+  private waitingPreview(): boolean {
+    return this.waitingScreenEl?.isPreview() ?? false;
+  }
+
+  /** Motion for the stage's own screens: Motion not "off" and no OS reduced motion. */
+  private sceneMotion(): boolean {
+    return this.effectIntensity !== "off" && !prefersReducedMotion();
+  }
+
+  /** Keep a turn's scenes, picture and writer (a turn without scenes keeps the last known place). */
+  private rememberTurnScenes(turn: VnTurnInput): void {
+    if (this.scenes.length > 0) this.lastScene = this.scenes[this.scenes.length - 1] ?? this.lastScene;
+    if (turn.scenes !== undefined) this.scenes = [...turn.scenes];
+    else if (turn.planHold === undefined) this.scenes = [];
+    if (turn.cardBackgroundUrl !== undefined) this.cardBackgroundUrl = turn.cardBackgroundUrl || null;
+    if (turn.writer !== undefined) this.writer = turn.writer;
+  }
+
+  /** The scene in effect at the reader's paragraph (the last known one while a provisional turn waits). */
+  private currentScene(): VnScene | null {
+    if (this.scenes.length === 0) return this.lastScene;
+    const turnParagraphs = this.state.paragraphs.filter((paragraph) => !paragraph.id.startsWith(USER_PARAGRAPH_PREFIX)).length;
+    return sceneAt(this.scenes, Math.min(this.state.currentParagraphIndex, Math.max(0, turnParagraphs - 1)));
+  }
+
+  /** The picture behind the opening card and the waiting screen: the card's own, else the scene on the stage. */
+  private sceneBackdropUrl(): string | null {
+    if (this.flow.cardBackground && this.cardBackgroundUrl) return this.cardBackgroundUrl;
+    return this.currentDisplayedUrl;
+  }
+
+  private openingCardContent(turn?: VnTurnInput) {
+    const scenes = turn?.scenes ?? this.scenes;
+    return {
+      scene: scenes[0] ?? this.lastScene,
+      fallbackTitle: this.writer,
+      paragraphCount: (turn?.paragraphs ?? this.state.paragraphs).length,
+      backgroundUrl: this.flow.cardBackground ? this.cardBackgroundUrl : null,
+    };
+  }
+
+  private showOpeningCard(replay: boolean, turn?: VnTurnInput): void {
+    this.openingCard.show(this.openingCardContent(turn), {
+      minMs: this.flow.openingCardMinMs,
+      autoStart: this.flow.playOnArrival,
+      motion: this.sceneMotion(),
+    });
+    if (replay) {
+      // A replay is ready at once and starts the reply again when it closes.
+      this.openingCard.markReady(true);
+      this.restart();
+    }
+  }
+
+  /** The opening card closed: the first paragraph types, plays its effects and enters History. */
+  private onOpeningCardClosed(): void {
+    if (this.destroyed) return;
+    this.currentRenderedParagraphId = "";
+    this.renderDialogueContent();
+    this.updateContinueButton();
+    this.syncSceneChrome();
+    this.focus();
+    this.callbacks.onReadingStart?.();
+  }
+
+  private waitingRecap() {
+    const paragraphs = this.state.paragraphs;
+    const reader = [...paragraphs].reverse().find((paragraph) => paragraph.id.startsWith(USER_PARAGRAPH_PREFIX));
+    return buildWaitingRecap({
+      paragraphs,
+      sprites: this.presentationMode === "sprites" ? this.spriteLayer.getView() : null,
+      scenes: this.scenes.length > 0 ? this.scenes : this.lastScene ? [this.lastScene] : [],
+      readerName: reader?.speaker ?? "",
+      sent: this.lastSent,
+      writer: this.writer,
+      backgroundUrl: this.sceneBackdropUrl(),
+    });
+  }
+
+  private waitingStatus(): string {
+    if (this.state.phase === "planning") return "Setting the next scene\u2026";
+    return `${this.writer || "The story"} is writing the next scene\u2026`;
+  }
+
+  /** The opening card's readiness, the waiting screen and the location label for the state on the stage. */
+  private syncSceneChrome(): void {
+    const phase = this.state.phase;
+    if (this.cardOpen()) {
+      this.openingCard.markReady(this.state.planHold === null && this.state.pendingImage === null);
+    }
+    const waiting = (phase === "waiting-for-response" || phase === "planning") && this.state.paragraphs.length > 0;
+    if (!this.waitingPreview()) {
+      if (waiting && this.flow.waitingBackdrop !== "off") {
+        if (this.waitingOpen()) this.waitingScreen.setStatus(this.waitingStatus());
+        else this.waitingScreen.show(this.waitingRecap(), {
+          backdrop: this.flow.waitingBackdrop,
+          recap: this.flow.waitingRecap,
+          preview: false,
+          motion: this.sceneMotion(),
+        }, this.waitingStatus());
+      } else if (this.waitingOpen()) {
+        this.waitingScreen.hide();
+      }
+    }
+    const reading = phase === "revealing" || phase === "awaiting-input" || phase === "error";
+    const covered = this.cardOpen() || this.waitingOpen();
+    const scene = this.flow.locationLabel && reading && !covered ? this.currentScene() : null;
+    if (scene || this.locationLabelEl) this.locationLabel.render(scene);
   }
 }

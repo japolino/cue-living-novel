@@ -302,7 +302,11 @@ function buildStandardStageDOM(parent: MockNode) {
   interaction.setAttribute("data-vn-interaction", "");
   const interactionHint = new MockNode("p");
   interactionHint.setAttribute("data-vn-interaction-hint", "");
-  interaction.append(interactionHint);
+  const interactionActions = new MockNode("div");
+  interactionActions.setAttribute("data-vn-interaction-actions", "");
+  interaction.append(interactionHint, interactionActions);
+  const replyOpen = new MockNode("button");
+  replyOpen.setAttribute("data-vn-reply-open", "");
   const gameChoices = new MockNode("div");
   gameChoices.setAttribute("data-vn-game-choices", "");
   const choiceList = new MockNode("ol");
@@ -322,9 +326,11 @@ function buildStandardStageDOM(parent: MockNode) {
   backlogClose.setAttribute("data-vn-backlog-close", "");
   const backlogContent = new MockNode("div");
   backlogContent.setAttribute("data-vn-backlog-content", "");
-  backlog.append(backlogClose, backlogContent);
+  const backlogScript = new MockNode("button");
+  backlogScript.setAttribute("data-vn-backlog-script", "");
+  backlog.append(backlogClose, backlogScript, backlogContent);
 
-  root.append(scene, fx, flash, status, empty, narrative, interaction, backlog);
+  root.append(scene, fx, flash, status, empty, narrative, interaction, replyOpen, backlog);
   parent.append(root);
 }
 

@@ -87,6 +87,17 @@ import {
   type SetupFlagStorage,
 } from "./model.js";
 import { SETTINGS_TOKENS_CSS } from "./controls-css.js";
+import {
+  OPENING_CARD_OPTIONS,
+  WAITING_BACKDROP_OPTIONS,
+  WAITING_RECAP_OPTIONS,
+  WAITING_SCREEN_HELP,
+  describeOpeningCardMin,
+  normalizeOpeningCard,
+  normalizeWaitingBackdrop,
+  normalizeWaitingRecap,
+  openingCardMinFrom,
+} from "./reading-flow.js";
 import { SPRITE_LIBRARY_CSS, SpriteLibraryView, type SpriteLibraryAction } from "./sprite-library.js";
 import type { PlateView, SpriteImageView, SpriteSetView } from "../../shared/sprites.js";
 import type { CutoutModelState } from "../sprites/cutout/index.js";
@@ -116,6 +127,10 @@ export type SettingsPanelOptions = {
   /** Receives partial patches. Every control calls this when it changes; Advanced text fields when committed and valid. */
   onSave: (patch: Partial<VisualNovelConfig>) => void;
   onOpenPreview: () => void;
+  /** Open Cue and show the waiting screen with the reply on the stage. */
+  onPreviewWaiting?: () => void;
+  /** Open Cue and show the reply's opening card again. */
+  onReplayOpening?: () => void;
   /** Open Cue with the Panels drawer on its Advanced tools (the stage shows no Panels button until a chat has a card). */
   onOpenPanelTools?: () => void;
   onRefreshConnections: () => void;
@@ -594,7 +609,29 @@ export class VisualNovelSettingsPanel {
             `, { find: find("Pace", "speed") })}
             ${group("Your turn", `
               <label data-check ${find("Suggest replies", "choices options cyoa generate suggestions reply")}><input name="generateChoices" type="checkbox" /><span>Suggest replies<small>Shown above the reply box when the reply offers no choices of its own.</small></span></label>
+              <label data-check ${find("Reply box at the end", "reply box input end of reply your turn open close next action")}><input name="replyBoxAtEnd" type="checkbox" /><span>Open the reply box when the reply ends<small>Off: the last scene stays in view and a Reply button opens the box.</small></span></label>
             `)}
+            ${group("Opening card", `
+              <fieldset aria-label="Opening card" ${find("Opening card", "opening scene title card first screen place time weather")}>
+                ${optionList("openingCard", OPENING_CARD_OPTIONS)}
+              </fieldset>
+              <label data-field ${find("Opening card time", "opening card minimum time shortest seconds")}><span>Shown at least <span data-opening-min-val>1.5 s</span></span><input name="openingCardMinMs" type="range" min="0" max="5000" step="250" /></label>
+              <label data-check ${find("Start by itself", "play as soon as the reply arrives auto start new reply tap to start")}><input name="playOnArrival" type="checkbox" /><span>Start a new reply by itself when it is ready<small>Off: the opening card waits for a tap.</small></span></label>
+              <label data-check ${find("Card background picture", "bot background bg asset 배경 card picture backdrop")}><input name="cardBackground" type="checkbox" /><span>Use the card's own background picture<small>An asset named bg, background or 배경, also behind the waiting screen.</small></span></label>
+              <label data-check ${find("Location label", "location place time weather top left label")}><input name="locationLabel" type="checkbox" /><span>Show the place at the top left while reading</span></label>
+              <div data-actions><button type="button" data-replay-opening>Replay the opening card</button></div>
+            `, { id: "opening", help: "Shown when a reply opens, while its pictures are prepared.", find: find("Opening card", "opening scene title first screen") })}
+            ${group("While you wait", `
+              <fieldset ${find("Waiting backdrop", "waiting screen loading backdrop tidy cast introduction light")}>
+                <legend>Backdrop</legend>
+                ${optionList("waitingBackdrop", WAITING_BACKDROP_OPTIONS)}
+              </fieldset>
+              <fieldset ${find("Waiting recap", "waiting screen recap line-up bubbles flashback cards film strip")}>
+                <legend>On top</legend>
+                ${optionList("waitingRecap", WAITING_RECAP_OPTIONS)}
+              </fieldset>
+              <div data-actions><button type="button" data-preview-waiting>Preview the waiting screen</button><small>Opens Cue with the reply on the stage; tap away from the characters to close.</small></div>
+            `, { id: "waiting", help: esc(WAITING_SCREEN_HELP), find: find("While you wait", "waiting screen loading generating next reply recap") })}
             ${group("Starting", `
               <label data-check ${find("Open automatically", "auto enter open novel view chat start")}><input name="autoEnter" type="checkbox" /><span>Open the novel view automatically when a chat opens</span></label>
             `)}
@@ -1260,6 +1297,7 @@ export class VisualNovelSettingsPanel {
       // Sliders and number fields preview while dragging or typing; the save happens on change.
       if (target.name === "bgmVolume" || target.name === "sfxVolume") this.updateVolumeLabels();
       if (target.name === "spriteMotion" || target.name === "spriteOutline") this.updatePuppetLabels();
+      if (target.name === "openingCardMinMs") this.updateReadingFlowLabels();
       if (target.name === "textSpeed") this.restartSample();
       if (target.name === "textScale") this.root.querySelector<HTMLElement>("[data-sample-stage]")!.style.setProperty("--sample-scale", String(clamp(Number(target.value), TEXT_SCALE_MIN, TEXT_SCALE_MAX, this.config.textScale)));
     });
@@ -1305,6 +1343,12 @@ export class VisualNovelSettingsPanel {
     for (const button of this.root.querySelectorAll("[data-open-preview]")) {
       button.addEventListener("click", () => this.options.onOpenPreview());
     }
+    const previewWaiting = this.root.querySelector<HTMLButtonElement>("[data-preview-waiting]")!;
+    previewWaiting.hidden = !this.options.onPreviewWaiting;
+    previewWaiting.addEventListener("click", () => this.options.onPreviewWaiting?.());
+    const replayOpening = this.root.querySelector<HTMLButtonElement>("[data-replay-opening]")!;
+    replayOpening.hidden = !this.options.onReplayOpening;
+    replayOpening.addEventListener("click", () => this.options.onReplayOpening?.());
     const panelTools = this.root.querySelector<HTMLButtonElement>("[data-open-panel-tools]")!;
     panelTools.hidden = !this.options.onOpenPanelTools;
     panelTools.addEventListener("click", () => this.options.onOpenPanelTools?.());
@@ -1451,6 +1495,14 @@ export class VisualNovelSettingsPanel {
     switch (name) {
       case "generateChoices": return { generateChoices: checked };
       case "autoEnter": return { autoEnter: checked };
+      case "replyBoxAtEnd": return { replyBoxAtEnd: checked };
+      case "openingCard": return { openingCard: normalizeOpeningCard(target.value) };
+      case "openingCardMinMs": return { openingCardMinMs: openingCardMinFrom(target.value) };
+      case "playOnArrival": return { playOnArrival: checked };
+      case "cardBackground": return { cardBackground: checked };
+      case "locationLabel": return { locationLabel: checked };
+      case "waitingBackdrop": return { waitingBackdrop: normalizeWaitingBackdrop(target.value) };
+      case "waitingRecap": return { waitingRecap: normalizeWaitingRecap(target.value) };
       case "referenceAnchoring": return { referenceAnchoring: checked };
       case "referenceSource": return { referenceSource: normalizeReferenceSource(target.value) };
       case "themePreset":
@@ -1948,6 +2000,15 @@ export class VisualNovelSettingsPanel {
     }
     this.control<HTMLInputElement>("generateChoices").checked = config.generateChoices;
     this.control<HTMLInputElement>("autoEnter").checked = config.autoEnter;
+    this.control<HTMLInputElement>("replyBoxAtEnd").checked = config.replyBoxAtEnd;
+    this.setRadio("openingCard", config.openingCard);
+    this.control<HTMLInputElement>("openingCardMinMs").value = String(config.openingCardMinMs);
+    this.control<HTMLInputElement>("playOnArrival").checked = config.playOnArrival;
+    this.control<HTMLInputElement>("cardBackground").checked = config.cardBackground;
+    this.control<HTMLInputElement>("locationLabel").checked = config.locationLabel;
+    this.setRadio("waitingBackdrop", config.waitingBackdrop);
+    this.setRadio("waitingRecap", config.waitingRecap);
+    this.updateReadingFlowLabels();
     this.control<HTMLInputElement>("referenceAnchoring").checked = config.referenceAnchoring;
     this.setRadio("referenceSource", config.referenceSource);
     this.root.querySelector<HTMLElement>("[data-reference-source]")!.hidden = !config.referenceAnchoring;
@@ -2174,6 +2235,13 @@ export class VisualNovelSettingsPanel {
   private showCustomQuiet(name: string, visible: boolean): void {
     const field = this.root.querySelector<HTMLElement>(`[data-custom="${name}"]`);
     if (field) field.hidden = !visible;
+  }
+
+  private updateReadingFlowLabels(): void {
+    const min = this.root.querySelector("[data-opening-min-val]");
+    if (min) min.textContent = describeOpeningCardMin(Number(this.control<HTMLInputElement>("openingCardMinMs").value));
+    const cardOff = this.config.openingCard === "off";
+    for (const name of ["openingCardMinMs", "playOnArrival"]) this.control<HTMLInputElement>(name).disabled = cardOff;
   }
 
   private updatePuppetLabels(): void {

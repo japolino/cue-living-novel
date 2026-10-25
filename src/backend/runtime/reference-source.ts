@@ -389,6 +389,29 @@ async function chatCharacter(spindle: SpindleAPI, chatId: string, userId?: strin
   }
 }
 
+/** Asset names a card uses for its own background picture, in order of preference. */
+export const CARD_BACKGROUND_ASSET_NAMES = ["bg", "background", "배경", "backdrop"] as const;
+
+/** The image id of the card's background picture (an asset named `bg`, `background` or `배경`), or null. */
+export function cardBackgroundImageId(character: CharacterDTO): string | null {
+  for (const name of CARD_BACKGROUND_ASSET_NAMES) {
+    const id = resolveCharacterAssetImageId(character, name);
+    if (id) return id;
+  }
+  return null;
+}
+
+/**
+ * The URL of the chat card's background picture, for the stage's opening card
+ * and waiting screen. Null when the chat has no card or the card has no such
+ * asset; any host failure is null too.
+ */
+export async function loadCardBackgroundUrl(spindle: SpindleAPI, chatId: string, userId?: string): Promise<string | null> {
+  const character = await chatCharacter(spindle, chatId, userId);
+  const id = character ? cardBackgroundImageId(character) : null;
+  return id ? `/api/v1/images/${encodeURIComponent(id)}` : null;
+}
+
 /**
  * Resolve card assets for a plan's characters. Called only when
  * `referenceSource` is "card"; any host failure yields null and the whole

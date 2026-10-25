@@ -45,6 +45,8 @@ function spyStage(): VisualStageThemeTarget & { calls: string[] } {
 }
 
 const baseConfig: VisualNovelConfig = {
+  // Settings this file does not care about keep their defaults.
+  ...DEFAULT_CONFIG,
   novelAiQualityTags: true,
   novelAiUseDefaultNegative: true,
   speech: DEFAULT_CONFIG.speech,

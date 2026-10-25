@@ -122,7 +122,8 @@ export function bootHost(options: { chatId?: string; config?: Partial<VisualNove
     sendToBackend: (message: Record<string, unknown>) => { sent.push(message); },
   };
   const cleanup = setupVisualNovelFrontend(ctx as never);
-  const config: VisualNovelConfig = { ...DEFAULT_CONFIG, textSpeed: 0, ...options.config };
+  // Replies open straight away here; the opening card has tests of its own.
+  const config: VisualNovelConfig = { ...DEFAULT_CONFIG, textSpeed: 0, openingCard: "off", ...options.config };
   const query = (selector: string) => root.querySelector(selector);
   const harness = {
     chatId, sent, audio, root,

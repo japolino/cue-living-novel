@@ -121,6 +121,17 @@ describe("runtime asset readiness", () => {
     expect(turnView(record).assets[0]?.jobId).toBe("job");
   });
 
+  test("turn views carry each scene's place, time and weather", () => {
+    const record: StoredTurnRecord = { schemaVersion: 1, speaker: "Mira", status: "ready", plan, jobs: [], updatedAt: now };
+    const scene = plan.scenes[0]!;
+    expect(turnView(record).scenes).toEqual([{
+      startParagraph: 0,
+      location: scene.environment.location,
+      timeOfDay: scene.environment.timeOfDay,
+      weather: scene.environment.weather,
+    }]);
+  });
+
   test("persists browser readiness only for the active fingerprint", async () => {
     const record: StoredTurnRecord = { schemaVersion: 1, speaker: "Mira", status: "ready", plan, jobs: [generatedJob()], updatedAt: now };
     const { spindle, writes, sent } = runtime(record);

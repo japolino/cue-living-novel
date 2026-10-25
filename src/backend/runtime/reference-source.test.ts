@@ -4,6 +4,7 @@ import { TurnPlanSchema, type SceneState, type TurnPlan, type VisualCue } from "
 import type { CharacterRegistry } from "../../shared/identity.js";
 import {
   assetNameMatches,
+  cardBackgroundImageId,
   chooseCardAssetName,
   collectCardAssetNames,
   fetchReferenceImageViaFrontend,
@@ -330,4 +331,19 @@ test("unresolvable bare entries do not shadow a usable sprite variant", () => {
   expect(collectCardAssetNames(card)).toEqual(["Aurelia_neutral"]);
   const result = resolveCardAssetsForPlan({ plan: plan([cue("a", 0, "Aurelia")], ["Aurelia"]), character: card, content: "", registry: emptyRegistry });
   expect(result.get("aurelia")?.imageId).toBe("usable");
+});
+
+describe("card background picture", () => {
+  const card = (map: Record<string, string>) => ({ ...singleCharacterCard, extensions: { risu_asset_map: map } }) as unknown as CharacterDTO;
+
+  test("an asset named bg, background or 배경 is the card's background", () => {
+    expect(cardBackgroundImageId(card({ Aurelia_smile: "smile", "BG.png": "bg-id" }))).toBe("bg-id");
+    expect(cardBackgroundImageId(card({ Background: "background-id" }))).toBe("background-id");
+    expect(cardBackgroundImageId(card({ "배경.webp": "korean-id" }))).toBe("korean-id");
+  });
+
+  test("bg wins over background; a card without one has none", () => {
+    expect(cardBackgroundImageId(card({ background: "second", bg: "first" }))).toBe("first");
+    expect(cardBackgroundImageId(card({ Aurelia_smile: "smile", bgm_theme: "music" }))).toBeNull();
+  });
 });

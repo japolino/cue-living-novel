@@ -13,6 +13,9 @@ import {
   SPRITE_MOTION_MAX,
   SPRITE_OUTLINE_MAX,
   THEME_PRESET_IDS,
+  OPENING_CARD_MIN_MS_MAX,
+  WAITING_BACKDROPS,
+  WAITING_RECAPS,
   spritePuppetSettings,
 } from "./config";
 
@@ -312,4 +315,32 @@ test("sprite puppet settings default on (no outline) and clamp to their ranges",
   assert.equal(normalizeConfig({ spriteMotion: -5, spriteOutline: "2" }).spriteMotion, 0);
   assert.equal(normalizeConfig({ spriteOutline: "2" }).spriteOutline, 2);
   assert.deepEqual(Object.keys(spritePuppetSettings(defaults)).sort(), ["spriteActing", "spriteBreathing", "spriteFocusBlur", "spriteHeadMotion", "spriteMotion", "spriteOutline", "spritePhysics", "spriteSway"]);
+});
+
+test("reading-flow settings: the opening card, the waiting screen and the reply box", () => {
+  const defaults = normalizeConfig({});
+  assert.equal(defaults.openingCard, "title");
+  assert.equal(defaults.openingCardMinMs, 1500);
+  assert.equal(defaults.cardBackground, true);
+  assert.equal(defaults.locationLabel, true);
+  assert.equal(defaults.waitingBackdrop, "card");
+  assert.equal(defaults.waitingRecap, "auto");
+  assert.equal(defaults.playOnArrival, true);
+  assert.equal(defaults.replyBoxAtEnd, true);
+  for (const backdrop of WAITING_BACKDROPS) assert.equal(normalizeConfig({ waitingBackdrop: backdrop }).waitingBackdrop, backdrop);
+  for (const recap of WAITING_RECAPS) assert.equal(normalizeConfig({ waitingRecap: recap }).waitingRecap, recap);
+  const odd = normalizeConfig({ openingCard: "big", waitingBackdrop: "neon", waitingRecap: 3, playOnArrival: "no", replyBoxAtEnd: 0, openingCardMinMs: 99999 });
+  assert.equal(odd.openingCard, "title");
+  assert.equal(odd.waitingBackdrop, "card");
+  assert.equal(odd.waitingRecap, "auto");
+  assert.equal(odd.playOnArrival, true);
+  assert.equal(odd.replyBoxAtEnd, true);
+  assert.equal(odd.openingCardMinMs, OPENING_CARD_MIN_MS_MAX);
+  const off = normalizeConfig({ openingCard: "off", openingCardMinMs: -10, cardBackground: false, locationLabel: false, playOnArrival: false, replyBoxAtEnd: false });
+  assert.equal(off.openingCard, "off");
+  assert.equal(off.openingCardMinMs, 0);
+  assert.equal(off.cardBackground, false);
+  assert.equal(off.locationLabel, false);
+  assert.equal(off.playOnArrival, false);
+  assert.equal(off.replyBoxAtEnd, false);
 });

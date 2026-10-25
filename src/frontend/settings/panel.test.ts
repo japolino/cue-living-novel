@@ -4,6 +4,16 @@ import { readFileSync } from "node:fs";
 import { THEME_PRESET_IDS } from "../../config.js";
 import { THEME_PRESET_LABELS, THEME_PRESET_OPTIONS } from "./panel";
 import { TEXT_EFFECT_CATALOGUE } from "../../shared/text-effects.js";
+import {
+  WAITING_BACKDROP_OPTIONS,
+  WAITING_RECAP_OPTIONS,
+  describeOpeningCardMin,
+  normalizeOpeningCard,
+  normalizeWaitingBackdrop,
+  normalizeWaitingRecap,
+  openingCardMinFrom,
+} from "./reading-flow";
+import { WAITING_BACKDROPS, WAITING_RECAPS } from "../../config.js";
 
 describe("theme preset settings options", () => {
   test("the selector exposes exactly the canonical five presets", () => {
@@ -82,6 +92,41 @@ describe("settings panel markup", () => {
       expect(advancedKeys).not.toContain(name);
     }
     expect(source).toContain('this.root.querySelector<HTMLElement>("[data-sprites-look]")!.hidden = !sprites;');
+  });
+
+  test("reading flow: the opening card, the waiting screen and the reply box save at once, each once", () => {
+    for (const name of ["openingCardMinMs", "playOnArrival", "cardBackground", "locationLabel", "replyBoxAtEnd"]) {
+      expect(names.filter((candidate) => candidate === name)).toEqual([name]);
+    }
+    for (const name of ["openingCard", "openingCardMinMs", "playOnArrival", "cardBackground", "locationLabel", "replyBoxAtEnd", "waitingBackdrop", "waitingRecap"]) {
+      expect(source).toContain(`case "${name}": return { ${name}: `);
+      expect(advancedKeys).not.toContain(name);
+    }
+    expect(source).toContain('optionList("openingCard", OPENING_CARD_OPTIONS)');
+    expect(source).toContain('optionList("waitingBackdrop", WAITING_BACKDROP_OPTIONS)');
+    expect(source).toContain('optionList("waitingRecap", WAITING_RECAP_OPTIONS)');
+    // The preview and replay buttons show only when the host can open Cue for them.
+    expect(source).toContain("previewWaiting.hidden = !this.options.onPreviewWaiting;");
+    expect(source).toContain("replayOpening.hidden = !this.options.onReplayOpening;");
+  });
+
+  test("reading flow options: one per setting value, and odd values fall back to the defaults", () => {
+    expect(WAITING_BACKDROP_OPTIONS.map((option) => option.value)).toEqual([...WAITING_BACKDROPS]);
+    expect(WAITING_RECAP_OPTIONS.map((option) => option.value)).toEqual([...WAITING_RECAPS]);
+    expect(normalizeOpeningCard("off")).toBe("off");
+    expect(normalizeOpeningCard("huge")).toBe("title");
+    expect(normalizeWaitingBackdrop("daylight")).toBe("daylight");
+    expect(normalizeWaitingBackdrop("neon")).toBe("card");
+    expect(normalizeWaitingRecap("film")).toBe("film");
+    expect(normalizeWaitingRecap("")).toBe("auto");
+    expect(openingCardMinFrom("2250")).toBe(2250);
+    expect(openingCardMinFrom("99999")).toBe(5000);
+    expect(openingCardMinFrom("-4")).toBe(0);
+    expect(openingCardMinFrom("x")).toBe(1500);
+    expect(describeOpeningCardMin(0)).toBe("until ready");
+    expect(describeOpeningCardMin(1000)).toBe("1 s");
+    expect(describeOpeningCardMin(1500)).toBe("1.5 s");
+    expect(describeOpeningCardMin(1750)).toBe("1.75 s");
   });
 
   test("character motion reads as not applying under Motion Still or reduced motion, with a note", () => {

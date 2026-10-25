@@ -2,7 +2,7 @@ import type { SpindleFrontendContext } from "lumiverse-spindle-types";
 import { spritePuppetSettings, textEffectModeFor, type VisualNovelConfig, type VisualNovelEffectIntensity, type VisualNovelPresentationMode, type VisualNovelSpritePuppet, type VisualNovelTextEffectMode } from "../../config.js";
 import { REFERENCE_IMAGE_MAX_BYTES, REFERENCE_IMAGE_MIMES } from "../../protocol.js";
 import type { AssetView, BackendResponse, ConnectionCatalogOption, FrontendRequest, TurnView } from "../../protocol.js";
-import { AudioEngine, VnStage, isAmbientEffect, isStageEffect } from "../stage/index.js";
+import { AudioEngine, VnStage, isAmbientEffect, isStageEffect, type VnReadingFlow } from "../stage/index.js";
 import type { AmbientEffect, StageEffect } from "../store/index.js";
 import { VisualNovelSettingsPanel } from "../settings/panel.js";
 import { cutoutDownloadNote } from "../settings/model.js";
@@ -322,6 +322,9 @@ export function stageTurnInput(
     preserveImage,
     ...(next.ambients !== undefined ? { ambient: firstAmbient(next, intensity) } : {}),
     ...(next.sprites ? { sprites: next.sprites } : {}),
+    ...(next.scenes ? { scenes: next.scenes } : {}),
+    cardBackgroundUrl: next.cardBackgroundUrl ?? null,
+    writer: next.speaker,
     ...(next.provisional ? { planHold } : {})
   };
 }
@@ -414,7 +417,23 @@ export type VisualStageThemeTarget = Pick<
   setPresentationMode?: (mode: VisualNovelPresentationMode) => void;
   /** Sprite puppet motion, outline and focus blur. */
   setSpritePuppet?: (settings: VisualNovelSpritePuppet) => void;
+  /** How a reply opens, waits and ends (opening card, location label, waiting screen, playback). */
+  setReadingFlow?: (flow: VnReadingFlow) => void;
 };
+
+/** The reading-flow settings of a config (what the stage needs). */
+export function readingFlowSettings(config: VisualNovelConfig): VnReadingFlow {
+  return {
+    openingCard: config.openingCard,
+    openingCardMinMs: config.openingCardMinMs,
+    cardBackground: config.cardBackground,
+    locationLabel: config.locationLabel,
+    waitingBackdrop: config.waitingBackdrop,
+    waitingRecap: config.waitingRecap,
+    playOnArrival: config.playOnArrival,
+    replyBoxAtEnd: config.replyBoxAtEnd,
+  };
+}
 
 /**
  * Push a config's presentation settings onto the stage. Applied on every save
@@ -438,6 +457,7 @@ export function applyVisualConfigToStage(
   stage.setTextEffects?.(textEffectModeFor(config.effectIntensity));
   stage.setPresentationMode?.(config.presentationMode);
   stage.setSpritePuppet?.(spritePuppetSettings(config));
+  stage.setReadingFlow?.(readingFlowSettings(config));
 }
 
 /**
@@ -639,6 +659,20 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     provisionalCursorKey = key;
     speech?.setCursor(cursor);
   };
+  /**
+   * The first paragraph's sound and voice wait while the opening card is up:
+   * the stage's onReadingStart runs them when it closes. Otherwise at once.
+   */
+  let readingStartWork: (() => void) | null = null;
+  const whenReading = (work: () => void): void => {
+    if (stage.isOpeningCardOpen()) {
+      readingStartWork = work;
+      speech?.setCursor(null);
+      return;
+    }
+    readingStartWork = null;
+    work();
+  };
   const onVisibilityChanged = (): void => {
     if (speech) speech.setVisible(!document.hidden);
   };
@@ -683,7 +717,9 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     onExit: () => deactivate(),
     onPrevious: (paragraphIndex) => {
       panels.setCursor(paragraphIndex);
-      syncSpeechCursor(turn, paragraphIndex);
+      // From the start under a replayed opening card: the voice waits for the card.
+      const rewound = turn;
+      whenReading(() => syncSpeechCursor(rewound, paragraphIndex));
       restoreMusicAt(turn, paragraphIndex);
       void syncImageForParagraph(paragraphIndex);
     },
@@ -745,6 +781,11 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       });
     },
     onSpriteRetry: (setKey) => ctx.sendToBackend({ type: "vn_sprite_action", action: "retry_failed", setKey }),
+    onReadingStart: () => {
+      const work = readingStartWork;
+      readingStartWork = null;
+      work?.();
+    },
   });
   // The cut-out model downloads in the background on first use (the first
   // sprites are cut with Basic meanwhile): the stage shows its progress, and
@@ -818,6 +859,14 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   const settingsPanel: (VisualNovelSettingsPanel & SettingsFeedbackTarget) | null = settingsHandle ? new VisualNovelSettingsPanel({
     mount: settingsHandle.root,
     onOpenPreview: () => { if (!active) toggleVisualNovel(); },
+    onPreviewWaiting: () => {
+      if (!active) toggleVisualNovel();
+      if (active) stage.previewWaitingScreen();
+    },
+    onReplayOpening: () => {
+      if (!active) toggleVisualNovel();
+      if (active) stage.replayOpeningCard();
+    },
     onOpenPanelTools: () => {
       if (!active) toggleVisualNovel();
       if (active) panels.openTools();
@@ -1259,6 +1308,21 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     const intensity = configRef.current?.effectIntensity ?? "full";
     if (decision.kind === "upgrade") {
       const input = stageTurnInput(next, true, intensity);
+      if (canUpgradeTurn(stage.getState(), input) && stage.isOpeningCardOpen()) {
+        // The plan landed under the opening card: reading has not started, so
+        // the opening paragraph plays whole (effect, sound, voice) when it closes.
+        const cursor = decision.paragraphIndex;
+        provisionalCursorKey = null;
+        provisionalSpokenKey = null;
+        panels.setTurn(next, cursor);
+        stage.upgradeTurn(input);
+        whenReading(() => {
+          syncSpeechCursor(next, cursor);
+          syncAudioForParagraph(next, cursor);
+        });
+        void syncImageForParagraph(cursor);
+        return;
+      }
       if (canUpgradeTurn(stage.getState(), input)) {
         const cursor = decision.paragraphIndex;
         // Speech first, so auto play that resumes with the plan waits on it. A
@@ -1280,9 +1344,11 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     const preserveImage = shouldPreserveImage(previous, next);
     turnOpeningBgm = preserveImage ? packSound.currentMusic : null;
     stage.loadTurn(stageTurnInput(next, preserveImage, intensity));
-    syncSpeechCursor(next, 0);
     void syncImageForParagraph(0);
-    syncAudioForParagraph(next, 0);
+    whenReading(() => {
+      syncSpeechCursor(next, 0);
+      syncAudioForParagraph(next, 0);
+    });
   }
 
   function routeBackend(payload: unknown): void {

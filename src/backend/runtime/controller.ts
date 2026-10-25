@@ -25,7 +25,7 @@ import { isFrontendRequest } from "../../protocol.js";
 import { compareTurnKeys, turnKeyEquals } from "../core/guards.js";
 import { PlanningQueue, isAbortError } from "../core/planning-queue.js";
 import { resolveNativeCardJobs } from "./native-assets.js";
-import { handleReferenceImageResponse } from "./reference-source.js";
+import { handleReferenceImageResponse, loadCardBackgroundUrl } from "./reference-source.js";
 import { CACHE_JOB_PROVIDER, createAssetJobs, prepareAssetJobs, generateAssets, resolveCacheCues, retainPlanEpisodes } from "./images.js";
 import { SceneImageCache, sceneImageScope } from "../core/scene-image-cache.js";
 import { fingerprintForMessage, gameHintsForTurn, planTurn, type StoryParagraphs } from "./planner.js";
@@ -139,6 +139,20 @@ const activeTurnKeys = new Map<string, StoredTurnRecord["plan"]["key"]>();
  * in memory; never the chat's active turn.
  */
 const provisionalTurns = new Map<string, { operationId: string; view: TurnView }>();
+
+/** Card background URLs by chat, briefly: a turn view is built several times per reply. */
+const cardBackgrounds = new Map<string, { at: number; url: string | null }>();
+const CARD_BACKGROUND_TTL_MS = 30_000;
+
+/** The chat card's background picture URL (see loadCardBackgroundUrl), cached for CARD_BACKGROUND_TTL_MS. */
+async function cardBackgroundUrl(spindle: SpindleAPI, chatId: string, userId: string | undefined): Promise<string | null> {
+  const key = `${userId ?? ""}:${chatId}`;
+  const cached = cardBackgrounds.get(key);
+  if (cached && Date.now() - cached.at < CARD_BACKGROUND_TTL_MS) return cached.url;
+  const url = await loadCardBackgroundUrl(spindle, chatId, userId).catch(() => null);
+  cardBackgrounds.set(key, { at: Date.now(), url });
+  return url;
+}
 /** Chats with a reply being generated: GENERATION_STARTED until it ends or stops. */
 const generatingChats = new Set<string>();
 
@@ -547,6 +561,12 @@ export function turnView(record: StoredTurnRecord): TurnView {
     choices: record.plan.choices.map((choice) => ({ id: choice.id, label: choice.label, value: choice.submission })),
     assets: record.jobs.map((job) => assetView(record, job)),
     ...(audioCues.length > 0 ? { audioCues } : {}),
+    scenes: record.plan.scenes.map((scene) => ({
+      startParagraph: scene.startParagraph,
+      location: scene.environment.location,
+      timeOfDay: scene.environment.timeOfDay,
+      weather: scene.environment.weather,
+    })),
     status: record.status,
     ...(record.error ? { error: record.error } : {})
   };
@@ -564,7 +584,9 @@ async function buildTurnView(
   userId: string | undefined,
   config?: VisualNovelConfig
 ): Promise<TurnView> {
-  const view = await turnViewWithAudio(spindle, record);
+  const background = await cardBackgroundUrl(spindle, record.plan.key.chatId, userId);
+  const plain = await turnViewWithAudio(spindle, record);
+  const view = background ? { ...plain, cardBackgroundUrl: background } : plain;
   if (config ? config.presentationMode !== "sprites" : !spriteModeCached(userId)) return view;
   try {
     const effective = config ?? await loadConfig(spindle, userId);

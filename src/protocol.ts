@@ -134,6 +134,13 @@ export type AudioCueView = {
   sfxUrl?: string | null;
 };
 
+export type SceneView = {
+  startParagraph: number;
+  location: string;
+  timeOfDay: string | null;
+  weather: string | null;
+};
+
 export type TurnView = {
   chatId: string;
   messageId: string;
@@ -156,6 +163,14 @@ export type TurnView = {
   audioCues?: AudioCueView[];
   /** Sprite mode only: per-paragraph staging plus the sprite sets and plates it uses. */
   sprites?: SpriteTurnView;
+  /**
+   * Where the turn's scenes take place (from the plan), in order: each starts
+   * at `startParagraph`. Shown on the opening card and the location label.
+   * Absent on the text before the plan.
+   */
+  scenes?: SceneView[];
+  /** The chat card's own background picture (an asset named `bg`, `background` or `배경`). */
+  cardBackgroundUrl?: string;
   status: "planning" | "ready" | "failed" | "cancelled";
   error?: string;
   /**
