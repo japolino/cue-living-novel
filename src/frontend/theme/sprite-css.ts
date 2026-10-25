@@ -16,7 +16,8 @@
  * zooms each image so every face has the same size, `--vn-sprite-face-shift`
  * (image widths) moves the anchor so the face nears the slot centre, and
  * `--vn-sprite-lift` (standing-figure heights, 0 or less) sinks the taller
- * figures in "heads" mode so the face tops line up.
+ * figures in "heads" mode so the face tops line up; `--vn-sprite-widest` on
+ * the layer makes the slot width limit everyone's shared height at once.
  *
  * Depth (sprite-depth.ts): a contact shadow and leg occlusion ground each
  * figure, a rim light coloured by the light preset sits on the edge that
@@ -101,7 +102,7 @@ export const VN_SPRITE_CSS = `
   [data-vn-sprites][data-vn-sprite-count="3"] {
     --vn-sprite-figure-h: min(var(--vn-sprite-figure-max), calc((100cqh - var(--vn-dialogue-top, 0px)) * 1.18));
   }
-  [data-vn-sprites] [data-vn-sprite] { bottom: calc(var(--vn-sprite-floor, 0px) + var(--vn-sprite-lift, 0) * var(--vn-sprite-figure-h)); }
+  [data-vn-sprites] [data-vn-sprite] { bottom: calc(var(--vn-sprite-floor, 0px) + var(--vn-sprite-lift, 0) * var(--vn-sprite-match-h, var(--vn-sprite-figure-h))); }
   /* A raised figure must not end in a straight cut above the box. */
   [data-vn-sprites] [data-vn-sprite-image] {
     --vn-sprite-feather-bottom: 16%;
@@ -143,14 +144,18 @@ export const VN_SPRITE_CSS = `
   --vn-sprite-fig-h: calc(var(--vn-sprite-img-h) * var(--vn-sprite-bh, 1));
 }
 
-/* Size matching (data-vn-size-match on the layer): the face decides the
-   size, not the slot width (a wide picture would otherwise end up with a
-   smaller face), but never past the stage top, so a full-body picture keeps
-   its head on screen. */
+/* Size matching (data-vn-size-match on the layer): every figure stands on
+   one shared height, so faces keep the same size. The slot width limits that
+   shared height once, for everyone: the widest figure on stage, over all
+   its ready expressions (--vn-sprite-widest, its width in standing heights,
+   from sprite-layer.ts), just fits its slot, like the per-picture limit
+   above, so an expression change resizes nobody. A figure never grows
+   past the stage top, so a full-body picture keeps its head on screen. */
 [data-vn-sprites][data-vn-size-match] [data-vn-sprite],
 [data-vn-sprites][data-vn-size-match] [data-vn-sprite-image] {
+  --vn-sprite-match-h: min(var(--vn-sprite-figure-h), calc(var(--vn-sprite-slot-w) / var(--vn-sprite-widest, 0.5)));
   --vn-sprite-img-h: min(
-    calc(var(--vn-sprite-figure-h) * var(--vn-sprite-s, 1) * var(--vn-sprite-match, 1)),
+    calc(var(--vn-sprite-match-h) * var(--vn-sprite-s, 1) * var(--vn-sprite-match, 1)),
     calc(98cqh * var(--vn-sprite-s, 1))
   );
 }
@@ -163,7 +168,7 @@ export const VN_SPRITE_CSS = `
   /* Size matching: the face toward the slot centre (mirrored figures flip it). */
   --vn-sprite-shift-px: calc(var(--vn-sprite-img-w) * var(--vn-sprite-face-shift, 0) * var(--vn-sprite-flip, 1));
   left: clamp(var(--vn-sprite-half-w), calc(var(--vn-sprite-x, 50%) + var(--vn-sprite-shift-px)), calc(100% - var(--vn-sprite-half-w)));
-  bottom: calc(var(--vn-sprite-lift, 0) * var(--vn-sprite-figure-h));
+  bottom: calc(var(--vn-sprite-lift, 0) * var(--vn-sprite-match-h, var(--vn-sprite-figure-h)));
   width: 0;
   height: 0;
   z-index: 1;

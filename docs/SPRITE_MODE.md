@@ -777,10 +777,15 @@ estimate (`spriteFaceSpot`):
   their old size; a close-up shrinks to the same face size, so an
   expression change keeps the head the same size.
 - The zoom is `--vn-sprite-match` on the actor and its image layer. With
-  matching on (`data-vn-size-match` on the layer), the face decides the
-  size instead of the slot width (a wide picture would otherwise get a
-  smaller face), but a figure never grows past 98% of the stage height, so
-  a full-body picture keeps its head on screen.
+  matching on (`data-vn-size-match` on the layer), everyone stands on one
+  shared height (`--vn-sprite-match-h`) instead of each picture being
+  limited by its own slot width (a wide picture would otherwise get a
+  smaller face). The slot width limits that shared height once: the widest
+  figure, over every ready expression of the actors on stage
+  (`--vn-sprite-widest`, `spriteMatchedWidth`), just fits its slot, so a
+  crowded phone trio stays as roomy as before and an expression change
+  resizes nobody. A figure never grows past 98% of the stage height, so a
+  full-body picture keeps its head on screen.
 - "heights" (default): feet stay on the floor, so height differences show.
   "heads": the taller figures also sink (`--vn-sprite-lift`, standing-figure
   heights, from `spriteHeadLift`) until every face top is on the lowest

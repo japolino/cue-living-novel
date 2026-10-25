@@ -433,6 +433,14 @@ export function spriteHeadLift(mode: VisualNovelSpriteSizeMatch["spriteSizeMatch
   return lifts;
 }
 
+/**
+ * A figure's width in standing-figure heights at its zoom: size matching
+ * limits everyone's shared height by the widest one (sprite-css.ts).
+ */
+export function spriteMatchedWidth(geometry: SpriteGeometry, zoom: number): number {
+  return geometry.scale * zoom * geometry.bw * geometry.aspect;
+}
+
 /** CSS custom properties for size matching (sprite-css.ts). */
 export function spriteSizeMatchVars(zoom: number, shift: number): Record<string, string> {
   return { "--vn-sprite-match": round(zoom), "--vn-sprite-face-shift": round(shift) };
@@ -1132,13 +1140,27 @@ export class SpriteLayer {
     this.puppet.refresh();
   }
 
-  /** Size matching "heads": sink the taller figures until every face top is on one line (`spriteHeadLift`). */
+  /**
+   * Size matching for everyone on stage at once: the widest figure limits the
+   * shared height (`--vn-sprite-widest`), and in "heads" mode the taller
+   * figures sink until every face top is on one line (`spriteHeadLift`).
+   * The widest counts every ready expression of the actors on stage, so an
+   * expression change never resizes anyone.
+   */
   private applyHeadLine(): void {
     const tops = new Map<string, number>();
+    let widest = 0;
     for (const entry of this.actors.values()) {
       if (entry.exiting || !entry.geometry || !entry.spot) continue;
       tops.set(entry.key, spriteFaceTop(entry.geometry, entry.spot, entry.match));
+      widest = Math.max(widest, spriteMatchedWidth(entry.geometry, entry.match));
+      for (const image of Object.values(this.view?.sets[entry.key]?.expressions ?? {})) {
+        if (image.status !== "ready" || !image.url) continue;
+        const geometry = spriteGeometry(image);
+        widest = Math.max(widest, spriteMatchedWidth(geometry, spriteSizeMatchZoom(this.sizeMatch, geometry, spriteFaceSpot(image, geometry))));
+      }
     }
+    if (widest > 0 && this.containerEl) setVars(this.containerEl, { "--vn-sprite-widest": round(widest) });
     const lifts = spriteHeadLift(this.sizeMatch.spriteSizeMatch, tops);
     for (const entry of this.actors.values()) {
       const lift = lifts.get(entry.key) ?? 0;

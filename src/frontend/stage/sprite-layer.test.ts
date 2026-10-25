@@ -810,6 +810,9 @@ describe("size matching (every face at one size)", () => {
       // Mira's face centre is 0.48 - 0.5 = -0.02 image widths off: moved back by that.
       expect(byKey("mira").style["--vn-sprite-face-shift"]).toBe("0.02");
       expect(byKey("mira").style["--vn-sprite-lift"]).toBe("0");
+      // The widest figure on stage limits everyone's shared height (each set here has one ready expression).
+      const widths = ["mira", "ren"].map((key) => Number(byKey(key).style["--vn-sprite-match"]) * Number(byKey(key).style["--vn-sprite-s"]) * Number(byKey(key).style["--vn-sprite-bw"]) * Number(byKey(key).style["--vn-sprite-a"]));
+      expect(Number(container.style["--vn-sprite-widest"])).toBeCloseTo(Math.max(...widths), 3);
       const snapshot = () => Object.fromEntries(layer.snapshot().actors.map((a) => [a.characterKey, [a.match, a.lift]]));
       expect(snapshot().mira![1]).toBe(0);
 

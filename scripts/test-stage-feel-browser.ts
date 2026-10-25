@@ -440,10 +440,10 @@ try {
     await settings.getByRole("tab", { name: "Look", exact: true }).click();
     const lastPatch = () => page.evaluate(() => (window as any).settingsFixture.patches.at(-1));
     const look = settings.locator('[data-pane="look"]');
-    // Order: Character motion, Character look, Stage feel, Text effect tags.
+    // Order: Character motion, Character look, Character size, Stage feel, Text effect tags.
     const order = await look.evaluate((pane) => [...pane.querySelectorAll<HTMLElement>("[data-group-id]")].map((group) => group.dataset.groupId));
     const at = (id: string) => order.indexOf(id);
-    assert.ok(at("sprite-motion") >= 0 && at("sprite-look") > at("sprite-motion") && at("stage-feel") === at("sprite-look") + 1 && at("text-fx") === at("stage-feel") + 1, `Stage feel sits right after the character groups (${order})`);
+    assert.ok(at("sprite-motion") >= 0 && at("sprite-look") > at("sprite-motion") && at("character-size") === at("sprite-look") + 1 && at("stage-feel") === at("character-size") + 1 && at("text-fx") === at("stage-feel") + 1, `Stage feel sits right after the character groups (${order})`);
     assert.equal(await settings.locator('[data-pane="reading"] [name="clickEffect"]').count(), 0, "nothing in Reading");
 
     const press = look.locator('input[name="spritePressBounce"]');

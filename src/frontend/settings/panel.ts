@@ -704,7 +704,7 @@ export class VisualNovelSettingsPanel {
                 <label data-field ${find("Smallest zoom", "sprites zoom limit shrink min")}><span>Smallest zoom <span data-size-min-val>60%</span></span><input name="spriteSizeMatchMin" type="range" min="${SPRITE_SIZE_MATCH_MIN_RANGE[0]}" max="${SPRITE_SIZE_MATCH_MIN_RANGE[1]}" step="5" /></label>
                 <label data-field ${find("Centre faces", "sprites centre center face slot horizontal align")}><span>Centre faces in their place <span data-size-center-val>100%</span></span><input name="spriteSizeMatchCenter" type="range" min="0" max="100" step="5" /></label>
                 <div data-actions><button type="button" data-size-match-reset>Default sizes</button></div>
-              `, { id: "sprite-size", help: esc(SPRITE_SIZE_MATCH_HELP), find: find("Character size", "sprites size face head height match same scale zoom") })}
+              `, { id: "character-size", help: esc(SPRITE_SIZE_MATCH_HELP), find: find("Character size", "sprites size face head height match same scale zoom") })}
             </div>
             ${group("Stage feel", `
               <fieldset ${find("Click effect", "click tap sparks sparkle star burst pop exclamation feedback")}>

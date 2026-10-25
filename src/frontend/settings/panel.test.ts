@@ -183,7 +183,9 @@ describe("settings panel markup", () => {
     expect(source).toContain("outlineColor.disabled = config.spriteOutline <= 0;");
     // Right after Character look, inside the Look pane.
     const look = source.slice(source.indexOf('${pane("look"'), source.indexOf('${pane("pictures"'));
-    expect(look.indexOf('id: "sprite-size"')).toBeGreaterThan(look.indexOf('id: "sprite-look"'));
+    expect(look.indexOf('id: "character-size"')).toBeGreaterThan(look.indexOf('id: "sprite-look"'));
+    // Its own group id: "sprite-size" is Advanced → Image size (hidden for NovelAI).
+    expect(source.match(/id: "sprite-size"/g)).toHaveLength(1);
     expect(look.indexOf('name="spriteOutlineColor"')).toBeLessThan(look.indexOf('id: "sprite-look"'));
     expect(source).toContain("const patch = spriteSizeMatchSettings(DEFAULT_CONFIG);");
   });
