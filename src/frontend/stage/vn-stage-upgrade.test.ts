@@ -184,6 +184,22 @@ describe("upgradeTurn", () => {
     expect(s.getState().phase).toBe("awaiting-input");
   });
 
+  test("a fallback load forgets what was read from the first changed paragraph on", () => {
+    const s = create();
+    s.loadTurn(provisional());
+    advance(s);
+    advance(s);
+    const turn = planned();
+    s.upgradeTurn({ ...turn, paragraphs: turn.paragraphs.map((paragraph, index) => index === 1 ? { ...paragraph, text: "Changed." } : paragraph) });
+    expect(s.getState().currentParagraphIndex).toBe(0);
+    // The unchanged opening stays; the old second and third paragraphs are gone.
+    expect(history(s).map((entry) => entry.text)).toEqual([texts[0]!]);
+    advance(s);
+    expect(history(s).map((entry) => entry.text)).toEqual([texts[0]!, "Changed."]);
+    // Skip "read" stops at the changed paragraph's successor: it was never read.
+    expect((s as unknown as { readParagraphIds: Set<string> }).readParagraphIds.has("fp:2")).toBe(false);
+  });
+
   test("a plan whose read text changed is loaded from the start", () => {
     const s = create();
     s.loadTurn(provisional());

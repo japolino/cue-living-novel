@@ -1255,8 +1255,31 @@ export class VnStage {
     this.lastSkipStop = null;
     // Sprite staging belongs to the turn: set it before the first paragraph renders.
     this.spriteLayer.setTurn(turn.sprites ?? null);
+    this.forgetChangedParagraphs(turn.paragraphs);
     this.dispatch({ type: "load-turn", turn });
     this.focus();
+  }
+
+  /**
+   * The turn on the stage loaded again with other text (the plan's text
+   * differs from the text that came before it): History entries and read
+   * marks from its first changed paragraph on describe text that is gone, and
+   * would keep the new text out of History and Skip unread. Another turn
+   * (its first paragraph id differs) and the reader's own line leave History
+   * alone.
+   */
+  private forgetChangedParagraphs(next: readonly VnParagraph[]): void {
+    const current = this.state.paragraphs;
+    if (this.state.isUserTurn || current.length === 0 || current[0]!.id !== next[0]?.id) return;
+    let first = 0;
+    while (first < current.length && current[first]!.id === next[first]?.id && current[first]!.text === next[first]!.text) first += 1;
+    const stale = new Set(current.slice(first).map((paragraph) => paragraph.id));
+    if (stale.size === 0) return;
+    for (const id of stale) this.readParagraphIds.delete(id);
+    for (let index = this.backlogEntries.length - 1; index >= 0; index -= 1) {
+      if (stale.has(this.backlogEntries[index]!.id)) this.backlogEntries.splice(index, 1);
+    }
+    if (this.isBacklogOpen) this.renderBacklog();
   }
 
   /**
