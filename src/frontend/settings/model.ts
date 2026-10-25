@@ -19,6 +19,7 @@ import {
   type VisualNovelEffectIntensity,
   type VisualNovelReferenceSource,
   type VisualNovelSceneImageFit,
+  type VisualNovelSpriteTransitions,
   type VisualNovelThemePreset,
 } from "../../config.js";
 import { THEME_PRESET_CSS } from "../theme/presets.js";
@@ -182,6 +183,16 @@ export const SCENE_IMAGE_FIT_OPTIONS: ReadonlyArray<{ value: VisualNovelSceneIma
   { value: "fill", label: "Stretch to fit", help: "Fills everything by stretching. Can look distorted." },
   { value: "none", label: "Original size", help: "No scaling. Large pictures get cropped, small ones sit centred." },
   { value: "scale-down", label: "Shrink only if too large", help: "Like the original size, but never bigger than the stage." },
+];
+
+/* ------------------------------------------------------------------------ */
+/* Expression changes on the PNG puppet, in plain words.                     */
+/* ------------------------------------------------------------------------ */
+
+export const SPRITE_TRANSITION_OPTIONS: ReadonlyArray<{ value: VisualNovelSpriteTransitions; label: string; help: string }> = [
+  { value: "expressive", label: "Match the emotion", help: "A surprise pops, sadness melts down, anger flares and a blush glows; calm changes spread from the face." },
+  { value: "soft", label: "Soft", help: "Every new expression spreads gently from the face." },
+  { value: "classic", label: "Simple fade", help: "A plain crossfade between the two pictures." },
 ];
 
 export function normalizeSceneImageFit(value: string): VisualNovelSceneImageFit {

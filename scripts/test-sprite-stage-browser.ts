@@ -13,7 +13,9 @@ import { SPRITE_EMOTES, SPRITE_LIGHTS, SPRITE_MOTIONS } from "../src/shared/spri
  * not ready, skip, auto), the PNG puppet (non-rigid idle motion, speaker
  * reaction, marks following the head, outline, focus, settings, pause, CSS
  * fallback), puppet acting (listeners look at the speaker and nod, the voice
- * follows the text, moods, emote reactions) and physics (follow-through on a
+ * follows the text, moods, emote reactions), transitions (a shift per emotion,
+ * the classic fade, the entrance focus pull), atmosphere (snow and breath,
+ * firelight, fog, off) and physics (follow-through on a
  * slot move, wind), and no console errors.
  * Screenshots: .cache/sprite-stage/ (puppet-frames.png and puppet-diff.png:
  * four frames 0.25 s apart and their differences amplified x12).
@@ -237,6 +239,17 @@ const samplePoses = (page: Page, ms: number) => page.evaluate((duration) => new 
 }), ms);
 const series = (frames: Awaited<ReturnType<typeof samplePoses>>, key: string, field: string) =>
   frames.map((frame) => frame[key]?.pose?.[field]).filter((v): v is number => typeof v === "number");
+/** Every actor's transition and atmosphere state (snapshot `effects`), once per frame for `ms`. */
+const sampleEffects = (page: Page, ms: number) => page.evaluate((duration) => new Promise<Array<Record<string, any>>>((resolve) => {
+  const frames: Array<Record<string, any>> = [];
+  const start = performance.now();
+  const step = () => {
+    const snapshot = (window as any).fx.stage.getSpriteSnapshot();
+    frames.push(Object.fromEntries(snapshot.actors.map((a: any) => [a.characterKey, a.effects])));
+    if (performance.now() - start < duration) requestAnimationFrame(step); else resolve(frames);
+  };
+  requestAnimationFrame(step);
+}), ms);
 
 const SOLO: P[] = [{ speaker: "Mira", text: "Good morning! Did you sleep well?", actors: [{ characterKey: "mira", focus: true }] }];
 const DUO: P[] = [{ speaker: "Mira", text: "This is Ren, from the class next door.", actors: [{ characterKey: "mira", slot: "left", focus: true, facing: "right" }, { characterKey: "ren", slot: "right", facing: "left" }] }];
@@ -323,7 +336,8 @@ try {
     geo = await geometry(page);
     assert.equal(geo.figures.length, 1, "the leaving actor is removed");
 
-    // Expression crossfade.
+    // Expression crossfade: the plain CSS fade ("classic"; the puppet's shifts are checked under "Puppet transitions").
+    await page.evaluate(() => (window as any).fx.puppet({ spriteTransitions: "classic" }));
     await load(page, [
       { speaker: "Mira", actors: [{ characterKey: "mira", focus: true }] },
       { speaker: "Mira", text: "What?!", actors: [{ characterKey: "mira", focus: true, expression: "shocked" }] },
@@ -360,6 +374,7 @@ try {
     await page.waitForTimeout(500);
     await shot(page, "expression-after");
     assert.equal((await snap(page)).actors[0].shownExpression, "surprised");
+    await page.evaluate(() => (window as any).fx.puppet({ spriteTransitions: "expressive" }));
 
     // A set with nothing ready: no sprite, a badge; it appears when a sprite is ready.
     await load(page, [{ speaker: "Yuki", text: "Hello?", actors: [{ characterKey: "mira", slot: "left" }, { characterKey: "yuki", slot: "right", focus: true }] }]);
@@ -509,12 +524,27 @@ try {
     await shot(page, "keymoment-0-sprites");
     // Into the key moment: the illustration crossfades in over the plate, the sprites fade out.
     await go(page, 1);
+    // Sampled every frame from the switch: with the puppet on software GL frames are slow,
+    // so the fade can start later than a fixed wait expects.
+    const fading = page.evaluate(() => new Promise<Array<{ opacity: number; illustrated: string | null }>>((resolve) => {
+      const theme = document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!;
+      const layer = theme.querySelector<HTMLElement>("[data-vn-sprites]")!;
+      const frames: Array<{ opacity: number; illustrated: string | null }> = [];
+      const start = performance.now();
+      const step = () => {
+        const frame = { opacity: Number(getComputedStyle(layer).opacity), illustrated: layer.dataset.vnSpriteIllustrated ?? null };
+        frames.push(frame);
+        if ((frame.illustrated === "true" && frame.opacity <= 0.02) || performance.now() - start > 3000) resolve(frames);
+        else requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    }));
     await page.waitForFunction((url) => (window as any).fx.stage.getState().displayedImage?.url === url, ILLUSTRATION);
     await page.waitForTimeout(120);
-    const mid = await layerState();
     await shot(page, "keymoment-1-crossfade-midframe");
-    assert.equal(mid.illustrated, "true");
-    assert.ok(mid.opacity > 0.02 && mid.opacity < 0.98, `sprites mid-fade (${mid.opacity})`);
+    const fade = await fading;
+    const mid = fade.find((frame) => frame.illustrated === "true" && frame.opacity > 0.02 && frame.opacity < 0.98);
+    assert.ok(mid, `sprites mid-fade (${fade.map((frame) => `${frame.illustrated ?? "-"}:${frame.opacity.toFixed(2)}`).join(" ")})`);
     await waitImages(page);
     await page.waitForTimeout(600);
     const on = await layerState();
@@ -970,6 +1000,57 @@ try {
     await load(page, [{ actors: [{ characterKey: "mira", focus: true, expression: "sad", intensity: 5 }] }], 2200);
     pose = (await snap(page)).actors[0].pose;
     assert.ok(Math.abs(pose.posture) < 0.0002 && Math.abs(pose.turn) < 0.0002, `acting off: no posture or gaze (posture ${pose.posture.toFixed(5)})`);
+    await page.close();
+  }
+
+  // ---- Puppet transitions and atmosphere ---------------------------------------------
+  {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+    watch(page);
+    await open(page);
+    // An expression change plays its shift in the shader: a surprise pops, then the layers go back to the CSS rules.
+    const change: P[] = [{ actors: [{ characterKey: "mira", focus: true }] }, { actors: [{ characterKey: "mira", focus: true, expression: "surprised", intensity: 4 }] }];
+    await load(page, change, 900);
+    await go(page, 1);
+    const popping = (await sampleEffects(page, 1400)).map((frame) => frame.mira);
+    const kinds = [...new Set(popping.map((e) => e?.shift).filter(Boolean))];
+    assert.deepEqual(kinds, ["pop"], `a surprise pops (${kinds.join(", ")})`);
+    assert.equal(popping.at(-1)?.shift ?? null, null, "the shift ends");
+    const layers = await page.evaluate(() => {
+      const theme = document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!;
+      return [...theme.querySelectorAll<HTMLElement>("[data-vn-sprite-key='mira'] [data-vn-sprite-image]")].map((l) => l.hasAttribute("data-vn-sprite-shift"));
+    });
+    assert.ok(layers.every((on) => !on), "no layer keeps the shift attribute");
+    // Classic: the plain CSS crossfade.
+    await page.evaluate(() => (window as any).fx.puppet({ spriteTransitions: "classic" }));
+    await load(page, change, 900);
+    await go(page, 1);
+    const fading = (await sampleEffects(page, 600)).map((frame) => frame.mira);
+    assert.ok(fading.every((e) => !e?.shift), "classic: the CSS crossfade, no shift");
+    await page.evaluate(() => (window as any).fx.puppet({ spriteTransitions: "expressive" }));
+
+    // An entrance is a focus pull: the figure sharpens from a blur.
+    await load(page, [{ actors: [{ characterKey: "ren", focus: true }] }], 0);
+    const entering = (await sampleEffects(page, 900)).map((frame) => frame.ren?.blur ?? 0);
+    assert.ok(Math.max(...entering) > 1 && entering.at(-1)! < 0.5, `an entrance sharpens from a blur (${entering.map((b) => b.toFixed(1))})`);
+
+    // Snow: breath clouds on the exhales and snow starting to settle.
+    await load(page, [{ actors: [{ characterKey: "mira", focus: true }], ambient: "snow", light: "night" }], 600);
+    const snowy = (await sampleEffects(page, 4500)).map((frame) => frame.mira);
+    const air = snowy.at(-1)!.air;
+    assert.ok(air.breath > 0.5 && air.snow > 0, `snow: breath and settling snow (breath ${air.breath.toFixed(2)}, snow ${air.snow.toFixed(3)})`);
+    assert.ok(Math.max(...snowy.map((e) => e.puffs)) >= 1, "a breath cloud on an exhale");
+    await shot(page, "puppet-atmosphere-snow");
+    await load(page, [{ actors: [{ characterKey: "mira", focus: true }], ambient: "embers", light: "night" }], 2200);
+    assert.ok((await snap(page)).actors[0].effects.air.fire > 0.5, "embers: firelight");
+    await shot(page, "puppet-atmosphere-embers");
+    await load(page, [{ actors: [{ characterKey: "mira", focus: true }], ambient: "fog" }], 2200);
+    assert.ok((await snap(page)).actors[0].effects.air.fog > 0.5, "fog: mist over the legs");
+    // Off: the weather leaves the characters alone.
+    await page.evaluate(() => (window as any).fx.puppet({ spriteAtmosphere: false }));
+    await page.waitForTimeout(2500);
+    const calm = (await snap(page)).actors[0].effects.air;
+    assert.ok(Object.values(calm).every((v) => (v as number) < 0.05), `atmosphere off: calm (${JSON.stringify(calm)})`);
     await page.close();
   }
 

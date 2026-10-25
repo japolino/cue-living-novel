@@ -2478,6 +2478,8 @@ export class VnStage {
     // text stays in the layout as a visibility-hidden sibling span; effect
     // letters keep their text and carry a pending attribute.
     this.activeTextNodes = textNodes;
+    // The speaking sprite talks inside the line's quotes and keeps quiet through its narration.
+    this.spriteLayer.speak(textNodes.map((item) => item.fullText).join(""));
     for (const item of textNodes) {
       if (!item.fullText) continue;
       if (item.letter) {

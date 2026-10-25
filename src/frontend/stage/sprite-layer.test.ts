@@ -361,7 +361,7 @@ describe("SpriteLayer DOM", () => {
     expect(snap.puppet).toEqual({ strength: 1, running: false });
     expect(container.style["--vn-sprite-breath"]).toBe("1");
     expect(container.dataset.vnSpriteBlur).toBe("true");
-    layer.setPuppet({ spriteMotion: 50, spriteBreathing: false, spriteSway: true, spriteHeadMotion: true, spriteActing: true, spritePhysics: false, spriteOutline: 3, spriteFocusBlur: false });
+    layer.setPuppet({ spriteMotion: 50, spriteBreathing: false, spriteSway: true, spriteHeadMotion: true, spriteActing: true, spritePhysics: false, spriteOutline: 3, spriteFocusBlur: false, spriteTransitions: "soft", spriteAtmosphere: false });
     expect(container.style["--vn-sprite-breath"]).toBe("0");
     expect(container.style["--vn-sprite-talk-amp"]).toBe("0.5");
     expect(container.dataset.vnSpriteBlur).toBe("false");
@@ -430,6 +430,26 @@ describe("SpriteLayer DOM", () => {
     layer.setTalking(true);
     layer.show(2, { animate: true, speaker: "" });
     expect(byKey("ren").dataset.vnSpriteTalking).not.toBe("true");
+  });
+
+  test("in a line with quotes the speaker talks inside them and keeps quiet through the narration", () => {
+    layer.setTurn(view);
+    layer.show(1, { animate: true, speaker: "Mira" });
+    const line = "She looked away. \"Fine,\" she said.";
+    layer.speak(line);
+    layer.setTalking(true);
+    const talking: string[] = [];
+    for (const ch of line) {
+      layer.typed(ch);
+      talking.push(byKey("mira").dataset.vnSpriteTalking ?? "");
+    }
+    expect(talking[0]).not.toBe("true");
+    expect(talking[line.indexOf("Fine")]).toBe("true");
+    expect(talking[line.indexOf("she said")]).toBe("false");
+    // Without quotes the whole line is speech.
+    layer.speak("Fine, I will go.");
+    expect(byKey("mira").dataset.vnSpriteTalking).toBe("true");
+    layer.setTalking(false);
   });
 
   test("paragraphs past the staged range keep the last stage; disabling clears every layer", () => {

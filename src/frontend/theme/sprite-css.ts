@@ -226,6 +226,18 @@ export const VN_SPRITE_CSS = `
   transition: none;
 }
 
+/* A puppet transition (sprite-puppet-fx.ts) plays the change in the shader:
+   both layers stay opaque while their canvases draw it, and the new layer
+   stays hidden until its canvas is ready (never the bare img). */
+[data-vn-sprite-image][data-vn-sprite-shift][data-vn-sprite-layer="active"],
+[data-vn-sprite-image][data-vn-sprite-shift][data-vn-sprite-layer="leaving"] {
+  opacity: 1;
+  transition: none;
+}
+[data-vn-sprite-image][data-vn-sprite-shift]:not([data-vn-sprite-canvas="puppet"]) {
+  opacity: 0;
+}
+
 [data-vn-sprite-image] img {
   display: block;
   width: 100%;
@@ -521,6 +533,12 @@ export const VN_SPRITE_CSS = `
   [data-vn-sprite][data-vn-sprite-order="1"] [data-vn-sprite-marks] { animation-delay: -1.5s; }
   [data-vn-sprite][data-vn-sprite-order="2"] [data-vn-sprite-figure],
   [data-vn-sprite][data-vn-sprite-order="2"] [data-vn-sprite-marks] { animation-delay: -3.1s; }
+
+  /* Expressive transitions: a character who turns to face the other way
+     flips like a card instead of jumping (spriteTransitions). */
+  [data-vn-root]:not([data-vn-effect-intensity="off"]) [data-vn-sprites][data-vn-sprite-transitions="expressive"] [data-vn-sprite-figure] {
+    transition: transform 240ms cubic-bezier(0.65, 0, 0.35, 1);
+  }
 
   /* Talking bob while the speaker's line types out (CSS fallback; the
      puppet nods or bounces, then moves the head while the text types). */

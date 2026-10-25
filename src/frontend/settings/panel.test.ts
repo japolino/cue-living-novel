@@ -75,13 +75,23 @@ describe("settings panel markup", () => {
     expect(source).toContain('case "spriteModelUrl": return parseSpriteModelUrl(text());');
   });
 
-  test("sprite puppet: motion, its parts, acting, physics, outline and focus blur save at once, sprite mode only", () => {
-    for (const name of ["spriteMotion", "spriteBreathing", "spriteSway", "spriteHeadMotion", "spriteActing", "spritePhysics", "spriteOutline", "spriteFocusBlur"]) {
+  test("sprite puppet: motion, its parts, acting, physics, atmosphere, outline and focus blur save at once, sprite mode only", () => {
+    for (const name of ["spriteMotion", "spriteBreathing", "spriteSway", "spriteHeadMotion", "spriteActing", "spritePhysics", "spriteAtmosphere", "spriteOutline", "spriteFocusBlur"]) {
       expect(names.filter((candidate) => candidate === name)).toEqual([name]);
       expect(source).toContain(`case "${name}": return { ${name}: `);
       expect(advancedKeys).not.toContain(name);
     }
     expect(source).toContain('this.root.querySelector<HTMLElement>("[data-sprites-look]")!.hidden = !sprites;');
+  });
+
+  test("expression changes: one option list in Character motion, saved at once and synced", () => {
+    expect(source.match(/optionList\("spriteTransitions"/g)).toHaveLength(1);
+    expect(source).toContain('case "spriteTransitions": return { spriteTransitions: normalizeSpriteTransitions(target.value) };');
+    expect(source).toContain('this.setRadio("spriteTransitions", config.spriteTransitions);');
+    expect(advancedKeys).not.toContain("spriteTransitions");
+    const motion = source.slice(source.indexOf('${group("Character motion"'), source.indexOf('${group("Character look"'));
+    expect(motion).toContain('optionList("spriteTransitions", SPRITE_TRANSITION_OPTIONS)');
+    expect(motion).toContain('name="spriteAtmosphere"');
   });
 
   test("character motion reads as not applying under Motion Still or reduced motion, with a note", () => {

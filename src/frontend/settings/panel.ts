@@ -4,6 +4,7 @@ import {
   textEffectModeFor,
   SPRITE_MOTION_MAX,
   SPRITE_OUTLINE_MAX,
+  normalizeSpriteTransitions,
   type VisualNovelConfig,
   type VisualNovelPromptPreset,
 } from "../../config.js";
@@ -17,6 +18,7 @@ import {
   REFERENCE_SOURCE_OPTIONS,
   SCENE_IMAGE_FIT_OPTIONS,
   SETUP_DONE_KEY,
+  SPRITE_TRANSITION_OPTIONS,
   TEXT_SCALE_MAX,
   TEXT_SCALE_MIN,
   TEXT_SCALE_STEPS,
@@ -629,6 +631,11 @@ export class VisualNovelSettingsPanel {
                 <label data-check ${find("Head movement", "sprites puppet head tilt nod idle")}><input name="spriteHeadMotion" type="checkbox" /><span>Head movement</span></label>
                 <label data-check ${find("Acting", "sprites puppet acting mood posture voice words look speaker listen react emote")}><input name="spriteActing" type="checkbox" /><span>Acting<small>The body carries the mood, the speaker's head follows the words, and the others turn to whoever speaks.</small></span></label>
                 <label data-check ${find("Hair and cloth physics", "sprites puppet physics hair cloth skirt bounce wind follow through")}><input name="spritePhysics" type="checkbox" /><span>Hair and cloth physics<small>Loose hair and clothes trail and settle when a character moves, and flutter in the wind.</small></span></label>
+                <label data-check ${find("Weather and light on characters", "sprites puppet atmosphere weather snow rain wet fog mist fire embers fireflies breath cold dream glow")}><input name="spriteAtmosphere" type="checkbox" /><span>Weather and light on characters<small>Snow settles on them, rain soaks them, firelight and fireflies light them, mist covers their feet, and their breath shows in the cold.</small></span></label>
+                <fieldset ${find("Expression changes", "sprites puppet transition expression change emotion pop melt flare blush fade crossfade")}>
+                  <legend>Expression changes</legend>
+                  ${optionList("spriteTransitions", SPRITE_TRANSITION_OPTIONS)}
+                </fieldset>
               `, { id: "sprite-motion", help: esc(SPRITE_MOTION_HELP), find: find("Character motion", "sprites puppet png motion breathing sway head speaker nod bounce") })}
               ${group("Character look", `
                 <label data-field ${find("Sticker outline", "sprites outline border white sticker stroke edge")}><span>Sticker outline <span data-sprite-outline-val>Off</span></span><input name="spriteOutline" type="range" min="0" max="${SPRITE_OUTLINE_MAX}" step="1" /></label>
@@ -1469,6 +1476,8 @@ export class VisualNovelSettingsPanel {
       case "spriteHeadMotion": return { spriteHeadMotion: checked };
       case "spriteActing": return { spriteActing: checked };
       case "spritePhysics": return { spritePhysics: checked };
+      case "spriteAtmosphere": return { spriteAtmosphere: checked };
+      case "spriteTransitions": return { spriteTransitions: normalizeSpriteTransitions(target.value) };
       case "spriteOutline": return { spriteOutline: clamp(Math.round(Number(target.value)), 0, SPRITE_OUTLINE_MAX, DEFAULT_CONFIG.spriteOutline) };
       case "spriteFocusBlur": return { spriteFocusBlur: checked };
       case "textScaleStep": {
@@ -2017,11 +2026,14 @@ export class VisualNovelSettingsPanel {
     this.root.querySelector<HTMLElement>("[data-sprites-look]")!.hidden = !sprites;
     this.control<HTMLInputElement>("spriteMotion").value = String(config.spriteMotion);
     this.control<HTMLInputElement>("spriteOutline").value = String(config.spriteOutline);
-    for (const name of ["spriteBreathing", "spriteSway", "spriteHeadMotion", "spriteActing", "spritePhysics"] as const) {
+    for (const name of ["spriteBreathing", "spriteSway", "spriteHeadMotion", "spriteActing", "spritePhysics", "spriteAtmosphere"] as const) {
       const input = this.control<HTMLInputElement>(name);
       input.checked = config[name];
       input.disabled = config.spriteMotion <= 0;
     }
+    // Expression changes play on the puppet: at Still they are the plain fade.
+    this.setRadio("spriteTransitions", config.spriteTransitions);
+    for (const input of this.root.querySelectorAll<HTMLInputElement>('input[name="spriteTransitions"]')) input.disabled = config.spriteMotion <= 0;
     this.control<HTMLInputElement>("spriteFocusBlur").checked = config.spriteFocusBlur;
     this.updatePuppetLabels();
     // Motion Still (or the system's reduced motion) keeps the characters still; the choices here are kept.

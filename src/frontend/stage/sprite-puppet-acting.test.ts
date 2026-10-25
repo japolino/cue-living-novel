@@ -12,6 +12,9 @@ import {
   puppetGesture,
   puppetGestureDelta,
   puppetMoodFor,
+  puppetNarrating,
+  puppetSpeech,
+  puppetSpoken,
   puppetVoice,
   puppetVoiceSample,
   puppetVoiceType,
@@ -107,14 +110,26 @@ describe("puppet voice", () => {
   test("the sample: a syllable pulse rises and decays; text keeps it active, a gap lets go", () => {
     const voice = puppetVoice();
     puppetVoiceType(voice, "a", 0);
-    expect(puppetVoiceSample(voice, 0.045).syllable).toBeCloseTo(1, 6);
-    expect(puppetVoiceSample(voice, 0.3).syllable).toBeLessThan(0.2);
+    // A soft attack (a sharp one twitches), the peak at 80 ms, then a decay.
+    expect(puppetVoiceSample(voice, 0.02).syllable).toBeLessThan(0.25);
+    expect(puppetVoiceSample(voice, 0.08).syllable).toBeCloseTo(1, 6);
+    expect(puppetVoiceSample(voice, 0.5).syllable).toBeLessThan(0.1);
     expect(puppetVoiceSample(voice, 0.1).active).toBe(1);
     expect(puppetVoiceSample(voice, 1).active).toBe(0);
     puppetVoiceType(voice, "?", 2);
     expect(puppetVoiceSample(voice, 2.5).question).toBe(1);
     expect(puppetVoiceSample(voice, 2.2).inhale).toBeGreaterThan(0);
     expect(puppetVoiceSample(voice, 5).question).toBe(0);
+  });
+
+  test("word starts carry the beat: a syllable inside a word moves the head less", () => {
+    const voice = puppetVoice();
+    puppetVoiceType(voice, " ba", 0);
+    const start = puppetVoiceSample(voice, 0.08).syllable;
+    puppetVoiceType(voice, "na", 1);
+    const inner = puppetVoiceSample(voice, 1.08).syllable;
+    expect(start).toBeCloseTo(1, 6);
+    expect(inner).toBeLessThan(0.5);
   });
 
   test("the speaker's head follows the text: a syllable dips it, a question tilts it", () => {
@@ -128,6 +143,41 @@ describe("puppet voice", () => {
     const asking = puppetPose({ ...talking, time: 1.5, side: 1, voice: puppetVoiceSample(voice, 1.5) });
     const plain = puppetPose({ ...talking, time: 1.5, side: 1, voice: { ...puppetVoiceSample(voice, 1.5), question: 0 } });
     expect(asking.tilt).toBeGreaterThan(plain.tilt);
+  });
+});
+
+describe("puppet speech and narration", () => {
+  const typeOut = (paragraph: string) => {
+    const speech = puppetSpeech(paragraph);
+    let spoken = "";
+    const quiet: boolean[] = [];
+    for (const ch of paragraph) {
+      spoken += puppetSpoken(speech, ch);
+      quiet.push(puppetNarrating(speech));
+    }
+    return { spoken, quiet };
+  };
+
+  test("a paragraph without quotes is all speech", () => {
+    const { spoken, quiet } = typeOut("I will see you tomorrow, then.");
+    expect(spoken).toBe("I will see you tomorrow, then.");
+    expect(quiet.some(Boolean)).toBe(false);
+  });
+
+  test("with quotes, only the quoted words are spoken; the narration around them is quiet", () => {
+    const line = "She sighed. \"I'm tired,\" she said. \"Let's go.\"";
+    const { spoken, quiet } = typeOut(line);
+    expect(spoken).toBe("I'm tired,Let's go.");
+    expect(quiet[0]).toBe(true);
+    expect(quiet[line.indexOf("I'm")]).toBe(false);
+    expect(quiet[line.indexOf("she said")]).toBe(true);
+    expect(quiet[line.length - 2]).toBe(false);
+  });
+
+  test("curly quotes and corner brackets open and close", () => {
+    expect(typeOut("He smiled. “Morning.” Then he left.").spoken).toBe("Morning.");
+    expect(typeOut("彼女は言った。「行こう」").spoken).toBe("行こう");
+    expect(typeOut("« Bonjour », dit-elle.").spoken).toBe(" Bonjour ");
   });
 });
 
@@ -158,8 +208,13 @@ describe("puppet gestures", () => {
 describe("puppet attention and the 2.5D turn", () => {
   test("gaze turns the head toward the side looked at; the face centre moves more than the head's outline", () => {
     const looking = puppetPose({ ...still, gaze: 1 });
+    const ahead = puppetPose({ ...still, gaze: 0 });
     expect(looking.turn).toBeGreaterThan(0);
     expect(looking.bodyTurn).toBeGreaterThan(0);
+    // Mostly a rigid head cock and a lean: a big slide of the face's middle reads as liquid.
+    expect(looking.turn).toBeLessThan(0.05 * rig.faceW);
+    expect(looking.tilt).toBeGreaterThan(ahead.tilt);
+    expect(looking.sway).toBeGreaterThan(ahead.sway);
     const p = pose({ turn: looking.turn });
     const centre = puppetDisplace(rig, p, rig.faceX, rig.faceY)[0];
     const outline = puppetDisplace(rig, p, rig.faceX + 1.3 * rig.faceW, rig.faceY)[0];

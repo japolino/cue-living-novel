@@ -38,12 +38,15 @@ own expression and there is no picture cap.
 | `spriteBreathing` / `spriteSway` / `spriteHeadMotion` | boolean | `true` | at once (everyday, sprite mode only) |
 | `spriteActing` | boolean | `false` | at once (everyday, sprite mode only) |
 | `spritePhysics` | boolean | `true` | at once (everyday, sprite mode only) |
+| `spriteTransitions` | `"expressive"` \| `"soft"` \| `"classic"` | `"expressive"` | at once (everyday, sprite mode only) |
+| `spriteAtmosphere` | boolean | `true` | at once (everyday, sprite mode only) |
 | `spriteOutline` | `0`–`6` (px) | `0` | at once (everyday, sprite mode only) |
 | `spriteFocusBlur` | boolean | `true` | at once (everyday, sprite mode only) |
 
-The eight puppet keys (`VisualNovelSpritePuppet`, `spritePuppetSettings`)
+The ten puppet keys (`VisualNovelSpritePuppet`, `spritePuppetSettings`)
 reach the stage through `VnStage.setSpritePuppet`; see "Puppet motion",
-"Puppet acting" and "Puppet physics".
+"Puppet acting", "Puppet physics", "Puppet transitions" and "Puppet
+atmosphere".
 
 ### Image size (`spriteImageSize`)
 
@@ -817,7 +820,9 @@ keeps the calmer idle motion of "Puppet motion".
   staging intensity (1..5 → 0.55..1.4 of the distance from neutral) and
   eased in over ≈ 0.6 s. Sad slumps above the waist with the head down,
   breathing slow and deep; angry draws up, raises the shoulders and huffs
-  with a slight tremble; surprised straightens with the chin up and a held
+  with a slight tremble (a shiver at 6-10 Hz in the body and shoulders; the
+  head rolls only a hair, since a fast head roll on a warped image reads as
+  convulsing); surprised straightens with the chin up and a held
   breath; embarrassed hunches with the head down and tilted; scared
   trembles with raised shoulders and quick shallow breaths; laughing gets
   bursts of chuckles in the chest; crying gets irregular sobbing catches;
@@ -826,21 +831,36 @@ keeps the calmer idle motion of "Puppet motion".
   shows; the body already tells the emotion). Breath and sway clocks are
   integrated per actor, so a faster breath never jumps in phase.
 - **The voice follows the text**: the typewriter reports each revealed
-  character (`VnStage` → `SpriteLayer.typed` → `SpritePuppet.typed`, the
-  only vn-stage.ts change besides `setSpritePuppet`). The speaker's head
-  dips once per syllable (a vowel group in Latin, Greek and Cyrillic text;
-  every kana, kanji and Hangul syllable), stressed at word starts; a comma
-  settles it and takes a small breath; a full stop dips it; "!" punches
-  (a quick dip and stretch); "?" tilts the head and lifts the chin a
-  little, held for a moment; "…" or "..." droops it; "~" wiggles. When no
+  character (`VnStage` → `SpriteLayer.typed` → `SpritePuppet.typed`). The
+  speaker's head follows the words' rhythm: each syllable (a vowel group in
+  Latin, Greek and Cyrillic text; every kana, kanji and Hangul syllable)
+  sends a soft pulse (80 ms rise, 160 ms fall), full at a word's first
+  syllable and under half inside a word, and the head follows those pulses
+  through a critically damped spring at about 3.5 Hz (`followSyllable`), so
+  it bobs with the words instead of twitching on each vowel. A comma
+  settles it and takes a small breath; a full stop dips it; "!" punches (a
+  dip and stretch with a 120 ms rise); "?" tilts the head and lifts the chin
+  a little, held for a moment; "…" or "..." droops it; "~" wiggles. When no
   text arrives (instant text), the generic talking motion runs instead.
-- **Attention**: listeners turn their heads toward whoever speaks (a 2.5D
-  yaw: the middle of the face shifts more than its outline) and their
-  torso a little; the speaker half-turns to the nearest listener. With
-  nobody speaking, each character glances at the nearest other one (or
-  aside, alone) every 7–14 s. Heads move on an underdamped spring, so a
-  turn overshoots a hair and settles. Directions are converted to each
-  figure's own image space (a mirrored figure turns the other way).
+- **Speech and narration**: when typing starts, `VnStage` hands the line as
+  it will be typed to `SpriteLayer.speak` (the second vn-stage.ts hook). In
+  a line with quotes (straight or curly double quotes, corner brackets,
+  guillemets) the speaker only talks inside them: through the narration
+  around them ("she said, looking away") it is quiet, its talking flag off
+  (so the CSS fallback's bob stops too), and that narration drives no
+  syllables, nods or breath clouds. The line-start nod plays once per line,
+  not again each time a quote opens. A line without quotes is all speech
+  (`puppetSpeech`, `puppetSpoken`).
+- **Attention**: listeners look toward whoever speaks; the speaker
+  half-turns to the nearest listener. With nobody speaking, each character
+  glances at the nearest other one (or aside, alone) every 7–14 s. Looking
+  is mostly a head cock toward the target (1.6° at full gaze) and a lean of
+  the figure's top (0.22% of its height), with a small 2.5D yaw (the middle
+  of the face shifts 3.5% of the face width; a bigger slide inside a fixed
+  outline reads as liquid) and a hair of torso turn. Gaze moves on a
+  critically damped spring (about 1.2 Hz): it settles without overshoot.
+  Directions are converted to each figure's own image space (a mirrored
+  figure turns the other way).
 - **Listener reactions**: after the speaker's full stop a listener nods
   (at most every 2.2 s); at "!" it starts a little, at "?" it tilts its head
   (each at most every 4 s), with a per-character delay of 0.15–0.45 s.
@@ -872,6 +892,58 @@ keeps the calmer idle motion of "Puppet motion".
   the stage's right, with gusts and flutter, per-character phase.
 - Off (`spritePhysics: false`): no trails, no squash, no wind.
 
+### Puppet transitions (`sprite-puppet-fx.ts`, `spriteTransitions`)
+
+An expression change is a shader effect, not a plain crossfade: the new
+image is revealed through a per-layer mask while the old one goes in a band
+just behind it (`revealMask`). The two bands do not overlap (plus a gap of
+0.1 for small differences between the two images' rigs), so one of the two
+layers is always opaque and the figure never turns see-through mid-change.
+`SpriteLayer.crossfade` asks `SpritePuppet.shift` first; it returns how long
+the old layer must stay, or 0 for the CSS crossfade (CSS mode, "classic",
+Still). The change starts on the new image's first draw (its texture may
+still be loading) and gives up after 0.6 s.
+
+| Shift | Emotions (expressive) | Sweep and edge | Length | Body |
+|---|---|---|---|---|
+| soft | idle, smile, worried, thinking, smug | from the face outward, grainy edge | 0.36 s | none |
+| pop | surprised, laughing, scared | a cut at 28% | 0.46 s | a take: squash to the cut, spring past rest |
+| melt | sad, crying | top down, drippy edge, faint cool glow | 0.72 s | posture sinks, head dips |
+| flare | angry | fast from the face, ember glow on the edge | 0.28 s | shoulders up, a stretch |
+| blush | embarrassed | from the face, pink glow on the edge | 0.46 s | shoulders, nod, tilt |
+
+"soft" uses the soft shift for every change; "classic" keeps the CSS
+crossfade. The staging intensity scales the glow and the body's part
+(0.6–1.4); Gentle effects scale them by 0.6. The body's part plays whatever
+the Acting setting. In expressive mode a facing change flips the figure like
+a card (a 240 ms `transform` transition on `[data-vn-sprite-figure]`).
+Entrances and exits are a focus pull: the figure sharpens from a 9 px blur
+as it enters and softens into it as it leaves (mip-biased taps, so a big
+blur stays smooth).
+
+### Puppet atmosphere (`sprite-puppet-fx.ts`, `spriteAtmosphere`)
+
+The scene's weather lights and touches the characters themselves, in the
+same shader (`puppetAtmosphere`, eased in and out over a second or two):
+
+| Ambient | On the characters |
+|---|---|
+| `snow` | snow settles on hair, shoulders and other upward edges (about 40 s to build, melts faster); breath clouds |
+| a cold plate (location, time or weather mentions snow, winter, frost, ice...) | breath clouds |
+| `rain` / `heavy_rain` | a wet sheen on the top edges and drops running down |
+| `embers` | flickering firelight from below |
+| `fireflies` | two drifting point lights around the upper body |
+| `fog` | ground mist over the legs |
+| `dream_haze` | a glow halo and a slow shimmer |
+| `danger_pulse` | a colour split on the overlay's beat |
+| `sepia_flashback` / `desaturate` | film grain and flicker (light grain for desaturate) |
+
+Breath clouds are drawn on the active layer's canvas after the WebGL copy:
+one on each exhale, at the speaker's typed pauses and sentence ends, and
+every 0.8 s while the voice is active; at most six at a time, from the mouth
+(below the face centre, toward the side a profile faces). Gentle effects
+scale the atmosphere by 0.6; Still and reduced motion turn the puppet off.
+
 ## Settings (frontend)
 
 Presentation mode control; cut-out quality; model status (absent /
@@ -887,7 +959,9 @@ again**); a device that cannot run it gets Best's status, never the Studio
 download. A model the browser did not store says it downloads again.
 Under Look (sprite mode only, `[data-sprites-look]`): "Character motion"
 (intensity 0–150% in steps of 10, "Still" at 0; Breathing, Body sway,
-Head movement, Acting, Hair and cloth physics, disabled at 0) and
+Head movement, Acting, Hair and cloth physics, Weather and light on
+characters, and Expression changes: Match the emotion / Soft / Simple fade,
+all disabled at 0) and
 "Character look" (outline 0–6 px, "Off" at 0; Blur characters who are not
 speaking). All save at once. Under Motion "Still", or the system's reduced
 motion, "Character motion" reads as not applying (`data-inactive`) with a
