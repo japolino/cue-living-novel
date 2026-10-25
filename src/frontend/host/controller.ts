@@ -1314,8 +1314,10 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       settingsPanel?.setSaveStatus?.({ kind: "saved" });
       return;
     }
-    if (type === "vn_turn" && message.type === "vn_turn") {
+    if ((type === "vn_turn" && message.type === "vn_turn") || (type === "vn_turn_text" && message.type === "vn_turn_text")) {
       if (message.turn.chatId !== chatId()) return;
+      // The text before the plan comes only as vn_turn_text, and only that carries it.
+      if ((message.type === "vn_turn_text") !== Boolean(message.turn.provisional)) return;
       if (stage.isReadingUserParagraph()) {
         if (!keepsPlannedTurn(pendingNextTurn, message.turn)) pendingNextTurn = message.turn;
       } else {

@@ -130,8 +130,25 @@ describe("provisional turn (text before the plan)", () => {
     expect(planned.paragraphs).toEqual(early.paragraphs);
     expect(planned.status).toBe("ready");
     expect(f.record(chat)?.plan.paragraphs.map((paragraph) => paragraph.text)).toEqual(STORY);
-    const order = f.sent.filter((m) => m.type === "vn_turn").map((m) => (m.turn as TurnView).provisional === true);
-    expect(order).toEqual([true, false]);
+    const order = f.sent.filter((m) => m.type === "vn_turn" || m.type === "vn_turn_text").map((m) => m.type);
+    expect(order).toEqual(["vn_turn_text", "vn_turn"]);
+  });
+
+  test("an older frontend, which reads only vn_turn, never sees the text before the plan", async () => {
+    const f = fixture({ skipNonStory: false });
+    const chat = "pt-old-frontend";
+    f.request({ type: "vn_view", chatId: chat, open: true }, "user-pt6");
+    f.reply(chat, "user-pt6");
+    await waitFor(() => f.provisionals().length === 1);
+    // A reloaded page joins the plan in flight: the text comes again, under its own type.
+    f.request({ type: "vn_get_state", chatId: chat, viewOpen: true }, "user-pt6");
+    await waitFor(() => f.provisionals().length === 2);
+    f.planner[0]!.release();
+    await waitFor(() => f.planned().length === 1);
+    const turns = f.sent.filter((m) => m.type === "vn_turn").map((m) => m.turn as TurnView);
+    expect(turns).toHaveLength(1);
+    expect(turns.every((turn) => !turn.provisional && turn.status === "ready")).toBe(true);
+    expect(f.sent.filter((m) => m.type === "vn_turn_text")).toHaveLength(2);
   });
 
   test("without Skip non-story blocks the text goes out at once, every line kept", async () => {
@@ -185,7 +202,7 @@ describe("provisional turn (text before the plan)", () => {
     const before = f.sent.length;
     f.request({ type: "vn_get_state", chatId: chat, viewOpen: true }, "user-pt4");
     await waitFor(() => f.provisionals().length === 2);
-    expect(f.sent.slice(before).map((m) => m.type)).toEqual(["vn_state", "vn_planning", "vn_turn"]);
+    expect(f.sent.slice(before).map((m) => m.type)).toEqual(["vn_state", "vn_planning", "vn_turn_text"]);
     expect(f.provisionals()[1]).toEqual(f.provisionals()[0]!);
     expect(f.planner).toHaveLength(1);
     f.planner[0]!.release();
@@ -219,7 +236,7 @@ describe("provisional turn (text before the plan)", () => {
     for (const call of f.planner) call.release();
     await waitFor(() => f.planned().length === 1);
     await settle(60);
-    const later = f.sent.slice(afterFirst).filter((m) => m.type === "vn_turn").map((m) => m.turn as TurnView);
+    const later = f.sent.slice(afterFirst).filter((m) => m.type === "vn_turn" || m.type === "vn_turn_text").map((m) => m.turn as TurnView);
     expect(later.every((turn) => turn.swipeId === 1)).toBe(true);
     expect(f.planned().map((turn) => turn.swipeId)).toEqual([1]);
     expect(f.record(chat, 0)).toBeUndefined();

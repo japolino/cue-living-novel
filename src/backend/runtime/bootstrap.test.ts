@@ -114,7 +114,7 @@ describe("existing-chat bootstrap", () => {
 
     expect(runtime.sent[0]).toMatchObject({ type: "vn_state", chatId: "chat-bootstrap", turn: null });
     expect(runtime.sent[1]).toMatchObject({ type: "vn_planning", chatId: "chat-bootstrap" });
-    expect(runtime.sent[2]).toMatchObject({
+    expect(runtime.sent.find(({ type }) => type === "vn_turn")).toMatchObject({
       type: "vn_turn",
       turn: { messageId: "assistant-1", paragraphs: ["The old door opens.", "Mira raises her lantern."] }
     });
@@ -139,7 +139,7 @@ describe("existing-chat bootstrap", () => {
     await sendState(runtime.spindle, "chat-bootstrap", "user-1", { viewOpen: true });
 
     // The text first (provisional), then the planned turn.
-    expect(runtime.sent.map(({ type }) => type)).toEqual(["vn_state", "vn_planning", "vn_turn", "vn_turn"]);
+    expect(runtime.sent.map(({ type }) => type)).toEqual(["vn_state", "vn_planning", "vn_turn_text", "vn_turn"]);
     expect(runtime.sent.filter(isProvisionalTurn)).toHaveLength(1);
     expect(runtime.sent.filter(isPlannedTurn)).toHaveLength(1);
     // One warning for the broken record, one for the audible planner fallback.

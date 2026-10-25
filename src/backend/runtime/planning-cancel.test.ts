@@ -4,7 +4,7 @@ import { seedSingleCharacter } from "../core/visual-state.js";
 import { registerVisualNovelBackend } from "./controller.js";
 import { characterRegistryPath, chatStatePath, singleCharacterStatePath, turnPath, type StoredTurnRecord } from "./storage.js";
 import { storyCheckReply } from "./__fixtures__/story-check";
-import { isPlannedTurn } from "./__fixtures__/turns.js";
+import { isPlannedTurn, isProvisionalTurn } from "./__fixtures__/turns.js";
 
 /**
  * Cancelled planning frees the chat's planning queue at once: the planner
@@ -50,6 +50,8 @@ type FixtureOptions = {
   config?: Record<string, unknown>;
   /** Planner calls answer at once instead of parking until released. */
   autoRelease?: boolean;
+  /** Line checks park until released too, so a superseded plan's text is still pending. */
+  holdChecks?: boolean;
   /** Runs before a storage read settles; awaiting it holds the read. */
   beforeGet?: (path: string) => Promise<void> | void;
   /** Runs before a storage write lands; awaiting it holds the write. */
@@ -64,6 +66,7 @@ function fixture(options: FixtureOptions = {}) {
   const messages: Array<Record<string, unknown>> = [];
   // Planner calls park until the test releases them; the fake host ignores the signal.
   const planner: Array<{ content: string; signal?: AbortSignal; release: () => void }> = [];
+  const checks: Array<() => void> = [];
   let seq = 0;
   data.set("config.json", {
     generateImages: false,
@@ -92,6 +95,7 @@ function fixture(options: FixtureOptions = {}) {
       raw: (request: { messages: Array<{ content: string }>; signal?: AbortSignal }) => new Promise((resolve) => {
         // Skip non-story blocks (on by default) answers its line check at once: only planner calls park.
         const check = storyCheckReply(request);
+        if (check && options.holdChecks) return void checks.push(() => resolve(check));
         if (check) return resolve(check);
         const content = request.messages.at(-1)?.content ?? "";
         const release = () => resolve({ content: JSON.stringify(plannerPayload(content)) });
@@ -129,17 +133,20 @@ function fixture(options: FixtureOptions = {}) {
     fire("MESSAGE_SWIPED", { chatId, message: swiped }, userId);
   };
   return {
-    fire, sent, planner, messages, message, swipe, data,
+    fire, sent, planner, checks, messages, message, swipe, data,
     request: (payload: unknown, userId: string) => frontend(payload, userId),
     record: (chatId: string, swipeId = 0) => data.get(turnPath(chatId, "m1", swipeId)) as StoredTurnRecord | undefined,
     activePath: (chatId: string) => (data.get(chatStatePath(chatId)) as { activeTurnPath?: string | null } | undefined)?.activeTurnPath,
-    turns: () => sent.filter(isPlannedTurn).map((m) => m.turn as { swipeId: number; paragraphs: string[] })
+    turns: () => sent.filter(isPlannedTurn).map((m) => m.turn as { swipeId: number; paragraphs: string[] }),
+    /** Swipe ids of the text sent before a plan, from `from` (an index into `sent`) on. */
+    texts: (from = 0) => sent.slice(from).filter(isProvisionalTurn).map((m) => (m.turn as { swipeId: number }).swipeId),
+    releaseChecks: () => { for (const release of checks.splice(0)) release(); }
   };
 }
 
 describe("cancelled planning frees the queue", () => {
   test("reopening the view while a turn plans plans it again (it never joins the cancelled plan)", async () => {
-    const f = fixture();
+    const f = fixture({ holdChecks: true });
     f.request({ type: "vn_view", chatId: "pc-reopen", open: true }, "user-pc1");
     f.messages.push(f.message("pc-reopen", FIRST));
     f.fire("GENERATION_ENDED", { chatId: "pc-reopen", messageId: "m1", content: FIRST }, "user-pc1");
@@ -150,18 +157,23 @@ describe("cancelled planning frees the queue", () => {
     expect(f.planner[0]?.signal?.aborted).toBe(true);
     f.request({ type: "vn_get_state", chatId: "pc-reopen", viewOpen: true }, "user-pc1");
     // The new plan starts while the cancelled request is still parked on the host.
-    await waitFor(() => f.planner.length === 2);
+    await waitFor(() => f.planner.length === 2 && f.checks.length === 2);
+    // The new plan's line check answers; the cancelled one's stays parked.
+    f.checks.splice(1)[0]!();
+    await waitFor(() => f.texts().length === 1);
     f.planner[1]!.release();
     await waitFor(() => f.turns().length === 1);
     expect(f.record("pc-reopen")?.status).toBe("ready");
-    // The cancelled request finishing late changes nothing.
+    // The cancelled requests finishing late change nothing, its text included.
+    f.releaseChecks();
     f.planner[0]!.release();
     await settle();
     expect(f.turns()).toHaveLength(1);
+    expect(f.texts()).toHaveLength(1);
   });
 
   test("swiping while the old swipe plans replaces that plan instead of queueing behind it", async () => {
-    const f = fixture();
+    const f = fixture({ holdChecks: true });
     f.request({ type: "vn_view", chatId: "pc-swipe", open: true }, "user-pc2");
     f.messages.push(f.message("pc-swipe", FIRST));
     f.fire("GENERATION_ENDED", { chatId: "pc-swipe", messageId: "m1", content: FIRST }, "user-pc2");
@@ -171,12 +183,15 @@ describe("cancelled planning frees the queue", () => {
     await waitFor(() => f.planner.length === 2);
     expect(f.planner[0]?.signal?.aborted).toBe(true);
     expect(f.planner[1]?.content).toContain("Another swipe opens.");
+    // Both line checks answer after the swipe: only the new swipe's text goes out.
+    f.releaseChecks();
     f.planner[1]!.release();
     f.planner[0]!.release();
     await waitFor(() => f.turns().length >= 1);
     await settle();
-    // Only the new swipe is shown; the old swipe's plan never paints.
+    // Only the new swipe is shown; the old swipe's plan never paints, not even its text.
     expect(f.turns().map((turn) => turn.swipeId)).toEqual([1]);
+    expect(f.texts()).toEqual([1]);
     expect(f.record("pc-swipe", 0)).toBeUndefined();
   });
 
@@ -193,12 +208,15 @@ describe("cancelled planning frees the queue", () => {
     f.swipe(chat, "user-pc3", SECOND, 1);
     await waitFor(() => f.planner.length === 2);
     // Back to swipe 0: its stored turn is shown again as it is.
+    const back = f.sent.length;
     f.swipe(chat, "user-pc3", FIRST, 0, [FIRST, SECOND]);
     await waitFor(() => f.turns().length === 2);
     expect(f.planner[1]?.signal?.aborted).toBe(true);
     f.planner[1]!.release();
     await settle(60);
     expect(f.turns().map((turn) => turn.swipeId)).toEqual([0, 0]);
+    // A stored turn needs no text before its plan; the left swipe's text never comes again.
+    expect(f.texts(back)).toEqual([]);
     expect(f.activePath(chat)).toBe(turnPath(chat, "m1", 0));
     expect(f.record(chat, 1)).toBeUndefined();
   });
@@ -228,7 +246,7 @@ describe("cancelled planning frees the queue", () => {
 
   test("swiping to a greeting that waits for a scene selection cancels the other swipe's plan", async () => {
     const GREETING = "{{#when::{{getvar::scene}}::is::1}}The first scene opens.{{/when}}";
-    const f = fixture();
+    const f = fixture({ holdChecks: true });
     const chat = "pc-greeting";
     f.request({ type: "vn_view", chatId: chat, open: true }, "user-pc5");
     f.messages.push(f.message(chat, FIRST));
@@ -238,9 +256,11 @@ describe("cancelled planning frees the queue", () => {
     f.swipe(chat, "user-pc5", GREETING, 1);
     await waitFor(() => f.sent.some((m) => m.type === "vn_waiting"));
     expect(f.planner[0]?.signal?.aborted).toBe(true);
+    f.releaseChecks();
     f.planner[0]!.release();
     await settle(60);
     expect(f.turns()).toHaveLength(0);
+    expect(f.texts()).toEqual([]);
     expect(f.record(chat, 0)).toBeUndefined();
   });
 
@@ -261,17 +281,20 @@ describe("cancelled planning frees the queue", () => {
     await waitFor(() => f.turns().length >= 1);
     await settle();
     expect(f.turns().map((turn) => turn.swipeId)).toEqual([2]);
+    expect(f.texts()).toEqual([2]);
   });
 
   test("a plan superseded during its identity writes stops before it seeds the chat's characters", async () => {
     const chat = "pc-identity";
     let armed = false;
+    let swiped = 0;
     // The first identity write after planning merges the chat's frozen
     // protagonist into its appearance roster; the cancel lands during it.
     const f: ReturnType<typeof fixture> = fixture({
       beforeGet: async (path) => {
         if (!armed || path !== `chats/${chat}/characters.json`) return;
         armed = false;
+        swiped = f.sent.length;
         f.swipe(chat, "user-pc7", FIRST, 1, [VEX, FIRST]);
         await waitFor(() => f.planner[0]!.signal!.aborted);
       }
@@ -288,6 +311,7 @@ describe("cancelled planning frees the queue", () => {
     await waitFor(() => f.turns().length === 1);
     await settle();
     expect(f.turns().map((turn) => turn.swipeId)).toEqual([1]);
+    expect(f.texts(swiped)).toEqual([1]);
     // Nothing of the discarded swipe's cast reaches the chat's identity state.
     for (const path of [singleCharacterStatePath(chat), characterRegistryPath(chat), `chats/${chat}/characters.json`]) {
       expect(JSON.stringify(f.data.get(path) ?? null)).not.toContain("Vex");
@@ -297,6 +321,7 @@ describe("cancelled planning frees the queue", () => {
   test("a plan superseded while its sprite view builds is neither persisted nor shown", async () => {
     const chat = "pc-view";
     let armed = false;
+    let swiped = 0;
     // The registry write is the last identity write; the next registry read builds the view.
     const f: ReturnType<typeof fixture> = fixture({
       config: { presentationMode: "sprites", generateImages: true, maxImagesPerTurn: 2, imageConcurrency: 4, referenceAnchoring: false },
@@ -305,6 +330,7 @@ describe("cancelled planning frees the queue", () => {
       beforeGet: async (path) => {
         if (!armed || path !== characterRegistryPath(chat)) return;
         armed = false;
+        swiped = f.sent.length;
         f.swipe(chat, "user-pc8", SECOND, 1);
         await waitFor(() => f.planner[0]!.signal!.aborted);
       }
@@ -316,6 +342,7 @@ describe("cancelled planning frees the queue", () => {
     await settle(60);
     expect(f.planner[0]?.signal?.aborted).toBe(true);
     expect(f.turns().map((turn) => turn.swipeId)).toEqual([1]);
+    expect(f.texts(swiped)).toEqual([1]);
     expect(f.record(chat, 0)).toBeUndefined();
     expect(f.activePath(chat)).toBe(turnPath(chat, "m1", 1));
   });

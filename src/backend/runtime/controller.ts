@@ -1241,7 +1241,7 @@ async function processAssistantMessage(
           previousAmbient: previous?.ambient,
         });
         provisionalTurns.set(provisionalKey, { operationId: operation.id, view });
-        spindle.sendToFrontend({ type: "vn_turn", turn: view }, userId);
+        spindle.sendToFrontend({ type: "vn_turn_text", turn: view }, userId);
         dbg(spindle, userId, `provisional turn sent chat=${chatId} message=${message.id} after ${Date.now() - planningStartedAt}ms paragraphs=${view.paragraphs.length} speakers=[${view.paragraphSpeakers?.map((name, index) => name ? `p${index}:${name}` : "").filter(Boolean).join(", ") ?? ""}]`);
       });
     };
@@ -1424,7 +1424,7 @@ async function processAssistantMessage(
   if (scheduled.reused) {
     // A reopened view (or a repeated event) joined the plan in flight: show its text again.
     const pending = provisionalTurns.get(provisionalKey);
-    if (pending?.operationId === scheduled.operation.id) spindle.sendToFrontend({ type: "vn_turn", turn: pending.view }, userId);
+    if (pending?.operationId === scheduled.operation.id) spindle.sendToFrontend({ type: "vn_turn_text", turn: pending.view }, userId);
   } else {
     void scheduled.promise.catch(() => undefined).finally(() => {
       if (provisionalTurns.get(provisionalKey)?.operationId === scheduled.operation.id) provisionalTurns.delete(provisionalKey);

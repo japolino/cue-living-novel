@@ -160,7 +160,7 @@ plans the latest reply once, and `vn_state` then carries `turn: null` so the
 stale turn is never rendered first. Cancelled jobs stay cancelled; they are never
 resumed on their own — the reader reruns them by hand with `vn_retry_turn`.
 
-The text before the plan (a provisional `vn_turn`, see below) follows the same
+The text before the plan (`vn_turn_text`, see below) follows the same
 gates. Only a plan that runs for an open view sends it; it is never persisted,
 never the chat's active turn, and `vn_state` never carries it. The backend
 keeps it in memory (`provisionalTurns`, per chat, tied to the plan's operation)
@@ -209,7 +209,7 @@ If an image is late, the previous decoded image remains visible. If an obsolete 
 
 ### Text before the plan
 
-A reply's text reaches the stage before its visual plan. `planTurn` calls `onStory` with the paragraphs the plan will hold, and the controller sends them as a provisional `vn_turn` (`provisionalTurnView`, `src/backend/core/provisional-turn.ts`): `provisional: true`, `status: "planning"`, the planned turn's `sourceFingerprint` (so the same paragraph ids), its panels, the previous scene's ambient when that scene has one, and no cues, effects, choices, staging, assets or sprites. The previous scene image stays.
+A reply's text reaches the stage before its visual plan. `planTurn` calls `onStory` with the paragraphs the plan will hold, and the controller sends them as `vn_turn_text` (`provisionalTurnView`, `src/backend/core/provisional-turn.ts`): `provisional: true`, `status: "planning"`, the planned turn's `sourceFingerprint` (so the same paragraph ids), its panels, the previous scene's ambient when that scene has one, and no cues, effects, choices, staging, assets or sprites. The previous scene image stays. It has its own message type because a frontend from before it (a tab still on the previous bundle after an update) would take a `vn_turn` with status `planning` for the turn and then never load the planned one; it ignores `vn_turn_text` and waits for the planned `vn_turn` as before. The frontend takes a provisional turn only as `vn_turn_text` and a planned one only as `vn_turn`.
 
 `onStory` fires from the same promise the plan joins the line check on, so with `skipNonStory` the text waits for the check's answer (or its cache) and is exactly the plan's paragraphs. The check is the only step that changes paragraphs; text sent before it would show lines (word counts, out-of-character notes) that then vanish and move the paragraph ids under the reader. The check runs beside the planner and answers first, so the wait is short. Without `skipNonStory` the text goes out right after `prepareNarrative`. A refused or failed check keeps every line, for the text as for the plan.
 
