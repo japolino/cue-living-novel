@@ -169,6 +169,21 @@ describe("upgradeTurn", () => {
     expect(countdown()).not.toBeNull();
   });
 
+  test("skip held by the plan stays on and carries on once it lands", async () => {
+    const s = create();
+    s.setSkipMode("all");
+    s.loadTurn(provisional(1));
+    s.toggleSkip(true);
+    await wait(250);
+    expect(s.getState().currentParagraphIndex).toBe(1);
+    expect(q(s, "[data-vn-control='skip']").getAttribute("aria-pressed")).toBe("true");
+    s.upgradeTurn(planned());
+    await wait(400);
+    // Skip all reaches the end of the turn: Your turn.
+    expect(s.getState().currentParagraphIndex).toBe(3);
+    expect(s.getState().phase).toBe("awaiting-input");
+  });
+
   test("a plan whose read text changed is loaded from the start", () => {
     const s = create();
     s.loadTurn(provisional());

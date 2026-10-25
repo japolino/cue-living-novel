@@ -2351,6 +2351,8 @@ export class VnStage {
     this.clearSkipTimer();
     if (!this.isSkipping) return;
     const view = selectVnStageView(this.state);
+    // Held by the plan: skip stays on and carries on when it lands (upgradeTurn).
+    if (!view.canAdvance && view.waitingForPlan) return;
     if (!view.canAdvance) {
       this.isSkipping = false;
       this.updateControlButtons();
