@@ -1219,9 +1219,10 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
         if (provisionalSpeechAt !== cursor) syncSpeechCursor(next, cursor);
         provisionalSpeechAt = null;
         panels.setTurn(next, cursor);
-        stage.upgradeTurn(input);
-        // Its music, not its sound effect: the paragraph's one-shot moment has passed.
-        restoreMusicAt(next, cursor);
+        // The opening paragraph the plan reached right away plays its moment,
+        // sound effect included; otherwise only its music: the moment has passed.
+        if (stage.upgradeTurn(input)) syncAudioForParagraph(next, cursor);
+        else restoreMusicAt(next, cursor);
         void syncImageForParagraph(cursor);
         return;
       }

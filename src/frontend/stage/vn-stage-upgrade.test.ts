@@ -101,6 +101,24 @@ describe("upgradeTurn", () => {
     expect(q(s, "[data-vn-speaker]").textContent).toBe("Mira");
   });
 
+  test("the opening paragraph the plan reaches right after it appeared plays its effect", () => {
+    const s = create();
+    s.loadTurn(provisional());
+    const fired = effectsOf(s);
+    expect(s.upgradeTurn(planned({ 0: "flash_white" }))).toBe(true);
+    expect(fired).toEqual(["flash_white"]);
+  });
+
+  test("an opening paragraph read for a while keeps the moment it had", () => {
+    const s = create();
+    s.loadTurn(provisional());
+    // The reader has been on it for seconds (a slow plan).
+    (s as unknown as { openingShownAt: number }).openingShownAt = Date.now() - 5000;
+    const fired = effectsOf(s);
+    expect(s.upgradeTurn(planned({ 0: "flash_white" }))).toBe(false);
+    expect(fired).toEqual([]);
+  });
+
   test("a preset that quotes spoken lines re-renders the paragraph on screen whole, without its effect", () => {
     const s = create();
     s.setThemePreset("literature-club");

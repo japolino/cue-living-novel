@@ -247,6 +247,13 @@ const THEME_MARKUP = `
 `;
 
 /** Scene-image request ids of sprite-mode plates start with this. */
+/**
+ * How soon after the opening paragraph appears its plan may land and still
+ * play that paragraph's effect and sound effect (the plan was right behind
+ * its text). Later, the moment has passed.
+ */
+const OPENING_MOMENT_MS = 1500;
+
 const PLATE_REQUEST_PREFIX = "plate:";
 /** Scene-image request ids of sprite-mode key illustrations start with this. */
 const ILLUSTRATION_REQUEST_PREFIX = "illustration:";
@@ -450,6 +457,12 @@ export class VnStage {
   private isRewinding = false;
   /** True while the planned turn replaces the provisional one on screen (see upgradeTurn). */
   private isUpgrading = false;
+  /**
+   * When the opening paragraph appeared, read forward with its effects; null
+   * once the reader is elsewhere. A plan that lands within OPENING_MOMENT_MS
+   * plays the opening paragraph's moment (see upgradeTurn).
+   */
+  private openingShownAt: number | null = null;
   private readonly interaction: HTMLElement;
   private readonly choiceList: HTMLOListElement;
   private readonly gameChoiceList: HTMLElement;
@@ -1217,6 +1230,7 @@ export class VnStage {
     this.isTyping = false;
     this.currentRenderedParagraphId = "";
     this.currentRenderedFormatted = "";
+    this.openingShownAt = null;
     this.errorDetails = null;
     this.hostImageError = null;
     this.lastSkipStop = null;
@@ -1252,11 +1266,16 @@ export class VnStage {
    * restarted typewriter or a second History entry; paragraphs already read
    * update their History entries; the rest play as usual when reached. A turn
    * whose read text differs is loaded instead.
+   *
+   * Returns true when the paragraph on screen played its moment: the opening
+   * paragraph the plan reaches within OPENING_MOMENT_MS of its appearing (the
+   * plan was right behind its text) gets its effect after all, and the host
+   * plays its sound effect. A turn loaded instead plays its opening as usual.
    */
-  upgradeTurn(turn: VnTurnInput): void {
+  upgradeTurn(turn: VnTurnInput): boolean {
     if (!canUpgradeTurn(this.state, turn)) {
       this.loadTurn({ ...turn, preserveImage: true });
-      return;
+      return true;
     }
     this.spriteLayer.setTurn(turn.sprites ?? null);
     // The persistent ambient in effect at the reader's paragraph, as on rewind.
@@ -1265,13 +1284,21 @@ export class VnStage {
       const ambient = paragraph.ambient !== undefined ? paragraph.ambient : paragraph.cue?.ambient;
       if (ambient === null || isAmbientEffect(ambient)) this.ambientOverride = ambient;
     }
+    const opening = this.state.currentParagraphIndex === 0 && this.state.highestRevealedIndex === 0
+      && this.openingShownAt !== null && Date.now() - this.openingShownAt < OPENING_MOMENT_MS;
     this.isUpgrading = true;
     try { this.dispatch({ type: "upgrade-turn", turn }); }
     finally { this.isUpgrading = false; }
+    if (opening) {
+      // Its effect only: the text's own shake and the ambient were applied already.
+      const effect = this.state.paragraphs[0]?.effect ?? this.state.paragraphs[0]?.cue?.effect;
+      if (effect && isStageEffect(effect)) this.triggerEffect(effect);
+    }
     this.refreshBacklogEntries();
     // Auto play (or skip) held at the plan carries on.
     if (this.isSkipping && !this.isTyping) this.scheduleSkipAdvance();
     else this.checkAutoPlay();
+    return opening;
   }
 
   /** History entries take the speakers and formatting of their paragraphs as they are now. */
@@ -2474,6 +2501,7 @@ export class VnStage {
     this.currentRenderedFormatted = formatted;
     this.recordBacklogAndRead(paragraph.id, paragraph.speaker, paragraph.text, formatted);
     if (!this.isRewinding) this.triggerParagraphEffects(paragraph);
+    this.openingShownAt = !this.isRewinding && this.state.currentParagraphIndex === 0 ? Date.now() : null;
 
     if (this.textSpeed <= 0 || this.isSkipping || this.isRewinding) {
       this.clearTypewriter();

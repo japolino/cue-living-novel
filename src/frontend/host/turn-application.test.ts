@@ -57,4 +57,24 @@ describe("applyTurn", () => {
     // Your turn: the composer.
     expect(h.root.querySelector("[data-vn-input-form]")!.hidden).toBe(false);
   });
+
+  test("a plan right behind its text plays the opening paragraph's effect and sound effect", async () => {
+    const h = await open();
+    h.receive({ type: "vn_turn_text", turn: text() });
+    expect(h.flash()).toBeNull();
+    h.receive({ type: "vn_turn", turn: planned({ effects: ["lightning", null, null], audioCues: [{ paragraphIndex: 0, sfxUrl: "/sfx/thunder.mp3" }] }) });
+    expect(h.flash()).toBe("lightning");
+    expect(h.audio.some((src) => src.includes("thunder.mp3"))).toBe(true);
+  });
+
+  test("a plan that lands after the reader moved on plays no past moment", async () => {
+    const h = await open();
+    h.receive({ type: "vn_turn_text", turn: text() });
+    h.next();
+    h.receive({ type: "vn_turn", turn: planned({ effects: ["lightning", "lightning", null], audioCues: [{ paragraphIndex: 1, sfxUrl: "/sfx/thunder.mp3", bgmUrl: "/bgm/storm.mp3" }] }) });
+    expect(h.flash()).toBeNull();
+    expect(h.audio.some((src) => src.includes("thunder.mp3"))).toBe(false);
+    // Its music still plays.
+    expect(h.audio.some((src) => src.includes("storm.mp3"))).toBe(true);
+  });
 });
