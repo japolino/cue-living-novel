@@ -693,6 +693,19 @@ export const SPRITE_EXPRESSION_COUNT_OPTIONS: ReadonlyArray<{ value: `${VisualNo
 /** Group hint under "Expressions per character". */
 export const SPRITE_EXPRESSION_COUNT_HELP = "Fewer expressions means fewer pictures to make for each new character. Pictures you already have are kept and still used.";
 
+/** Group hint under "Character motion" (sprite mode). */
+export const SPRITE_MOTION_HELP = "Characters breathe, sway and move their heads a little, and the speaker nods or bounces when a line starts. Motion Off and your system's reduced-motion setting keep them still.";
+
+/** "Still" / "100%" for the motion strength slider. */
+export function describeSpriteMotion(percent: number): string {
+  return percent <= 0 ? "Still" : `${Math.round(percent)}%`;
+}
+
+/** "Off" / "3 px" for the sticker outline slider. */
+export function describeSpriteOutline(px: number): string {
+  return px <= 0 ? "Off" : `${Math.round(px)} px`;
+}
+
 export function normalizeSpriteExpressionCount(value: string): VisualNovelSpriteExpressionCount {
   return normalizeExpressionCount(value);
 }

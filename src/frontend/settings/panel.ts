@@ -2,6 +2,8 @@ import { DEFAULT_SPRITE_MODEL_URL } from "../../shared/sprites.js";
 import {
   DEFAULT_CONFIG,
   textEffectModeFor,
+  SPRITE_MOTION_MAX,
+  SPRITE_OUTLINE_MAX,
   type VisualNovelConfig,
   type VisualNovelPromptPreset,
 } from "../../config.js";
@@ -63,6 +65,9 @@ import {
   SPRITE_IMAGE_SIZE_OPTIONS,
   SPRITE_EXPRESSION_COUNT_HELP,
   SPRITE_EXPRESSION_COUNT_OPTIONS,
+  SPRITE_MOTION_HELP,
+  describeSpriteMotion,
+  describeSpriteOutline,
   normalizeSpriteExpressionCount,
   KEY_ILLUSTRATION_OPTIONS,
   normalizeKeyIllustrations,
@@ -613,6 +618,18 @@ export class VisualNovelSettingsPanel {
                 ${optionList("sceneImageFit", SCENE_IMAGE_FIT_OPTIONS)}
               </fieldset>
             `)}
+            <div data-sprites-look hidden>
+              ${group("Character motion", `
+                <label data-field ${find("Motion strength", "sprites puppet png breathing sway head move subtle strength still")}><span>Strength <span data-sprite-motion-val>100%</span></span><input name="spriteMotion" type="range" min="0" max="${SPRITE_MOTION_MAX}" step="10" /></label>
+                <label data-check ${find("Breathing", "sprites puppet breathe chest idle")}><input name="spriteBreathing" type="checkbox" /><span>Breathing</span></label>
+                <label data-check ${find("Body sway", "sprites puppet sway lean idle")}><input name="spriteSway" type="checkbox" /><span>Body sway</span></label>
+                <label data-check ${find("Head movement", "sprites puppet head tilt nod idle")}><input name="spriteHeadMotion" type="checkbox" /><span>Head movement</span></label>
+              `, { id: "sprite-motion", help: esc(SPRITE_MOTION_HELP), find: find("Character motion", "sprites puppet png motion breathing sway head speaker nod bounce") })}
+              ${group("Character look", `
+                <label data-field ${find("Sticker outline", "sprites outline border white sticker stroke edge")}><span>Sticker outline <span data-sprite-outline-val>Off</span></span><input name="spriteOutline" type="range" min="0" max="${SPRITE_OUTLINE_MAX}" step="1" /></label>
+                <label data-check ${find("Blur others", "sprites focus speaker dim blur depth")}><input name="spriteFocusBlur" type="checkbox" /><span>Blur characters who are not speaking<small>The speaker steps forward a little; the others are dimmed.</small></span></label>
+              `, { id: "sprite-look", find: find("Character look", "sprites outline sticker focus speaker dim blur") })}
+            </div>
             ${group("Text effect tags", `
               <div data-actions><button type="button" data-copy-guide>Copy guide for your chat model</button><small>Paste it into a character card, lorebook entry or preset so the model uses the tags.</small></div>
               <div data-copy-fallback hidden><small data-copy-fallback-label>Copying is blocked here. The text is selected: press Ctrl+C (or ⌘C).</small><textarea readonly spellcheck="false" aria-label="Text to copy"></textarea></div>
@@ -1237,6 +1254,7 @@ export class VisualNovelSettingsPanel {
       if (this.isAdvanced(target.name)) { this.markDraft(target.name); return; }
       // Sliders and number fields preview while dragging or typing; the save happens on change.
       if (target.name === "bgmVolume" || target.name === "sfxVolume") this.updateVolumeLabels();
+      if (target.name === "spriteMotion" || target.name === "spriteOutline") this.updatePuppetLabels();
       if (target.name === "textSpeed") this.restartSample();
       if (target.name === "textScale") this.root.querySelector<HTMLElement>("[data-sample-stage]")!.style.setProperty("--sample-scale", String(clamp(Number(target.value), TEXT_SCALE_MIN, TEXT_SCALE_MAX, this.config.textScale)));
     });
@@ -1440,6 +1458,12 @@ export class VisualNovelSettingsPanel {
       case "spriteImageSize": return { spriteImageSize: normalizeSpriteImageSize(target.value) };
       case "spriteExpressionCount": return { spriteExpressionCount: normalizeSpriteExpressionCount(target.value) };
       case "keyIllustrations": return { keyIllustrations: normalizeKeyIllustrations(target.value) };
+      case "spriteMotion": return { spriteMotion: clamp(Math.round(Number(target.value)), 0, SPRITE_MOTION_MAX, DEFAULT_CONFIG.spriteMotion) };
+      case "spriteBreathing": return { spriteBreathing: checked };
+      case "spriteSway": return { spriteSway: checked };
+      case "spriteHeadMotion": return { spriteHeadMotion: checked };
+      case "spriteOutline": return { spriteOutline: clamp(Math.round(Number(target.value)), 0, SPRITE_OUTLINE_MAX, DEFAULT_CONFIG.spriteOutline) };
+      case "spriteFocusBlur": return { spriteFocusBlur: checked };
       case "textScaleStep": {
         if (target.value === "custom") { this.showCustom("textScale", true); return null; }
         return { textScale: Number(target.value) };
@@ -1982,6 +2006,17 @@ export class VisualNovelSettingsPanel {
     this.root.querySelector<HTMLElement>("[data-sprites-only]")!.hidden = !sprites;
     // Advanced: the set size exists only for sprites.
     this.root.querySelector<HTMLElement>('[data-group-id="sprite-expressions"]')!.hidden = !sprites;
+    // Character motion and look (Look section) apply to sprites only.
+    this.root.querySelector<HTMLElement>("[data-sprites-look]")!.hidden = !sprites;
+    this.control<HTMLInputElement>("spriteMotion").value = String(config.spriteMotion);
+    this.control<HTMLInputElement>("spriteOutline").value = String(config.spriteOutline);
+    for (const name of ["spriteBreathing", "spriteSway", "spriteHeadMotion"] as const) {
+      const input = this.control<HTMLInputElement>(name);
+      input.checked = config[name];
+      input.disabled = config.spriteMotion <= 0;
+    }
+    this.control<HTMLInputElement>("spriteFocusBlur").checked = config.spriteFocusBlur;
+    this.updatePuppetLabels();
     // Key moments sit under the presentation choice and also exist only for sprites.
     this.root.querySelector<HTMLElement>("[data-key-moments]")!.hidden = !sprites;
     // Scene-only controls keep their values; they only read as not applying.
@@ -2125,6 +2160,11 @@ export class VisualNovelSettingsPanel {
   private showCustomQuiet(name: string, visible: boolean): void {
     const field = this.root.querySelector<HTMLElement>(`[data-custom="${name}"]`);
     if (field) field.hidden = !visible;
+  }
+
+  private updatePuppetLabels(): void {
+    this.root.querySelector("[data-sprite-motion-val]")!.textContent = describeSpriteMotion(Number(this.control<HTMLInputElement>("spriteMotion").value));
+    this.root.querySelector("[data-sprite-outline-val]")!.textContent = describeSpriteOutline(Number(this.control<HTMLInputElement>("spriteOutline").value));
   }
 
   private updateVolumeLabels(): void {

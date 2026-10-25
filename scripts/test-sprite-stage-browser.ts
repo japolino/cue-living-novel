@@ -10,8 +10,12 @@ import { SPRITE_EMOTES, SPRITE_LIGHTS, SPRITE_MOTIONS } from "../src/shared/spri
  * motion mid-frames, expression crossfade, enter/exit, a set with nothing
  * ready (badge), every theme preset, effect intensity, reduced motion, the
  * talking bob, mode switching, key-moment illustrations (switch, Previous,
- * not ready, skip, auto), and no console errors.
- * Screenshots: .cache/sprite-stage/. Run: bun run ./scripts/test-sprite-stage-browser.ts
+ * not ready, skip, auto), the PNG puppet (non-rigid idle motion, speaker
+ * reaction, marks following the head, outline, focus, settings, pause, CSS
+ * fallback), and no console errors.
+ * Screenshots: .cache/sprite-stage/ (puppet-frames.png and puppet-diff.png:
+ * four frames 0.25 s apart and their differences amplified x12).
+ * Run: bun run ./scripts/test-sprite-stage-browser.ts
  */
 const OUT = ".cache/sprite-stage";
 const build = await Bun.build({ entrypoints: ["scripts/sprite-stage-browser-fixture.ts"], target: "browser" });
@@ -162,6 +166,56 @@ const runningAnimations = (page: Page) => page.evaluate(() => {
   return layer.getAnimations({ subtree: true }).filter((a) => a instanceof CSSAnimation && a.playState === "running").map((a) => (a as CSSAnimation).animationName);
 });
 
+/** Puppet mode per actor and whether its frame loop runs. */
+const puppetState = (page: Page) => page.evaluate(() => {
+  const snapshot = (window as any).fx.stage.getSpriteSnapshot();
+  return { running: snapshot.puppet.running as boolean, strength: snapshot.puppet.strength as number, modes: Object.fromEntries(snapshot.actors.map((a: any) => [a.characterKey, a.puppet])) as Record<string, string> };
+});
+
+/** Keep a copy of every actor's puppet canvas (active layer) for puppetMotion. */
+const puppetFrame = (page: Page) => page.evaluate(() => {
+  const theme = document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!;
+  const w = window as any;
+  w.__puppetFrames ??= [];
+  const frame: Record<string, { w: number; h: number; data: Uint8ClampedArray; by: number; bh: number }> = {};
+  for (const el of theme.querySelectorAll<HTMLElement>("[data-vn-sprite]")) {
+    const layer = el.querySelector<HTMLElement>("[data-vn-sprite-image][data-vn-sprite-layer='active']")!;
+    const canvas = layer.querySelector("canvas");
+    if (!canvas || layer.dataset.vnSpriteCanvas !== "puppet") continue;
+    const cs = getComputedStyle(layer);
+    frame[el.dataset.vnSpriteKey!] = {
+      w: canvas.width, h: canvas.height, data: canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height).data,
+      by: Number.parseFloat(cs.getPropertyValue("--vn-sprite-by")) || 1, bh: Number.parseFloat(cs.getPropertyValue("--vn-sprite-bh")) || 1,
+    };
+  }
+  return w.__puppetFrames.push(frame) - 1;
+});
+
+/** Mean pixel change between two puppet frames in the head band (top 30% of the figure) and the feet band (bottom 15%). */
+const puppetMotion = (page: Page, a: number, b: number) => page.evaluate(([ia, ib]) => {
+  const frames = (window as any).__puppetFrames;
+  const out: Record<string, { head: number; feet: number }> = {};
+  for (const [key, first] of Object.entries(frames[ia] as Record<string, any>)) {
+    const second = frames[ib][key];
+    if (!second || second.w !== first.w || second.h !== first.h) continue;
+    const band = (from: number, to: number) => {
+      const y0 = Math.max(0, Math.floor(from * first.h));
+      const y1 = Math.min(first.h, Math.ceil(to * first.h));
+      let sum = 0;
+      for (let y = y0; y < y1; y += 1) {
+        for (let x = 0; x < first.w; x += 1) {
+          const i = (y * first.w + x) * 4;
+          sum += Math.abs(first.data[i] - second.data[i]) + Math.abs(first.data[i + 1] - second.data[i + 1]) + Math.abs(first.data[i + 2] - second.data[i + 2]) + Math.abs(first.data[i + 3] - second.data[i + 3]);
+        }
+      }
+      return sum / Math.max(1, (y1 - y0) * first.w);
+    };
+    const top = first.by - first.bh;
+    out[key] = { head: band(top, top + first.bh * 0.3), feet: band(first.by - first.bh * 0.15, first.by) };
+  }
+  return out;
+}, [a, b] as const);
+
 const SOLO: P[] = [{ speaker: "Mira", text: "Good morning! Did you sleep well?", actors: [{ characterKey: "mira", focus: true }] }];
 const DUO: P[] = [{ speaker: "Mira", text: "This is Ren, from the class next door.", actors: [{ characterKey: "mira", slot: "left", focus: true, facing: "right" }, { characterKey: "ren", slot: "right", facing: "left" }] }];
 const TRIO: P[] = [{ speaker: "Aoi", text: "So all three of us are on duty today?", actors: [{ characterKey: "mira", slot: "left" }, { characterKey: "aoi", slot: "center", focus: true }, { characterKey: "kaede", slot: "right", facing: "left" }] }];
@@ -221,8 +275,9 @@ try {
     const before = (await geometry(page)).figures[0]!;
     await go(page, 1);
     await page.waitForTimeout(150);
-    await shot(page, "enter-and-move-midframe");
+    // Measure before the screenshot: with the puppet on software GL a screenshot can outlast the move.
     const mid = (await geometry(page)).figures.find((f) => f.key === "mira")!;
+    await shot(page, "enter-and-move-midframe");
     await page.waitForTimeout(700);
     const after = (await geometry(page)).figures.find((f) => f.key === "mira")!;
     assert.ok(after.left < mid.left && mid.left < before.left, `slot move animates (${before.left.toFixed(0)} -> ${mid.left.toFixed(0)} -> ${after.left.toFixed(0)})`);
@@ -420,6 +475,7 @@ try {
     await page.waitForTimeout(600);
     const on = await layerState();
     assert.equal(on.opacity, 0, "sprites hidden under the illustration");
+    assert.equal((await puppetState(page)).running, false, "the puppet pauses under an illustration");
     assert.equal(on.sprites, 2, "the staging still applies underneath");
     const image = await displayed();
     assert.equal(image.url, ILLUSTRATION);
@@ -433,6 +489,7 @@ try {
     assert.equal((await displayed()).url, "/sprites/plate_street.webp", "p2: the plate again");
     const back = await layerState();
     assert.equal(back.opacity, 1, "sprites visible again");
+    assert.equal((await puppetState(page)).running, true, "the puppet runs again");
     assert.equal(back.illustrated, null);
     await shot(page, "keymoment-2-back-to-sprites");
     // Previous re-shows the illustration; Previous again returns to the sprites.
@@ -586,8 +643,48 @@ try {
       await page.waitForTimeout(durations[motion]! * 0.7 + 120);
       assert.equal(await page.evaluate(() => document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!.querySelector<HTMLElement>("[data-vn-sprite-body]")!.dataset.vnSpriteMotion ?? null), null, `${motion}: one-shot`);
     }
-    // Idle breathing runs while nothing else happens.
-    assert.ok((await runningAnimations(page)).includes("vn-sprite-breathe"), "idle breathing");
+    // Idle motion runs while nothing else happens: the PNG puppet (WebGL), not the CSS breathing.
+    const idle = await puppetState(page);
+    assert.equal(idle.modes.mira, "gl", "the puppet draws the sprite");
+    assert.ok(idle.running, "the puppet loop runs");
+    assert.ok(!(await runningAnimations(page)).includes("vn-sprite-breathe"), "no CSS breathing under the puppet");
+    await page.close();
+  }
+
+  // ---- CSS fallback: no WebGL puppet ---------------------------------------------
+  {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+    watch(page);
+    await open(page, { puppet: "css", speed: "30" });
+    await load(page, [{ speaker: "Mira", text: "Without the puppet the old breathing and bob carry on, line after line.", actors: [{ characterKey: "mira", slot: "left", focus: true }, { characterKey: "ren", slot: "right" }] }], 200);
+    const state = await puppetState(page);
+    assert.deepEqual(state.modes, { mira: "css", ren: "css" }, "CSS fallback without (hardware) WebGL");
+    assert.equal(state.running, false);
+    const names = await runningAnimations(page);
+    assert.ok(names.includes("vn-sprite-breathe") && names.includes("vn-sprite-talk"), `CSS breathing and talking bob (${names})`);
+    const css = await page.evaluate(() => {
+      const theme = document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!;
+      const ren = theme.querySelector<HTMLElement>("[data-vn-sprite-key='ren']")!;
+      const mira = theme.querySelector<HTMLElement>("[data-vn-sprite-key='mira']")!;
+      return { filter: getComputedStyle(ren).filter, zoom: getComputedStyle(mira.querySelector("[data-vn-sprite-body]")!).scale, canvas: mira.querySelector<HTMLElement>("[data-vn-sprite-image][data-vn-sprite-layer='active']")!.dataset.vnSpriteCanvas ?? null };
+    });
+    assert.match(css.filter, /brightness\(0\.68\).*blur\(1\.2px\)/, `CSS fallback: others dimmed and blurred (${css.filter})`);
+    assert.equal(css.zoom, "1.035", "the speaker steps forward");
+    assert.equal(css.canvas, null, "no outline: the img shows");
+    // A baked outline shows as a static canvas on the CSS path.
+    await page.evaluate(() => (window as any).fx.puppet({ spriteOutline: 4 }));
+    await page.waitForTimeout(100);
+    const outlined = await page.evaluate(() => {
+      const theme = document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!;
+      const layer = theme.querySelector<HTMLElement>("[data-vn-sprite-key='mira'] [data-vn-sprite-image][data-vn-sprite-layer='active']")!;
+      return { canvas: layer.dataset.vnSpriteCanvas ?? null, img: getComputedStyle(layer.querySelector("img")!).visibility };
+    });
+    assert.deepEqual(outlined, { canvas: "outline", img: "hidden" }, "CSS fallback: baked outline canvas");
+    await shot(page, "puppet-css-fallback-outline");
+    // Strength 0 stops the CSS idle motion too.
+    await page.evaluate(() => (window as any).fx.puppet({ spriteMotion: 0 }));
+    const breath = await page.evaluate(() => getComputedStyle(document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!.querySelector("[data-vn-sprites]")!).getPropertyValue("--vn-sprite-breath").trim());
+    assert.equal(breath, "0", "motion 0: no CSS breathing amplitude");
     await page.close();
   }
 
@@ -599,10 +696,153 @@ try {
     await load(page, [{ speaker: "Mira", text: "This line types out slowly so the speaker can bob while she talks, one letter at a time.", actors: [{ characterKey: "mira", slot: "left", focus: true }, { characterKey: "ren", slot: "right" }] }], 200);
     const talking = () => page.evaluate(() => [...document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!.querySelectorAll<HTMLElement>("[data-vn-sprite]")].map((el) => [el.dataset.vnSpriteKey, el.dataset.vnSpriteTalking]));
     const bob = Object.fromEntries(await talking());
-    assert.ok(bob.mira === "true" && bob.ren !== "true", `only the speaker bobs (${JSON.stringify(bob)})`);
-    assert.ok((await runningAnimations(page)).includes("vn-sprite-talk"));
-    await page.waitForTimeout(3600);
+    assert.ok(bob.mira === "true" && bob.ren !== "true", `only the speaker talks (${JSON.stringify(bob)})`);
+    assert.equal((await puppetState(page)).modes.mira, "gl");
+    assert.ok(!(await runningAnimations(page)).includes("vn-sprite-talk"), "the puppet moves the head instead of the CSS bob");
+    // Wait for the line rather than a fixed time: software GL frames (the puppet in headless) slow the typewriter's ticks.
+    await page.waitForFunction(() => document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!.querySelector<HTMLElement>("[data-vn-sprite-key='mira']")!.dataset.vnSpriteTalking !== "true", undefined, { timeout: 15_000 });
     assert.equal(Object.fromEntries(await talking()).mira, "false", "bob stops when the line is typed");
+    await page.close();
+  }
+
+  // ---- PNG puppet ----------------------------------------------------------------
+  {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+    watch(page);
+    await open(page, { speed: "40" });
+    await load(page, [{ actors: [{ characterKey: "mira", slot: "left", focus: true, emote: "sparkle" }, { characterKey: "ren", slot: "right" }], light: "sunset" }], 600);
+    const layers = await page.evaluate(() => {
+      const theme = document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!;
+      return [...theme.querySelectorAll<HTMLElement>("[data-vn-sprite-image][data-vn-sprite-layer='active']")].map((layer) => ({
+        canvas: layer.dataset.vnSpriteCanvas ?? null, img: getComputedStyle(layer.querySelector("img")!).visibility,
+        rim: getComputedStyle(layer, "::before").visibility, filter: getComputedStyle(layer).filter, width: layer.querySelector("canvas")?.width ?? 0,
+      }));
+    });
+    for (const layer of layers) {
+      assert.deepEqual([layer.canvas, layer.img, layer.rim, layer.filter], ["puppet", "hidden", "hidden", "none"], "the warped canvas replaces the img, its CSS rim, tint and grade");
+      assert.ok(layer.width > 100, `canvas backing (${layer.width})`);
+    }
+    // Non-rigid: the head band changes over a quarter second, the feet stay put.
+    const f0 = await puppetFrame(page);
+    await page.waitForTimeout(400);
+    const f1 = await puppetFrame(page);
+    const motion = await puppetMotion(page, f0, f1);
+    for (const key of ["mira", "ren"]) {
+      const m = motion[key]!;
+      assert.ok(m.head > 0.4, `${key}: the head moves (${m.head.toFixed(2)})`);
+      assert.ok(m.head > m.feet * 4, `${key}: the head moves more than the feet (head ${m.head.toFixed(2)}, feet ${m.feet.toFixed(2)})`);
+    }
+    // The emote rides on the head.
+    const marks = () => page.evaluate(() => document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!.querySelector<HTMLElement>("[data-vn-sprite-key='mira'] [data-vn-sprite-marks]")!.style.translate);
+    const m0 = await marks();
+    await page.waitForTimeout(350);
+    const m1 = await marks();
+    assert.ok(m0 && m1 && m0 !== m1, `the marks follow the head (${m0} -> ${m1})`);
+
+    // Frame capture like the reference: 4 frames 0.25 s apart and their differences x12.
+    // The plate drift (vn-plate-drift) is paused so the differences show only the figures.
+    await page.evaluate(() => {
+      const style = document.createElement("style");
+      style.textContent = "[data-vn-scene-image] { animation-play-state: paused !important; }";
+      document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!.append(style);
+    });
+    const clip = { x: 120, y: 40, width: 1040, height: 520 };
+    const frames: string[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      frames.push((await page.screenshot({ clip })).toString("base64"));
+      if (i < 4) await page.waitForTimeout(250);
+    }
+    const strips = await page.evaluate(async (list) => {
+      const images = await Promise.all(list.map((b64) => new Promise<HTMLImageElement>((resolve) => { const img = new Image(); img.onload = () => resolve(img); img.src = `data:image/png;base64,${b64}`; })));
+      const w = images[0]!.width, h = images[0]!.height, scale = 0.5;
+      const sw = Math.round(w * scale), sh = Math.round(h * scale);
+      const frameStrip = document.createElement("canvas");
+      frameStrip.width = sw * 2; frameStrip.height = sh * 2;
+      const diffStrip = document.createElement("canvas");
+      diffStrip.width = sw * 2; diffStrip.height = sh * 2;
+      const fctx = frameStrip.getContext("2d")!, dctx = diffStrip.getContext("2d")!;
+      const read = (img: HTMLImageElement) => { const c = document.createElement("canvas"); c.width = w; c.height = h; const x = c.getContext("2d")!; x.drawImage(img, 0, 0); return x.getImageData(0, 0, w, h); };
+      let total = 0;
+      for (let i = 0; i < 4; i += 1) {
+        const ox = (i % 2) * sw, oy = Math.floor(i / 2) * sh;
+        fctx.drawImage(images[i]!, ox, oy, sw, sh);
+        const a = read(images[i]!), b = read(images[i + 1]!);
+        const diff = new ImageData(w, h);
+        for (let k = 0; k < a.data.length; k += 4) {
+          for (let c = 0; c < 3; c += 1) {
+            const d = Math.abs(a.data[k + c]! - b.data[k + c]!);
+            total += d;
+            diff.data[k + c] = Math.min(255, d * 12);
+          }
+          diff.data[k + 3] = 255;
+        }
+        const tmp = document.createElement("canvas"); tmp.width = w; tmp.height = h;
+        tmp.getContext("2d")!.putImageData(diff, 0, 0);
+        dctx.drawImage(tmp, ox, oy, sw, sh);
+      }
+      return { frames: frameStrip.toDataURL("image/png"), diff: diffStrip.toDataURL("image/png"), total };
+    }, frames);
+    await Bun.write(`${OUT}/puppet-frames.png`, Buffer.from(strips.frames.split(",")[1]!, "base64"));
+    await Bun.write(`${OUT}/puppet-diff.png`, Buffer.from(strips.diff.split(",")[1]!, "base64"));
+    shots.push(`${OUT}/puppet-frames.png`, `${OUT}/puppet-diff.png`);
+    assert.ok(strips.total > 0, "frames differ");
+
+    // Speaker reaction: a nod when the line starts, then the head moves while it types.
+    await load(page, [{ speaker: "Mira", text: "When I start to talk, I nod first and then my head moves along with the words.", actors: [{ characterKey: "mira", slot: "left", focus: true, emote: "music" }, { characterKey: "ren", slot: "right" }] }], 0);
+    const dips = await page.evaluate(() => new Promise<number>((resolve) => {
+      const marks = document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!.querySelector<HTMLElement>("[data-vn-sprite-key='mira'] [data-vn-sprite-marks]")!;
+      const ys: number[] = [];
+      const start = performance.now();
+      const step = () => {
+        const y = Number.parseFloat(marks.style.translate.split(" ")[1] ?? "0");
+        if (Number.isFinite(y)) ys.push(y);
+        if (performance.now() - start < 700) requestAnimationFrame(step); else resolve(Math.max(...ys) - Math.min(...ys));
+      };
+      requestAnimationFrame(step);
+    }));
+    assert.ok(dips > 3, `the speaker nods at the start of the line (head travel ${dips.toFixed(1)} px)`);
+    assert.equal(await page.evaluate(() => document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!.querySelector<HTMLElement>("[data-vn-sprite-key='mira']")!.dataset.vnSpriteTalking), "true");
+    const zoom = await page.evaluate(() => getComputedStyle(document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!.querySelector("[data-vn-sprite-key='mira'] [data-vn-sprite-body]")!).scale);
+    assert.equal(zoom, "1.035", "the speaker steps forward");
+    await shot(page, "puppet-speaker");
+
+    // Outline: white pixels appear just outside the figure.
+    const whiteCount = () => page.evaluate(() => {
+      const canvas = document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!.querySelector<HTMLCanvasElement>("[data-vn-sprite-key='ren'] [data-vn-sprite-image][data-vn-sprite-layer='active'] > canvas")!;
+      const data = canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height).data;
+      let n = 0;
+      for (let i = 0; i < data.length; i += 4) if (data[i + 3]! > 200 && data[i]! > 225 && data[i + 1]! > 225 && data[i + 2]! > 225) n += 1;
+      return n;
+    });
+    const before = await whiteCount();
+    await page.evaluate(() => (window as any).fx.puppet({ spriteOutline: 4 }));
+    await page.waitForTimeout(300);
+    const after = await whiteCount();
+    assert.ok(after > before + 500, `outline: white border baked in (${before} -> ${after} white pixels)`);
+    await shot(page, "puppet-outline-4px");
+
+    // Settings: strength 0 falls back to the still CSS path; turning it on again restores the puppet.
+    await page.evaluate(() => (window as any).fx.puppet({ spriteMotion: 0 }));
+    let state = await puppetState(page);
+    assert.deepEqual([state.modes.mira, state.strength], ["css", 0], "strength 0: no puppet");
+    await page.evaluate(() => (window as any).fx.puppet({ spriteMotion: 150, spriteBreathing: false, spriteSway: false, spriteHeadMotion: true }));
+    await page.waitForTimeout(200);
+    state = await puppetState(page);
+    assert.deepEqual([state.modes.mira, state.strength, state.running], ["gl", 1.5, true], "strength 150%");
+
+    // A hidden page pauses the loop; visible again resumes it.
+    await page.evaluate(() => {
+      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await page.waitForTimeout(100);
+    assert.equal((await puppetState(page)).running, false, "paused while the page is hidden");
+    await page.evaluate(() => {
+      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await page.waitForTimeout(100);
+    assert.equal((await puppetState(page)).running, true, "runs again when visible");
     await page.close();
   }
 
@@ -617,7 +857,10 @@ try {
     const names = await runningAnimations(page);
     if (intensity === "off") {
       assert.deepEqual(names, [], `effects off: no sprite animation (${names})`);
+      const state = await puppetState(page);
+      assert.deepEqual([state.modes.mira, state.running, state.strength], ["css", false, 0], "Motion off: the puppet stays still");
     } else {
+      assert.equal((await puppetState(page)).strength, 0.55, "gentle scales the puppet");
       assert.ok(names.includes("vn-sprite-hop"), "gentle still moves");
       const fx = await page.evaluate(() => getComputedStyle(document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!.querySelector("[data-vn-sprites]")!).getPropertyValue("--vn-sprite-fx").trim());
       assert.equal(fx, "0.55", "gentle scales motion");
@@ -637,6 +880,8 @@ try {
     await go(page, 1);
     await page.waitForTimeout(100);
     assert.deepEqual(await runningAnimations(page), [], "reduced motion: no sprite keyframes");
+    const reduced = await puppetState(page);
+    assert.deepEqual([reduced.modes, reduced.running], [{ mira: "css", ren: "css" }, false], "reduced motion: no puppet");
     await page.waitForTimeout(500);
     assertLayout(await geometry(page), "reduced motion", 2);
     await shot(page, "reduced-motion");

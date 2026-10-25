@@ -1,4 +1,6 @@
 import { VnStage } from "../src/frontend/stage/vn-stage.js";
+import { puppetGlOptions } from "../src/frontend/stage/sprite-puppet.js";
+import { DEFAULT_CONFIG, spritePuppetSettings, type VisualNovelSpritePuppet } from "../src/config.js";
 import {
   SPRITE_HOT_SET,
   type PlateView,
@@ -15,13 +17,17 @@ import {
  * (scripts/test-sprite-stage-browser.ts). Sprites and plates are small
  * downscaled copies of the sprite bake-off assets in scripts/fixtures/sprites/.
  *
- * Query: ?preset, ?intensity (full|gentle|off), ?speed (typewriter ms), ?mode (sprites|scene).
- * window.fx: { stage, load(paragraphs, options), go(index), illustrate(index, status), ready(...), view(), effect(name), ambient(name) }.
+ * Query: ?preset, ?intensity (full|gentle|off), ?speed (typewriter ms), ?mode (sprites|scene),
+ * ?puppet=css (no WebGL puppet: the CSS fallback), ?outline (px).
+ * window.fx: { stage, load(paragraphs, options), go(index), illustrate(index, status), ready(...), view(), effect(name), ambient(name), puppet(settings) }.
+ * Headless Chromium only has software WebGL (SwiftShader), which the puppet
+ * refuses by default; the fixture allows it so the WebGL path runs here.
  * Key moments: a paragraph with `illustrate: true` gets the fixture
  * illustration (`/sprites/illustration_moment.webp`, a composited close-up
  * standing in for a generated scene picture) unless `illustration` says otherwise.
  */
 const q = new URL(location.href).searchParams;
+puppetGlOptions.allowSoftware = q.get("puppet") !== "css";
 
 /** Opaque bbox of each fixture cut-out (alpha > 24), normalized [x, y, w, h]. */
 const BBOX: Record<string, [number, number, number, number]> = {
@@ -122,6 +128,8 @@ const stage = new VnStage({
 });
 stage.setEffectIntensity((q.get("intensity") as never) ?? "full");
 stage.setPresentationMode((q.get("mode") as never) ?? "sprites");
+const puppet = (settings: Partial<VisualNovelSpritePuppet>) => stage.setSpritePuppet({ ...spritePuppetSettings(DEFAULT_CONFIG), ...settings });
+if (q.get("outline")) puppet({ spriteOutline: Number(q.get("outline")) });
 
 let current: SpriteTurnView | null = null;
 let turnCounter = 0;
@@ -192,5 +200,6 @@ Object.assign(window, {
     view: () => current,
     effect: (name: string) => stage.triggerEffect(name as never),
     ambient: (name: string | null) => stage.applyAmbient(name as never),
+    puppet,
   },
 });

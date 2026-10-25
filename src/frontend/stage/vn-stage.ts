@@ -100,6 +100,7 @@ import {
   type VisualNovelEffectIntensity,
   type VisualNovelPresentationMode,
   type VisualNovelSceneImageFit,
+  type VisualNovelSpritePuppet,
   type VisualNovelTextEffectMode,
   type VisualNovelThemePreset,
 } from "../../config.js";
@@ -920,6 +921,11 @@ export class VnStage {
     if (next === this.spriteNote) return;
     this.spriteNote = next;
     this.renderStatus();
+  }
+
+  /** Sprite puppet motion, outline and focus blur (sprite-layer.ts `setPuppet`). */
+  setSpritePuppet(settings: VisualNovelSpritePuppet): void {
+    this.spriteLayer.setPuppet(settings);
   }
 
   /**

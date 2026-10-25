@@ -1,5 +1,5 @@
 import type { SpindleFrontendContext } from "lumiverse-spindle-types";
-import { textEffectModeFor, type VisualNovelConfig, type VisualNovelEffectIntensity, type VisualNovelPresentationMode, type VisualNovelTextEffectMode } from "../../config.js";
+import { spritePuppetSettings, textEffectModeFor, type VisualNovelConfig, type VisualNovelEffectIntensity, type VisualNovelPresentationMode, type VisualNovelSpritePuppet, type VisualNovelTextEffectMode } from "../../config.js";
 import { REFERENCE_IMAGE_MAX_BYTES, REFERENCE_IMAGE_MIMES } from "../../protocol.js";
 import type { AssetView, BackendResponse, ConnectionCatalogOption, FrontendRequest, TurnView } from "../../protocol.js";
 import { AudioEngine, VnStage, isAmbientEffect, isStageEffect } from "../stage/index.js";
@@ -411,6 +411,8 @@ export type VisualStageThemeTarget = Pick<
   setTextEffects?: (mode: VisualNovelTextEffectMode) => void;
   /** Scene pictures or sprite mode (stage shows or removes the sprite layer). */
   setPresentationMode?: (mode: VisualNovelPresentationMode) => void;
+  /** Sprite puppet motion, outline and focus blur. */
+  setSpritePuppet?: (settings: VisualNovelSpritePuppet) => void;
 };
 
 /**
@@ -434,6 +436,7 @@ export function applyVisualConfigToStage(
   stage.setEffectIntensity?.(config.effectIntensity);
   stage.setTextEffects?.(textEffectModeFor(config.effectIntensity));
   stage.setPresentationMode?.(config.presentationMode);
+  stage.setSpritePuppet?.(spritePuppetSettings(config));
 }
 
 /**
