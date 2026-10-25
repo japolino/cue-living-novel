@@ -12,7 +12,9 @@ import { SPRITE_EMOTES, SPRITE_LIGHTS, SPRITE_MOTIONS } from "../src/shared/spri
  * talking bob, mode switching, key-moment illustrations (switch, Previous,
  * not ready, skip, auto), the PNG puppet (non-rigid idle motion, speaker
  * reaction, marks following the head, outline, focus, settings, pause, CSS
- * fallback), and no console errors.
+ * fallback), puppet acting (listeners look at the speaker and nod, the voice
+ * follows the text, moods, emote reactions) and physics (follow-through on a
+ * slot move, wind), and no console errors.
  * Screenshots: .cache/sprite-stage/ (puppet-frames.png and puppet-diff.png:
  * four frames 0.25 s apart and their differences amplified x12).
  * Run: bun run ./scripts/test-sprite-stage-browser.ts
@@ -54,7 +56,13 @@ async function open(page: Page, query: Record<string, string> = {}): Promise<voi
 async function load(page: Page, paragraphs: P[], settle = 700): Promise<void> {
   await page.evaluate((p) => (window as any).fx.load(p), paragraphs);
   await waitImages(page);
-  if (settle) await page.waitForTimeout(settle);
+  if (!settle) return;
+  await page.waitForTimeout(settle);
+  // With the puppet on software GL frames are slow, so a slot or scale transition can outlast the settle time.
+  await page.waitForFunction(() => {
+    const sprites = document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!.querySelector("[data-vn-sprites]");
+    return !sprites || sprites.getAnimations({ subtree: true }).every((a) => !(a instanceof CSSTransition) || a.playState !== "running");
+  }, undefined, { timeout: 4000 }).catch(() => {});
 }
 
 async function go(page: Page, index: number): Promise<void> {
@@ -216,6 +224,20 @@ const puppetMotion = (page: Page, a: number, b: number) => page.evaluate(([ia, i
   return out;
 }, [a, b] as const);
 
+/** Every frame for `ms`: each actor's puppet pose and voice level, from the sprite snapshot. */
+const samplePoses = (page: Page, ms: number) => page.evaluate((duration) => new Promise<Array<Record<string, { pose: Record<string, number> | null; voice: number }>>>((resolve) => {
+  const frames: Array<Record<string, { pose: Record<string, number> | null; voice: number }>> = [];
+  const start = performance.now();
+  const step = () => {
+    const snapshot = (window as any).fx.stage.getSpriteSnapshot();
+    frames.push(Object.fromEntries(snapshot.actors.map((a: any) => [a.characterKey, { pose: a.pose, voice: a.voice }])));
+    if (performance.now() - start < duration) requestAnimationFrame(step); else resolve(frames);
+  };
+  requestAnimationFrame(step);
+}), ms);
+const series = (frames: Awaited<ReturnType<typeof samplePoses>>, key: string, field: string) =>
+  frames.map((frame) => frame[key]?.pose?.[field]).filter((v): v is number => typeof v === "number");
+
 const SOLO: P[] = [{ speaker: "Mira", text: "Good morning! Did you sleep well?", actors: [{ characterKey: "mira", focus: true }] }];
 const DUO: P[] = [{ speaker: "Mira", text: "This is Ren, from the class next door.", actors: [{ characterKey: "mira", slot: "left", focus: true, facing: "right" }, { characterKey: "ren", slot: "right", facing: "left" }] }];
 const TRIO: P[] = [{ speaker: "Aoi", text: "So all three of us are on duty today?", actors: [{ characterKey: "mira", slot: "left" }, { characterKey: "aoi", slot: "center", focus: true }, { characterKey: "kaede", slot: "right", facing: "left" }] }];
@@ -274,13 +296,18 @@ try {
     ]);
     const before = (await geometry(page)).figures[0]!;
     await go(page, 1);
-    await page.waitForTimeout(150);
-    // Measure before the screenshot: with the puppet on software GL a screenshot can outlast the move.
-    const mid = (await geometry(page)).figures.find((f) => f.key === "mira")!;
-    await shot(page, "enter-and-move-midframe");
+    // Sample through the move (with the puppet on software GL, frames and the move's start time vary):
+    // some position must lie between the start and the end, so it animated instead of jumping.
+    const path: number[] = [];
+    for (let i = 0; i < 14; i += 1) {
+      path.push((await geometry(page)).figures.find((f) => f.key === "mira")!.left);
+      if (i === 3) await shot(page, "enter-and-move-midframe");
+      await page.waitForTimeout(50);
+    }
     await page.waitForTimeout(700);
     const after = (await geometry(page)).figures.find((f) => f.key === "mira")!;
-    assert.ok(after.left < mid.left && mid.left < before.left, `slot move animates (${before.left.toFixed(0)} -> ${mid.left.toFixed(0)} -> ${after.left.toFixed(0)})`);
+    const between = path.filter((left) => left < before.left - 10 && left > after.left + 10);
+    assert.ok(after.left < before.left - 100 && between.length > 0, `slot move animates (${before.left.toFixed(0)} -> [${path.map((l) => l.toFixed(0)).join(", ")}] -> ${after.left.toFixed(0)})`);
 
     // Exit.
     await load(page, [
@@ -843,6 +870,67 @@ try {
     });
     await page.waitForTimeout(100);
     assert.equal((await puppetState(page)).running, true, "runs again when visible");
+    await page.close();
+  }
+
+  // ---- Puppet acting and physics ---------------------------------------------------
+  {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+    watch(page);
+    await open(page, { speed: "45" });
+    // Attention and voice: Ren listens and looks at Mira; her head follows the words; he nods after her full stop.
+    await load(page, [{ speaker: "Mira", text: "Okay. So you are Ren, from the class next door? I have heard so much about you, and all of it good.", actors: [{ characterKey: "mira", slot: "left", focus: true, facing: "right" }, { characterKey: "ren", slot: "right", facing: "left" }] }], 0);
+    const talk = await samplePoses(page, 1800);
+    const renTurn = series(talk.slice(-10), "ren", "turn");
+    assert.ok(renTurn.length && renTurn.every((v) => v < 0), `the listener (not mirrored, on the right) turns toward the speaker on the left (${renTurn.map((v) => v.toFixed(4))})`);
+    const voice = talk.map((frame) => frame.mira?.voice ?? 0);
+    assert.ok(Math.max(...voice) > 0.9, `the speaker's head follows the typed text (voice ${Math.max(...voice).toFixed(2)})`);
+    const renNod = series(talk, "ren", "nod");
+    assert.ok(Math.max(...renNod) > 0.003, `the listener nods after "Okay." (peak nod ${Math.max(...renNod).toFixed(4)})`);
+    await shot(page, "puppet-acting-listen");
+
+    // Moods: a sad body slumps with the head down, an angry one raises its shoulders.
+    await load(page, [{ actors: [{ characterKey: "mira", focus: true, expression: "sad", intensity: 4 }] }], 1800);
+    let pose = (await snap(page)).actors[0].pose;
+    assert.ok(pose.posture < 0 && pose.nod > 0, `sad: slumped, head down (posture ${pose.posture.toFixed(4)}, nod ${pose.nod.toFixed(4)})`);
+    await shot(page, "puppet-acting-sad");
+    await load(page, [{ actors: [{ characterKey: "mira", focus: true, expression: "angry", intensity: 4 }] }], 1800);
+    pose = (await snap(page)).actors[0].pose;
+    assert.ok(pose.shoulders > 0 && pose.posture > 0, `angry: drawn up, shoulders raised (shoulders ${pose.shoulders.toFixed(4)})`);
+
+    // Emote reaction: "!" jolts the body.
+    await load(page, [{ actors: [{ characterKey: "mira", focus: true }] }, { actors: [{ characterKey: "mira", focus: true, emote: "exclaim" }] }], 600);
+    await go(page, 1);
+    const jolt = series(await samplePoses(page, 500), "mira", "shoulders");
+    assert.ok(Math.max(...jolt) > 0.004, `an exclamation mark jolts the shoulders (peak ${Math.max(...jolt).toFixed(4)})`);
+
+    // Physics: a slot move makes the loose parts trail; with physics off they do not.
+    const slotMove: P[] = [{ actors: [{ characterKey: "mira", focus: true }] }, { actors: [{ characterKey: "mira", slot: "left", focus: true }, { characterKey: "ren", slot: "right" }] }];
+    await load(page, slotMove, 600);
+    await go(page, 1);
+    const moving = series(await samplePoses(page, 1000), "mira", "lagX");
+    assert.ok(Math.max(...moving.map(Math.abs)) > 0.0008, `follow-through on the slot move (peak lag ${Math.max(...moving.map(Math.abs)).toFixed(4)})`);
+    await page.evaluate(() => (window as any).fx.puppet({ spritePhysics: false }));
+    await load(page, slotMove, 1600);
+    await go(page, 1);
+    const rigid = series(await samplePoses(page, 900), "mira", "lagX");
+    assert.ok(Math.max(...rigid.map(Math.abs)) < 0.0003, `physics off: no trail (${Math.max(...rigid.map(Math.abs)).toFixed(5)})`);
+    await page.evaluate(() => (window as any).fx.puppet({ spritePhysics: true }));
+
+    // Wind from the weather: hems and hair lean the same way on screen (mirrored figures the other way in their image).
+    await load(page, [{ actors: [{ characterKey: "mira", slot: "left", facing: "right" }, { characterKey: "ren", slot: "right", facing: "left" }], ambient: "heavy_rain" }], 800);
+    const windy = await samplePoses(page, 800);
+    const mean = (values: number[]) => values.reduce((a, b) => a + b, 0) / Math.max(1, values.length);
+    const miraWind = mean(series(windy, "mira", "lagX"));
+    const renWind = mean(series(windy, "ren", "lagX"));
+    assert.ok(miraWind < -0.0005 && renWind > 0.0005, `wind pushes both toward the stage's right (mira ${miraWind.toFixed(4)} mirrored, ren ${renWind.toFixed(4)})`);
+    await shot(page, "puppet-physics-wind");
+
+    // Acting off: no mood, no gaze, the plain idle motion.
+    await page.evaluate(() => (window as any).fx.puppet({ spriteActing: false }));
+    await load(page, [{ actors: [{ characterKey: "mira", focus: true, expression: "sad", intensity: 5 }] }], 2200);
+    pose = (await snap(page)).actors[0].pose;
+    assert.ok(Math.abs(pose.posture) < 0.0002 && Math.abs(pose.turn) < 0.0002, `acting off: no posture or gaze (posture ${pose.posture.toFixed(5)})`);
     await page.close();
   }
 

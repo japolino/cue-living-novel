@@ -298,6 +298,10 @@ test("sprite puppet settings default on (no outline) and clamp to their ranges",
   assert.equal(defaults.spriteHeadMotion, true);
   assert.equal(defaults.spriteOutline, 0);
   assert.equal(defaults.spriteFocusBlur, true);
+  assert.equal(defaults.spriteActing, true);
+  assert.equal(defaults.spritePhysics, true);
+  assert.equal(normalizeConfig({ spriteActing: false }).spriteActing, false);
+  assert.equal(normalizeConfig({ spritePhysics: "off" }).spritePhysics, true);
   const clamped = normalizeConfig({ spriteMotion: 400, spriteOutline: 9.6, spriteBreathing: false, spriteSway: "no", spriteFocusBlur: false });
   assert.equal(clamped.spriteMotion, SPRITE_MOTION_MAX);
   assert.equal(clamped.spriteOutline, SPRITE_OUTLINE_MAX);
@@ -306,5 +310,5 @@ test("sprite puppet settings default on (no outline) and clamp to their ranges",
   assert.equal(clamped.spriteFocusBlur, false);
   assert.equal(normalizeConfig({ spriteMotion: -5, spriteOutline: "2" }).spriteMotion, 0);
   assert.equal(normalizeConfig({ spriteOutline: "2" }).spriteOutline, 2);
-  assert.deepEqual(Object.keys(spritePuppetSettings(defaults)).sort(), ["spriteBreathing", "spriteFocusBlur", "spriteHeadMotion", "spriteMotion", "spriteOutline", "spriteSway"]);
+  assert.deepEqual(Object.keys(spritePuppetSettings(defaults)).sort(), ["spriteActing", "spriteBreathing", "spriteFocusBlur", "spriteHeadMotion", "spriteMotion", "spriteOutline", "spritePhysics", "spriteSway"]);
 });

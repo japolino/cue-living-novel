@@ -75,8 +75,8 @@ describe("settings panel markup", () => {
     expect(source).toContain('case "spriteModelUrl": return parseSpriteModelUrl(text());');
   });
 
-  test("sprite puppet: motion, its three parts, outline and focus blur save at once, sprite mode only", () => {
-    for (const name of ["spriteMotion", "spriteBreathing", "spriteSway", "spriteHeadMotion", "spriteOutline", "spriteFocusBlur"]) {
+  test("sprite puppet: motion, its parts, acting, physics, outline and focus blur save at once, sprite mode only", () => {
+    for (const name of ["spriteMotion", "spriteBreathing", "spriteSway", "spriteHeadMotion", "spriteActing", "spritePhysics", "spriteOutline", "spriteFocusBlur"]) {
       expect(names.filter((candidate) => candidate === name)).toEqual([name]);
       expect(source).toContain(`case "${name}": return { ${name}: `);
       expect(advancedKeys).not.toContain(name);

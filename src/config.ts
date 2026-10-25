@@ -69,13 +69,16 @@ export const KEY_ILLUSTRATION_CAP: Readonly<Record<VisualNovelKeyIllustrations, 
  * 100 = default, up to SPRITE_MOTION_MAX); breathing, body sway and head
  * movement switch on and off separately. `spriteOutline` is a white sticker
  * outline in px (0 = none). `spriteFocusBlur` blurs the characters who are
- * not speaking a little. Motion (`effectIntensity`) "off" and the OS
- * reduced-motion setting still stop all movement.
+ * not speaking a little. `spriteActing` lets the body carry the mood, the
+ * speaker's head follow the typed words and the others look at whoever
+ * speaks ("Puppet acting"); `spritePhysics` lets hair and loose clothes
+ * trail and settle ("Puppet physics"). Motion (`effectIntensity`) "off"
+ * and the OS reduced-motion setting still stop all movement.
  */
 export const SPRITE_MOTION_MAX = 150;
 export const SPRITE_OUTLINE_MAX = 6;
 export type VisualNovelSpritePuppet = Pick<VisualNovelConfig,
-  "spriteMotion" | "spriteBreathing" | "spriteSway" | "spriteHeadMotion" | "spriteOutline" | "spriteFocusBlur">;
+  "spriteMotion" | "spriteBreathing" | "spriteSway" | "spriteHeadMotion" | "spriteActing" | "spritePhysics" | "spriteOutline" | "spriteFocusBlur">;
 export type VisualNovelTextEffectMode = (typeof TEXT_EFFECT_MODES)[number];
 
 /**
@@ -201,6 +204,10 @@ export type VisualNovelConfig = {
   spriteSway: boolean;
   /** Sprite mode: the head tilts and bobs on its own around the neck. */
   spriteHeadMotion: boolean;
+  /** Sprite mode: posture follows the mood, the speaker's head follows the words, the others look at the speaker. */
+  spriteActing: boolean;
+  /** Sprite mode: hair and loose clothes trail, overshoot and settle; wind makes them flutter. */
+  spritePhysics: boolean;
   /** Sprite mode: white sticker outline width in px (0 = none, up to SPRITE_OUTLINE_MAX). */
   spriteOutline: number;
   /** Sprite mode: blur the characters who are not speaking a little. */
@@ -266,6 +273,8 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   spriteBreathing: true,
   spriteSway: true,
   spriteHeadMotion: true,
+  spriteActing: true,
+  spritePhysics: true,
   spriteOutline: 0,
   spriteFocusBlur: true,
   textScale: 1,
@@ -393,6 +402,8 @@ export function spritePuppetSettings(config: VisualNovelSpritePuppet): VisualNov
     spriteBreathing: config.spriteBreathing,
     spriteSway: config.spriteSway,
     spriteHeadMotion: config.spriteHeadMotion,
+    spriteActing: config.spriteActing,
+    spritePhysics: config.spritePhysics,
     spriteOutline: config.spriteOutline,
     spriteFocusBlur: config.spriteFocusBlur,
   };
@@ -496,6 +507,8 @@ export function normalizeConfig(value: unknown): VisualNovelConfig {
     spriteBreathing: bool(input.spriteBreathing, DEFAULT_CONFIG.spriteBreathing),
     spriteSway: bool(input.spriteSway, DEFAULT_CONFIG.spriteSway),
     spriteHeadMotion: bool(input.spriteHeadMotion, DEFAULT_CONFIG.spriteHeadMotion),
+    spriteActing: bool(input.spriteActing, DEFAULT_CONFIG.spriteActing),
+    spritePhysics: bool(input.spritePhysics, DEFAULT_CONFIG.spritePhysics),
     spriteOutline: integer(input.spriteOutline, 0, SPRITE_OUTLINE_MAX, DEFAULT_CONFIG.spriteOutline),
     spriteFocusBlur: bool(input.spriteFocusBlur, DEFAULT_CONFIG.spriteFocusBlur),
     textScale: textScale(input.textScale),

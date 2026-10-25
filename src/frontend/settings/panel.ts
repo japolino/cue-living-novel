@@ -624,6 +624,8 @@ export class VisualNovelSettingsPanel {
                 <label data-check ${find("Breathing", "sprites puppet breathe chest idle")}><input name="spriteBreathing" type="checkbox" /><span>Breathing</span></label>
                 <label data-check ${find("Body sway", "sprites puppet sway lean idle")}><input name="spriteSway" type="checkbox" /><span>Body sway</span></label>
                 <label data-check ${find("Head movement", "sprites puppet head tilt nod idle")}><input name="spriteHeadMotion" type="checkbox" /><span>Head movement</span></label>
+                <label data-check ${find("Acting", "sprites puppet acting mood posture voice words look speaker listen react emote")}><input name="spriteActing" type="checkbox" /><span>Acting<small>The body carries the mood, the speaker's head follows the words, and the others turn to whoever speaks.</small></span></label>
+                <label data-check ${find("Hair and cloth physics", "sprites puppet physics hair cloth skirt bounce wind follow through")}><input name="spritePhysics" type="checkbox" /><span>Hair and cloth physics<small>Loose hair and clothes trail and settle when a character moves, and flutter in the wind.</small></span></label>
               `, { id: "sprite-motion", help: esc(SPRITE_MOTION_HELP), find: find("Character motion", "sprites puppet png motion breathing sway head speaker nod bounce") })}
               ${group("Character look", `
                 <label data-field ${find("Sticker outline", "sprites outline border white sticker stroke edge")}><span>Sticker outline <span data-sprite-outline-val>Off</span></span><input name="spriteOutline" type="range" min="0" max="${SPRITE_OUTLINE_MAX}" step="1" /></label>
@@ -1462,6 +1464,8 @@ export class VisualNovelSettingsPanel {
       case "spriteBreathing": return { spriteBreathing: checked };
       case "spriteSway": return { spriteSway: checked };
       case "spriteHeadMotion": return { spriteHeadMotion: checked };
+      case "spriteActing": return { spriteActing: checked };
+      case "spritePhysics": return { spritePhysics: checked };
       case "spriteOutline": return { spriteOutline: clamp(Math.round(Number(target.value)), 0, SPRITE_OUTLINE_MAX, DEFAULT_CONFIG.spriteOutline) };
       case "spriteFocusBlur": return { spriteFocusBlur: checked };
       case "textScaleStep": {
@@ -2010,7 +2014,7 @@ export class VisualNovelSettingsPanel {
     this.root.querySelector<HTMLElement>("[data-sprites-look]")!.hidden = !sprites;
     this.control<HTMLInputElement>("spriteMotion").value = String(config.spriteMotion);
     this.control<HTMLInputElement>("spriteOutline").value = String(config.spriteOutline);
-    for (const name of ["spriteBreathing", "spriteSway", "spriteHeadMotion"] as const) {
+    for (const name of ["spriteBreathing", "spriteSway", "spriteHeadMotion", "spriteActing", "spritePhysics"] as const) {
       const input = this.control<HTMLInputElement>(name);
       input.checked = config[name];
       input.disabled = config.spriteMotion <= 0;

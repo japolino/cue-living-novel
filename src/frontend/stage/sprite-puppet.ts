@@ -12,6 +12,14 @@
  * shake...), the crossfade, enter/exit and the dimming still apply on top,
  * since the canvas sits where the img was.
  *
+ * Acting (sprite-puppet-acting.ts): the body carries the staged mood, the
+ * speaker's head follows the typed text (`typed`), listeners turn to the
+ * speaker and nod at the ends of sentences, characters glance at each other
+ * when nobody speaks, and emotes and staged motions get a body reaction.
+ * Physics (sprite-puppet-physics.ts): the anchor of each figure is tracked
+ * on screen, so a slot change, a staged hop or an entrance makes the loose
+ * parts and the hair trail and settle; the weather ambient adds wind.
+ *
  * One WebGL context draws every layer and copies the result into the
  * layer's 2D canvas; one rAF loop runs while any actor is in puppet mode and
  * pauses when the page is hidden, the stage is off screen, or a key
@@ -23,8 +31,37 @@
  * baked canvas shown statically.
  */
 import { DEFAULT_CONFIG, spritePuppetSettings, type VisualNovelSpritePuppet } from "../../config.js";
+import type { SpriteEmote, SpriteMotion } from "../../shared/sprites.js";
 import type { SpriteFaceSpot, SpriteGeometry } from "./sprite-layer.js";
 import { bakeSpriteOutline } from "./sprite-outline.js";
+import {
+  PUPPET_EMOTE_GESTURE,
+  PUPPET_GESTURE_S,
+  PUPPET_MOTION_GESTURE,
+  PUPPET_NEUTRAL_MOOD,
+  easeMood,
+  puppetMoodFor,
+  puppetNoise,
+  puppetVoice,
+  puppetVoiceSample,
+  puppetVoiceType,
+  type PuppetGestureKind,
+  type PuppetMood,
+  type PuppetVoice,
+} from "./sprite-puppet-acting.js";
+import {
+  PUPPET_BODY_SPRING,
+  PUPPET_HAIR_SPRING,
+  puppetSpring,
+  puppetTracker,
+  puppetWind,
+  puppetWindPush,
+  springKick,
+  springStep,
+  trackPoint,
+  type PuppetSpring,
+  type PuppetTracker,
+} from "./sprite-puppet-physics.js";
 import {
   IDENTITY_COLOR,
   PUPPET_REACTION_MS,
@@ -53,6 +90,8 @@ export type PuppetImage = {
 export type PuppetActorRef = {
   key: string;
   el: HTMLElement;
+  /** The element the staged motions move (its anchor is tracked for the physics). */
+  body: HTMLElement;
   marks: HTMLElement;
   layers: readonly [HTMLElement, HTMLElement];
 };
@@ -104,7 +143,37 @@ type ActorState = {
   talk: number;
   dim: number;
   marksMoved: boolean;
+  /** The staged expression's mood, and the mood the body carries now (eased toward it). */
+  moodTarget: PuppetMood;
+  mood: PuppetMood;
+  /** Eased weights of the acting and physics settings. */
+  acting: number;
+  physics: number;
+  /** Breath and sway clocks: they run faster or slower with the mood, without jumps. */
+  clocks: { breath: number; sway: number };
+  voice: PuppetVoice;
+  gestures: Gesture[];
+  /** Where the character looks (image space, -1..1) and its spring. */
+  gaze: number;
+  gazeV: number;
+  /** ±1: the side its head tilts to when it looks at no one. */
+  side: number;
+  /** Anchor x on screen (CSS px), refreshed a few times a second. */
+  screenX: number;
+  /** Last listener reaction, and the idle glance schedule (seconds). */
+  heardAt: number;
+  glanceAt: number;
+  glanceUntil: number;
+  glanceDir: number;
+  body: PuppetSpring;
+  hair: PuppetSpring;
+  bodyTrack: PuppetTracker;
+  headTrack: PuppetTracker;
+  /** The last pose drawn for the active layer. */
+  pose: PuppetPose | null;
 };
+
+type Gesture = { kind: PuppetGestureKind; start: number; gain: number; side: number };
 
 type LayerState = {
   el: HTMLElement;
@@ -328,6 +397,8 @@ export class SpritePuppet {
   private readonly bakes = new Map<string, HTMLCanvasElement>();
   private raf = 0;
   private lastFrame = 0;
+  /** When the actors' screen positions were last read (seconds). */
+  private placedAt = -Infinity;
   private paused = false;
   private onScreen = true;
   private destroyed = false;
@@ -375,6 +446,26 @@ export class SpritePuppet {
       talk: 0,
       dim: 0,
       marksMoved: false,
+      moodTarget: { ...PUPPET_NEUTRAL_MOOD },
+      mood: { ...PUPPET_NEUTRAL_MOOD },
+      acting: this.settings.spriteActing ? 1 : 0,
+      physics: this.settings.spritePhysics ? 1 : 0,
+      clocks: { breath: 0, sway: 0 },
+      voice: puppetVoice(),
+      gestures: [],
+      gaze: 0,
+      gazeV: 0,
+      side: puppetPhase(`${ref.key}/side`) < 0.5 ? -1 : 1,
+      screenX: 0,
+      heardAt: -Infinity,
+      glanceAt: 0,
+      glanceUntil: 0,
+      glanceDir: 0,
+      body: puppetSpring(),
+      hair: puppetSpring(),
+      bodyTrack: puppetTracker(),
+      headTrack: puppetTracker(),
+      pose: null,
     };
     ref.el.dataset.vnPuppet = "css";
     this.actors.set(ref.key, actor);
@@ -431,8 +522,57 @@ export class SpritePuppet {
   setTalking(key: string, talking: boolean, reaction: PuppetReaction | null = null): void {
     const actor = this.actors.get(key);
     if (!actor) return;
-    if (talking && !actor.talking && reaction && actor.mode === "gl") actor.reaction = { kind: reaction, start: now() / 1000 };
+    if (talking && !actor.talking) {
+      actor.voice = puppetVoice();
+      if (reaction && actor.mode === "gl") actor.reaction = { kind: reaction, start: now() / 1000 };
+    }
     actor.talking = talking;
+  }
+
+  /** The staged expression (any catalogue id) and intensity (1..5): the mood the body carries. */
+  setMood(key: string, expression: string | null | undefined, intensity: number): void {
+    const actor = this.actors.get(key);
+    if (actor) actor.moodTarget = puppetMoodFor(expression, intensity);
+  }
+
+  /** An emote just appeared: the body answers it (a jolt for "!", a slump for gloom...). */
+  emote(key: string, emote: SpriteEmote): void {
+    const actor = this.actors.get(key);
+    const kind = PUPPET_EMOTE_GESTURE[emote];
+    if (actor && kind) this.gesture(actor, kind, 1);
+  }
+
+  /** A staged motion just started: the head and posture act it out on top of the CSS move. */
+  motion(key: string, motion: SpriteMotion): void {
+    const actor = this.actors.get(key);
+    const kind = PUPPET_MOTION_GESTURE[motion];
+    if (actor && kind) this.gesture(actor, kind, kind === "nod" ? 1.6 : 1);
+  }
+
+  /**
+   * Text the typewriter just revealed for the current line: the talking
+   * actors follow it, and the others react at the ends of sentences.
+   */
+  typed(text: string): void {
+    if (!text || this.destroyed) return;
+    const time = now() / 1000;
+    for (const actor of this.actors.values()) {
+      if (!actor.talking || actor.mode !== "gl") continue;
+      const event = puppetVoiceType(actor.voice, text, time);
+      if (event === "stop" || event === "exclaim" || event === "question") this.listen(actor, event, time);
+    }
+  }
+
+  /** The last pose drawn for an actor (tests and debugging), or null in CSS mode. */
+  poseFor(key: string): PuppetPose | null {
+    const actor = this.actors.get(key);
+    return actor?.mode === "gl" && actor.pose ? { ...actor.pose } : null;
+  }
+
+  /** 0..1: how much the speaker's head follows typed text now. */
+  voiceActive(key: string): number {
+    const actor = this.actors.get(key);
+    return actor?.talking ? puppetVoiceSample(actor.voice, now() / 1000).active : 0;
   }
 
   /** Pause while a key illustration covers the sprites. */
@@ -727,6 +867,97 @@ export class SpritePuppet {
     }
   }
 
+  /* ---- acting --------------------------------------------------------- */
+
+  private gesture(actor: ActorState, kind: PuppetGestureKind, gain: number, delay = 0): void {
+    if (actor.mode !== "gl") return;
+    const side = Math.abs(actor.gaze) > 0.1 ? Math.sign(actor.gaze) : actor.side;
+    actor.gestures.push({ kind, start: now() / 1000 + delay, gain, side });
+    if (actor.gestures.length > 6) actor.gestures.shift();
+  }
+
+  /** Listeners answer a sentence end: a nod at ".", a small start at "!", a tilt at "?". */
+  private listen(speaker: ActorState, event: "stop" | "exclaim" | "question", time: number): void {
+    for (const other of this.actors.values()) {
+      if (other === speaker || other.talking || other.mode !== "gl" || !this.onStage(other)) continue;
+      const delay = 0.15 + 0.3 * other.phase;
+      if (event === "stop" && time - other.heardAt > 2.2) this.gesture(other, "listen", 1, delay);
+      else if (event === "exclaim" && time - other.heardAt > 4) this.gesture(other, "startle", 0.6, delay * 0.5);
+      else if (event === "question" && time - other.heardAt > 4) this.gesture(other, "wonder", 0.5, delay);
+      else continue;
+      other.heardAt = time;
+    }
+  }
+
+  private onStage(actor: ActorState): boolean {
+    const state = actor.ref.el.dataset.vnSpriteState;
+    return actor.ref.el.isConnected && (state === "shown" || state === "entering");
+  }
+
+  /**
+   * Where everyone looks, once per frame: listeners turn to the speaker, the
+   * speaker half-turns to the nearest listener; with nobody speaking, each
+   * character now and then glances at the nearest other one (or aside).
+   */
+  private attend(time: number, dt: number): void {
+    if (time - this.placedAt > 0.25 || time < this.placedAt) {
+      this.placedAt = time;
+      for (const actor of this.actors.values()) actor.screenX = actor.ref.el.getBoundingClientRect().left;
+    }
+    const present = [...this.actors.values()].filter((actor) => actor.mode === "gl" && this.onStage(actor));
+    const speaker = present.find((actor) => actor.talking) ?? null;
+    for (const actor of present) {
+      const others = present.filter((other) => other !== actor);
+      let nearest: ActorState | null = null;
+      for (const other of others) {
+        if (!nearest || Math.abs(other.screenX - actor.screenX) < Math.abs(nearest.screenX - actor.screenX)) nearest = other;
+      }
+      let target = 0;
+      if (speaker && speaker !== actor) {
+        target = Math.sign(speaker.screenX - actor.screenX);
+      } else if (speaker === actor) {
+        target = nearest ? 0.35 * Math.sign(nearest.screenX - actor.screenX) : 0;
+      } else {
+        if (!actor.glanceAt) actor.glanceAt = time + 4 + 6 * actor.phase;
+        if (time >= actor.glanceAt) {
+          const roll = puppetNoise(time * 0.37 + actor.phase * 91);
+          actor.glanceUntil = time + 1.2 + 0.9 * roll;
+          actor.glanceDir = nearest ? Math.sign(nearest.screenX - actor.screenX) : (roll < 0.5 ? -0.5 : 0.5);
+          actor.glanceAt = time + 7 + 7 * puppetNoise(time * 0.11 + actor.phase * 17);
+        }
+        if (time < actor.glanceUntil) target = actor.glanceDir;
+      }
+      // Screen to image space: a mirrored figure looks the other way in its own image.
+      if (actor.ref.el.dataset.vnSpriteMirrored === "true") target = -target;
+      // A slightly underdamped spring: the head turns, overshoots a hair, settles.
+      const omega = Math.PI * 2 * 1.4;
+      const steps = Math.max(1, Math.ceil(dt * 240));
+      const h = dt / steps;
+      for (let i = 0; i < steps; i += 1) {
+        actor.gazeV += (omega * omega * (target - actor.gaze) - 2 * 0.72 * omega * actor.gazeV) * h;
+        actor.gaze += actor.gazeV * h;
+      }
+    }
+  }
+
+  /** Follow-through: track the figure's anchor and its head, and run the springs. */
+  private simulate(actor: ActorState, state: LayerState, time: number, dt: number): void {
+    const rig = state.rig;
+    const height = state.el.offsetHeight;
+    if (!rig || !(height > 0)) return;
+    const flip = actor.ref.el.dataset.vnSpriteMirrored === "true" ? -1 : 1;
+    const anchor = actor.ref.body.getBoundingClientRect();
+    const [bvx, bvy] = trackPoint(actor.bodyTrack, (anchor.left / height) * flip, -anchor.top / height, dt);
+    springKick(actor.body, bvx, bvy);
+    springKick(actor.hair, bvx * 0.8, bvy * 0.8);
+    // The head's own motion (nods, turns, bounces) swings the hair.
+    const [fx, fy] = puppetFaceOffset(rig, this.poseOf(actor, rig, time, false));
+    const [hvx, hvy] = trackPoint(actor.headTrack, fx, fy, dt, 0.1);
+    springKick(actor.hair, hvx, hvy);
+    springStep(actor.body, dt, PUPPET_BODY_SPRING);
+    springStep(actor.hair, dt, PUPPET_HAIR_SPRING);
+  }
+
   /* ---- drawing -------------------------------------------------------- */
 
   private schedule(): void {
@@ -746,6 +977,7 @@ export class SpritePuppet {
     if (this.destroyed || !this.shouldRun()) return;
     const dt = this.lastFrame ? Math.min(0.1, Math.max(0, (time - this.lastFrame) / 1000)) : 1 / 60;
     this.lastFrame = time;
+    this.attend(time / 1000, dt);
     for (const actor of this.actors.values()) {
       if (actor.mode === "gl") this.drawActor(actor, time / 1000, dt);
     }
@@ -759,20 +991,40 @@ export class SpritePuppet {
     this.schedule();
   }
 
-  private poseOf(actor: ActorState, rig: PuppetRig, time: number): PuppetPose {
+  private poseOf(actor: ActorState, rig: PuppetRig, time: number, withPhysics = true): PuppetPose {
     const reaction = actor.reaction && time - actor.reaction.start <= PUPPET_REACTION_MS[actor.reaction.kind] / 1000
       ? { kind: actor.reaction.kind, age: time - actor.reaction.start }
       : null;
+    const pw = withPhysics ? actor.physics : 0;
+    const flip = actor.ref.el.dataset.vnSpriteMirrored === "true" ? -1 : 1;
     return puppetPose({
       time,
       phase: actor.phase,
       figH: rig.figH,
+      faceW: rig.faceW,
       breathing: actor.breathing,
       sway: actor.sway,
       head: actor.head,
       talk: actor.talk,
       reaction,
       strength: this.strength(),
+      clocks: actor.clocks,
+      acting: actor.acting,
+      mood: actor.mood,
+      voice: actor.talk > 0 ? puppetVoiceSample(actor.voice, time) : null,
+      gaze: actor.gaze,
+      side: actor.side,
+      gestures: actor.gestures.map((g) => ({ kind: g.kind, age: time - g.start, gain: g.gain * actor.acting, side: g.side })),
+      physics: pw > 0.001
+        ? {
+          bodyX: actor.body.x * pw,
+          bodyY: actor.body.y * pw,
+          hairX: actor.hair.x * pw,
+          hairY: actor.hair.y * pw,
+          // The weather blows toward the stage's right; in a mirrored figure's own image that is its left.
+          windX: puppetWindPush(puppetWind(this.sceneEl?.dataset.vnSceneAmbient), time, actor.phase) * flip * pw,
+        }
+        : null,
     });
   }
 
@@ -784,7 +1036,18 @@ export class SpritePuppet {
     actor.head = ease(actor.head, s.spriteHeadMotion ? 1 : 0, 0.4);
     actor.talk = ease(actor.talk, actor.talking ? 1 : 0, actor.talking ? 0.15 : 0.3);
     actor.dim = ease(actor.dim, s.spriteFocusBlur && actor.ref.el.dataset.vnSpriteDim === "true" ? 1 : 0, 0.11);
+    // Settings fade in and out, then settle exactly (so "off" really is off).
+    const settle = (value: number, target: number) => (Math.abs(target - value) < 0.02 ? target : value);
+    actor.acting = settle(ease(actor.acting, s.spriteActing ? 1 : 0, 0.4), s.spriteActing ? 1 : 0);
+    actor.physics = settle(ease(actor.physics, s.spritePhysics ? 1 : 0, 0.3), s.spritePhysics ? 1 : 0);
+    easeMood(actor.mood, actor.moodTarget, 1 - Math.exp(-dt / 0.6));
+    // The clocks tick at the mood's rates, so a faster breath never jumps in phase.
+    actor.clocks.breath += dt * (1 + (actor.mood.breathRate - 1) * actor.acting);
+    actor.clocks.sway += dt * (1 + (actor.mood.swayRate - 1) * actor.acting);
     if (actor.reaction && time - actor.reaction.start > PUPPET_REACTION_MS[actor.reaction.kind] / 1000) actor.reaction = null;
+    if (actor.gestures.length) actor.gestures = actor.gestures.filter((g) => time - g.start < PUPPET_GESTURE_S[g.kind]);
+    const active = actor.ref.layers.map((el) => this.layerStates.get(el)).find((state) => state?.el.dataset.vnSpriteLayer === "active" && state.rig);
+    if (active && actor.physics > 0.001) this.simulate(actor, active, time, dt);
     let marked = false;
     for (const el of actor.ref.layers) {
       const state = this.layerStates.get(el);
@@ -792,7 +1055,10 @@ export class SpritePuppet {
       if (!state?.rig || (role !== "active" && role !== "leaving")) continue;
       const pose = this.poseOf(actor, state.rig, time);
       if (!this.drawLayer(state, pose, time * 1000)) continue;
-      if (role === "active") marked = this.placeMarks(actor, state, pose);
+      if (role === "active") {
+        actor.pose = pose;
+        marked = this.placeMarks(actor, state, pose);
+      }
     }
     if (!marked) this.resetMarks(actor);
   }

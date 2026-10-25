@@ -361,15 +361,17 @@ describe("SpriteLayer DOM", () => {
     expect(snap.puppet).toEqual({ strength: 1, running: false });
     expect(container.style["--vn-sprite-breath"]).toBe("1");
     expect(container.dataset.vnSpriteBlur).toBe("true");
-    layer.setPuppet({ spriteMotion: 50, spriteBreathing: false, spriteSway: true, spriteHeadMotion: true, spriteOutline: 3, spriteFocusBlur: false });
+    layer.setPuppet({ spriteMotion: 50, spriteBreathing: false, spriteSway: true, spriteHeadMotion: true, spriteActing: true, spritePhysics: false, spriteOutline: 3, spriteFocusBlur: false });
     expect(container.style["--vn-sprite-breath"]).toBe("0");
     expect(container.style["--vn-sprite-talk-amp"]).toBe("0.5");
     expect(container.dataset.vnSpriteBlur).toBe("false");
     expect(layer.snapshot().puppet.strength).toBe(0.5);
     expect(layer.getPuppet().spriteOutline).toBe(3);
-    // Talking still works on the CSS path.
+    // Talking still works on the CSS path; typed text and acting are ignored there.
     layer.setTalking(true);
     expect(byKey("mira").dataset.vnSpriteTalking).toBe("true");
+    layer.typed("Hello there?");
+    expect(layer.snapshot().actors.map((a) => [a.pose, a.voice])).toEqual([[null, 0], [null, 0]]);
   });
 
   test("rewinding applies the final pose without motion or emote pop", () => {

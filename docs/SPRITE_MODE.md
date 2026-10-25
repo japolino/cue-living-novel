@@ -36,11 +36,14 @@ own expression and there is no picture cap.
 | `spriteExpressionCount` | `4` \| `8` \| `12` | `4` | at once (Advanced, sprite mode only) |
 | `spriteMotion` | `0`–`150` (%) | `100` | at once (everyday, sprite mode only) |
 | `spriteBreathing` / `spriteSway` / `spriteHeadMotion` | boolean | `true` | at once (everyday, sprite mode only) |
+| `spriteActing` | boolean | `true` | at once (everyday, sprite mode only) |
+| `spritePhysics` | boolean | `true` | at once (everyday, sprite mode only) |
 | `spriteOutline` | `0`–`6` (px) | `0` | at once (everyday, sprite mode only) |
 | `spriteFocusBlur` | boolean | `true` | at once (everyday, sprite mode only) |
 
-The six puppet keys (`VisualNovelSpritePuppet`, `spritePuppetSettings`)
-reach the stage through `VnStage.setSpritePuppet`; see "Puppet motion".
+The eight puppet keys (`VisualNovelSpritePuppet`, `spritePuppetSettings`)
+reach the stage through `VnStage.setSpritePuppet`; see "Puppet motion",
+"Puppet acting" and "Puppet physics".
 
 ### Image size (`spriteImageSize`)
 
@@ -744,7 +747,7 @@ and the head tilts and bobs around the neck while the feet stay planted.
   types, the head moves with the words (syllable dips ≈ 2.7 Hz with phrase
   swells, a small tilt jitter) instead of the CSS bob.
 - **Displacement** (`puppetDisplace`): one pure function moves the mesh
-  vertices on the CPU (18 × 28 grid) and places the emotes:
+  vertices on the CPU (24 × 36 grid) and places the emotes:
   `[data-vn-sprite-marks]` gets a `translate` from the face offset (x flipped
   for a mirrored figure) while an emote shows, so marks ride on the head.
   Actions, the marks box and the slot transitions keep working because the
@@ -779,15 +782,87 @@ and the head tilts and bobs around the neck while the feet stay planted.
   intensity "off", or prefers-reduced-motion. A lost context also falls
   back until the next refresh. `--vn-sprite-breath` and
   `--vn-sprite-talk-amp` scale the CSS keyframes by the same settings.
-- **Cost**: the per-frame JavaScript (pose, mesh, look) is under 0.2 ms for
-  two actors. Under SwiftShader in headless Chromium a frame costs ≈ 39 ms,
-  mostly the canvas copy, which is why software GL is refused.
+- **Cost**: pose and mesh (24 × 36 grid, every acting and physics term on)
+  take ≈ 0.19 ms per layer per frame in JavaScript (bun micro-benchmark);
+  with hardware WebGL the rest is one draw and one copy per layer (before
+  acting, one actor held 13.3 ms frames, the display's 75 Hz, on an RTX
+  3060). Under SwiftShader in headless Chromium a frame costs ≈ 50 ms,
+  mostly rasterizing and copying in software, which is why software GL is
+  refused.
 - **Checks**: `sprite-puppet-rig.test.ts` (rig, pose, mesh, colour matrices,
-  outline offsets); `bun run test:sprite-stage` asserts puppet mode, that the
-  head band moves more than the feet, the marks following the head, the
-  nod, the outline, settings, the pauses and the CSS fallback, and writes
-  `.cache/sprite-stage/puppet-frames.png` and `puppet-diff.png` (four
-  frames 0.25 s apart and their differences ×12).
+  outline offsets), `sprite-puppet-acting.test.ts` (moods, voice, gestures,
+  the 2.5D turn, shoulders, posture, trails, springs, wind);
+  `bun run test:sprite-stage` asserts puppet mode, that the head band moves
+  more than the feet, the marks following the head, the nod, the outline,
+  settings, the pauses and the CSS fallback, plus acting and physics (see
+  below), and writes `.cache/sprite-stage/puppet-frames.png` and
+  `puppet-diff.png` (four frames 0.25 s apart and their differences ×12).
+
+### Puppet acting (`sprite-puppet-acting.ts`, `spriteActing`)
+
+The reference overlays breathe, sway and bob on every line the same way.
+Cue's puppet acts: what the body does depends on who the character is
+feeling like, what it is saying, and who else is talking.
+
+- **Mood posture**: each staged expression has a body (`PUPPET_MOODS`, one
+  per hot-set id; rare ids use `spriteFallbackExpression`), scaled by the
+  staging intensity (1..5 → 0.55..1.4 of the distance from neutral) and
+  eased in over ≈ 0.6 s. Sad slumps above the waist with the head down,
+  breathing slow and deep; angry draws up, raises the shoulders and huffs
+  with a slight tremble; surprised straightens with the chin up and a held
+  breath; embarrassed hunches with the head down and tilted; scared
+  trembles with raised shoulders and quick shallow breaths; laughing gets
+  bursts of chuckles in the chest; crying gets irregular sobbing catches;
+  thinking holds a tilt; smug lifts the chin. The requested expression
+  drives the body even while its image is not ready yet (the stand-in face
+  shows; the body already tells the emotion). Breath and sway clocks are
+  integrated per actor, so a faster breath never jumps in phase.
+- **The voice follows the text**: the typewriter reports each revealed
+  character (`VnStage` → `SpriteLayer.typed` → `SpritePuppet.typed`, the
+  only vn-stage.ts change besides `setSpritePuppet`). The speaker's head
+  dips once per syllable (a vowel group in Latin, Greek and Cyrillic text;
+  every kana, kanji and Hangul syllable), stressed at word starts; a comma
+  settles it and takes a small breath; a full stop dips it; "!" punches
+  (a quick dip and stretch); "?" tilts the head and lifts the chin a
+  little, held for a moment; "…" or "..." droops it; "~" wiggles. When no
+  text arrives (instant text), the generic talking motion runs instead.
+- **Attention**: listeners turn their heads toward whoever speaks (a 2.5D
+  yaw: the middle of the face shifts more than its outline) and their
+  torso a little; the speaker half-turns to the nearest listener. With
+  nobody speaking, each character glances at the nearest other one (or
+  aside, alone) every 7–14 s. Heads move on an underdamped spring, so a
+  turn overshoots a hair and settles. Directions are converted to each
+  figure's own image space (a mirrored figure turns the other way).
+- **Listener reactions**: after the speaker's full stop a listener nods
+  (at most every 2.2 s); at "!" it starts a little, at "?" it tilts its head
+  (each at most every 4 s), with a per-character delay of 0.15–0.45 s.
+- **Emote reactions** (`PUPPET_EMOTE_GESTURE`): the body answers the mark:
+  "!" jolts, sweat flinches and looks away, anger puffs up and trembles,
+  gloom slumps, "?" tilts, heart and sparkle hop, music grooves, "…" droops.
+- **Staged motions** (`PUPPET_MOTION_GESTURE`): on top of the CSS move, the
+  head and posture act them out: nod is a real head nod, shake turns the
+  head left and right, turn_away turns head and tilt away, lean_in and
+  step_back bend the posture and pitch the head, sink slumps, tremble shakes.
+- Off (`spriteActing: false`): the idle motion and the line-start nod or
+  bounce only, as in "Puppet motion".
+
+### Puppet physics (`sprite-puppet-physics.ts`, `spritePhysics`)
+
+- **Follow-through**: each figure's anchor (the `[data-vn-sprite-body]`
+  point, which carries the slot moves, the staged CSS motions and the
+  entrance) is tracked on screen every frame; its velocity changes kick two
+  damped springs: the body's loose mass (≈ 1.5 Hz, damping 0.3) and the hair
+  (≈ 2.3 Hz, damping 0.22, also kicked by the head's own nods and turns).
+  The body spring shears the figure (the top trails a slot move) and
+  squashes it on a landing, then stretches it on the rebound; hems, sleeves
+  and wide hair trail sideways (the spine and the feet stay); hair at the
+  sides and over the crown trails most at its tips. Offsets are capped
+  (0.03 and 0.025 image heights); a jump of more than a quarter image
+  height in one frame (a new layout) resets instead of swinging.
+- **Wind**: the weather ambient blows (`heavy_rain` 1, `sakura` 0.45, `rain`
+  0.35, `snow` 0.25): a steady lean of the loose parts and the hair toward
+  the stage's right, with gusts and flutter, per-character phase.
+- Off (`spritePhysics: false`): no trails, no squash, no wind.
 
 ## Settings (frontend)
 
@@ -804,8 +879,9 @@ again**); a device that cannot run it gets Best's status, never the Studio
 download. A model the browser did not store says it downloads again.
 Under Look (sprite mode only, `[data-sprites-look]`): "Character motion"
 (intensity 0–150% in steps of 10, "Still" at 0; Breathing, Body sway,
-Head movement, disabled at 0) and "Character look" (outline 0–6 px, "Off"
-at 0; Blur characters who are not speaking). All save at once.
+Head movement, Acting, Hair and cloth physics, disabled at 0) and
+"Character look" (outline 0–6 px, "Off" at 0; Blur characters who are not
+speaking). All save at once.
 
 ## Cut-out (frontend)
 
@@ -1150,7 +1226,7 @@ Code map:
 | Cut-out | `src/frontend/sprites/cutout/**` (`kernel.ts` is the DOM-free algorithm), `cut-service.ts` (crop of inset renders) |
 | NovelAI V5 inset canvas | `src/frontend/sprites/inset-service.ts`, `canvas-tools.ts`; probe `scripts/novelai-v5-inset-probe.ts` |
 | Stage | `src/frontend/stage/sprite-layer.ts`, `src/frontend/theme/sprite-css.ts`, VnStage sprite API |
-| Puppet | `src/frontend/stage/sprite-puppet.ts` (WebGL renderer, loop), `sprite-puppet-rig.ts` (pure rig / pose / mesh / colour), `sprite-outline.ts` |
+| Puppet | `src/frontend/stage/sprite-puppet.ts` (WebGL renderer, loop, attention, physics tracking), `sprite-puppet-rig.ts` (pure rig / pose / mesh / colour), `sprite-puppet-acting.ts` (moods, voice, gestures), `sprite-puppet-physics.ts` (springs, wind), `sprite-outline.ts` |
 | Settings | `src/frontend/settings/sprite-library.ts`, sprite controls in `panel.ts` / `model.ts` |
 | Browser checks | `bun run test:sprite-stage`, `bun run test:sprite-cutout` |
 

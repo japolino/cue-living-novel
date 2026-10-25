@@ -97,6 +97,8 @@ const baseConfig: VisualNovelConfig = {
   spriteBreathing: true,
   spriteSway: true,
   spriteHeadMotion: true,
+  spriteActing: true,
+  spritePhysics: true,
   spriteOutline: 0,
   spriteFocusBlur: true,
   textScale: 1,

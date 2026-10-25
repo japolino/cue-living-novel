@@ -40,7 +40,7 @@ import {
 } from "../../shared/sprites.js";
 import { DEFAULT_CONFIG, spritePuppetSettings, type VisualNovelSpritePuppet } from "../../config.js";
 import { SpritePuppet, type PuppetImage, type PuppetMode } from "./sprite-puppet.js";
-import { puppetReactionFor } from "./sprite-puppet-rig.js";
+import { puppetReactionFor, type PuppetPose } from "./sprite-puppet-rig.js";
 
 /** Natural orientation assumed for every cut-out (see the file comment). */
 export const SPRITE_NATURAL_FACING: Exclude<SpriteFacing, "viewer"> = "left";
@@ -470,6 +470,10 @@ export type SpriteActorSnapshot = {
   face: SpriteFaceSpot["source"] | null;
   /** "gl": the PNG puppet draws it; "css": the img and the CSS idle motion. */
   puppet: PuppetMode;
+  /** The puppet's last pose (null in CSS mode). */
+  pose: PuppetPose | null;
+  /** 0..1: how much the speaker's head follows the typed text now. */
+  voice: number;
 };
 
 export type SpriteLayerSnapshot = {
@@ -731,6 +735,11 @@ export class SpriteLayer {
     return { ...this.puppetSettings };
   }
 
+  /** Text the typewriter just revealed: the speaking puppet follows it (syllables, punctuation). */
+  typed(text: string): void {
+    if (this.talking) this.puppet.typed(text);
+  }
+
   snapshot(): SpriteLayerSnapshot {
     const view = this.view;
     const actors: SpriteActorSnapshot[] = [];
@@ -753,6 +762,8 @@ export class SpriteLayer {
         talking: entry.talking,
         face: entry.url ? entry.faceSource : null,
         puppet: this.puppet.modeFor(entry.key) ?? "css",
+        pose: this.puppet.poseFor(entry.key),
+        voice: this.puppet.voiceActive(entry.key),
       });
     }
     actors.sort((a, b) => a.x - b.x);
@@ -824,6 +835,7 @@ export class SpriteLayer {
       }
       entry.stage = actor;
       entry.x = x;
+      this.puppet.setMood(actor.characterKey, actor.expression, actor.intensity);
       const el = entry.el;
       el.dataset.vnSpriteSlot = actor.slot;
       el.dataset.vnSpriteOrder = String(order);
@@ -879,7 +891,7 @@ export class SpriteLayer {
     marks.append(emote);
     body.append(figure, marks);
     el.append(body);
-    this.puppet.attach({ key, el, marks, layers });
+    this.puppet.attach({ key, el, body, marks, layers });
     return {
       key, el, body, figure, marks, emote, layers, faceSource: null, active: 0, url: null, shownExpression: null,
       stage: { characterKey: key, expression: "idle", slot: "center", facing: "viewer", focus: false, motion: "none", emote: "none", intensity: 3 },
@@ -1013,6 +1025,7 @@ export class SpriteLayer {
     entry.emote.dataset.vnSpriteEmotePlace = SPRITE_EMOTE_PLACE[emote as Exclude<SpriteEmote, "none">];
     delete entry.emote.dataset.vnSpriteEmotePop;
     if (animate) {
+      this.puppet.emote(entry.key, emote);
       reflow(entry.emote);
       entry.emote.dataset.vnSpriteEmotePop = "true";
       entry.emoteTimer = setTimeout(() => {
@@ -1029,6 +1042,7 @@ export class SpriteLayer {
     if (motion === "none") return;
     reflow(entry.body);
     entry.body.dataset.vnSpriteMotion = motion;
+    this.puppet.motion(entry.key, motion);
     entry.motionTimer = setTimeout(() => {
       entry.motionTimer = null;
       delete entry.body.dataset.vnSpriteMotion;
