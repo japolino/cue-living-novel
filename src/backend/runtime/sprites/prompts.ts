@@ -25,6 +25,16 @@ import { NOVELAI_NEGATIVE_DEFAULT, novelAiCapabilities, novelAiCaption, novelAiQ
 export const SPRITE_FRAMING_TAGS = "solo, standing, centered, front view, straight-on, facing viewer, looking at viewer, cowboy shot, simple background, white background, no shadow";
 export const SPRITE_NEGATIVE_TAGS = "scenery, background, shadow, drop shadow, gradient background, multiple people, text, multiple girls, 2girls, multiple views, split screen, border, from below, from above, dutch angle, cropped, out of frame";
 /**
+ * NovelAI V5 draws a real alpha channel when asked for a `transparent
+ * background` (its release notes), so its sprites ask for that in place of
+ * the white background, and the bare `background` negative tag (which the
+ * positive tag contains) is left out. A render that comes back transparent
+ * keeps its alpha and loads no cut-out model; one that comes back opaque is
+ * cut as before.
+ */
+export const SPRITE_ALPHA_FRAMING_TAGS = SPRITE_FRAMING_TAGS.replace("simple background, white background", "transparent background");
+export const SPRITE_ALPHA_NEGATIVE_TAGS = SPRITE_NEGATIVE_TAGS.replace("scenery, background, ", "scenery, ");
+/**
  * Sprite faces of the 4 set, in place of the shared pose catalogue's suffix
  * (scene prompts keep the catalogue). The catalogue's "gentle smile", "sad
  * expression" and "angry expression" are not Danbooru tags; these are
@@ -223,12 +233,13 @@ export function compileSpriteRequest(input: {
     const characterReference = spriteCharacterReferenceTag(member.name, config, true);
     // V4+ caption: "girl" / "boy" / "other" first, count tags only in the base prompt (novelAiCaption).
     const characterSections = [novelAiCaption(label, [characterReference, identity, pose.suffix])];
+    const framing = caps.alpha ? SPRITE_ALPHA_FRAMING_TAGS : SPRITE_FRAMING_TAGS;
     const base = caps.structured
-      ? dedupeSections([stylePrefix(config, true), subject, SPRITE_FRAMING_TAGS, config.promptSuffix])
-      : dedupeSections([stylePrefix(config, true), subject, characterReference, identity, pose.suffix, SPRITE_FRAMING_TAGS, config.promptSuffix]);
+      ? dedupeSections([stylePrefix(config, true), subject, framing, config.promptSuffix])
+      : dedupeSections([stylePrefix(config, true), subject, characterReference, identity, pose.suffix, framing, config.promptSuffix]);
     const quality = novelAiQuality(config, model, [...base, ...(caps.structured ? characterSections : [])], true);
     const prompt = renderNovelAiEmphasis([...base, ...quality].join(", "), model);
-    const negativePrompt = novelAiNegative(config, SPRITE_NEGATIVE_TAGS, model);
+    const negativePrompt = novelAiNegative(config, caps.alpha ? SPRITE_ALPHA_NEGATIVE_TAGS : SPRITE_NEGATIVE_TAGS, model);
     return {
       prompt,
       negativePrompt,

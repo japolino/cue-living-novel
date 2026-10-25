@@ -2,9 +2,11 @@ import { expect, test } from "bun:test";
 import { novelAiCapabilities, novelAiQualityTags, renderNovelAiEmphasis } from "./novelai-prompt";
 
 test("NovelAI capabilities are model-specific and unknown models fail conservatively", () => {
-  expect(novelAiCapabilities("nai-diffusion-3")).toEqual({ structured: false, numeric: false, negativeNumeric: false });
-  expect(novelAiCapabilities("nai-diffusion-4-full")).toEqual({ structured: true, numeric: true, negativeNumeric: false });
+  expect(novelAiCapabilities("nai-diffusion-3")).toEqual({ structured: false, numeric: false, negativeNumeric: false, alpha: false });
+  expect(novelAiCapabilities("nai-diffusion-4-full")).toEqual({ structured: true, numeric: true, negativeNumeric: false, alpha: false });
   for (const model of ["nai-diffusion-4-5-full", "nai-diffusion-5-full"]) expect(novelAiCapabilities(model).negativeNumeric).toBe(true);
+  for (const model of ["nai-diffusion-5-full", "nai-diffusion-5-curated", "nai-diffusion-5-full-inpainting"]) expect(novelAiCapabilities(model).alpha).toBe(true);
+  expect(novelAiCapabilities("nai-diffusion-4-5-full").alpha).toBe(false);
   expect(novelAiCapabilities(null).structured).toBe(false);
 });
 

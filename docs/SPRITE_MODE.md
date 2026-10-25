@@ -274,6 +274,17 @@ prints one `wardrobe` line per decision and one `scene:` line with the scores.
     open: monster identities (`hellhound`, `slime girl`) sometimes draw a
     beast, pattern or text behind the figure (≈ 2–3 of 9 sets), and some
     seeds give a face close-up.
+  - NovelAI V5 (`novelAiCapabilities().alpha`) draws a real alpha channel
+    when asked for a `transparent background` (NovelAI's V5 release notes:
+    a custom VAE trained for transparency). Its sprite prompts use that in
+    place of `simple background, white background`, and its negative leaves
+    out the bare `background` tag. A render that arrives transparent keeps
+    its alpha with no cut-out model (the pre-cut check, see "Cut-out"), so a
+    V5 user never downloads Best or Studio for it; one that arrives opaque
+    (the tag ignored, or an inset render) is cut as before. The prompt
+    version stays `sprite-prompt-v2`, so existing V5 sets are kept and only
+    new renders ask for transparency. Not yet measured on real V5 renders
+    (how often the alpha comes back, edge quality).
   - Anima 2.9B, October 2026 (idles only; 4 characters × 4 seeds = 16 per
     variant; pure-white background / figure touching a side / head touching
     the top / two figures): today's framing 14 / 1 / 4 / 0; without `no

@@ -257,6 +257,27 @@ describe("sprite prompts: NovelAI syntax", () => {
     expect(request.parameters.negativePrompt).toBe(request.negativePrompt);
   });
 
+  test("V5: asks for a transparent background in place of the white one (its VAE draws alpha)", () => {
+    const request = compileSpriteRequest({
+      config: config({ imageModel: "nai-diffusion-5-full" }), provider: "novelai", member: mira, expression: "idle", seed: 7,
+    });
+    const tags = splitTopLevelCsv(request.prompt).map((tag) => tag.trim());
+    expect(tags).toContain("transparent background");
+    expect(tags).not.toContain("white background");
+    expect(tags).not.toContain("simple background");
+    expect(tags).toContain("no shadow");
+    const negative = splitTopLevelCsv(request.negativePrompt).map((tag) => tag.trim());
+    // The bare "background" negative would fight the positive tag; the rest stay.
+    expect(negative).not.toContain("background");
+    expect(negative).toContain("scenery");
+    expect(negative).toContain("gradient background");
+    // V4.5 and other providers keep the white background.
+    const older = compileSpriteRequest({ config: config({ imageModel: "nai-diffusion-4-5-full" }), provider: "novelai", member: mira, expression: "idle", seed: 7 });
+    expect(older.prompt).toContain("white background");
+    expect(splitTopLevelCsv(older.negativePrompt).map((tag) => tag.trim())).toContain("background");
+    expect(compileSpriteRequest({ config: config(), provider: "comfyui", member: mira, expression: "idle", seed: 7 }).prompt).toContain("white background");
+  });
+
   test("V4+: the caption names girl / boy / other without a number; count tags stay in the base prompt", () => {
     const girl = compileSpriteRequest({ config: config({ imageModel: "nai-diffusion-4-5-full" }), provider: "novelai", member: mira, expression: "idle", seed: 1 });
     const girlCaption = (girl.parameters.characterTags as Array<{ tags: string }>)[0]!.tags;
