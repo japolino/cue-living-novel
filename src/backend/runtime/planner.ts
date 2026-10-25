@@ -58,7 +58,7 @@ import { lightGoogleThinking, resolvePlannerConnection, type ResolvedPlannerConn
 import { normalizeStageEffect, normalizeAmbientEffect, deriveWeatherAmbient } from "./planner-effects.js";
 import { getAudioCatalog, getAudioCatalogPromptSummary } from "./audio-catalog.js";
 import { debugErrorSummary, debugJson, debugQuote, plannerDebugLogger, type PlannerDebugScope } from "./debug-trace.js";
-import { decidePresentation, MAX_WARDROBE_QUESTIONS, type SystemOneDecisions, type WardrobeQuestion } from "./system-one.js";
+import { decidePresentation, MAX_WARDROBE_QUESTIONS, warnDecisionSetup, type SystemOneDecisions, type WardrobeQuestion } from "./system-one.js";
 import { stripTextEffectTags } from "../../shared/text-effects.js";
 import { cachedStoryLabels, checkStoryLines, type StoryCheckResult } from "./story-check.js";
 
@@ -2511,6 +2511,7 @@ export async function planTurn(spindle: SpindleAPI, input: PlanTurnInput): Promi
         ...(input.userId ? { userId: input.userId } : {}),
       }).catch((error: unknown) => {
         spindle.log.warn(`System One decision failed; using story reader: ${debugErrorSummary(error)}`);
+        warnDecisionSetup(spindle, error, input.userId);
         return null;
       });
   let systemOne = input.config.systemOneMode === "on" ? await abortable(systemOnePromise, input.signal) : null;

@@ -37,7 +37,7 @@ if (view === "settings") {
     mount, setupStorage: storage as never,
     onSave: (patch) => { config = { ...config, ...patch }; panel.setConfig(config); queueMicrotask(() => panel.setSaveStatus({ kind: "saved" })); },
     onOpenPreview: () => {}, onRefreshConnections: () => {},
-    onSaveSystemOneKey: () => panel.setSystemOneKeyStatus(true), onClearSystemOneKey: () => panel.setSystemOneKeyStatus(false),
+    onCheckDecisions: () => {}, onOpenDecisionConnections: () => {},
     onScanAudio: () => ({ bgmCount: 3, sfxCount: 12 }), onImportAudio: () => {},
   } as never);
   panel.setConfig(config);

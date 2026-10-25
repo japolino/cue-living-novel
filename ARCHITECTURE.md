@@ -66,6 +66,7 @@ Lumiverse staging host
 | `src/backend/runtime/images.ts` | deterministic prompt compilation through the vendored Inlay compiler, image generation, per-provider asset scheduling, reference-portrait anchoring, asset updates |
 | `src/backend/runtime/storage.ts` | versioned per-user config, per-chat state, protagonist visual state, per-chat portrait store, durable character-appearance memory, serialized writes |
 | `src/backend/runtime/audio-catalog.ts` | audio library scan, BGM/SFX categorization, tag matching |
+| `src/backend/runtime/system-one.ts`, `system-one-sprites.ts` | System One (Jev) presentation, change and sprite staging questions, sent through Lumiverse's default Decision connection; its status for Settings and the one-time setup notice |
 | `src/backend/inlay-prompt` | vendored Inlay prompt compiler: tag assembly, visibility filtering, environment sections, ComfyUI/NovelAI syntax rendering |
 | `src/backend/core/visual-state.ts` | frozen protagonist tag block, schema-v1 profile migration |
 | `src/backend/core` | host-neutral queues, contracts, continuity reduction, boundary decisions, stale guards |
@@ -514,7 +515,8 @@ The audited remote staging commit is `33dfa9ee62999fa3e2567066ed5cdadf61635323`.
 - Lower numeric override priority wins. This preview uses priority `10`.
 - Destroying a handle restores the underlying host component.
 - Permission revocation clears host overrides. The frontend also exits VN mode when it receives an `app_manipulation` revocation event.
-- Published types `0.6.23` do not accurately declare the staging override call, so one narrow local adapter contains the mismatch.
+- Published types `0.6.59` still do not accurately declare the staging override call, so one narrow local adapter contains the mismatch.
+- System One requests use `spindle.decisions.evaluate({ state, questions, userId })` (permission `decisions`, host capability `decisions-v1`) with no `connection_id` or `model`, so Lumiverse answers with the user's default Decision connection (Connections → Decision models) and its own key, URL and model; Cue keeps none of them and no longer needs `cors_proxy`. Settings shows that connection (`vn_get_decision_status` → `vn_decision_status`, from `spindle.decisions.listConnections`), or what to set up when there is no default, it has no readable key, the permission is off, or the host has no `spindle.decisions`; `vn_open_decision_connections` calls `spindle.ui.closeSettings` and `openDrawerTab("connections")`. A turn whose System One requests fail for one of those reasons falls back as before (story reader, deterministic staging) and shows one `spindle.toast.warning` per user until a request succeeds. The first status check deletes the enclave key Cue used to keep (`system_one_api_key`); saved `systemOneApiUrl` and `systemOneModel` are dropped on load.
 
 Primary references:
 

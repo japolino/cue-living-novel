@@ -348,7 +348,6 @@ test("a fallback-planned turn (no story reader) stages the companion and follows
     parent_message_id: null, branch_id: null, created_at: 1, role: "assistant" as const,
   };
   const spindle = {
-    enclave: { get: async () => null },
     generate: { raw: async () => { throw new Error("no story reader"); } },
     storage: { list: async () => [] },
     log: { warn: () => {}, info: () => {} },

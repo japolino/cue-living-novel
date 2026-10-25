@@ -7,7 +7,7 @@
   "permissions": [
     "app_manipulation",
     "generation",
-    "cors_proxy",
+    "decisions",
     "chat_mutation",
     "image_gen",
     "images",

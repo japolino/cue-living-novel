@@ -1300,9 +1300,8 @@ test("a cancelled plan tears down the sidecar request and neither retries nor fa
 test("a cancelled plan does not wait on a System One request that never answers", async () => {
   for (const systemOneMode of ["on", "compare"] as const) {
     const spindle = {
-      enclave: { get: async () => "system-one-key" },
       // System One's host call has no signal and no timeout: it never settles.
-      cors: () => new Promise(() => undefined),
+      decisions: { evaluate: () => new Promise(() => undefined) },
       generate: { raw: async () => { throw new Error("planner unavailable"); } },
       log: { warn() {}, info() {} }
     } as unknown as SpindleAPI;

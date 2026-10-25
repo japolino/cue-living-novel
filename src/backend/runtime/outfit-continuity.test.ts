@@ -42,10 +42,9 @@ function setup(answers: Answers | null, planner: unknown, paragraphs: number | s
   const bodies: string[] = [];
   const logs: string[] = [];
   const spindle = {
-    enclave: { get: async () => answers ? "test-secret" : null },
-    cors: async (_url: string, request: { body: string }) => {
-      bodies.push(request.body);
-      const body = JSON.parse(request.body) as Request;
+    decisions: { evaluate: async (request: Request) => {
+      const body = { state: request.state, questions: request.questions };
+      bodies.push(JSON.stringify(body));
       requests.push(body);
       const out: Record<string, unknown> = {};
       const text = JSON.stringify(body.state.paragraphs ?? []);
@@ -56,8 +55,8 @@ function setup(answers: Answers | null, planner: unknown, paragraphs: number | s
         else if (key.startsWith("outfit_choice") && outfit) out[key] = { type: "choice", choice: outfit[0] > 0.5 ? "changed_outfit" : "same_outfit", confidence: 0.9, probabilities: { changed_outfit: outfit[0], same_outfit: 1 - outfit[0] } };
         else if (key.startsWith("outfit_change") && outfit) out[key] = { type: "noul", noul: outfit[1] };
       }
-      return { status: 200, body: JSON.stringify({ model: "jev-latest", answers: out }) };
-    },
+      return { model: "jev-latest", answers: out };
+    } },
     generate: { raw: async () => ({ choices: [{ message: { content: JSON.stringify(planner) } }] }) },
     storage: { list: async () => [] },
     log: { warn: (line: string) => logs.push(line), info: (line: string) => logs.push(line) },

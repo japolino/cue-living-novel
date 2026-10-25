@@ -134,12 +134,11 @@ describe("controller wiring: extra swaps beyond the cap without extra requests",
     expect(calls).toHaveLength(1);
     data.set("config.json", { ...(data.get("config.json") as object), systemOneMode: "on" });
     Object.assign(spindle, {
-      enclave: { get: async () => "test-key" },
-      cors: async () => ({ status: 200, body: JSON.stringify({ model: "jev-latest", answers: {
+      decisions: { evaluate: async () => ({ model: "jev-latest", answers: {
         scene_change: { type: "noul", noul: 0.01 }, needs_description: { type: "noul", noul: 0.01 },
         ...Object.fromEntries(["smile", "listen", "smile", "listen", "idle", "smile"].map((pose, index) =>
           [`expression_${index}`, { type: "choice", choice: pose, confidence: 0.95, probabilities: { [pose]: 0.95 } }]))
-      } }) })
+      } }) }
     });
     fire("GENERATION_ENDED", { chatId: "chat", messageId: "classified", content: expanded }, "user-1");
     await settle(() => active()?.plan.key.assistantMessageId === "classified" && active()?.jobs.length === 5 && active()?.jobs.every((job) => job.status === "generated") === true);

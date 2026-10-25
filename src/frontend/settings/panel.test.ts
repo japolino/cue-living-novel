@@ -63,7 +63,7 @@ describe("settings panel markup", () => {
 
   test("everyday controls appear once (radio groups once per option list)", () => {
     for (const name of ["generateChoices", "autoEnter", "referenceAnchoring", "parserConnectionId", "imageConnectionId",
-      "textSpeed", "autoPlayDelay", "textScale", "maxImagesPerTurn", "bgmVolume", "sfxVolume", "systemOneApiKey",
+      "textSpeed", "autoPlayDelay", "textScale", "maxImagesPerTurn", "bgmVolume", "sfxVolume", "systemOneOn",
       "novelAiSteps", "novelAiGuidance", "novelAiSampler", "novelAiSeed", "novelAiWidth", "novelAiHeight"]) {
       expect(names.filter((candidate) => candidate === name)).toEqual([name]);
     }
@@ -174,10 +174,8 @@ describe("settings panel markup", () => {
     expect(source).toContain('motionGroup.toggleAttribute("data-inactive", hold !== null);');
   });
 
-  test("System One mode, URL and model save live; no Apply or Discard remains", () => {
+  test("System One mode saves live; no Apply or Discard remains", () => {
     expect(advancedKeys).not.toContain("systemOneMode");
-    expect(advancedKeys).not.toContain("systemOneApiUrl");
-    expect(advancedKeys).not.toContain("systemOneModel");
     expect(source).toContain('case "systemOneMode": return');
     expect(source).not.toContain("data-apply");
     expect(source).not.toContain("data-discard");
@@ -218,14 +216,22 @@ describe("settings panel markup", () => {
     expect(generated.indexOf('${group("Image connection"')).toBeLessThan(generated.indexOf('${group("How the story is shown"'));
     expect(generated.indexOf('${group("Image connection"')).toBeLessThan(generated.indexOf("data-novelai-controls"));
     expect(picturesPane).toContain('name="novelAiWidth"');
-    for (const name of ["novelAiSteps", "novelAiGuidance", "novelAiSampler", "novelAiSeed", "systemOneMode", "systemOneApiUrl", "systemOneModel"]) {
+    for (const name of ["novelAiSteps", "novelAiGuidance", "novelAiSampler", "novelAiSeed", "systemOneMode"]) {
       expect(advancedPane).toContain(`name="${name}"`);
     }
     const connections = source.slice(source.indexOf('${pane("connections"'), source.indexOf('${pane("advanced"'));
     expect(connections).toContain('name="systemOneOn"');
-    expect(connections).toContain('name="systemOneApiKey"');
     expect(connections).not.toContain('name="systemOneMode"');
     expect(source).toContain('case "systemOneOn": return { systemOneMode: checked ? "on" : "off" };');
+  });
+
+  test("System One uses Lumiverse's Decision connection: no key, URL or model of Cue's own", () => {
+    const connections = source.slice(source.indexOf('${pane("connections"'), source.indexOf('${pane("advanced"'));
+    for (const name of ["systemOneApiKey", "systemOneApiUrl", "systemOneModel"]) expect(source).not.toContain(`name="${name}"`);
+    expect(connections).toContain("data-decision-status");
+    expect(connections).toContain("<button type=\"button\" data-check-decisions>Check again</button>");
+    expect(connections).toContain("<button type=\"button\" data-open-decision-connections>Open Lumiverse Connections</button>");
+    expect(connections).toContain("Connections → Decision models");
   });
 
   test("the sprite controls sit with the generated-picture settings in Pictures", () => {

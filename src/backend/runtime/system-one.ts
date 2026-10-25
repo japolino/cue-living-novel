@@ -1,24 +1,98 @@
-import type { SpindleAPI } from "lumiverse-spindle-types";
+import type { DecisionQuestion, DecisionState, SpindleAPI } from "lumiverse-spindle-types";
 import { z } from "zod";
 import type { VisualNovelConfig } from "../../config.js";
+import type { DecisionStatus } from "../../protocol.js";
 import type { SceneState } from "../../shared/contracts.js";
 import { POSE_EXPRESSION_CATALOGUE } from "../../shared/character.js";
 import { getAudioCatalog } from "./audio-catalog.js";
 import { SCENE_CHANGED_ABOVE, sceneScore, type JevSceneAnswer, type JevWardrobeAnswers } from "../core/change-decisions.js";
 
-export const SYSTEM_ONE_KEY = "system_one_api_key";
+/** The enclave entry where Cue kept its own System One key; deleted on the first status check. */
+export const LEGACY_SYSTEM_ONE_KEY = "system_one_api_key";
 
-export function systemOneEndpoint(apiUrl: string): string {
-  const base = new URL(apiUrl.trim());
-  if (base.protocol !== "https:" && !(base.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(base.hostname))) {
-    throw new Error("System One URL must use HTTPS or local HTTP");
+/** Where the reader sets up System One: Lumiverse's own setting, not Cue's. */
+const DECISION_SETTING_HINT = "In Lumiverse, open Connections → Decision models, add a connection and set it as default.";
+const NO_DECISIONS_API = "This Lumiverse has no Decision models. Update Lumiverse to use System One.";
+const NO_DEFAULT_CONNECTION = `No default Decision connection. ${DECISION_SETTING_HINT}`;
+const NO_PERMISSION = "Cue needs the Decision models permission. Grant it to Cue in Lumiverse's Extensions panel.";
+
+/** A host error as one sentence that names the Lumiverse setting to fix, where there is one. */
+export function decisionErrorText(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/no default decision connection/i.test(message)) return NO_DEFAULT_CONNECTION;
+  if (/PERMISSION_DENIED:?\s*decisions/i.test(message)) return NO_PERMISSION;
+  if (/no readable api key for decision connection/i.test(message)) return `${message}. Add its key in Lumiverse: Connections → Decision models.`;
+  return message;
+}
+
+/**
+ * Which Decision connection System One would use: Lumiverse's default one.
+ * Never throws; a failed lookup is "unavailable" with the reason.
+ */
+export async function decisionConnectionStatus(spindle: SpindleAPI, userId?: string): Promise<DecisionStatus> {
+  const decisions = (spindle as Partial<SpindleAPI>).decisions;
+  if (typeof decisions?.listConnections !== "function") return { state: "unavailable", error: NO_DECISIONS_API };
+  try {
+    const connections = await decisions.listConnections(userId ? { userId } : undefined);
+    const chosen = connections.find((connection) => connection.is_default);
+    if (!chosen) return { state: "missing", error: NO_DEFAULT_CONNECTION };
+    if (!chosen.has_api_key) {
+      return { state: "unavailable", name: chosen.name, model: chosen.model, error: `The default Decision connection "${chosen.name}" has no API key. Add it in Lumiverse: Connections → Decision models.` };
+    }
+    return { state: "ready", name: chosen.name, model: chosen.model };
+  } catch (error) {
+    return { state: "unavailable", error: decisionErrorText(error) };
   }
-  if (base.username || base.password) throw new Error("System One URL cannot contain credentials");
-  const path = base.pathname.replace(/\/+$/, "");
-  base.pathname = path.endsWith("/v1/systemone") ? path : `${path.endsWith("/v1") ? path : `${path}/v1`}/systemone`;
-  base.search = "";
-  base.hash = "";
-  return base.toString();
+}
+
+/** Users told this backend run that System One cannot reach a Decision connection. */
+const warnedSetup = new Set<string>();
+
+/**
+ * A turn's System One requests failed. When the reason is Lumiverse's setup
+ * (no Decision models, no default connection or key, no permission), say so
+ * once per user in a toast instead of falling back quietly; a request that
+ * works again clears it.
+ */
+export function warnDecisionSetup(spindle: SpindleAPI, error: unknown, userId?: string): void {
+  const reason = error instanceof Error ? error.message : String(error ?? "");
+  const setup = reason === NO_DECISIONS_API || reason === NO_PERMISSION || reason.includes("Connections → Decision models");
+  const key = userId ?? "";
+  if (!setup || warnedSetup.has(key)) return;
+  warnedSetup.add(key);
+  try {
+    spindle.toast?.warning?.(`${reason} Until then, Cue uses the story reader.`, { title: "Cue: System One is on", ...(userId ? { userId } : {}) });
+  } catch {
+    // a toast must never break the turn
+  }
+}
+
+export type DecisionRequest = { state: unknown; questions: Record<string, unknown> };
+
+/**
+ * One System One request through Lumiverse's default Decision connection
+ * (Lumiverse holds the key, URL and model). Returns the raw result for the
+ * caller's own schema. Throws with a reason that names Lumiverse's setting
+ * when it is missing.
+ */
+export async function sendDecision(
+  spindle: SpindleAPI,
+  request: DecisionRequest,
+  options: { userId?: string; signal?: AbortSignal } = {},
+): Promise<unknown> {
+  const decisions = (spindle as Partial<SpindleAPI>).decisions;
+  if (typeof decisions?.evaluate !== "function") throw new Error(NO_DECISIONS_API);
+  let result: unknown;
+  try {
+    result = await decisions.evaluate(
+      { state: request.state as DecisionState, questions: request.questions as Record<string, DecisionQuestion>, ...(options.userId ? { userId: options.userId } : {}) },
+      options.signal ? { signal: options.signal } : undefined,
+    );
+  } catch (error) {
+    throw new Error(decisionErrorText(error));
+  }
+  warnedSetup.delete(options.userId ?? "");
+  return result;
 }
 
 const Answer = z.discriminatedUnion("type", [
@@ -39,7 +113,8 @@ export type WardrobeAnswers = WardrobeQuestion & JevWardrobeAnswers;
 export const MAX_WARDROBE_QUESTIONS = 3;
 /** Paragraphs the per-paragraph questions (speaker, expression, audio) cover. */
 export const SYSTEM_ONE_MAX_PARAGRAPHS = 24;
-const REQUEST_BYTE_LIMIT = 65_536;
+/** The API's 64 KiB request limit, less room for the model id Lumiverse adds to each request. */
+const REQUEST_BYTE_LIMIT = 65_536 - 1024;
 const PARAGRAPH_TEXT_LIMIT = 3000;
 
 /*
@@ -114,35 +189,6 @@ export function sceneStartChunks(paragraphs: ReadonlyArray<{ text: string }>): s
   return chunks;
 }
 
-/**
- * One small request that proves the key, URL and model work together: a
- * single yes/no question about one sentence. Throws with the reason when the
- * call fails or the answer does not parse.
- */
-export async function testSystemOneKey(
-  spindle: SpindleAPI,
-  input: { key: string; config: Pick<VisualNovelConfig, "systemOneApiUrl" | "systemOneModel"> },
-): Promise<void> {
-  const model = input.config.systemOneModel.trim();
-  if (!model) throw new Error("System One model is missing");
-  const endpoint = systemOneEndpoint(input.config.systemOneApiUrl);
-  const response = await spindle.cors(endpoint, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${input.key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model,
-      state: { paragraphs: [{ index: 0, text: "Mira opens the door." }] },
-      questions: { key_check: { type: "noul", instructions: "Does someone open a door in paragraph 0?" } },
-    }),
-  }) as { status: number; body: string };
-  if (response.status < 200 || response.status >= 300) throw new Error(`System One request failed (${response.status})`);
-  try {
-    Response.parse(JSON.parse(response.body));
-  } catch {
-    throw new Error("System One answered in a form Cue does not understand. Check the URL and model.");
-  }
-}
-
 export type SystemOneDecisions = {
   speakers: Map<number, string>;
   expressions: Map<number, string>;
@@ -170,11 +216,6 @@ export async function decidePresentation(
   input: { paragraphs: Array<{ index: number; text: string }>; previousScene: SceneState | null; names: string[]; personaName?: string; wardrobe?: WardrobeQuestion[]; config: VisualNovelConfig; userId?: string },
 ): Promise<SystemOneDecisions | null> {
   if (input.config.systemOneMode === "off") return null;
-  const key = await spindle.enclave.get(SYSTEM_ONE_KEY, input.userId);
-  if (!key) return null;
-  const model = input.config.systemOneModel.trim();
-  if (!model) throw new Error("System One model is missing");
-  const endpoint = systemOneEndpoint(input.config.systemOneApiUrl);
 
   const names = [...new Set(["Narrator", ...(input.personaName ? [input.personaName] : []), ...input.names].filter(Boolean))].slice(0, 32);
   const poses = POSE_EXPRESSION_CATALOGUE.slice(0, 16);
@@ -196,16 +237,11 @@ export async function decidePresentation(
     if (sounds.length) questions[`sfx_${index}`] = { type: "choice", instructions: `Is a sound effect clearly called for at paragraph ${index}?`, criteria: { none: "No sound effect", ...Object.fromEntries(sounds.map((entry) => [entry.id, `${entry.name}; ${entry.tags.join(", ")}`])) } };
   }
   const encoder = new TextEncoder();
-  const send = async (payload: unknown) => {
-    const body = JSON.stringify(payload);
-    if (encoder.encode(body).length > REQUEST_BYTE_LIMIT) throw new Error("System One request exceeds the API's 64 KiB limit");
-    const response = await spindle.cors(endpoint, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body,
-    }) as { status: number; body: string };
-    if (response.status < 200 || response.status >= 300) throw new Error(`System One request failed (${response.status})`);
-    return Response.parse(JSON.parse(response.body));
+  const send = async (payload: DecisionRequest) => {
+    if (encoder.encode(JSON.stringify(payload)).length > REQUEST_BYTE_LIMIT) throw new Error("System One request exceeds the API's 64 KiB limit");
+    const parsed = Response.safeParse(await sendDecision(spindle, payload, input.userId ? { userId: input.userId } : {}));
+    if (!parsed.success) throw new Error("System One answered in a form Cue does not understand. Check the model of Lumiverse's default Decision connection.");
+    return parsed.data;
   };
   const started = Date.now();
   const paragraphs = input.paragraphs.slice(0, SYSTEM_ONE_MAX_PARAGRAPHS);
@@ -219,7 +255,6 @@ export async function decidePresentation(
       }
     }
     return send({
-      model,
       state: {
         previousScene: input.previousScene ? { environment: input.previousScene.environment, character: input.previousScene.character, attire: input.previousScene.attire } : null,
         paragraphs: batch.map((paragraph) => ({ index: paragraph.index, text: paragraph.text.slice(0, 3000) })),
@@ -241,7 +276,7 @@ export async function decidePresentation(
     .filter((paragraph) => paragraph.text);
   const wardrobeChunks: Array<typeof cleaned> = [];
   if (wardrobe.length) {
-    const fits = (chunk: typeof cleaned) => encoder.encode(JSON.stringify({ model, state: { paragraphs: chunk }, questions: wardrobeAsked })).length <= REQUEST_BYTE_LIMIT;
+    const fits = (chunk: typeof cleaned) => encoder.encode(JSON.stringify({ state: { paragraphs: chunk }, questions: wardrobeAsked })).length <= REQUEST_BYTE_LIMIT;
     let current: typeof cleaned = [];
     for (const paragraph of cleaned) {
       if (current.length && !fits([...current, paragraph])) {
@@ -252,13 +287,12 @@ export async function decidePresentation(
     }
     if (current.length) wardrobeChunks.push(current);
   }
-  const wardrobeRequests = wardrobeChunks.map((chunk) => send({ model, state: { paragraphs: chunk }, questions: wardrobeAsked }));
+  const wardrobeRequests = wardrobeChunks.map((chunk) => send({ state: { paragraphs: chunk }, questions: wardrobeAsked }));
 
   // Scene: the start of the reply only; the planner's scene is never sent.
   const sceneChunks = input.previousScene ? sceneStartChunks(input.paragraphs) : [];
   const sceneRequest = input.previousScene && sceneChunks.length
     ? send({
-        model,
         state: {
           previousScene: { location: input.previousScene.environment.location, timeOfDay: input.previousScene.environment.timeOfDay, weather: input.previousScene.environment.weather },
           paragraphs: sceneChunks.map((text, index) => ({ index, text })),
