@@ -409,7 +409,8 @@ try {
   assert.equal(await settings.locator("[data-apply-bar], [data-draft-bar], [data-discard]").count(), 0, "no Apply or Discard anywhere");
   await openTab("Connections");
   assert.equal(await settings.locator('[data-pane="connections"] [data-readiness]').count(), 1, "one readiness widget in Connections");
-  // System One: Connections has an on/off switch and Lumiverse's Decision connection; Compare is in Advanced.
+  // Decision connection (formerly System One): Connections has an on/off switch and a picker of Lumiverse's
+  // Decision connections; Compare is in Advanced.
   // Cue keeps no key, URL or model of its own.
   assert.equal(await settings.locator('[data-pane="connections"] [name="systemOneMode"]').count(), 0);
   assert.equal(await settings.locator('[name="systemOneApiKey"], [name="systemOneApiUrl"], [name="systemOneModel"]').count(), 0);
@@ -428,7 +429,7 @@ try {
   const decisionStatus = settings.locator("[data-decision-status]");
   assert.match(await decisionStatus.innerText(), /Checking Lumiverse's Decision connection/);
   await page.evaluate(() => {
-    (window as any).settingsFixture.panel.setDecisionStatus("No default Decision connection. In Lumiverse, open Connections → Decision models, add a connection and set it as default. Until then, System One does not run and Cue uses the story reader.");
+    (window as any).settingsFixture.panel.setDecisionStatus("No default Decision connection. In Lumiverse, open Connections → Decision models, add a connection and set it as default, or choose one in Cue. Until then, Cue uses the story reader.");
   });
   assert.match(await decisionStatus.innerText(), /Connections → Decision models/);
   await settings.locator("[data-check-decisions]").click();
@@ -445,6 +446,26 @@ try {
   assert.equal(await settings.locator('[name="systemOneMode"]').inputValue(), "on", "the mode follows the host");
   assert.equal(await systemOneOn.isChecked(), true, "the switch follows the host");
   assert.match(await decisionStatus.innerText(), /Uses "Jev" \(jev-latest\)/);
+  const connectionsText = await settings.locator('[data-pane="connections"]').innerText();
+  assert.ok(connectionsText.includes("Decision connection") && !connectionsText.includes("System One"), "named Decision connection, not System One");
+  // The picker lists Lumiverse's Decision connections; choosing one saves at once.
+  await page.evaluate(() => {
+    (window as any).settingsFixture.panel.setConnectionCatalog("decision", { status: "ready", options: [
+      { id: "d1", name: "Jev", provider: "typesafe", model: "jev-latest", isDefault: true },
+      { id: "d0", name: "Mini", provider: "typesafe", model: "jev-mini", isDefault: false },
+    ] });
+  });
+  const decisionSelect = settings.locator('[name="decisionConnectionId"]');
+  assert.equal(await decisionSelect.isVisible(), true, "the Decision connection picker shows in Connections");
+  const decisionOptions = await decisionSelect.locator("option").allInnerTexts();
+  assert.equal(decisionOptions.length, 3, "Lumiverse default and both connections");
+  assert.equal(decisionOptions[0], "Lumiverse default");
+  assert.ok(decisionOptions[1]!.startsWith("Jev") && decisionOptions[2]!.startsWith("Mini"), "the default first: " + decisionOptions.join(" | "));
+  assert.equal(await decisionSelect.inputValue(), "", "Lumiverse default until one is chosen");
+  await decisionSelect.selectOption("d0");
+  assert.deepEqual(await lastPatch(page), { decisionConnectionId: "d0" }, "choosing a Decision connection saves at once");
+  await decisionSelect.selectOption("");
+  assert.deepEqual(await lastPatch(page), { decisionConnectionId: null }, "and back to Lumiverse default");
   await tab("Advanced").focus(); await page.keyboard.press("Enter");
   const params = settings.locator('[name="imageParameters"]');
   const beforeTyping = (await fixture(page)).patches.length;

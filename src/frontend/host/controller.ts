@@ -94,16 +94,17 @@ export function speechHoldsInterfaceSounds(status: Pick<SpeechStatus, "kind"> | 
 }
 
 /**
- * The status line under Use System One: the Decision connection it asks
- * (Lumiverse's default one), or what to set up in Lumiverse first.
+ * The status line under the Decision connection picker: the connection Cue
+ * asks (the chosen one, or Lumiverse's default one), or what to set up in
+ * Lumiverse first.
  */
 export function decisionStatusMessage(status: DecisionStatus): string {
   if (status.state === "ready") {
     const model = status.model ? ` (${status.model})` : "";
-    return `Uses "${status.name ?? "Decision connection"}"${model}, Lumiverse's default Decision connection.`;
+    return `Uses "${status.name ?? "Decision connection"}"${model}${status.chosen ? "" : ", Lumiverse's default Decision connection"}.`;
   }
   const reason = status.error ?? "No default Decision connection. In Lumiverse, open Connections → Decision models, add a connection and set it as default.";
-  return `${reason} Until then, System One does not run and Cue uses the story reader.`;
+  return `${reason} Until then, Cue uses the story reader.`;
 }
 
 /**
@@ -561,7 +562,7 @@ export function turnWithPlate<T extends Pick<TurnView, "sprites">>(turn: T, plat
 export type SettingsFeedbackTarget = {
   /** `scope`: the open chat's character and both layers, for "<name> only" (null: none). */
   setConfig(config: VisualNovelConfig, scope?: CharacterScopeView | null): void;
-  setConnectionCatalog(kind: "planner" | "image", state: ConnectionCatalogFeedback): void;
+  setConnectionCatalog(kind: "planner" | "image" | "decision", state: ConnectionCatalogFeedback): void;
   setDecisionStatus(message: string): void;
   setAudioStatus(message: string): void;
   /** Acknowledged save result: "saved" only after the backend echoes `vn_config`. */
@@ -958,8 +959,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
         applyLocalLayers(layersAfterSave(configLayers, patch, forCharacter));
       }
       ctx.sendToBackend({ type: "vn_set_config", patch, chatId: chatId(), ...(character ? { character: { characterId: character.characterId } } : {}) });
-      // Turning System One on: check Lumiverse's Decision connection again (it may have been set up since).
-      if (patch.systemOneMode && patch.systemOneMode !== "off") ctx.sendToBackend({ type: "vn_get_decision_status" });
+      // Turning it on or choosing a Decision connection: check again (it may have been set up since).
+      if ((patch.systemOneMode && patch.systemOneMode !== "off") || "decisionConnectionId" in patch) ctx.sendToBackend({ type: "vn_get_decision_status" });
     },
     onResetCharacter: (characterId, keys) => {
       if (configLayers?.scope?.characterId === characterId) applyLocalLayers(layersAfterReset(configLayers, keys));
@@ -1414,6 +1415,10 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       return;
     }
     if (type === "vn_decision_status" && message.type === "vn_decision_status") {
+      const { connections, error } = message.status;
+      settingsPanel?.setConnectionCatalog("decision", connections
+        ? { status: "ready", options: connections }
+        : { status: "error", options: [], error: error ?? "Could not list Lumiverse's Decision connections." });
       settingsPanel?.setDecisionStatus(decisionStatusMessage(message.status));
       return;
     }

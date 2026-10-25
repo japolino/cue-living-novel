@@ -10,10 +10,11 @@ import { SCENE_CHANGED_ABOVE, sceneScore, type JevSceneAnswer, type JevWardrobeA
 /** The enclave entry where Cue kept its own System One key; deleted on the first status check. */
 export const LEGACY_SYSTEM_ONE_KEY = "system_one_api_key";
 
-/** Where the reader sets up System One: Lumiverse's own setting, not Cue's. */
-const DECISION_SETTING_HINT = "In Lumiverse, open Connections → Decision models, add a connection and set it as default.";
-const NO_DECISIONS_API = "This Lumiverse has no Decision models. Update Lumiverse to use System One.";
+/** Where the reader sets up a Decision connection: Lumiverse's own setting, not Cue's. */
+const DECISION_SETTING_HINT = "In Lumiverse, open Connections → Decision models, add a connection and set it as default, or choose one in Cue.";
+const NO_DECISIONS_API = "This Lumiverse has no Decision models. Update Lumiverse to use a Decision connection.";
 const NO_DEFAULT_CONNECTION = `No default Decision connection. ${DECISION_SETTING_HINT}`;
+const CHOSEN_GONE = "The chosen Decision connection is no longer in Lumiverse. Choose another, or Lumiverse default.";
 const NO_PERMISSION = "Cue needs the Decision models permission. Grant it to Cue in Lumiverse's Extensions panel.";
 
 /** A host error as one sentence that names the Lumiverse setting to fix, where there is one. */
@@ -26,26 +27,29 @@ export function decisionErrorText(error: unknown): string {
 }
 
 /**
- * Which Decision connection System One would use: Lumiverse's default one.
- * Never throws; a failed lookup is "unavailable" with the reason.
+ * Which Decision connection Cue would ask: the chosen one (`connectionId`),
+ * else Lumiverse's default one, with every connection for the picker. Never
+ * throws; a failed lookup is "unavailable" with the reason.
  */
-export async function decisionConnectionStatus(spindle: SpindleAPI, userId?: string): Promise<DecisionStatus> {
+export async function decisionConnectionStatus(spindle: SpindleAPI, userId?: string, connectionId: string | null = null): Promise<DecisionStatus> {
   const decisions = (spindle as Partial<SpindleAPI>).decisions;
   if (typeof decisions?.listConnections !== "function") return { state: "unavailable", error: NO_DECISIONS_API };
   try {
-    const connections = await decisions.listConnections(userId ? { userId } : undefined);
-    const chosen = connections.find((connection) => connection.is_default);
-    if (!chosen) return { state: "missing", error: NO_DEFAULT_CONNECTION };
+    const listed = await decisions.listConnections(userId ? { userId } : undefined);
+    const connections = listed.map((connection) => ({ id: connection.id, name: connection.name, provider: connection.provider, model: connection.model, isDefault: connection.is_default }));
+    const chosen = connectionId ? listed.find((connection) => connection.id === connectionId) : listed.find((connection) => connection.is_default);
+    if (!chosen) return { state: "missing", error: connectionId ? CHOSEN_GONE : NO_DEFAULT_CONNECTION, connections };
+    const which = connectionId ? "chosen" : "default";
     if (!chosen.has_api_key) {
-      return { state: "unavailable", name: chosen.name, model: chosen.model, error: `The default Decision connection "${chosen.name}" has no API key. Add it in Lumiverse: Connections → Decision models.` };
+      return { state: "unavailable", name: chosen.name, model: chosen.model, chosen: Boolean(connectionId), error: `The ${which} Decision connection "${chosen.name}" has no API key. Add it in Lumiverse: Connections → Decision models.`, connections };
     }
-    return { state: "ready", name: chosen.name, model: chosen.model };
+    return { state: "ready", name: chosen.name, model: chosen.model, chosen: Boolean(connectionId), connections };
   } catch (error) {
     return { state: "unavailable", error: decisionErrorText(error) };
   }
 }
 
-/** Users told this backend run that System One cannot reach a Decision connection. */
+/** Users told this backend run that Cue cannot reach a Decision connection. */
 const warnedSetup = new Set<string>();
 
 /**
@@ -61,7 +65,7 @@ export function warnDecisionSetup(spindle: SpindleAPI, error: unknown, userId?: 
   if (!setup || warnedSetup.has(key)) return;
   warnedSetup.add(key);
   try {
-    spindle.toast?.warning?.(`${reason} Until then, Cue uses the story reader.`, { title: "Cue: System One is on", ...(userId ? { userId } : {}) });
+    spindle.toast?.warning?.(`${reason} Until then, Cue uses the story reader.`, { title: "Cue: Decision connection is on", ...(userId ? { userId } : {}) });
   } catch {
     // a toast must never break the turn
   }
@@ -70,22 +74,27 @@ export function warnDecisionSetup(spindle: SpindleAPI, error: unknown, userId?: 
 export type DecisionRequest = { state: unknown; questions: Record<string, unknown> };
 
 /**
- * One System One request through Lumiverse's default Decision connection
- * (Lumiverse holds the key, URL and model). Returns the raw result for the
- * caller's own schema. Throws with a reason that names Lumiverse's setting
- * when it is missing.
+ * One request through a Decision connection: `connectionId`, else
+ * Lumiverse's default one (Lumiverse holds the key, URL and model). Returns
+ * the raw result for the caller's own schema. Throws with a reason that
+ * names Lumiverse's setting when it is missing.
  */
 export async function sendDecision(
   spindle: SpindleAPI,
   request: DecisionRequest,
-  options: { userId?: string; signal?: AbortSignal } = {},
+  options: { userId?: string; signal?: AbortSignal; connectionId?: string | null } = {},
 ): Promise<unknown> {
   const decisions = (spindle as Partial<SpindleAPI>).decisions;
   if (typeof decisions?.evaluate !== "function") throw new Error(NO_DECISIONS_API);
   let result: unknown;
   try {
     result = await decisions.evaluate(
-      { state: request.state as DecisionState, questions: request.questions as Record<string, DecisionQuestion>, ...(options.userId ? { userId: options.userId } : {}) },
+      {
+        state: request.state as DecisionState,
+        questions: request.questions as Record<string, DecisionQuestion>,
+        ...(options.connectionId ? { connection_id: options.connectionId } : {}),
+        ...(options.userId ? { userId: options.userId } : {}),
+      },
       options.signal ? { signal: options.signal } : undefined,
     );
   } catch (error) {
@@ -238,9 +247,9 @@ export async function decidePresentation(
   }
   const encoder = new TextEncoder();
   const send = async (payload: DecisionRequest) => {
-    if (encoder.encode(JSON.stringify(payload)).length > REQUEST_BYTE_LIMIT) throw new Error("System One request exceeds the API's 64 KiB limit");
-    const parsed = Response.safeParse(await sendDecision(spindle, payload, input.userId ? { userId: input.userId } : {}));
-    if (!parsed.success) throw new Error("System One answered in a form Cue does not understand. Check the model of Lumiverse's default Decision connection.");
+    if (encoder.encode(JSON.stringify(payload)).length > REQUEST_BYTE_LIMIT) throw new Error("Decision request exceeds the API's 64 KiB limit");
+    const parsed = Response.safeParse(await sendDecision(spindle, payload, { ...(input.userId ? { userId: input.userId } : {}), connectionId: input.config.decisionConnectionId }));
+    if (!parsed.success) throw new Error("The Decision connection answered in a form Cue does not understand. Check its model in Lumiverse: Connections → Decision models.");
     return parsed.data;
   };
   const started = Date.now();

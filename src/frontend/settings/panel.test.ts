@@ -64,7 +64,7 @@ describe("settings panel markup", () => {
 
   test("everyday controls appear once (radio groups once per option list)", () => {
     for (const name of ["generateChoices", "autoEnter", "referenceAnchoring", "parserConnectionId", "imageConnectionId",
-      "textSpeed", "autoPlayDelay", "textScale", "maxImagesPerTurn", "bgmVolume", "sfxVolume", "systemOneOn",
+      "textSpeed", "autoPlayDelay", "textScale", "maxImagesPerTurn", "bgmVolume", "sfxVolume", "systemOneOn", "decisionConnectionId",
       "novelAiSteps", "novelAiGuidance", "novelAiSampler", "novelAiSeed", "novelAiWidth", "novelAiHeight"]) {
       expect(names.filter((candidate) => candidate === name)).toEqual([name]);
     }
@@ -253,8 +253,13 @@ describe("settings panel markup", () => {
     expect(source).toContain('case "systemOneOn": return { systemOneMode: checked ? "on" : "off" };');
   });
 
-  test("System One uses Lumiverse's Decision connection: no key, URL or model of Cue's own", () => {
+  test("the Decision connection is one of Lumiverse's, chosen in Connections: no key, URL or model of Cue's own", () => {
     const connections = source.slice(source.indexOf('${pane("connections"'), source.indexOf('${pane("advanced"'));
+    expect(connections).toContain('${group("Decision connection"');
+    expect(source).not.toMatch(/>[^<>]*System One[^<>]*</);
+    expect(connections).toContain('<select name="decisionConnectionId" data-connection-select="decision" aria-label="Decision connection"><option value="">Lumiverse default</option></select>');
+    expect(source).toMatch(/case "decisionConnectionId":\s+return \{ decisionConnectionId: target\.value\.trim\(\) \|\| null \};/);
+    expect(source).toContain('this.renderConnectionSelects("decision", config.decisionConnectionId);');
     for (const name of ["systemOneApiKey", "systemOneApiUrl", "systemOneModel"]) expect(source).not.toContain(`name="${name}"`);
     expect(connections).toContain("data-decision-status");
     expect(connections).toContain("<button type=\"button\" data-check-decisions>Check again</button>");

@@ -306,7 +306,7 @@ export function themePreviewTokens(preset: VisualNovelThemePreset): ThemePreview
 /* Connections.                                                              */
 /* ------------------------------------------------------------------------ */
 
-export type ConnectionCatalogKind = "planner" | "image";
+export type ConnectionCatalogKind = "planner" | "image" | "decision";
 
 export type ConnectionOption = {
   id: string;
@@ -364,6 +364,7 @@ export type ConnectionReadiness = {
 const KIND_NOUN: Record<ConnectionCatalogKind, string> = {
   planner: "story reader",
   image: "image",
+  decision: "Decision",
 };
 
 export function connectionReadiness(

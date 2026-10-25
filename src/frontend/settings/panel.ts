@@ -161,7 +161,7 @@ export type SettingsPanelOptions = {
   /** Open Cue with the Panels drawer on its Advanced tools (the stage shows no Panels button until a chat has a card). */
   onOpenPanelTools?: () => void;
   onRefreshConnections: () => void;
-  /** Ask the backend which of Lumiverse's Decision connections System One uses (the answer comes as `setDecisionStatus`). */
+  /** Ask the backend which of Lumiverse's Decision connections Cue asks, and for the list (the answers come as `setDecisionStatus` and the "decision" catalog). */
   onCheckDecisions?: () => void;
   /** Show Lumiverse's Connections drawer, where Decision models are set up. */
   onOpenDecisionConnections?: () => void;
@@ -551,6 +551,7 @@ export class VisualNovelSettingsPanel {
   private readonly connectionStates: Record<ConnectionCatalogKind, ConnectionCatalogState> = {
     planner: { status: "idle", options: [] },
     image: { status: "idle", options: [] },
+    decision: { status: "idle", options: [] },
   };
   /** The open chat's character and both layers (null: only the shared settings exist here). */
   private scopeView: CharacterScopeView | null = null;
@@ -885,10 +886,16 @@ export class VisualNovelSettingsPanel {
             ${group("Image connection", `
               <div data-actions><small>Chosen in Pictures, next to where pictures come from.</small><button type="button" data-goto="pictures" data-goto-target="imageConnectionId">Go to Pictures</button></div>
             `, { find: "" })}
-            ${group("System One", `
-              <label data-check ${find("Use System One", "jev typesafe on off decisions")}><input name="systemOneOn" type="checkbox" /><span>Use System One for presentation and familiar scenes<small>Comparing only is in Advanced.</small>${more("Jev makes bounded speaker, expression, audio, and scene decisions.")}</span></label>
-              <div data-field ${find("Decision connection", "jev system one decision model connection key url lumiverse")}><span>Decision connection</span><div data-actions><button type="button" data-check-decisions>Check again</button><button type="button" data-open-decision-connections>Open Lumiverse Connections</button><small data-decision-status>Checking Lumiverse's Decision connection…</small></div><small>System One asks Lumiverse's default Decision connection. Its key, URL and model are set in Lumiverse (Connections → Decision models), not in Cue.</small></div>
-            `, { help: "Optional. Saves as you change it.", find: find("System One", "jev") })}
+            ${group("Decision connection", `
+              <label data-check ${find("Use a Decision connection", "jev typesafe on off decisions system one")}><input name="systemOneOn" type="checkbox" /><span>Use a Decision connection for presentation and familiar scenes<small>Comparing only is in Advanced.</small>${more("Jev makes bounded speaker, expression, audio, and scene decisions.")}</span></label>
+              <div data-field ${find("Which Decision connection", "jev system one decision model connection profile key url lumiverse default")}>
+                <span>Connection</span>
+                <select name="decisionConnectionId" data-connection-select="decision" aria-label="Decision connection"><option value="">Lumiverse default</option></select>
+                <small data-decision-status>Checking Lumiverse's Decision connections…</small>
+                <div data-actions><button type="button" data-check-decisions>Check again</button><button type="button" data-open-decision-connections>Open Lumiverse Connections</button></div>
+                <small>One of Lumiverse's Decision connections. Keys, URLs and models are set in Lumiverse (Connections → Decision models), not in Cue. Saves when changed.</small>
+              </div>
+            `, { help: "Optional. Saves as you change it.", find: find("Decision connection", "jev system one") })}
           `)}
 
           ${pane("advanced", `
@@ -966,7 +973,7 @@ export class VisualNovelSettingsPanel {
               <label data-field ${find("Display regex rules", "regex replace formatting dialogue pattern")}><span>Display regex rules</span><textarea name="displayRegexRules" spellcheck="false" placeholder="/§([^§]+)§/g => <em class=&quot;vn-transmission&quot;>$1</em>"></textarea><small>One rule per line: <code>/pattern/flags =&gt; replacement</code>. Dialogue formatting only.</small>${more("<code>pattern =&gt; replacement</code> also works. An empty replacement hides a match from dialogue, not from image planning. Only safe inline formatting renders here. For full HTML/SVG cards, open Panels in the novel view.")}</label>
             `, { id: "filtering" })}
             ${group("Models and parameters", `
-              <label data-field ${find("System One decisions", "jev typesafe mode compare")}><span>System One decisions</span><select name="systemOneMode"><option value="off">Off</option><option value="compare">Compare with story reader</option><option value="on">Use for presentation and familiar scenes</option></select>${more("Compare logs agreement with the story reader without changing the turn.")}</label>
+              <label data-field ${find("Decision connection mode", "jev typesafe mode compare system one")}><span>Decision connection mode</span><select name="systemOneMode"><option value="off">Off</option><option value="compare">Compare with story reader</option><option value="on">Use for presentation and familiar scenes</option></select>${more("Compare logs agreement with the story reader without changing the turn.")}</label>
               <div data-row>
                 <label data-field ${find("Image model override", "image model checkpoint")}><span>Image model override</span><input name="imageModel" type="text" placeholder="Use the selected connection model" /><small data-image-model-hint>Leave blank to use the model configured on the selected image connection.</small></label>
                 <label data-field ${find("Images at the same time", "concurrency parallel images")}><span>Images generated at the same time</span><input name="imageConcurrency" type="number" min="1" max="6" step="1" /></label>
@@ -1420,7 +1427,7 @@ export class VisualNovelSettingsPanel {
     });
     this.root.querySelector("[data-undo]")?.addEventListener("click", () => this.undo());
     this.root.querySelector<HTMLButtonElement>("[data-check-decisions]")?.addEventListener("click", () => {
-      this.setDecisionStatus("Checking Lumiverse's Decision connection…");
+      this.setDecisionStatus("Checking Lumiverse's Decision connections…");
       this.options.onCheckDecisions?.();
     });
     this.root.querySelector<HTMLButtonElement>("[data-open-decision-connections]")?.addEventListener("click", () => {
@@ -1647,6 +1654,8 @@ export class VisualNovelSettingsPanel {
       case "imageConnectionId":
       case "setupImageConnectionId":
         return { imageConnectionId: target.value.trim() || null };
+      case "decisionConnectionId":
+        return { decisionConnectionId: target.value.trim() || null };
       case "textSpeedStep": {
         if (target.value === "custom") { this.showCustom("textSpeed", true); return null; }
         return { textSpeed: Number(target.value) };
@@ -2377,7 +2386,7 @@ export class VisualNovelSettingsPanel {
     this.control<HTMLInputElement>("maxImagesPerTurn").value = String(config.maxImagesPerTurn);
     this.showCustomQuiet("maxImagesPerTurn", budget === "custom");
     this.root.querySelector<HTMLElement>("[data-budget-help]")!.textContent = config.systemOneMode === "on" && !config.useNativeCardImages
-      ? `${config.maxImagesPerTurn > 0 ? `Up to ${config.maxImagesPerTurn} new pictures per reply.` : "No limit on new pictures."} With confident System One expressions, cached pictures can appear on additional paragraphs without using this allowance.`
+      ? `${config.maxImagesPerTurn > 0 ? `Up to ${config.maxImagesPerTurn} new pictures per reply.` : "No limit on new pictures."} With confident expressions from the Decision connection, cached pictures can appear on additional paragraphs without using this allowance.`
       : describeBudget(config.maxImagesPerTurn);
 
     this.control<HTMLInputElement>("bgmVolume").value = String(config.bgmVolume);
@@ -2387,6 +2396,7 @@ export class VisualNovelSettingsPanel {
 
     this.renderConnectionSelects("planner", config.parserConnectionId);
     this.renderConnectionSelects("image", config.imageConnectionId);
+    this.renderConnectionSelects("decision", config.decisionConnectionId);
     this.syncNovelAiControls(config, source);
     this.syncSprites(config, source);
     this.updateSummaries(config);
@@ -2708,14 +2718,14 @@ export class VisualNovelSettingsPanel {
   setConnectionCatalog(kind: ConnectionCatalogKind, state: ConnectionCatalogState): void {
     this.connectionStates[kind] = state;
     this.renderConnectionSelects(kind, kind === "planner" ? this.config.parserConnectionId
-        : this.config.imageConnectionId);
+        : kind === "image" ? this.config.imageConnectionId : this.config.decisionConnectionId);
     if (kind === "image") {
       this.updateImageModelHint();
       this.syncNovelAiControls(this.config, imageSourceFromConfig(this.config));
     }
   }
 
-  /** The line under Use System One: Lumiverse's Decision connection, or what to set up there. */
+  /** The line under the Decision connection picker: the one Cue asks, or what to set up in Lumiverse. */
   setDecisionStatus(message: string): void {
     const status = this.root.querySelector<HTMLElement>("[data-decision-status]");
     if (status) status.textContent = message;

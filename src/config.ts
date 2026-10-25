@@ -213,11 +213,13 @@ export type VisualNovelConfig = {
   generateChoices: boolean;
   parserConnectionId: string | null;
   /**
-   * System One asks Lumiverse's default Decision connection. The URL and
-   * model Cue kept before (`systemOneApiUrl`, `systemOneModel`) are dropped
-   * on load.
+   * The Decision connection (formerly System One) asks one of Lumiverse's
+   * Decision connections. The URL and model Cue kept before
+   * (`systemOneApiUrl`, `systemOneModel`) are dropped on load.
    */
   systemOneMode: "off" | "compare" | "on";
+  /** Which of Lumiverse's Decision connections it asks; null: Lumiverse's default one. */
+  decisionConnectionId: string | null;
   parserParameters: Record<string, unknown>;
   imageConnectionId: string | null;
   imageModel: string;
@@ -345,6 +347,7 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   generateChoices: true,
   parserConnectionId: null,
   systemOneMode: "off",
+  decisionConnectionId: null,
   parserParameters: {},
   imageConnectionId: null,
   imageModel: "",
@@ -789,6 +792,7 @@ export function normalizeConfig(value: unknown): VisualNovelConfig {
     generateChoices: bool(input.generateChoices, DEFAULT_CONFIG.generateChoices),
     parserConnectionId: nullableString(input.parserConnectionId),
     systemOneMode: input.systemOneMode === "compare" || input.systemOneMode === "on" ? input.systemOneMode : "off",
+    decisionConnectionId: nullableString(input.decisionConnectionId),
     parserParameters: record(input.parserParameters),
     imageConnectionId: nullableString(input.imageConnectionId),
     imageModel: stringValue(input.imageModel, DEFAULT_CONFIG.imageModel),

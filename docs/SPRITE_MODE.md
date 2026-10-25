@@ -19,7 +19,7 @@ once and reuses them:
 
 After that, staging a reply is a *choice* problem — who stands where, with
 which expression, motion, emote and light — which the story reader or the
-System One classifier (Jev: choice / score / yes-no, 70–500 ms, parallel
+Decision connection classifier (Jev: choice / score / yes-no, 70–500 ms, parallel
 questions) answers per paragraph at almost no cost. Every paragraph gets its
 own expression and there is no picture cap.
 
@@ -142,8 +142,8 @@ distress than to calm).
 
 Rules:
 
-- The planner and System One may still pick any expression; the mapping
-  handles it. System One's "cheap" expressions are the active set: an
+- The planner and the Decision connection may still pick any expression; the mapping
+  handles it. Its "cheap" expressions are the active set: an
   answer outside it needs the rare-expression confidence, else the set's
   stand-in is used.
 - Display (`bestAvailableExpression`, every size): the first ready image of
@@ -173,7 +173,7 @@ moments"); the planner still plans scenes, environments, speakers and cues
 
 ```
 assistant reply
-  -> planner (+ System One presentation, unchanged)          [existing]
+  -> planner (+ Decision connection presentation, unchanged) [existing]
   -> TurnPlan
   -> buildSpriteStaging(plan, ...)  => plan.spriteStaging      [backend: staging]
        classifier (Jev) when configured, else deterministic from the plan
@@ -239,7 +239,7 @@ the Jev questions are `wardrobeQuestions` and `SCENE_QUESTION` in
 `runtime/system-one.ts`) whenever the planner's outfit differs from the
 current one:
 
-- System One on: one extra request per reply (in parallel with the
+- Decision connection on: one extra request per reply (in parallel with the
   per-paragraph batches) sends the whole reply, cleaned (no HTML tags, no
   80+ character blobs), and asks per known character with an outfit in
   continuity (not the persona; at most 3, the previous scene character
@@ -662,8 +662,8 @@ intensity), the plate key, and the light preset.
   `poseExpressionId` or the deterministic selector; light from the scene's
   time of day / lighting words; motion and emote "none" except simple,
   conservative cues.
-- **Classifier** (System One on; requests go to Lumiverse's default Decision
-  connection through `spindle.decisions`): one request per 7 paragraphs,
+- **Classifier** (Decision connection on; requests go to the chosen Decision
+  connection, else Lumiverse's default one, through `spindle.decisions`): one request per 7 paragraphs,
   questions in parallel. Per paragraph and cast member: present (yes/no),
   expression (choice, `keep_current` first — Jev leans to the first option),
   motion and emote (choice, `none` first), intensity (score 1–5). Per scene:

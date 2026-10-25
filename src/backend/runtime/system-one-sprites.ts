@@ -680,7 +680,7 @@ export async function classifySpriteStaging(
     const stop = () => controller.abort();
     input.signal?.addEventListener("abort", stop, { once: true });
     try {
-      return await withDeadline(sendDecision(spindle, batch.body, { ...(input.userId ? { userId: input.userId } : {}), signal: controller.signal }), timeoutMs, input.signal);
+      return await withDeadline(sendDecision(spindle, batch.body, { ...(input.userId ? { userId: input.userId } : {}), signal: controller.signal, connectionId: input.config.decisionConnectionId }), timeoutMs, input.signal);
     } finally {
       input.signal?.removeEventListener("abort", stop);
       controller.abort();

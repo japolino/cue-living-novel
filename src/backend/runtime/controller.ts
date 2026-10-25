@@ -1962,7 +1962,8 @@ async function handleFrontendMessage(spindle: SpindleAPI, request: FrontendReque
       } catch (error) {
         dbg(spindle, userId, `old System One key not removed: ${errorText(error)}`);
       }
-      spindle.sendToFrontend({ type: "vn_decision_status", status: await decisionConnectionStatus(spindle, userId) }, userId);
+      const { decisionConnectionId } = await loadConfig(spindle, userId);
+      spindle.sendToFrontend({ type: "vn_decision_status", status: await decisionConnectionStatus(spindle, userId, decisionConnectionId) }, userId);
       return;
     }
     case "vn_open_decision_connections": {

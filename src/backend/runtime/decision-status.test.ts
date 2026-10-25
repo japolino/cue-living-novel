@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { registerVisualNovelBackend } from "./controller.js";
 import { LEGACY_SYSTEM_ONE_KEY } from "./system-one.js";
 
-type Connection = { id: string; name: string; model: string; is_default: boolean; has_api_key: boolean };
+type Connection = { id: string; name: string; provider: string; model: string; is_default: boolean; has_api_key: boolean };
 
 /** The backend with an in-memory config and enclave, and Lumiverse's Decision connections and UI. */
 function harness(options: { connections?: Connection[]; decisions?: false; listError?: string; ui?: false } = {}) {
@@ -53,14 +53,35 @@ function harness(options: { connections?: Connection[]; decisions?: false; listE
   return { send, sent, secrets, navigation, handle: (message: unknown) => frontendHandler(message, "user") };
 }
 
-const jev: Connection = { id: "d1", name: "Jev", model: "jev-latest", is_default: true, has_api_key: true };
+const jev: Connection = { id: "d1", name: "Jev", provider: "typesafe", model: "jev-latest", is_default: true, has_api_key: true };
+const other: Connection = { ...jev, id: "d0", name: "Other", model: "jev-mini", is_default: false };
+const listed = (...connections: Connection[]) => connections.map(({ id, name, provider, model, is_default }) => ({ id, name, provider, model, isDefault: is_default }));
 
-describe("System One's connection is Lumiverse's default Decision connection", () => {
-  test("the status names the default Decision connection, for this user", async () => {
-    const h = harness({ connections: [{ ...jev, id: "d0", name: "Other", is_default: false }, jev] });
+describe("the Decision connection: the chosen one, else Lumiverse's default one", () => {
+  test("the status names the default Decision connection and lists every one, for this user", async () => {
+    const h = harness({ connections: [other, jev] });
     await h.send({ type: "vn_get_decision_status" });
-    expect(h.sent.at(-1)).toEqual({ type: "vn_decision_status", status: { state: "ready", name: "Jev", model: "jev-latest" } });
+    expect(h.sent.at(-1)).toEqual({ type: "vn_decision_status", status: { state: "ready", name: "Jev", model: "jev-latest", chosen: false, connections: listed(other, jev) } });
     expect(h.navigation).toEqual(["list:user"]);
+  });
+
+  test("a chosen Decision connection is the one named; a chosen one that is gone says so", async () => {
+    const h = harness({ connections: [other, jev] });
+    const choose = async (decisionConnectionId: string) => {
+      const saved = h.sent.filter((entry) => entry.type === "vn_config").length;
+      await h.handle({ type: "vn_set_config", patch: { decisionConnectionId } });
+      for (let i = 0; i < 100 && h.sent.filter((entry) => entry.type === "vn_config").length === saved; i += 1) await new Promise((resolve) => setTimeout(resolve, 2));
+    };
+    const status = () => h.sent.filter((entry) => entry.type === "vn_decision_status").at(-1);
+    await choose("d0");
+    await h.send({ type: "vn_get_decision_status" });
+    expect(status()).toEqual({ type: "vn_decision_status", status: { state: "ready", name: "Other", model: "jev-mini", chosen: true, connections: listed(other, jev) } });
+    await choose("gone");
+    await h.send({ type: "vn_get_decision_status" });
+    expect(status()).toEqual({
+      type: "vn_decision_status",
+      status: { state: "missing", error: "The chosen Decision connection is no longer in Lumiverse. Choose another, or Lumiverse default.", connections: listed(other, jev) },
+    });
   });
 
   test("no default Decision connection points to Lumiverse's setting", async () => {
@@ -68,7 +89,7 @@ describe("System One's connection is Lumiverse's default Decision connection", (
     await h.send({ type: "vn_get_decision_status" });
     expect(h.sent.at(-1)).toEqual({
       type: "vn_decision_status",
-      status: { state: "missing", error: "No default Decision connection. In Lumiverse, open Connections → Decision models, add a connection and set it as default." },
+      status: { state: "missing", error: "No default Decision connection. In Lumiverse, open Connections → Decision models, add a connection and set it as default, or choose one in Cue.", connections: listed({ ...jev, is_default: false }) },
     });
   });
 
@@ -78,7 +99,7 @@ describe("System One's connection is Lumiverse's default Decision connection", (
     expect(noKey.sent.at(-1)).toMatchObject({ status: { state: "unavailable", name: "Jev", error: 'The default Decision connection "Jev" has no API key. Add it in Lumiverse: Connections → Decision models.' } });
     const old = harness({ decisions: false });
     await old.send({ type: "vn_get_decision_status" });
-    expect(old.sent.at(-1)).toMatchObject({ status: { state: "unavailable", error: "This Lumiverse has no Decision models. Update Lumiverse to use System One." } });
+    expect(old.sent.at(-1)).toMatchObject({ status: { state: "unavailable", error: "This Lumiverse has no Decision models. Update Lumiverse to use a Decision connection." } });
     const denied = harness({ listError: "PERMISSION_DENIED: decisions — Decision model permission not granted" });
     await denied.send({ type: "vn_get_decision_status" });
     expect(denied.sent.at(-1)).toMatchObject({ status: { state: "unavailable", error: "Cue needs the Decision models permission. Grant it to Cue in Lumiverse's Extensions panel." } });

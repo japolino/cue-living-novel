@@ -31,12 +31,12 @@ const decisions = {
   },
 };
 
-function spindle(raw: () => Promise<unknown>, logs: string[], response: unknown, connected = true, toasts: string[] = []): SpindleAPI {
+function spindle(raw: () => Promise<unknown>, logs: string[], response: unknown, connected = true, toasts: string[] = [], connectionId?: string): SpindleAPI {
   return {
     decisions: {
       evaluate: async (body: { state: any; questions: any; model?: string; connection_id?: string }) => {
-        // Lumiverse picks its default Decision connection: Cue sends no connection, key or model.
-        assert.equal(body.connection_id, undefined);
+        // Only the chosen connection's id is sent (none: Lumiverse's default); never a key or model.
+        assert.equal(body.connection_id, connectionId);
         assert.equal(body.model, undefined);
         if (!connected) throw new Error("No default Decision connection configured");
         if (body.questions.scene_start) assert.equal(body.state.previousScene.location, "Library");
@@ -73,6 +73,13 @@ test("confident System One continuation reuses a known scene without a prose pla
   assert.ok(logs.some((line) => line.includes("System One continuation")));
 });
 
+test("a chosen Decision connection is the one asked", async () => {
+  const chosen = input("on");
+  chosen.config = { ...chosen.config, decisionConnectionId: "d7" };
+  const result = await planTurn(spindle(async () => { throw new Error("should not run"); }, [], decisions, true, [], "d7"), chosen);
+  assert.equal(result.plan.paragraphSpeakers[0], "Mira");
+});
+
 test("compare mode records decisions without changing the story-reader result", async () => {
   const logs: string[] = [];
   const result = await planTurn(spindle(async () => { throw new Error("planner unavailable"); }, logs, decisions), input("compare"));
@@ -91,19 +98,27 @@ test("no default Decision connection falls back to the ordinary planner and says
   assert.equal(result.usedFallback, true);
   assert.ok(logs.some((line) => line.startsWith("System One decision failed; using story reader:") && line.includes("No default Decision connection.")));
   await planTurn(api, input("on"));
-  assert.deepEqual(toasts, ["No default Decision connection. In Lumiverse, open Connections → Decision models, add a connection and set it as default. Until then, Cue uses the story reader."]);
+  assert.deepEqual(toasts, ["No default Decision connection. In Lumiverse, open Connections → Decision models, add a connection and set it as default, or choose one in Cue. Until then, Cue uses the story reader."]);
 });
 
-test("System One's connection is Lumiverse's default Decision connection", async () => {
+test("the Decision connection: the chosen one, else Lumiverse's default one", async () => {
   const connection = (patch: Record<string, unknown>) => ({ id: "d1", name: "Jev", provider: "typesafe", api_url: "", model: "jev-latest", is_default: true, has_api_key: true, default_parameters: {}, metadata: {}, created_at: 1, updated_at: 1, ...patch });
   const api = (list: () => Promise<unknown[]>) => ({ decisions: { listConnections: list } }) as unknown as SpindleAPI;
-  assert.deepEqual(await decisionConnectionStatus(api(async () => [connection({ id: "d0", is_default: false }), connection({})])), { state: "ready", name: "Jev", model: "jev-latest" });
+  const both = async () => [connection({ id: "d0", name: "Other", is_default: false }), connection({})];
+  const options = [
+    { id: "d0", name: "Other", provider: "typesafe", model: "jev-latest", isDefault: false },
+    { id: "d1", name: "Jev", provider: "typesafe", model: "jev-latest", isDefault: true },
+  ];
+  assert.deepEqual(await decisionConnectionStatus(api(both)), { state: "ready", name: "Jev", model: "jev-latest", chosen: false, connections: options });
+  assert.deepEqual(await decisionConnectionStatus(api(both), undefined, "d0"), { state: "ready", name: "Other", model: "jev-latest", chosen: true, connections: options });
   assert.deepEqual(await decisionConnectionStatus(api(async () => [connection({ is_default: false })])), {
     state: "missing",
-    error: "No default Decision connection. In Lumiverse, open Connections → Decision models, add a connection and set it as default.",
+    error: "No default Decision connection. In Lumiverse, open Connections → Decision models, add a connection and set it as default, or choose one in Cue.",
+    connections: [{ ...options[1]!, isDefault: false }],
   });
+  assert.match((await decisionConnectionStatus(api(async () => [connection({ id: "d0", is_default: false, has_api_key: false })]), undefined, "d0")).error ?? "", /^The chosen Decision connection "Jev" has no API key/);
   assert.match((await decisionConnectionStatus(api(async () => [connection({ has_api_key: false })]))).error ?? "", /"Jev" has no API key. Add it in Lumiverse: Connections → Decision models\./);
-  assert.deepEqual(await decisionConnectionStatus({} as SpindleAPI), { state: "unavailable", error: "This Lumiverse has no Decision models. Update Lumiverse to use System One." });
+  assert.deepEqual(await decisionConnectionStatus({} as SpindleAPI), { state: "unavailable", error: "This Lumiverse has no Decision models. Update Lumiverse to use a Decision connection." });
   assert.deepEqual(await decisionConnectionStatus(api(async () => { throw new Error("PERMISSION_DENIED: decisions — Decision model permission not granted"); })), {
     state: "unavailable",
     error: "Cue needs the Decision models permission. Grant it to Cue in Lumiverse's Extensions panel.",

@@ -40,7 +40,7 @@ type Mock = { spindle: SpindleAPI; bodies: Body[]; logs: string[]; toasts: strin
  * Lumiverse's Decision API. `answer` returns answers, or an HTTP reply that
  * the host turns into its result (2xx JSON) or its error (other statuses).
  */
-function mockSpindle(answer: (body: Body, call: number) => Answers | Promise<Answers> | { status: number; body: string }, options: { connected?: boolean } = {}): Mock {
+function mockSpindle(answer: (body: Body, call: number) => Answers | Promise<Answers> | { status: number; body: string }, options: { connected?: boolean; connectionId?: string } = {}): Mock {
   const bodies: Body[] = [];
   const logs: string[] = [];
   const toasts: string[] = [];
@@ -49,8 +49,8 @@ function mockSpindle(answer: (body: Body, call: number) => Answers | Promise<Ans
   const spindle = {
     decisions: {
       evaluate: async (input: Body & { model?: string; connection_id?: string; userId?: string }) => {
-        // Lumiverse picks its default Decision connection: Cue sends no connection, key or model.
-        assert.equal(input.connection_id, undefined);
+        // Only the chosen connection's id is sent (none: Lumiverse's default); never a key or model.
+        assert.equal(input.connection_id, options.connectionId);
         assert.equal(input.model, undefined);
         if (options.connected === false) throw new Error("No default Decision connection configured");
         const body = { state: input.state, questions: input.questions };
@@ -107,9 +107,16 @@ test("System One off: no request; no default Decision connection: deterministic 
   assert.deepEqual(await buildSpriteStaging(unset.spindle, stagingInput(plan, { config: on })), expected);
   assert.equal(off.bodies.length + unset.bodies.length, 0);
   assert.equal(off.toasts.length, 0);
-  assert.deepEqual(unset.toasts, ["No default Decision connection. In Lumiverse, open Connections → Decision models, add a connection and set it as default. Until then, Cue uses the story reader."]);
+  assert.deepEqual(unset.toasts, ["No default Decision connection. In Lumiverse, open Connections → Decision models, add a connection and set it as default, or choose one in Cue. Until then, Cue uses the story reader."]);
   const noApi = { log: { warn: () => {}, info: () => {} }, toast: { warning: () => {} } } as unknown as SpindleAPI;
   assert.deepEqual(await buildSpriteStaging(noApi, stagingInput(plan, { config: on })), expected, "a Lumiverse without Decision models");
+});
+
+test("a chosen Decision connection is the one asked", async () => {
+  const plan = duoPlan();
+  const mock = mockSpindle((body) => lowAnswers(body), { connectionId: "d7" });
+  await buildSpriteStaging(mock.spindle, stagingInput(plan, { config: { ...on, decisionConnectionId: "d7" } }));
+  assert.equal(mock.bodies.length, 1);
 });
 
 test("question design: safe default first, closed catalogues, typed questions per candidate", async () => {

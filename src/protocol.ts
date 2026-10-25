@@ -23,7 +23,7 @@ export type FrontendRequest =
   | { type: "vn_get_connection_catalog" }
   /** A cut-out model finished downloading in this browser: cuts made without it are re-cut now. */
   | { type: "vn_sprite_cutout_ready" }
-  /** Which of Lumiverse's Decision connections System One uses (answered by `vn_decision_status`). */
+  /** Which of Lumiverse's Decision connections Cue asks, and the list to choose from (answered by `vn_decision_status`). */
   | { type: "vn_get_decision_status" }
   /** Show Lumiverse's Connections drawer, where Decision models are set up. */
   | { type: "vn_open_decision_connections" }
@@ -237,16 +237,21 @@ export type ConnectionCatalogOption = {
 };
 
 /**
- * System One's connection: Lumiverse's default Decision connection.
- * "ready": set up (`name`, `model`); "missing": no default one; "unavailable":
- * there is one but it cannot be used, or this Lumiverse has no Decision
- * models. `error` says what to do in Lumiverse.
+ * The Decision connection Cue asks: the chosen one (`decisionConnectionId`),
+ * else Lumiverse's default one. "ready": set up (`name`, `model`; `chosen`
+ * when it is the chosen one, not the default); "missing": the chosen one is
+ * gone, or there is no default one; "unavailable": there is one but it cannot
+ * be used, or this Lumiverse has no Decision models. `error` says what to do
+ * in Lumiverse. `connections`: every Decision connection, for the picker
+ * (absent when they could not be listed).
  */
 export type DecisionStatus = {
   state: "ready" | "missing" | "unavailable";
   name?: string;
   model?: string;
+  chosen?: boolean;
   error?: string;
+  connections?: ConnectionCatalogOption[];
 };
 
 export type ConnectionCatalogErrors = {

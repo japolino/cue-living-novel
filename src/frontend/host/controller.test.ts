@@ -119,14 +119,15 @@ describe("decisionStatusMessage", () => {
   test("ready names Lumiverse's default Decision connection and its model", () => {
     expect(decisionStatusMessage({ state: "ready", name: "Jev", model: "jev-latest" })).toBe("Uses \"Jev\" (jev-latest), Lumiverse's default Decision connection.");
     expect(decisionStatusMessage({ state: "ready", name: "Jev", model: "" })).toBe("Uses \"Jev\", Lumiverse's default Decision connection.");
+    expect(decisionStatusMessage({ state: "ready", name: "Other", model: "jev-mini", chosen: true })).toBe("Uses \"Other\" (jev-mini).");
   });
 
   test("missing or unavailable says what to set up in Lumiverse and that the story reader answers meanwhile", () => {
     expect(decisionStatusMessage({ state: "missing", error: "No default Decision connection. In Lumiverse, open Connections → Decision models, add a connection and set it as default." }))
-      .toBe("No default Decision connection. In Lumiverse, open Connections → Decision models, add a connection and set it as default. Until then, System One does not run and Cue uses the story reader.");
+      .toBe("No default Decision connection. In Lumiverse, open Connections → Decision models, add a connection and set it as default. Until then, Cue uses the story reader.");
     expect(decisionStatusMessage({ state: "missing" })).toContain("Connections → Decision models");
-    expect(decisionStatusMessage({ state: "unavailable", error: "This Lumiverse has no Decision models. Update Lumiverse to use System One." }))
-      .toBe("This Lumiverse has no Decision models. Update Lumiverse to use System One. Until then, System One does not run and Cue uses the story reader.");
+    expect(decisionStatusMessage({ state: "unavailable", error: "This Lumiverse has no Decision models. Update Lumiverse to use a Decision connection." }))
+      .toBe("This Lumiverse has no Decision models. Update Lumiverse to use a Decision connection. Until then, Cue uses the story reader.");
   });
 });
 
