@@ -313,6 +313,11 @@ export function decideTurnApplication(
   cursor: number,
   active: boolean,
   hasLoadedTurn: boolean,
+  /**
+   * The stage holds text that waits for its plan (`planHold`). The host's own
+   * turn can be the planned one already: it arrived while the view was closed.
+   */
+  stageAwaitsPlan = false,
 ): TurnApplicationDecision {
   if (!active) return { kind: "none" };
   // Only treat a re-broadcast as the same turn when the stage is actually showing
@@ -324,7 +329,7 @@ export function decideTurnApplication(
   if (next.status === "planning") return { kind: "planning" };
   if (next.status === "failed") return { kind: "error", error: next.error ?? "Visual planning failed." };
   if (shown) {
-    return previous?.provisional ? { kind: "upgrade", paragraphIndex: cursor } : { kind: "same-turn", paragraphIndex: cursor };
+    return previous?.provisional || stageAwaitsPlan ? { kind: "upgrade", paragraphIndex: cursor } : { kind: "same-turn", paragraphIndex: cursor };
   }
   return { kind: "load-turn" };
 }
@@ -1166,7 +1171,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     turn = next;
     spriteFaces.wantView(next.sprites);
     stage.setAssetProgress(computeAssetProgress(next));
-    const decision = decideTurnApplication(previous, next, stage.getState().currentParagraphIndex, active, stage.getState().paragraphs.length > 0);
+    const staged = stage.getState();
+    const decision = decideTurnApplication(previous, next, staged.currentParagraphIndex, active, staged.paragraphs.length > 0, staged.planHold !== null);
     vnDebug("turn decision", decision.kind, {
       message: next.messageId,
       paragraphs: next.paragraphs.length,

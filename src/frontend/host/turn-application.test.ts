@@ -1,0 +1,60 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import type { TurnView } from "../../protocol.js";
+import { bootHost, flush, type HostHarness } from "./__fixtures__/host.js";
+
+/** How the running host applies the text before the plan and the planned turn (applyTurn). */
+
+const texts = ["The door creaks open.", "\"Over here,\" Mira says.", "Wind howls."];
+const base = (overrides: Partial<TurnView> = {}): TurnView => ({
+  chatId: "chat", messageId: "m1", swipeId: 0, sourceFingerprint: "fp", revision: 1,
+  speaker: "Mira", userSpeaker: "You", paragraphs: texts, choices: [], assets: [], status: "ready", ...overrides,
+});
+const text = (overrides: Partial<TurnView> = {}) => base({ status: "planning", provisional: true, paragraphSpeakers: ["", "", ""], ...overrides });
+const planned = (overrides: Partial<TurnView> = {}) => base({ paragraphSpeakers: ["Mira", "Mira", ""], ...overrides });
+
+let host: HostHarness | null = null;
+afterEach(() => { host?.destroy(); host = null; });
+
+async function open(): Promise<HostHarness> {
+  host = bootHost();
+  host.state(null);
+  host.toggle();
+  host.state(null);
+  await flush();
+  return host;
+}
+
+describe("applyTurn", () => {
+  test("smoke: the text shows, the plan upgrades it where the reader is", async () => {
+    const h = await open();
+    h.receive({ type: "vn_turn_text", turn: text() });
+    expect(h.text()).toBe(texts[0]!);
+    h.next();
+    expect(h.text()).toBe(texts[1]!);
+    h.receive({ type: "vn_turn", turn: planned() });
+    expect(h.text()).toBe(texts[1]!);
+    expect(h.speaker()).toBe("Mira");
+  });
+
+  test("a plan that lands while the view is closed upgrades the held text when it reopens", async () => {
+    const h = await open();
+    h.receive({ type: "vn_turn_text", turn: text() });
+    h.next();
+    h.next();
+    // The final paragraph waits for the plan.
+    expect(h.text()).toBe(texts[2]!);
+    expect(h.badges()).toContain("Preparing the scene…");
+    h.toggle();
+    // The planned turn was already on its way when the view closed.
+    h.receive({ type: "vn_turn", turn: planned() });
+    h.toggle();
+    h.state(planned());
+    await flush();
+    expect(h.text()).toBe(texts[2]!);
+    expect(h.badges()).not.toContain("Preparing the scene…");
+    expect(h.continueDisabled()).toBe(false);
+    h.next();
+    // Your turn: the composer.
+    expect(h.root.querySelector("[data-vn-input-form]")!.hidden).toBe(false);
+  });
+});

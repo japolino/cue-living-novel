@@ -33,6 +33,11 @@ describe("decideTurnApplication with provisional turns", () => {
     expect(decideTurnApplication(provisional(), turn(), 0, true, false)).toEqual({ kind: "load-turn" });
   });
 
+  test("the stage's own hold decides too: the planned turn may have reached the host while the view was closed", () => {
+    expect(decideTurnApplication(turn(), turn(), 2, true, true, true)).toEqual({ kind: "upgrade", paragraphIndex: 2 });
+    expect(decideTurnApplication(turn(), turn(), 2, true, true, false)).toEqual({ kind: "same-turn", paragraphIndex: 2 });
+  });
+
   test("the same provisional turn again (a reopen, a repeated event) is a cursor sync", () => {
     expect(decideTurnApplication(provisional(), provisional(), 1, true, true)).toEqual({ kind: "same-turn", paragraphIndex: 1 });
   });
