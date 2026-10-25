@@ -503,6 +503,17 @@ describe("cache keys, invalidation, and object URLs", () => {
     expect(revoked.length).toBe(0);
   });
 
+  test("turning Read before the scene is ready on or off does NOT stop playback or clear the cache", async () => {
+    const { transport, controller, revoked } = rig();
+    controller.setCursor(cursor());
+    const { done: playPromise } = await dispatchPlay(controller);
+    transport.requests[0]!.resolve(audioBlob());
+    await playPromise;
+    controller.setSettings(enabledSettings({ speakBeforePlan: true }));
+    expect(controller.getStatus().kind).toBe("playing");
+    expect(revoked.length).toBe(0);
+  });
+
   test("chat change and dispose clear the cache; every URL is revoked exactly once", async () => {
     const { transport, audio, controller, created, revoked } = rig();
     controller.setCursor(cursor());
