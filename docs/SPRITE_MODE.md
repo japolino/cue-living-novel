@@ -698,7 +698,15 @@ has loaded (`onCutoutModelArrived`; also the Studio download, and settings'
 **Download model**) the host sends `vn_sprite_cutout_ready`, and the backend
 queues the one-shot basic → best (and provisional → Studio) re-cuts at once
 instead of on the next view open. A model already in the browser loads within
-the cut (seconds).
+the cut (seconds). Such a Basic cut carries `modelPending` in its meta, so
+the one re-cut is never spent while the model still downloads: a re-cut
+that comes back Basic with it (a view opened or a page reloaded mid-download)
+keeps `upgrade: null` for the arrival, and a cut still out when the arrival
+is told (sent before it, by the bridge's `sentAt`) is re-cut at once; one
+sent after it waits for the next arrival, so it never loops. With "studio",
+a Studio model in storage is not loaded while Best downloads in the
+background (the load would wait for that download inside the cut): that cut
+is Basic with `modelPending` and the arrival re-cuts it with Studio.
 
 Half-precision download: for the default `spriteModelUrl` the browser
 downloads `DEFAULT_SPRITE_MODEL_F16_URL` instead (the same ISNet-anime in

@@ -93,7 +93,7 @@ export function createSpriteCutService(deps: SpriteCutServiceDeps): SpriteCutSer
           chunkCount: chunks.length,
           dataBase64,
           ...(chunkIndex === 0
-            ? { meta: { width: result.width, height: result.height, bbox: result.bbox, quality: result.quality, twoFigures: result.twoFigures === true, ...(result.face !== undefined ? { face: result.face } : {}), ...(result.studio ? { studio: true as const } : {}), ...(result.provisional ? { provisional: true as const } : {}), ...(cropRect ? { crop: cropRect } : {}), durationMs: Math.round(result.durationMs) } }
+            ? { meta: { width: result.width, height: result.height, bbox: result.bbox, quality: result.quality, twoFigures: result.twoFigures === true, ...(result.face !== undefined ? { face: result.face } : {}), ...(result.studio ? { studio: true as const } : {}), ...(result.provisional ? { provisional: true as const } : {}), ...(result.modelPending ? { modelPending: true as const } : {}), ...(cropRect ? { crop: cropRect } : {}), durationMs: Math.round(result.durationMs) } }
             : {}),
         });
       });

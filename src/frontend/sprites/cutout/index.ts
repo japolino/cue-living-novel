@@ -81,6 +81,13 @@ export type CutoutResult = {
    */
   provisional?: true;
   /**
+   * Cut "basic" only because the Best model was still downloading (or, with
+   * "studio", because Best downloads and the Studio model must not wait for
+   * it inside a cut): the backend keeps this sprite's one re-cut for the
+   * model's arrival instead of spending it on another Basic cut.
+   */
+  modelPending?: true;
+  /**
    * Duplicate check: the mask looks like two figures side by side (see
    * `CutoutFigureCheck`). Precise (1% false positives) but finds only about
    * half of the duplicates.
@@ -761,7 +768,9 @@ export async function cutSprite(image: Blob, options: CutoutOptions): Promise<Cu
     const url = options.studioModelUrl;
     const plan = await studioForCut(url);
     later = plan === "later";
-    if (plan === "load") {
+    // Best downloads in the background: loading Studio would wait for that download inside this cut.
+    if (plan === "load" && bestBackground) later = true;
+    else if (plan === "load") {
       try {
         await ensureModel(url, false, STUDIO_SPEC);
         modelUrl = url;
@@ -848,6 +857,7 @@ export async function cutSprite(image: Blob, options: CutoutOptions): Promise<Cu
     quality: result.quality,
     ...(studio && result.quality === "best" && !result.preCut ? { studio: true as const } : {}),
     ...(later && !studio && result.quality === "best" && !result.preCut ? { provisional: true as const } : {}),
+    ...(bestLater && result.quality === "basic" && !result.preCut ? { modelPending: true as const } : {}),
     twoFigures: result.figures?.twoFigures === true,
     splitShare: result.figures?.splitShare ?? 0,
     ...(result.face ? { face: result.face.face ? result.face.face.box : null } : {}),

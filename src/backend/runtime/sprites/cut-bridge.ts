@@ -73,6 +73,7 @@ export function normalizeCutMeta(meta: unknown, size: { width: number; height: n
     quality: record.quality === "best" ? "best" : "basic",
     ...(record.studio === true ? { studio: true as const } : {}),
     ...(record.provisional === true ? { provisional: true as const } : {}),
+    ...(record.modelPending === true && record.quality !== "best" ? { modelPending: true as const } : {}),
     ...(typeof record.twoFigures === "boolean" ? { twoFigures: record.twoFigures } : {}),
     // A broken face box counts as "not detected" (the stage detects again later).
     ...(record.face === null ? { face: null } : normalizeSpriteFaceBox(record.face) ? { face: normalizeSpriteFaceBox(record.face) } : {}),
@@ -96,7 +97,8 @@ type PendingCut = {
 
 export type SpriteCutBridgeDeps = {
   send: (message: Extract<BackendResponse, { type: "vn_sprite_cut" }>, userId: string | undefined) => void;
-  onSettled: (userId: string | undefined, target: SpriteCutTarget, outcome: SpriteCutOutcome, requestId: string) => void;
+  /** `sentAt`: when the cut was last sent to a page (a resend counts). */
+  onSettled: (userId: string | undefined, target: SpriteCutTarget, outcome: SpriteCutOutcome, requestId: string, sentAt: number) => void;
   timeoutMs?: number;
   now?: () => number;
 };
@@ -282,6 +284,6 @@ export class SpriteCutBridge {
     if (entry.timer) clearTimeout(entry.timer);
     this.pending.delete(entry.requestId);
     entry.chunks = [];
-    this.deps.onSettled(entry.userId, entry.target, outcome, entry.requestId);
+    this.deps.onSettled(entry.userId, entry.target, outcome, entry.requestId, entry.sentAt);
   }
 }

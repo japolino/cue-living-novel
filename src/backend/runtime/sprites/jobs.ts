@@ -235,6 +235,8 @@ export class SpriteService {
   /** Relay misses per set (raw image id + until): later expressions do not wait for the same timeout again. */
   private readonly referenceMisses = new Map<string, { imageId: string; until: number }>();
   private readonly cutTasks = new Set<Promise<void>>();
+  /** When a page last told that a cut-out model arrived, per user (see onCutSettled). */
+  private readonly cutoutArrivedAt = new Map<string, number>();
   /** When each fresh idle render (by raw image id) started waiting for its duplicate check. */
   private readonly idleCheckSince = new Map<string, number>();
   readonly insetBridge: NovelAiInsetBridge;
@@ -250,8 +252,8 @@ export class SpriteService {
     });
     this.bridge = new SpriteCutBridge({
       send: (message, userId) => this.spindle.sendToFrontend(message, userId),
-      onSettled: (userId, target, outcome) => {
-        const task = this.onCutSettled(userId, target, outcome).catch((error) => {
+      onSettled: (userId, target, outcome, _requestId, sentAt) => {
+        const task = this.onCutSettled(userId, target, outcome, sentAt).catch((error) => {
           this.spindle.log.warn(`Sprite cut-out handling failed: ${errorText(error)}`);
         });
         this.cutTasks.add(task);
@@ -659,6 +661,7 @@ export class SpriteService {
    * the next view open.
    */
   async onCutoutModelArrived(userId: string | undefined): Promise<number> {
+    this.cutoutArrivedAt.set(userKey(userId), Date.now());
     const queued = await this.queueCutUpgrades(userId);
     if (queued > 0) await this.pump(userId);
     return queued;
@@ -1599,7 +1602,7 @@ export class SpriteService {
     this.insetBridge.accept(userId, message);
   }
 
-  private async onCutSettled(userId: string | undefined, target: SpriteCutTarget, outcome: SpriteCutOutcome): Promise<void> {
+  private async onCutSettled(userId: string | undefined, target: SpriteCutTarget, outcome: SpriteCutOutcome, sentAt?: number): Promise<void> {
     if (outcome.ok && target.crop && !sameRect(outcome.meta.crop, target.crop)) {
       // A page from before the inset cut the whole canvas (reference and render): never keep that.
       outcome = { ok: false, error: "This page did not crop the NovelAI V5 inset render. Reload the page, then use Re-cut." };
@@ -1612,6 +1615,14 @@ export class SpriteService {
     };
     const first = current();
     if (!first) return;
+    // Basic only because the cut-out model was still downloading: this
+    // sprite's re-cut waits for the model's arrival. A cut sent before the
+    // arrival was told (it was still out) is re-cut at once; one sent after
+    // it waits for the next arrival (a reloaded page downloads again), so
+    // this never loops.
+    const modelPending = outcome.ok && outcome.meta.modelPending === true;
+    const arrivedAt = this.cutoutArrivedAt.get(userKey(userId));
+    const recutNow = modelPending && sentAt !== undefined && arrivedAt !== undefined && arrivedAt >= sentAt;
     if (first.status === "ready") {
       // A silent upgrade re-cut, tried only once: it replaces a basic cut with
       // a model's, or a provisional Best cut with the Studio model's; anything
@@ -1621,7 +1632,7 @@ export class SpriteService {
         await this.library.update(userId, (_library, now) => {
           const image = current();
           if (!image) return;
-          image.upgrade = "done";
+          image.upgrade = modelPending ? (recutNow ? "pending" : null) : "done";
           image.updatedAt = now;
         });
         void this.pump(userId);
@@ -1700,7 +1711,7 @@ export class SpriteService {
       else delete image.face;
       // A basic cut while "best" is selected gets one silent upgrade later; a
       // provisional Best one (also an upgrade of a basic cut) one Studio try.
-      image.upgrade = image.upgrade === "pending" && !outcome.meta.provisional ? "done" : null;
+      image.upgrade = recutNow ? "pending" : image.upgrade === "pending" && !outcome.meta.provisional ? "done" : null;
       image.error = null;
       image.cutAttempts = 0;
       image.updatedAt = now;

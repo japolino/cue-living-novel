@@ -194,13 +194,20 @@ describe("cut-out runtime", () => {
     const first = await cutSprite(sprite(), { quality: "best", modelUrl: "https://models.test/isnet.onnx", faceModelUrl: "https://models.test/face.onnx" });
     expect(first.quality).toBe("basic");
     expect(first.face).toBeUndefined(); // the face finder waits for the re-cut
+    // Flagged, so the backend keeps its re-cut for the arrival.
+    expect(first.modelPending).toBe(true);
     // More cuts while it downloads: Basic, one download.
-    expect((await cutSprite(sprite(), { quality: "best", modelUrl: "https://models.test/isnet.onnx" })).quality).toBe("basic");
+    const meanwhile = await cutSprite(sprite(), { quality: "best", modelUrl: "https://models.test/isnet.onnx" });
+    expect(meanwhile.quality).toBe("basic");
+    expect(meanwhile.modelPending).toBe(true);
     await cutoutModelSettled();
     off();
     expect(arrivals).toBe(1);
     const result = await cutSprite(sprite(), { quality: "best", modelUrl: "https://models.test/isnet.onnx" });
     expect(result.quality).toBe("best");
+    expect(result.modelPending).toBeUndefined();
+    // A Basic cut asked for as Basic is not waiting for anything.
+    expect((await cutSprite(sprite(), { quality: "basic", modelUrl: "https://models.test/isnet.onnx" })).modelPending).toBeUndefined();
     expect(fetches).toEqual(["https://models.test/isnet.onnx"]);
     expect(states[0]).toEqual({ state: "downloading", receivedBytes: 0, totalBytes: null });
     expect(states.some((s) => s.state === "downloading" && s.receivedBytes === 4096 && s.totalBytes === 4096)).toBe(true);

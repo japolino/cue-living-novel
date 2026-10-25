@@ -419,6 +419,56 @@ describe("sprite jobs: cut bridge", () => {
     expect(f.cutRequests().length).toBe(count);
   });
 
+  test("a re-cut that is Basic again because the model is still downloading keeps its re-cut for the arrival", async () => {
+    const f = setup({ config: { spriteCutout: "best" } });
+    await f.service.prepareCast("u1", [MIRA], spriteConfig());
+    await f.service.settle("u1");
+    const setKey = spriteSetKeyFor(MIRA, f.styleKey);
+    await answerPending(f, { ...CUT_META, quality: "basic", modelPending: true });
+    // The view reopens (or the page reloads) while Best still downloads: the re-cuts are Basic again.
+    await f.service.onViewOpened("u1");
+    await f.service.settle("u1");
+    await answerPending(f, { ...CUT_META, quality: "basic", modelPending: true });
+    const images = () => f.library().then((library) => Object.values(library.sets[setKey]!.images));
+    expect((await images()).every((image) => image.quality === "basic" && image.upgrade === null)).toBe(true);
+    // The model arrives: every one of them is re-cut with it.
+    expect(await f.service.onCutoutModelArrived("u1")).toBe((await images()).length);
+    await f.service.settle("u1");
+    await answerPending(f);
+    expect((await images()).every((image) => image.quality === "best" && image.upgrade === "done")).toBe(true);
+  });
+
+  test("a cut still out when the model arrives comes back Basic and is re-cut at once", async () => {
+    const f = setup({ config: { spriteCutout: "best" } });
+    await f.service.prepareCast("u1", [MIRA], spriteConfig());
+    await f.service.settle("u1");
+    const setKey = spriteSetKeyFor(MIRA, f.styleKey);
+    const first = f.cutRequests()[0]!;
+    // The model arrives while this cut is still being made (Basic: it started without the model).
+    expect(await f.service.onCutoutModelArrived("u1")).toBe(0);
+    const before = f.cutRequests().length;
+    f.answered.add(first.requestId);
+    f.answerCut(first, { ...CUT_META, quality: "basic", modelPending: true });
+    await f.service.settle("u1");
+    expect((await f.library()).sets[setKey]!.images.idle!).toMatchObject({ status: "ready", quality: "basic", upgrade: "pending" });
+    // The re-cut goes out after the cuts still in flight (lower priority) and uses the model.
+    await answerPending(f);
+    const recut = f.cutRequests().slice(before).filter((request) => request.imageId === first.imageId);
+    expect(recut).toHaveLength(1);
+    expect((await f.library()).sets[setKey]!.images.idle!).toMatchObject({ quality: "best", upgrade: "done" });
+    // A re-cut sent after the arrival that is Basic again (a reloaded page downloads again) waits for the next arrival: no loop.
+    const g = setup({ config: { spriteCutout: "best" } });
+    await g.service.prepareCast("u1", [MIRA], spriteConfig());
+    await g.service.settle("u1");
+    await g.service.onCutoutModelArrived("u1");
+    const sent = g.cutRequests().length;
+    await answerPending(g, { ...CUT_META, quality: "basic", modelPending: true });
+    await g.service.settle("u1");
+    const gKey = spriteSetKeyFor(MIRA, g.styleKey);
+    expect(Object.values((await g.library()).sets[gKey]!.images).every((image) => image.upgrade === null)).toBe(true);
+    expect(g.cutRequests().length).toBeGreaterThanOrEqual(sent);
+  });
+
   test("a basic cut made while 'best' is selected is re-cut once on the next view open, silently", async () => {
     const f = setup({ config: { spriteCutout: "best" } });
     await f.service.prepareCast("u1", [MIRA], spriteConfig());
