@@ -112,10 +112,10 @@ async function figureCheckUrl(url: string) {
   return { ...kernel.figureCheck(px.data, px.width, px.height), size: [px.width, px.height] };
 }
 
-/** Cut a raw sprite with the real pipeline and return its duplicate check. */
+/** Cut a raw sprite with the real pipeline and return its duplicate and scenery checks. */
 async function cutFigures(url: string, options: { quality: "best" | "basic"; modelUrl: string }) {
   const r = await cutSprite(await fetchBlob(url), options);
-  return { twoFigures: r.twoFigures, splitShare: r.splitShare, quality: r.quality, ms: r.durationMs };
+  return { twoFigures: r.twoFigures, splitShare: r.splitShare, scenery: r.scenery ?? null, sceneryShare: r.sceneryShare ?? null, quality: r.quality, ms: r.durationMs };
 }
 
 /**

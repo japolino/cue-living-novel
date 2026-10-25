@@ -43,6 +43,12 @@ import { mkdir, writeFile } from "node:fs/promises";
  *     flagged and at most 1 of reply-test/raw_lr/*.png is; with
  *     SPRITE_CUTOUT_FULL=1 or SPRITE_CUTOUT_DUP_FULL=1 every experiment raw
  *     image is also cut ("basic") and compared with the labels;
+ *   - scenery check: every Best (and Studio) cut of the bake-off and
+ *     reply-test sprites is checked and none is flagged; on the hard
+ *     light-themed renders (CUE_SPRITE_SCENERY, default the background-removal
+ *     benchmark's gen/white; skipped when missing) at least 8 of the 10 with
+ *     drawn scenery are flagged and none of the 12 clean ones (3 of each on
+ *     WASM unless SPRITE_CUTOUT_FULL=1);
  *   - model cache: a second load reads the cache (no download), clear removes it;
  *   - Studio quality (CUE_SPRITE_STUDIO_MODEL, an exported BiRefNet .onnx;
  *     skipped when unset): where the browser cannot run it (headless Chromium
@@ -77,6 +83,10 @@ const OUT = ".cache/sprite-cutout";
 const HYP = (process.env.CUE_SPRITE_HYP ?? "C:/Users/eme4/cue-living-novel/.cache/reply-test/hyp").replace(/\\/g, "/");
 const LR2 = (process.env.CUE_SPRITE_LR2 ?? `${HYP.replace(/\/[^/]+\/?$/, "")}/raw_lr2`).replace(/\\/g, "/");
 const DUP_FULL = FULL || process.env.SPRITE_CUTOUT_DUP_FULL === "1";
+const SCENERY = (process.env.CUE_SPRITE_SCENERY ?? "C:/Users/eme4/cue-living-novel/.cache/improve/bgremoval/gen/white").replace(/\\/g, "/");
+/** Hard light-themed renders (docs/SPRITE_MODE.md, scenery check): drawn scenery behind the character, and clean ones. */
+const SCENERY_KEPT = ["c01_white_sundress", "c08_fairy_wings", "c14_sheep_girl", "c15_shrine_maiden", "c17_dark_elf", "c18_black_maid", "c19_school_uniform", "c20_vampire_goth", "c22_angel_glow", "c23_snow_coat_boy"];
+const SCENERY_CLEAN = ["c02_bride_veil", "c03_angel_wings", "c04_kitsune_white", "c05_ghost_girl", "c06_slime_girl", "c09_harpy_white", "c10_nurse_white", "c11_boy_white_shirt", "c12_lace_sleeves", "c13_windy_hair", "c16_magical_girl", "c21_cat_hoodie"];
 type HypLabel = { src: string; label: string; dup: boolean; rf: number; flag: boolean };
 const hypLabels: HypLabel[] = existsSync(`${HYP}/q4_labels_rule.csv`)
   ? readFileSync(`${HYP}/q4_labels_rule.csv`, "utf8").trim().split(/\r?\n/).slice(1).map((line) => {
@@ -120,13 +130,14 @@ const server = Bun.serve({
     if (path.startsWith("/std/")) return send(`${STANDARD}/${path.slice(5)}`);
     if (path.startsWith("/hyp/")) return send(`${HYP}/${path.slice(5)}`);
     if (path.startsWith("/lr2/")) return send(`${LR2}/${path.slice(5)}`);
+    if (path.startsWith("/scn/")) return send(`${SCENERY}/${path.slice(5)}`);
     return new Response('<html><head><meta charset="utf-8"></head><body><script type="module" src="/fixture.js"></script></body></html>', { headers: { "Content-Type": "text/html" } });
   },
 });
 const origin = `http://127.0.0.1:${server.port}`;
 await mkdir(OUT, { recursive: true });
 
-type Row = { name: string; quality: string; studio?: boolean; ms: number; modelMs: number; cutMs: number; iou: number | null; mad: number | null; bbox: number[]; jpeg?: string };
+type Row = { name: string; quality: string; studio?: boolean; scenery: boolean | null; ms: number; modelMs: number; cutMs: number; iou: number | null; mad: number | null; bbox: number[]; jpeg?: string };
 
 async function cutAll(page: Page, list: string[], quality: "studio" | "best" | "basic", modelUrl: string, keepJpeg: boolean, studioModelUrl = ""): Promise<Row[]> {
   const rows: Row[] = [];
@@ -136,7 +147,7 @@ async function cutAll(page: Page, list: string[], quality: "studio" | "best" | "
       const blob = await c.fetchBlob(`/raw/${name}.png`);
       const r = await c.cutSprite(blob, { quality, modelUrl, ...(studioModelUrl ? { studioModelUrl } : {}) });
       const cmp = hasRef ? await c.compareAlpha(r.png, `/ref/${name}.png`) : { iou: null, mad: null };
-      return { name, quality: r.quality, studio: r.studio === true, ms: r.durationMs, modelMs: r.timings?.modelMs ?? 0, cutMs: r.timings?.cutMs ?? 0, iou: cmp.iou, mad: cmp.mad, bbox: r.bbox, ...(keepJpeg ? { jpeg: await c.composite(r.png) } : {}) };
+      return { name, quality: r.quality, studio: r.studio === true, scenery: r.scenery ?? null, ms: r.durationMs, modelMs: r.timings?.modelMs ?? 0, cutMs: r.timings?.cutMs ?? 0, iou: cmp.iou, mad: cmp.mad, bbox: r.bbox, ...(keepJpeg ? { jpeg: await c.composite(r.png) } : {}) };
     }, { name, quality, modelUrl, studioModelUrl, keepJpeg, hasRef: withRef.includes(name) }));
   }
   return rows;
@@ -247,6 +258,7 @@ try {
       await saveJpegs(rows, `${int8 ? "int8" : "fp32"}_${backend}`);
       const stats = summarize(`${model} on ${backend} (load ${Math.round(load.ms)} ms, session ${Math.round(load.info.loadMs)} ms; states ${[...new Set(load.states)].join(" > ")})`, rows);
       assert.ok(rows.every((r) => r.quality === "best"), `${model}/${backend}: model used for every sprite`);
+      assert.deepEqual(rows.filter((r) => r.scenery !== false).map((r) => r.name), [], `${model}/${backend}: the scenery check ran and flagged no bake-off sprite`);
       if (int8) {
         assert.ok(stats.meanIou >= 0.99 && stats.minIou >= 0.98, `${model}/${backend}: IoU vs reference mean >= 0.99, min >= 0.98 (${fmt(stats.meanIou)}, ${fmt(stats.minIou)})`);
       } else {
@@ -347,6 +359,8 @@ try {
       for (const name of list) {
         const r = await page.evaluate(({ url, quality, modelUrl }) => (window as any).cutout.cutFigures(url, { quality, modelUrl }), { url: `/std/${name}.png`, quality, modelUrl });
         if (r.twoFigures) flagged.push(`${name} ${fmt(r.splitShare, 3)}`);
+        if (quality === "best") assert.equal(r.scenery, false, `raw_lr/${name}: no scenery flagged (share ${r.sceneryShare})`);
+        else assert.equal(r.scenery, null, `raw_lr/${name}: no scenery check without a model`);
         real[`raw_lr/${name}/${quality}`] = r.splitShare;
       }
       console.log(`  raw_lr (${quality}): ${flagged.length}/${list.length} flagged${flagged.length ? `: ${flagged.join(", ")}` : ""}`);
@@ -366,6 +380,43 @@ try {
       console.log(`  basic cut of every raw image: ${agreeFull}/${rows.length} agree with the Python flags; vs labels P ${fmt(full.precision, 3)} R ${fmt(full.recall, 3)} FPR ${fmt(full.fpr, 3)} (TP ${full.tp} FP ${full.fp} FN ${full.fn})`);
       summary.duplicateCheckBasicPipeline = { agree: agreeFull, total: rows.length, ...full };
     }
+  }
+
+  // ---- Scenery check -------------------------------------------------------------
+  // Hard light-themed renders: walls, discs, rings or floor bands drawn behind
+  // the character that the cut keeps. The Best cut must flag at least 8 of the
+  // 10 with scenery (the dark ring of c17 sits inside the model's figure and
+  // is missed by design) and none of the 12 clean ones.
+  const sceneryModel = models.at(-1);
+  if (!existsSync(SCENERY) || !sceneryModel) {
+    console.log(`\nSKIP scenery check: ${sceneryModel ? `no renders at ${SCENERY} (set CUE_SPRITE_SCENERY)` : "no model"}.`);
+  } else {
+    const url = `${origin}/models/${sceneryModel}`;
+    await page.evaluate(async ({ url, backend, base }) => {
+      const c = (window as any).cutout;
+      c.resetCutoutRuntime();
+      c.configureCutoutRuntime({ ortBaseUrl: base, backend });
+      await c.prepareCutoutModel(url);
+    }, { url, backend: gpu ? "webgpu" : "wasm", base: `${origin}/ort/` });
+    // WASM: 3 of each unless SPRITE_CUTOUT_FULL=1.
+    const pick = (list: string[]) => (gpu || FULL ? list : list.slice(0, 3)).filter((name) => existsSync(`${SCENERY}/${name}.png`));
+    const check = async (list: string[]) => {
+      const out: Array<{ name: string; scenery: boolean | null; share: number | null }> = [];
+      for (const name of list) {
+        const r = await page.evaluate(({ url, modelUrl }) => (window as any).cutout.cutFigures(url, { quality: "best", modelUrl }), { url: `/scn/${name}.png`, modelUrl: url });
+        assert.equal(r.quality, "best", `${name}: cut with the model`);
+        out.push({ name, scenery: r.scenery, share: r.sceneryShare });
+      }
+      return out;
+    };
+    const kept = await check(pick(SCENERY_KEPT));
+    const clean = await check(pick(SCENERY_CLEAN));
+    console.log(`\nscenery check (${sceneryModel}, ${gpu ? "webgpu" : "wasm"}): ${kept.filter((r) => r.scenery).length}/${kept.length} renders with scenery flagged, ${clean.filter((r) => r.scenery).length}/${clean.length} clean ones`);
+    for (const r of [...kept, ...clean]) console.log(`  ${r.name.padEnd(22)} share ${r.share === null ? "-" : fmt(r.share)} ${r.scenery ? "scenery" : ""}`);
+    assert.deepEqual(clean.filter((r) => r.scenery !== false).map((r) => r.name), [], "no clean render is flagged");
+    const minimum = kept.length === SCENERY_KEPT.length ? 8 : kept.filter((r) => r.name !== "c17_dark_elf").length;
+    assert.ok(kept.filter((r) => r.scenery).length >= minimum, `at least ${minimum} of ${kept.length} renders with scenery are flagged`);
+    summary.sceneryCheck = { model: sceneryModel, backend: gpu ? "webgpu" : "wasm", kept, clean };
   }
 
   // ---- Model cache --------------------------------------------------------------
@@ -471,6 +522,7 @@ try {
         await saveJpegs(rows, "studio");
         const stats = summarize(`Studio (BiRefNet, load ${Math.round(load.ms)} ms, session ${Math.round(load.info.loadMs)} ms; states ${[...new Set(load.states)].join(" > ")}) vs the ISNet reference`, rows);
         assert.ok(rows.every((r) => r.quality === "best" && r.studio), "the Studio model cut every sprite");
+        assert.deepEqual(rows.filter((r) => r.scenery !== false).map((r) => r.name), [], "the scenery check ran on the Studio mask and flagged no bake-off sprite");
         assert.ok(stats.meanIou >= 0.95 && stats.minIou >= 0.9, `Studio IoU vs reference mean >= 0.95, min >= 0.9 (${fmt(stats.meanIou)}, ${fmt(stats.minIou)})`);
         summary.studio = { ...stats, loadMs: load.ms, sessionMs: load.info.loadMs, sprites: rows.length, channel: STUDIO_CHANNEL || "chromium", firstCutMs: early.ms, notStored: load.state.notStored === true };
       }

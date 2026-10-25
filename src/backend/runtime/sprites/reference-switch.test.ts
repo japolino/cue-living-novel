@@ -3,6 +3,7 @@ import type { VisualNovelConfig } from "../../../config.js";
 import { AssetJobSchema, type AssetJob } from "../../../shared/contracts.js";
 import { SPRITE_HOT_SET, spriteSetKeyFor } from "../../../shared/sprites.js";
 import anima from "../__fixtures__/anima29b-connection.json";
+import { lumiverseCustomValue } from "../__fixtures__/lumiverse-custom.js";
 import { CUT_META, MIRA, fakePng, mockSpindle, sampleStaging, spriteConfig, toBase64, type MockSpindleOptions } from "./__fixtures__/sprite-fixtures.js";
 import { SpriteService } from "./jobs.js";
 import type { KeyMomentScene } from "./moment-prompts.js";
@@ -136,6 +137,118 @@ describe("sprite jobs: ComfyUI reference switch", () => {
         expect(parameters.denoise).toBe(0.5);
         expect(parameters.comfyui_custom_fields).toBeUndefined();
       }
+    }
+  });
+});
+
+/** Anima 2.9b plus a background-removal branch behind a mapped Boolean (900:value). */
+function withCutout(): typeof anima.metadata {
+  const metadata = JSON.parse(JSON.stringify(anima.metadata)) as typeof anima.metadata;
+  const comfy = metadata.comfyui as unknown as { workflow_api_json: Record<string, unknown>; field_mappings: Array<Record<string, unknown>> };
+  comfy.workflow_api_json["900"] = { class_type: "PrimitiveBoolean", inputs: { value: false }, _meta: { title: "Cue sprite cut-out" } };
+  comfy.field_mappings.push({ nodeId: "900", fieldName: "value", mappedAs: "custom" });
+  return metadata;
+}
+
+describe("sprite jobs: ComfyUI cut-out switch", () => {
+  test("sprites turn it on (next to the reference switch); plates turn it off", async () => {
+    const f = setup({ metadata: withCutout(), config: { referenceAnchoring: true } });
+    await f.service.ensureForStaging("u1", sampleStaging(f.styleKey), f.config);
+    await f.service.settle("u1");
+    await f.answerAll();
+    await f.service.settle("u1");
+    const calls = f.callsBy();
+    const plates = calls.filter((entry) => !entry.name.includes("/"));
+    const sprites = calls.filter((entry) => entry.name.includes("/"));
+    expect(plates.length).toBeGreaterThan(0);
+    expect(sprites.length).toBeGreaterThan(1);
+    for (const entry of plates) expect(entry.parameters.comfyui_custom_fields).toEqual({ "804:value": false, "900:value": false });
+    const idle = sprites.find((entry) => entry.name.endsWith("/idle"))!;
+    expect(idle.parameters.comfyui_custom_fields).toEqual({ "804:value": false, "900:value": true });
+    for (const entry of sprites.filter((candidate) => candidate !== idle)) {
+      expect(entry.parameters.comfyui_custom_fields).toEqual({ "804:value": true, "900:value": true });
+    }
+    expect(f.log.some((line) => line.endsWith("/idle: cut-out switch 900:value -> on"))).toBe(true);
+    expect(f.log.some((line) => line.startsWith("plate ") && line.endsWith("cut-out switch 900:value -> off"))).toBe(true);
+  });
+
+  test("key moments turn it off", async () => {
+    const f = setup({ metadata: withCutout() });
+    await f.service.runKeyMoments("u1", { jobs: [job("job-a")], scenes: new Map([["job-a", kiss]]), chatId: "chat-1", signal: new AbortController().signal, onUpdate: () => {} });
+    expect(f.calls).toHaveLength(1);
+    expect(f.calls[0]!.parameters.comfyui_custom_fields).toEqual({ "804:value": false, "900:value": false });
+    expect(f.log).toContain("key moment: cut-out switch 900:value -> off");
+  });
+
+  test("a true the user set leaves plates and key moments opaque", async () => {
+    const f = setup({ metadata: withCutout(), config: { imageParameters: { comfyui_custom_fields: { "900:value": true } } } });
+    await f.service.ensureForStaging("u1", sampleStaging(f.styleKey), f.config);
+    await f.service.settle("u1");
+    await f.answerAll();
+    await f.service.settle("u1");
+    const calls = f.callsBy();
+    const plates = calls.filter((entry) => !entry.name.includes("/"));
+    expect(plates.length).toBeGreaterThan(0);
+    for (const entry of plates) expect((entry.parameters.comfyui_custom_fields as Record<string, unknown>)["900:value"]).toBe(false);
+    for (const entry of calls.filter((candidate) => candidate.name.includes("/"))) expect((entry.parameters.comfyui_custom_fields as Record<string, unknown>)["900:value"]).toBe(true);
+  });
+
+  test("SwarmUI with the connection's ComfyUI workflow: sprites on, plates off", async () => {
+    const f = setup({ provider: "swarmui", metadata: withCutout() });
+    await f.service.ensureForStaging("u1", sampleStaging(f.styleKey), f.config);
+    await f.service.settle("u1");
+    await f.answerAll();
+    await f.service.settle("u1");
+    const calls = f.callsBy();
+    expect(calls.length).toBeGreaterThan(1);
+    for (const entry of calls) {
+      expect((entry.parameters.comfyui_custom_fields as Record<string, unknown>)["900:value"]).toBe(entry.name.includes("/"));
+    }
+  });
+
+  test("the user's own value wins; without the switch nothing is added", async () => {
+    const owned = setup({ metadata: withCutout(), config: { imageParameters: { comfyui_custom_fields: { "900:value": false } } } });
+    await owned.service.prepareCast("u1", [MIRA], owned.config);
+    await owned.service.settle("u1");
+    expect(owned.calls.length).toBeGreaterThan(0);
+    for (const call of owned.calls) expect((call.parameters.comfyui_custom_fields as Record<string, unknown>)["900:value"]).toBe(false);
+    const plain = setup({ metadata: anima.metadata });
+    await plain.service.prepareCast("u1", [MIRA], plain.config);
+    await plain.service.settle("u1");
+    for (const call of plain.calls) expect(Object.keys(call.parameters.comfyui_custom_fields as Record<string, unknown>)).toEqual(["804:value"]);
+  });
+});
+
+describe("sprite jobs: switches over the Image Gen panel's saved values", () => {
+  const panel = (custom: Record<string, unknown>) => ({ comfyui_field_values: { custom } });
+
+  test("panel saved Enabled: plates and key moments stay opaque; sprites are cut", async () => {
+    const defaults = panel({ "900:value": true });
+    const f = setup({ metadata: withCutout(), defaultParameters: defaults, config: { referenceAnchoring: true } });
+    await f.service.ensureForStaging("u1", sampleStaging(f.styleKey), f.config);
+    await f.service.settle("u1");
+    await f.answerAll();
+    await f.service.settle("u1");
+    const calls = f.callsBy();
+    const plates = calls.filter((entry) => !entry.name.includes("/"));
+    const sprites = calls.filter((entry) => entry.name.includes("/"));
+    expect(plates.length).toBeGreaterThan(0);
+    for (const entry of plates) expect(lumiverseCustomValue(defaults, entry.parameters, "900:value")).toBe(false);
+    for (const entry of sprites) expect(lumiverseCustomValue(defaults, entry.parameters, "900:value")).toBe(true);
+    const moment = setup({ metadata: withCutout(), defaultParameters: defaults });
+    await moment.service.runKeyMoments("u1", { jobs: [job("job-a")], scenes: new Map([["job-a", kiss]]), chatId: "chat-1", signal: new AbortController().signal, onUpdate: () => {} });
+    expect(lumiverseCustomValue(defaults, moment.calls[0]!.parameters, "900:value")).toBe(false);
+    expect(moment.log).toContain("key moment: cut-out switch 900:value -> off (Image Gen panel had true)");
+  });
+
+  test("panel saved Disabled: sprites are still cut, and anchored ones still use the reference", async () => {
+    const defaults = panel({ "900:value": false, "804:value": false });
+    const { idle, expressions } = await anchoredSpriteCalls({ metadata: withCutout(), defaultParameters: defaults });
+    expect(lumiverseCustomValue(defaults, idle, "900:value")).toBe(true);
+    expect(lumiverseCustomValue(defaults, idle, "804:value")).toBe(false);
+    for (const parameters of expressions) {
+      expect(lumiverseCustomValue(defaults, parameters, "900:value")).toBe(true);
+      expect(lumiverseCustomValue(defaults, parameters, "804:value")).toBe(true);
     }
   });
 });

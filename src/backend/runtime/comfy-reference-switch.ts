@@ -16,12 +16,73 @@ import type { VisualNovelConfig } from "../../config.js";
  * (src/services/image-gen.service.ts applyActiveComfyUIWorkflowConfig):
  * the workflow id of the selection, else the active library entry, else
  * `metadata.comfyui`.
+ *
+ * The same lookup finds the sprite cut-out switch: a Boolean custom field
+ * titled like "cut-out", "remove background" or "transparent" (and not
+ * "disable…", "skip…" or the reference) that makes the workflow remove the
+ * background itself (a ComfyUI background-removal branch before SaveImage). Cue turns it on for sprite renders and off for
+ * everything else (plates, key moments, scene pictures); the browser keeps
+ * the alpha of a render that arrives transparent.
+ *
+ * Lumiverse applies the connection's imported ComfyUI workflow for SwarmUI
+ * connections too, so both switches are driven there as well.
+ *
+ * Lumiverse merges each request over the connection's `default_parameters`,
+ * where its Image Gen panel saves the workflow's Custom controls
+ * (`comfyui_field_values.custom`, which replaces `comfyui_custom_fields` as a
+ * whole, and `node_fields`, which beats both). The lookup returns those
+ * defaults, and Cue writes its switch values where they win over them.
  */
 
 type Mapping = { nodeId?: unknown; fieldName?: unknown; mappedAs?: unknown };
 type ApiNode = { class_type?: unknown; inputs?: Record<string, unknown>; _meta?: { title?: unknown } };
 
 const SWITCH_TITLE = /ip[\s_-]?adapter|reference|\bref\b/i;
+/** Node classes that remove the background themselves: their own options are never the cut-out switch. */
+const REMOVAL_CLASS = /rembg|rmbg|birefnet|matting|segment|background[\s_-]?remov|remov\w*[\s_-]?(?:the[\s_-]?)?(?:background|bg)|bg[\s_-]?remov|cut[\s_-]?out|transparen/i;
+
+const NEGATIONS = new Set(["no", "not", "non", "dont", "don't", "disable", "disabled", "disables", "skip", "skips", "skipped", "without", "bypass", "bypassed", "never"]);
+const CUTOUT_WORDS = new Set(["cutout", "cutouts", "transparent", "transparency", "rembg"]);
+const REMOVE_WORDS = new Set(["remove", "removes", "removed", "removal", "remover", "removing"]);
+const BACKGROUND_WORDS = new Set(["background", "backgrounds", "bg"]);
+/** A word after "remove background" that makes it about something else ("Remove background noise"). */
+const NOT_THE_IMAGE = new Set(["noise", "music", "sound", "audio", "hum", "color", "colour", "blur", "model", "strength", "threshold", "size", "resolution", "mask"]);
+
+/** Lower-case words of a node title ("RemoveBackground" -> remove, background; "cut-out" -> cut, out). */
+function titleWords(title: string): string[] {
+  return title
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z])([A-Z][a-z])/g, "$1 $2")
+    .replace(/[\u2019`]/g, "'")
+    .toLowerCase()
+    .split(/[^a-z0-9']+/)
+    .filter(Boolean);
+}
+
+/**
+ * Whether a node title asks for the cut-out: it names a cut-out
+ * ("cut-out", "cutout"), transparency, or removing the image's background,
+ * and holds no negation ("Disable…", "Skip…", "No…", "without"), which
+ * would make Cue drive the switch inverted.
+ */
+function namesCutout(title: string): boolean {
+  const words = titleWords(title);
+  if (words.some((word) => NEGATIONS.has(word))) return false;
+  const imageBackground = (at: number): boolean => BACKGROUND_WORDS.has(words[at] ?? "") && !NOT_THE_IMAGE.has(words[at + 1] ?? "");
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i]!;
+    if (CUTOUT_WORDS.has(word)) return true;
+    if (word === "cut" && (words[i + 1] === "out" || words[i + 1] === "outs")) return true;
+    if (REMOVE_WORDS.has(word) && imageBackground(words[i + 1] === "the" ? i + 2 : i + 1)) return true;
+    if (BACKGROUND_WORDS.has(word) && REMOVE_WORDS.has(words[i + 1] ?? "") && !NOT_THE_IMAGE.has(words[i + 2] ?? "")) return true;
+  }
+  return false;
+}
+
+/** Whether Lumiverse patches this provider's requests into the connection's ComfyUI workflow. */
+export function drivesComfyWorkflow(provider: string | null): boolean {
+  return provider === "comfyui" || provider === "swarmui";
+}
 
 /** How long a looked-up switch (or a failed lookup) is reused. */
 export const REFERENCE_SWITCH_TTL_MS = 30_000;
@@ -78,11 +139,10 @@ function nodeInfo(config: Record<string, unknown>, nodeId: string, fieldName: st
 }
 
 /**
- * The `"<nodeId>:<fieldName>"` key of the reference on/off field: the first
- * `custom` mapping on a Boolean node (PrimitiveBoolean, or a boolean input
- * value) whose title or class type names the IP-Adapter or the reference.
+ * The `"<nodeId>:<fieldName>"` key of the first `custom` mapping on a Boolean
+ * node (PrimitiveBoolean, or a boolean input value) that passes `matches`.
  */
-export function findReferenceSwitch(config: Record<string, unknown> | null): string | null {
+function findBooleanSwitch(config: Record<string, unknown> | null, matches: (node: { classType: string; title: string }) => boolean): string | null {
   if (!config || !Array.isArray(config.field_mappings)) return null;
   for (const raw of config.field_mappings as Mapping[]) {
     if (!raw || raw.mappedAs !== "custom") continue;
@@ -93,13 +153,47 @@ export function findReferenceSwitch(config: Record<string, unknown> | null): str
     if (!node) continue;
     const isBoolean = node.classType === "PrimitiveBoolean" || typeof node.value === "boolean";
     if (!isBoolean) continue;
-    if (!SWITCH_TITLE.test(node.title) && !SWITCH_TITLE.test(node.classType)) continue;
+    if (!matches(node)) continue;
     return `${nodeId}:${raw.fieldName}`;
   }
   return null;
 }
 
-type CacheEntry = { until: number; key: Promise<string | null> };
+/**
+ * The `"<nodeId>:<fieldName>"` key of the reference on/off field: the first
+ * `custom` mapping on a Boolean node (PrimitiveBoolean, or a boolean input
+ * value) whose title or class type names the IP-Adapter or the reference.
+ */
+export function findReferenceSwitch(config: Record<string, unknown> | null): string | null {
+  return findBooleanSwitch(config, (node) => SWITCH_TITLE.test(node.title) || SWITCH_TITLE.test(node.classType));
+}
+
+/**
+ * The `"<nodeId>:<fieldName>"` key of the sprite cut-out on/off field: the
+ * first `custom` mapping on a Boolean node whose title asks for the cut-out
+ * ("Cue sprite cut-out", "Remove background", "Transparent PNG"; see
+ * `namesCutout`). Never an option of a node that removes the background
+ * itself (its title is often its class name, "Image Rembg (Remove
+ * Background)"), and never a node that names the reference, which stays
+ * the reference switch.
+ */
+export function findCutoutSwitch(config: Record<string, unknown> | null): string | null {
+  return findBooleanSwitch(config, (node) =>
+    namesCutout(node.title)
+    && !REMOVAL_CLASS.test(node.classType)
+    && !SWITCH_TITLE.test(node.title)
+    && !SWITCH_TITLE.test(node.classType));
+}
+
+/**
+ * The Boolean custom fields Cue drives in the selected workflow (null: none),
+ * and the connection's `default_parameters` its requests are merged over.
+ */
+export type ComfySwitches = { reference: string | null; cutout: string | null; defaults: Record<string, unknown> | null };
+
+const NO_SWITCHES: ComfySwitches = { reference: null, cutout: null, defaults: null };
+
+type CacheEntry = { until: number; switches: Promise<ComfySwitches> };
 const caches = new WeakMap<object, Map<string, CacheEntry>>();
 
 /** Forget cached lookups (tests). */
@@ -120,27 +214,29 @@ function splitSelection(raw: string | null): { connectionId?: string; workflowId
   return { connectionId: raw.slice(0, separator), workflowId: raw.slice(separator + 2) };
 }
 
-async function lookup(spindle: SpindleAPI, config: VisualNovelConfig, userId: string | undefined): Promise<string | null> {
+async function lookup(spindle: SpindleAPI, config: VisualNovelConfig, userId: string | undefined): Promise<ComfySwitches> {
   try {
     const { connectionId, workflowId } = splitSelection(config.imageConnectionId);
     const api = spindle.imageGen;
-    let connection: { metadata?: unknown } | null | undefined;
+    let connection: { metadata?: unknown; default_parameters?: unknown } | null | undefined;
     if (connectionId) connection = await api.getConnection(connectionId, userId);
     else {
       const connections = await api.listConnections(userId);
       connection = connections.find((candidate) => candidate.is_default) ?? connections[0];
     }
-    return findReferenceSwitch(comfyWorkflowConfigFor(connection?.metadata, workflowIdOf(config, workflowId)));
+    const workflow = comfyWorkflowConfigFor(connection?.metadata, workflowIdOf(config, workflowId));
+    return { reference: findReferenceSwitch(workflow), cutout: findCutoutSwitch(workflow), defaults: asRecord(connection?.default_parameters) };
   } catch {
-    return null;
+    return NO_SWITCHES;
   }
 }
 
 /**
- * The reference switch key for the current image connection selection, or
- * null. Cached per selection for {@link REFERENCE_SWITCH_TTL_MS}; never throws.
+ * The reference and cut-out switch keys for the current image connection
+ * selection (null where the workflow has none). Cached per selection for
+ * {@link REFERENCE_SWITCH_TTL_MS}; never throws.
  */
-export function resolveReferenceSwitch(spindle: SpindleAPI, config: VisualNovelConfig, userId?: string, now: number = Date.now()): Promise<string | null> {
+export function resolveComfySwitches(spindle: SpindleAPI, config: VisualNovelConfig, userId?: string, now: number = Date.now()): Promise<ComfySwitches> {
   let cache = caches.get(spindle);
   if (!cache) {
     cache = new Map();
@@ -149,15 +245,72 @@ export function resolveReferenceSwitch(spindle: SpindleAPI, config: VisualNovelC
   const ownWorkflow = config.imageParameters.workflow_id ?? config.imageParameters.workflowId;
   const cacheKey = `${userId ?? ""}\u0000${config.imageConnectionId ?? ""}\u0000${typeof ownWorkflow === "string" ? ownWorkflow : ""}`;
   const hit = cache.get(cacheKey);
-  if (hit && hit.until > now) return hit.key;
-  const key = lookup(spindle, config, userId);
-  cache.set(cacheKey, { until: now + REFERENCE_SWITCH_TTL_MS, key });
-  return key;
+  if (hit && hit.until > now) return hit.switches;
+  const switches = lookup(spindle, config, userId);
+  cache.set(cacheKey, { until: now + REFERENCE_SWITCH_TTL_MS, switches });
+  return switches;
+}
+
+/**
+ * The reference switch key for the current image connection selection, or
+ * null. Cached per selection for {@link REFERENCE_SWITCH_TTL_MS}; never throws.
+ */
+export async function resolveReferenceSwitch(spindle: SpindleAPI, config: VisualNovelConfig, userId?: string, now: number = Date.now()): Promise<string | null> {
+  return (await resolveComfySwitches(spindle, config, userId, now)).reference;
 }
 
 /** The user's custom-field values Lumiverse would read (it reads only one of the two). */
 function userCustomFields(parameters: Record<string, unknown>): Record<string, unknown> | null {
   return asRecord(parameters.comfyui_custom_fields) ?? asRecord(parameters.custom);
+}
+
+/**
+ * The value `parameters` hold for one custom field, where Lumiverse looks
+ * last first: `comfyui_field_values.node_fields`, its `custom`, then
+ * `comfyui_custom_fields` (else `custom`). Null when none has the key.
+ */
+function customValueIn(parameters: Record<string, unknown> | null, key: string): { value: unknown } | null {
+  if (!parameters) return null;
+  const fieldValues = asRecord(parameters.comfyui_field_values);
+  for (const source of [asRecord(fieldValues?.node_fields), asRecord(fieldValues?.custom), userCustomFields(parameters)]) {
+    if (source && Object.hasOwn(source, key)) return { value: source[key] };
+  }
+  return null;
+}
+
+/** The value the connection's saved defaults (the Image Gen panel) hold for a field the request leaves to them. */
+function panelValue(defaults: Record<string, unknown> | null, userParameters: Record<string, unknown>, key: string): { value: unknown } | null {
+  if (!defaults) return null;
+  const visible = Object.fromEntries(Object.entries(defaults).filter(([name]) => !Object.hasOwn(userParameters, name)));
+  return customValueIn(visible, key);
+}
+
+/**
+ * `parameters` with `values` set where Lumiverse reads them last, over the
+ * connection's saved defaults: in `comfyui_custom_fields` (with the custom
+ * fields Lumiverse would read), and, when the request or the defaults carry
+ * `comfyui_field_values`, in its `custom` (saved values, then the user's
+ * own custom fields, then `values`) with the keys taken out of its
+ * `node_fields`. The request's `comfyui_field_values` replaces the saved one
+ * whole, so the saved values that are not switches go along.
+ */
+function withSwitchValues(parameters: Record<string, unknown>, defaults: Record<string, unknown> | null, values: Record<string, unknown>): Record<string, unknown> {
+  const effective = { ...(defaults ?? {}), ...parameters };
+  const out: Record<string, unknown> = { ...parameters, comfyui_custom_fields: { ...(userCustomFields(effective) ?? {}), ...values } };
+  const fieldValues = asRecord(effective.comfyui_field_values);
+  if (fieldValues) {
+    const next: Record<string, unknown> = { ...fieldValues, custom: { ...(asRecord(fieldValues.custom) ?? {}), ...(userCustomFields(parameters) ?? {}), ...values } };
+    const nodeFields = asRecord(fieldValues.node_fields);
+    if (nodeFields) next.node_fields = Object.fromEntries(Object.entries(nodeFields).filter(([key]) => !Object.hasOwn(values, key)));
+    out.comfyui_field_values = next;
+  }
+  return out;
+}
+
+/** " (Image Gen panel had ...)" when the saved defaults held a value for the switch Cue sets. */
+function panelNote(defaults: Record<string, unknown> | null, userParameters: Record<string, unknown>, key: string): string {
+  const saved = panelValue(defaults, userParameters, key);
+  return saved ? ` (Image Gen panel had ${JSON.stringify(saved.value)})` : "";
 }
 
 export type ReferenceSwitchResult = {
@@ -173,33 +326,73 @@ export type ReferenceSwitchResult = {
  * `reference` holds the provider's reference parameters
  * (`referenceParametersFor`), or null when this image has no reference.
  * ComfyUI with a switch: on with a reference (reference parameters as
- * before), off without one and no `denoise: 0.0`. The switch value goes into
- * `comfyui_custom_fields`, merged over the user's own `comfyui_custom_fields`
- * (or `custom`); a value the user set for the same key wins. No switch (or a
- * user-owned key): unchanged, `denoise: 0.0` without a reference.
+ * before), off without one and no `denoise: 0.0`. The switch value is
+ * written over the user's own custom fields and the connection's saved
+ * `defaults` (see `withSwitchValues`); a value the user set for the same key
+ * in their own image parameters wins (and keeps `denoise: 0.0` without a
+ * reference). No switch: unchanged, `denoise: 0.0` without a reference.
+ * SwarmUI (when its connection has the workflow) gets the switch, never
+ * the `denoise: 0.0`.
  */
 export function referenceSwitchParameters(
   provider: string | null,
   userParameters: Record<string, unknown>,
   reference: Record<string, unknown> | null,
-  switchKey: string | null
+  switchKey: string | null,
+  defaults: Record<string, unknown> | null = null
 ): ReferenceSwitchResult {
-  if (provider !== "comfyui") {
+  if (provider !== "comfyui" && !(provider === "swarmui" && switchKey)) {
     return { parameters: reference ? { ...userParameters, ...reference } : { ...userParameters }, note: null };
   }
-  const custom = userCustomFields(userParameters);
-  const userOwns = Boolean(switchKey && custom && Object.hasOwn(custom, switchKey));
-  const controlled = Boolean(switchKey) && !userOwns;
-  const fields = controlled ? { comfyui_custom_fields: { ...(custom ?? {}), [switchKey!]: reference !== null } } : {};
-  const zeroDenoise = !reference && !controlled && userParameters.denoise === undefined;
-  const parameters = reference
-    ? { ...userParameters, ...reference, ...fields }
-    : { ...userParameters, ...(zeroDenoise ? { denoise: 0.0 } : {}), ...fields };
+  const own = switchKey ? customValueIn(userParameters, switchKey) : null;
+  const zeroDenoise = provider === "comfyui" && !reference && (!switchKey || own !== null) && userParameters.denoise === undefined;
+  const base = reference
+    ? { ...userParameters, ...reference }
+    : { ...userParameters, ...(zeroDenoise ? { denoise: 0.0 } : {}) };
+  const parameters = switchKey ? withSwitchValues(base, defaults, { [switchKey]: own ? own.value : reference !== null }) : base;
   const tail = reference ? "with reference" : zeroDenoise ? "no reference, denoise 0.0" : "no reference";
   const note = !switchKey
     ? `reference switch none (${tail})`
-    : userOwns
-      ? `reference switch ${switchKey} -> user value ${JSON.stringify(custom![switchKey])} (${tail})`
-      : `reference switch ${switchKey} -> ${reference ? "on" : "off"}`;
+    : own
+      ? `reference switch ${switchKey} -> user value ${JSON.stringify(own.value)} (${tail})`
+      : `reference switch ${switchKey} -> ${reference ? "on" : "off"}${panelNote(defaults, userParameters, switchKey)}`;
   return { parameters, note };
+}
+
+/**
+ * Parameters with the sprite cut-out switch set: on for a sprite render
+ * (`cutout`), off for anything else, so a workflow that saves transparent
+ * PNGs only does so for sprites. Applied after `referenceSwitchParameters`,
+ * written the same way over the custom fields there are and the
+ * connection's saved `defaults`. A value the user set for the same key in
+ * their own image parameters can only turn it off: their `false` wins, but
+ * a `true` never makes scenes, plates or key moments transparent. No
+ * switch, or a provider without the workflow: unchanged, no note.
+ */
+export function cutoutSwitchParameters(
+  provider: string | null,
+  userParameters: Record<string, unknown>,
+  parameters: Record<string, unknown>,
+  cutout: boolean,
+  switchKey: string | null,
+  defaults: Record<string, unknown> | null = null
+): ReferenceSwitchResult {
+  if (!drivesComfyWorkflow(provider) || !switchKey) return { parameters, note: null };
+  const own = customValueIn(userParameters, switchKey);
+  if (own?.value === false) {
+    return {
+      parameters: withSwitchValues(parameters, defaults, { [switchKey]: false }),
+      note: `cut-out switch ${switchKey} -> user value false`
+    };
+  }
+  if (own) {
+    return {
+      parameters: withSwitchValues(parameters, defaults, { [switchKey]: cutout }),
+      note: `cut-out switch ${switchKey} -> ${cutout ? "on" : "off"} (user value ${JSON.stringify(own.value)} only allows it)`
+    };
+  }
+  return {
+    parameters: withSwitchValues(parameters, defaults, { [switchKey]: cutout }),
+    note: `cut-out switch ${switchKey} -> ${cutout ? "on" : "off"}${panelNote(defaults, userParameters, switchKey)}`
+  };
 }

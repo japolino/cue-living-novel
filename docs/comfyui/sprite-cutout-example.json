@@ -1,0 +1,78 @@
+{
+  "1": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": { "ckpt_name": "your_checkpoint.safetensors" },
+    "_meta": { "title": "Load Checkpoint" }
+  },
+  "2": {
+    "class_type": "CLIPTextEncode",
+    "inputs": { "text": "", "clip": ["1", 1] },
+    "_meta": { "title": "Positive prompt" }
+  },
+  "3": {
+    "class_type": "CLIPTextEncode",
+    "inputs": { "text": "", "clip": ["1", 1] },
+    "_meta": { "title": "Negative prompt" }
+  },
+  "4": {
+    "class_type": "EmptyLatentImage",
+    "inputs": { "width": 832, "height": 1216, "batch_size": 1 },
+    "_meta": { "title": "Image size" }
+  },
+  "5": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": 0,
+      "steps": 28,
+      "cfg": 5,
+      "sampler_name": "euler",
+      "scheduler": "normal",
+      "denoise": 1,
+      "model": ["1", 0],
+      "positive": ["2", 0],
+      "negative": ["3", 0],
+      "latent_image": ["4", 0]
+    },
+    "_meta": { "title": "KSampler" }
+  },
+  "6": {
+    "class_type": "VAEDecode",
+    "inputs": { "samples": ["5", 0], "vae": ["1", 2] },
+    "_meta": { "title": "VAE Decode" }
+  },
+  "10": {
+    "class_type": "LoadBackgroundRemovalModel",
+    "inputs": { "bg_removal_name": "birefnet_cue_folded.safetensors" },
+    "_meta": { "title": "Background removal model" }
+  },
+  "11": {
+    "class_type": "RemoveBackground",
+    "inputs": { "bg_removal_model": ["10", 0], "image": ["6", 0] },
+    "_meta": { "title": "Remove background (mask: 1 = character)" }
+  },
+  "12": {
+    "class_type": "InvertMask",
+    "inputs": { "mask": ["11", 0] },
+    "_meta": { "title": "Invert mask" }
+  },
+  "13": {
+    "class_type": "JoinImageWithAlpha",
+    "inputs": { "image": ["6", 0], "alpha": ["12", 0] },
+    "_meta": { "title": "Join image with alpha" }
+  },
+  "14": {
+    "class_type": "PrimitiveBoolean",
+    "inputs": { "value": false },
+    "_meta": { "title": "Cue sprite cut-out" }
+  },
+  "15": {
+    "class_type": "ComfySwitchNode",
+    "inputs": { "switch": ["14", 0], "on_true": ["13", 0], "on_false": ["6", 0] },
+    "_meta": { "title": "Transparent or plain" }
+  },
+  "16": {
+    "class_type": "SaveImage",
+    "inputs": { "images": ["15", 0], "filename_prefix": "Cue/render" },
+    "_meta": { "title": "Save Image" }
+  }
+}

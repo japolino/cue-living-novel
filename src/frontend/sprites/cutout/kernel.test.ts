@@ -322,3 +322,81 @@ describe("two-figure check", () => {
     expect(k.figureCheck(new Uint8ClampedArray(0), 0, 0)).toEqual({ twoFigures: false, splitShare: 0 });
   });
 });
+
+describe("scenery check", () => {
+  /** Opaque RGBA from rectangles [x0, y0, x1, y1]. */
+  function opaque(w: number, h: number, rects: Array<[number, number, number, number]>): Uint8ClampedArray {
+    const rgba = new Uint8ClampedArray(w * h * 4);
+    for (const [x0, y0, x1, y1] of rects) for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) rgba[(y * w + x) * 4 + 3] = 255;
+    return rgba;
+  }
+  const blank = (w: number, h: number) => ({ rgba: new Uint8ClampedArray(w * h * 4), w, h });
+
+  test("opaque pixels the mask calls background far from its figure are stray", () => {
+    // Figure 40x100 = 4000 px, a 20x20 panel 20 px to its right = 400 px.
+    const rgba = opaque(120, 120, [[20, 10, 60, 110], [80, 50, 100, 70]]);
+    const m = mask(blank(120, 120), [[20, 10, 60, 110, 1]]);
+    const r = k.sceneryCheck(rgba, m, 120, 120);
+    expect(r.share).toBeCloseTo(400 / 4400, 6);
+    expect(r.scenery).toBe(true);
+  });
+
+  test("a clean cut-out (opaque only where the mask is foreground) is not flagged", () => {
+    const rgba = opaque(120, 120, [[20, 10, 60, 110]]);
+    expect(k.sceneryCheck(rgba, mask(blank(120, 120), [[20, 10, 60, 110, 1]]), 120, 120)).toEqual({ scenery: false, share: 0 });
+  });
+
+  test("a halo within 8 px of the mask's figure does not count; 9 px away does", () => {
+    const m = mask(blank(120, 120), [[20, 10, 60, 110, 1]]);
+    // Columns 60..67 are 1..8 px from the figure (L1), column 68 is 9 px.
+    expect(k.sceneryCheck(opaque(120, 120, [[20, 10, 68, 110]]), m, 120, 120).share).toBe(0);
+    const far = k.sceneryCheck(opaque(120, 120, [[20, 10, 69, 110]]), m, 120, 120);
+    expect(far.share).toBeCloseTo(100 / (49 * 100), 6);
+  });
+
+  test("only a mask below 0.1 counts as background, only 0.5 and up as the figure", () => {
+    const rgba = opaque(120, 120, [[20, 10, 60, 110], [80, 50, 100, 70]]);
+    // The panel scored 0.1: not background enough.
+    expect(k.sceneryCheck(rgba, mask(blank(120, 120), [[20, 10, 60, 110, 1], [80, 50, 100, 70, 0.1]]), 120, 120).share).toBe(0);
+    // Mask 0.5 just left of the panel is figure: the panel's first 8 columns are near it (12x20 px stay stray) ...
+    const near = mask(blank(120, 120), [[20, 10, 60, 110, 1], [70, 50, 80, 70, 0.5]]);
+    expect(k.sceneryCheck(rgba, near, 120, 120).share).toBeCloseTo(240 / 4400, 6);
+    // ... 0.49 is not.
+    const weak = mask(blank(120, 120), [[20, 10, 60, 110, 1], [70, 50, 80, 70, 0.49]]);
+    expect(k.sceneryCheck(rgba, weak, 120, 120).share).toBeCloseTo(400 / 4400, 6);
+  });
+
+  test("flagged at 3% of the opaque pixels", () => {
+    const m = mask(blank(200, 200), [[20, 10, 120, 110, 1]]);
+    // Figure 100x100 = 10000 px; 300 stray px = 2.91% (not flagged), 310 = 3.01%.
+    const under = k.sceneryCheck(opaque(200, 200, [[20, 10, 120, 110], [150, 150, 180, 160]]), m, 200, 200);
+    expect(under.share).toBeLessThan(0.03);
+    expect(under.scenery).toBe(false);
+    const over = k.sceneryCheck(opaque(200, 200, [[20, 10, 120, 110], [150, 150, 181, 160]]), m, 200, 200);
+    expect(over.share).toBeGreaterThanOrEqual(0.03);
+    expect(over.scenery).toBe(true);
+  });
+
+  test("cutoutPixels checks against its mask: a wall panel the flood fill cannot reach is flagged", () => {
+    // Dark grey background, a light panel touching the figure's side (the
+    // flood fill stops at it: far from the background colour).
+    const img = image(120, 160, [60, 60, 60]);
+    fill(img, 60, 30, 110, 150, [235, 235, 235]);
+    figure(img, 20, 10, 64, 150, [230, 180, 160]);
+    const r = k.cutoutPixels(img.rgba, img.w, img.h, mask(img, [[20, 10, 64, 150, 1]]));
+    expect(alphaAt(r.rgba, 120, 100, 100)).toBe(255); // the panel is kept ...
+    expect(r.scenery!.scenery).toBe(true); // ... and flagged
+    const clean = image(120, 160, [60, 60, 60]);
+    figure(clean, 20, 10, 64, 150, [230, 180, 160]);
+    expect(k.cutoutPixels(clean.rgba, clean.w, clean.h, mask(clean, [[20, 10, 64, 150, 1]])).scenery).toEqual({ scenery: false, share: 0 });
+  });
+
+  test("no mask, no check; an empty or short input is not flagged", () => {
+    const img = image(60, 90);
+    figure(img, 20, 10, 40, 80, [230, 180, 160]);
+    expect(k.cutoutPixels(img.rgba, img.w, img.h, null).scenery).toBeNull();
+    expect(k.sceneryCheck(new Uint8ClampedArray(4 * 10 * 10), new Float32Array(100), 10, 10)).toEqual({ scenery: false, share: 0 });
+    expect(k.sceneryCheck(new Uint8ClampedArray(0), new Float32Array(0), 0, 0)).toEqual({ scenery: false, share: 0 });
+    expect(k.sceneryCheck(opaque(10, 10, [[0, 0, 10, 10]]), new Float32Array(50), 10, 10)).toEqual({ scenery: false, share: 0 });
+  });
+});

@@ -119,12 +119,12 @@ describe("sprite library: seeds and the duplicate check (schema compatibility)",
     const set = library.sets.set_a!;
     expect(set.seed).toBe(7);
     expect(set.seedRound).toBe(0);
-    expect(set.images.idle).toMatchObject({ seed: null, ownSeed: true, twoFigures: null, autoRetried: false });
+    expect(set.images.idle).toMatchObject({ seed: null, ownSeed: true, twoFigures: null, scenery: null, autoRetried: false });
     expect(set.images.smile).toMatchObject({ ownSeed: false });
     // Stored values round-trip.
-    const again = normalizeSpriteLibrary(JSON.parse(JSON.stringify({ ...library, sets: { set_a: { ...set, seedRound: 2, images: { ...set.images, idle: { ...set.images.idle!, ownSeed: false, twoFigures: true, autoRetried: true, seed: 9 } } } } })));
+    const again = normalizeSpriteLibrary(JSON.parse(JSON.stringify({ ...library, sets: { set_a: { ...set, seedRound: 2, images: { ...set.images, idle: { ...set.images.idle!, ownSeed: false, twoFigures: true, scenery: true, autoRetried: true, seed: 9 } } } } })));
     expect(again.sets.set_a!.seedRound).toBe(2);
-    expect(again.sets.set_a!.images.idle).toMatchObject({ seed: 9, ownSeed: false, twoFigures: true, autoRetried: true });
+    expect(again.sets.set_a!.images.idle).toMatchObject({ seed: 9, ownSeed: false, twoFigures: true, scenery: true, autoRetried: true });
   });
 });
 
@@ -192,6 +192,18 @@ describe("sprite views", () => {
     expect(view.expressions.idle!.twoFigures).toBe(true);
     expect(view.expressions.smile!.twoFigures).toBeUndefined();
     expect(view.expressions.sad!.twoFigures).toBeUndefined();
+  });
+
+  test("a ready image the scenery check flagged says so; other statuses and unchecked images do not", () => {
+    const set = newSpriteSet(member, "set_a", STYLE, "2026-01-01T00:00:00.000Z");
+    expect(set.images.idle!.scenery).toBeNull();
+    set.images.idle = { ...set.images.idle!, status: "ready", cutImageId: "cut1", cutUrl: "/api/v1/images/cut1", rawImageId: "raw1", scenery: true };
+    set.images.smile = { ...set.images.smile!, status: "cutting", rawImageId: "raw2", scenery: true };
+    set.images.sad = { ...set.images.sad!, status: "ready", cutImageId: "cut3", cutUrl: "/api/v1/images/cut3", rawImageId: "raw3", scenery: null };
+    const view = spriteSetView(set);
+    expect(view.expressions.idle!.scenery).toBe(true);
+    expect(view.expressions.smile!.scenery).toBeUndefined();
+    expect(view.expressions.sad!.scenery).toBeUndefined();
   });
 
   test("turn view keys sets by characterKey and plates by plateKey, missing ones included", () => {

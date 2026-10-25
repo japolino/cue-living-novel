@@ -6,7 +6,8 @@ import type { CutoutRunner } from "./runner.js";
  * be made to crash on demand). The fake reads what to do from the model
  * file's first bytes: "STUDIO-CRASHLOAD" stops the worker while loading,
  * "...-CRASHCUT" while cutting, "...-RUNTIME" / "...-SESSION" fail the load
- * with that code, "...-MODELERR" loads but every run fails.
+ * with that code, "...-MODELERR" loads but every run fails. An image whose
+ * bytes hold "PRECUT" comes back as a source the workflow already cut.
  */
 const KEY = "cue-sprite-cutout-studio-attempt";
 const BEST = "https://models.test/isnet.onnx";
@@ -41,12 +42,14 @@ class FakeRunner {
     this.model = name;
     return { backend: options.backend === "wasm" ? "wasm" as const : "webgpu" as const, inputSize: 1024, loadMs: 1, notes: [] };
   }
-  async cut(_image: Blob, useModel: boolean, detectFace = false) {
+  async cut(image: Blob, useModel: boolean, detectFace = false) {
     this.check();
     this.calls.push(`cut ${useModel ? this.model ?? "none" : "basic"}${detectFace ? " face" : ""}`);
     let quality: "best" | "basic" = "basic";
     let modelError: string | null = null;
-    if (useModel) {
+    const preCut = (await image.text()).includes("PRECUT");
+    if (preCut) quality = "best";
+    else if (useModel) {
       if (!this.model) modelError = "The cut-out model is not loaded.";
       else if (this.model.endsWith("CRASHCUT")) { this.terminate(); throw new Error("The cut-out worker stopped."); }
       else if (this.model.endsWith("MODELERR")) modelError = "out of GPU memory";
@@ -54,7 +57,7 @@ class FakeRunner {
     }
     return {
       png: new Blob(["png"], { type: "image/png" }), width: 16, height: 16, bbox: [0.25, 0.25, 0.5, 0.5] as [number, number, number, number], quality,
-      figures: { twoFigures: false, splitShare: 0 } as never, modelError,
+      figures: { twoFigures: false, splitShare: 0 } as never, modelError, ...(preCut ? { preCut: true as const } : {}),
       ...(detectFace && this.faceLoaded ? { face: { face: null, candidates: [], ms: 0 } } : {}),
       timings: { decodeMs: 0, modelMs: 0, cutMs: 0, encodeMs: 0 },
     };
@@ -290,6 +293,59 @@ describe("Studio failures that stop the worker or the tab", () => {
     cutout.resetCutoutRuntime();
     setNav("gpu", adapter(["shader-f16"]));
     expect(await cutout.getStudioCutoutSupport()).toBeNull();
+  });
+});
+
+/** PNG signature and IHDR (16x16, 8 bit, `colourType`), then an empty IDAT: what an image's header says about alpha. */
+const pngHeader = (colourType: number, chunks: string[] = []): Uint8Array<ArrayBuffer> => {
+  const bytes: number[] = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  const chunk = (type: string, data: number[]): void => {
+    const length = data.length;
+    bytes.push(length >>> 24, (length >>> 16) & 255, (length >>> 8) & 255, length & 255, ...[...type].map((c) => c.charCodeAt(0)), ...data, 0, 0, 0, 0);
+  };
+  chunk("IHDR", [0, 0, 0, 16, 0, 0, 0, 16, 8, colourType, 0, 0, 0]);
+  for (const type of chunks) chunk(type, type === "tRNS" ? [0, 0] : []);
+  chunk("IDAT", []);
+  return Uint8Array.from(bytes);
+};
+
+describe("a source the image workflow already cut", () => {
+  test("a transparent PNG is checked before any model loads: no Studio download, no Best load", async () => {
+    const result = await cutout.cutSprite(new Blob([pngHeader(6), "PRECUT"]), { quality: "studio", modelUrl: BEST, studioModelUrl: STUDIO });
+    expect(result.preCut).toBe(true);
+    expect(result.quality).toBe("best");
+    expect(calls()).toEqual(["cut basic"]);
+    expect(fetches).toEqual([]);
+    expect(cutout.getCutoutModelState().state).not.toBe("downloading");
+    expect(marker()).toBeNull();
+    // A palette PNG with a tRNS chunk can be transparent too.
+    expect((await cutout.cutSprite(new Blob([pngHeader(3, ["PLTE", "tRNS"]), "PRECUT"]), { quality: "best", modelUrl: BEST })).preCut).toBe(true);
+    expect(fetches).toEqual([]);
+  });
+
+  test("a transparent PNG that is not cut out after all: cut with the model as usual", async () => {
+    cached(STUDIO);
+    const result = await cutout.cutSprite(new Blob([pngHeader(6), "image"]), { quality: "studio", modelUrl: BEST, studioModelUrl: STUDIO });
+    expect(result.studio).toBe(true);
+    expect(calls().filter((call) => call.startsWith("cut"))).toEqual(["cut basic", "cut STUDIO"]);
+  });
+
+  test("an opaque PNG, a JPEG or an unknown format: no extra cut before the model", async () => {
+    for (const image of [new Blob([pngHeader(2), "image"]), new Blob([Uint8Array.from([0xff, 0xd8, 0xff, 0xe0]), "image"]), new Blob(["image"])]) {
+      cutout.resetCutoutRuntime();
+      runners = [];
+      await cutout.cutSprite(image, { quality: "best", modelUrl: BEST });
+      expect(calls().filter((call) => call.startsWith("cut"))).toEqual(["cut BEST"]);
+    }
+  });
+
+  test("the Studio model loaded for a source that turns out cut: its marker is cleared", async () => {
+    cached(STUDIO);
+    // The header does not tell (not a PNG): the Studio model loads, then the worker finds the cut.
+    const result = await cutout.cutSprite(new Blob(["PRECUT"]), { quality: "studio", modelUrl: BEST, studioModelUrl: STUDIO });
+    expect(result.preCut).toBe(true);
+    expect(studioLoads()).toBe(1);
+    expect(marker()).toBeNull();
   });
 });
 

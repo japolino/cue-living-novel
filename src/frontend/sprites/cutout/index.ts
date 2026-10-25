@@ -88,6 +88,15 @@ export type CutoutResult = {
   twoFigures: boolean;
   /** Share of the checked rows that hold two wide opaque runs (0..1). */
   splitShare: number;
+  /**
+   * Scenery check: the cut kept scenery drawn behind the character (a wall,
+   * disc, ring or floor band the mask calls background; see
+   * `CutoutSceneryCheck`). Absent when there was no mask to check against
+   * ("basic", or a pre-cut source).
+   */
+  scenery?: boolean;
+  /** Share of the opaque pixels the scenery check counts as stray (0..1); absent with `scenery`. */
+  sceneryShare?: number;
   /** Detected face, normalized to the image; null: none found; absent: not detected. */
   face?: FaceBox | null;
   /** The source was already transparent (cut by the image workflow) and kept its own alpha. */
@@ -695,17 +704,107 @@ async function studioForCut(url: string): Promise<"load" | "later" | "no"> {
 }
 
 /**
+ * Whether an encoded image can be transparent, from its header alone: a PNG
+ * with an alpha channel or a tRNS chunk, or a WebP with alpha. A JPEG, a PNG
+ * or WebP without alpha, or another format: false (the worker still checks
+ * every image it cuts).
+ */
+export async function mayBeTransparent(image: Blob): Promise<boolean> {
+  let bytes: Uint8Array;
+  try {
+    bytes = new Uint8Array(await image.slice(0, 65536).arrayBuffer());
+  } catch {
+    return false;
+  }
+  const ascii = (at: number, length: number): string => String.fromCharCode(...bytes.subarray(at, at + length));
+  const u32 = (at: number): number => ((bytes[at]! << 24) | (bytes[at + 1]! << 16) | (bytes[at + 2]! << 8) | bytes[at + 3]!) >>> 0;
+  if (bytes.length >= 33 && bytes[0] === 0x89 && ascii(1, 3) === "PNG" && ascii(12, 4) === "IHDR") {
+    const colourType = bytes[25]!;
+    if (colourType === 4 || colourType === 6) return true;
+    // Grey, RGB or palette: transparent only with a tRNS chunk, which comes before the image data.
+    for (let at = 33; at + 8 <= bytes.length; at += 12 + u32(at)) {
+      const type = ascii(at + 4, 4);
+      if (type === "tRNS") return true;
+      if (type === "IDAT" || type === "IEND") return false;
+    }
+    return true; // Its chunks run past what was read: it may be.
+  }
+  if (bytes.length >= 25 && ascii(0, 4) === "RIFF" && ascii(8, 4) === "WEBP") {
+    const chunk = ascii(12, 4);
+    if (chunk === "VP8X") return (bytes[20]! & 0x10) !== 0;
+    if (chunk === "VP8L") return bytes[20] === 0x2f && ((bytes[24]! >> 4) & 1) === 1;
+    return false; // Lossy "VP8 ": no alpha.
+  }
+  return false;
+}
+
+/** The cut-out result for the page from the worker's result. */
+function cutoutResult(result: CutoutWorkerCutResult, studio: boolean, later: boolean, started: number): CutoutResult {
+  return {
+    png: result.png,
+    width: result.width,
+    height: result.height,
+    bbox: result.bbox,
+    quality: result.quality,
+    ...(studio && result.quality === "best" && !result.preCut ? { studio: true as const } : {}),
+    ...(later && !studio && result.quality === "best" && !result.preCut ? { provisional: true as const } : {}),
+    twoFigures: result.figures?.twoFigures === true,
+    splitShare: result.figures?.splitShare ?? 0,
+    ...(result.scenery ? { scenery: result.scenery.scenery, sceneryShare: result.scenery.share } : {}),
+    ...(result.face ? { face: result.face.face ? result.face.face.box : null } : {}),
+    ...(result.preCut ? { preCut: true as const } : {}),
+    durationMs: performance.now() - started,
+    timings: result.timings,
+  };
+}
+
+/**
+ * A source that may be transparent, cut without a model first: the worker
+ * keeps the alpha of one the image workflow already cut (null when it is
+ * not one, or the worker stopped). Only the face model loads for it.
+ */
+async function cutPreCut(image: Blob, options: CutoutOptions, started: number): Promise<CutoutResult | null> {
+  let withFace = false;
+  if (options.faceModelUrl) {
+    try {
+      await ensureFaceModel(options.faceModelUrl, false);
+      withFace = true;
+    } catch {
+      /* no face: the stage detects it later */
+    }
+  }
+  throwIfAborted(options.signal);
+  const runner = await getRunner();
+  let result: CutoutWorkerCutResult;
+  try {
+    result = await runner.cut(image, false, withFace && faceLoaded?.runner === runner);
+  } catch (error) {
+    if (!runner.isClosed()) throw error;
+    return null; // The cut with a model starts on a fresh worker.
+  }
+  if (!result.preCut) return null;
+  throwIfAborted(options.signal);
+  return cutoutResult(result, false, false, started);
+}
+
+/**
  * Cut one sprite. "best" downloads/loads the model on first use; when the
  * model cannot run the cut falls back to "basic" and says so in `quality`
  * (and the model state says why). "studio" does the same with the Studio
  * model, and falls back to "best" when that cannot run (`studio` in the
- * result says which model made the mask).
+ * result says which model made the mask). A transparent source the image
+ * workflow already cut keeps its alpha and loads no cut-out model (Studio
+ * would start its download for nothing).
  */
 export async function cutSprite(image: Blob, options: CutoutOptions): Promise<CutoutResult> {
   const started = performance.now();
   throwIfAborted(options.signal);
   syncStudioCutout(options.quality, options.studioModelUrl);
   const wantsModel = options.quality !== "basic";
+  if (wantsModel && await mayBeTransparent(image)) {
+    const preCut = await cutPreCut(image, options, started);
+    if (preCut) return preCut;
+  }
   let useModel = false;
   let studio = false;
   /** The Studio model may come later (see CutoutResult.provisional). */
@@ -797,28 +896,15 @@ export async function cutSprite(image: Blob, options: CutoutOptions): Promise<Cu
     studio = false;
     result = await cutAgain(true);
   }
-  if (studio && result.quality === "best" && !result.modelError && !result.preCut) studioAttemptDone(modelUrl);
+  // A source that turns out cut (its header did not tell) ends the Studio attempt too: the model loaded.
+  if (studio && result.quality === "best" && !result.modelError) studioAttemptDone(modelUrl);
   if (result.modelError && loaded?.url === modelUrl) {
     failure = { url: modelUrl, at: Date.now(), sticky: false, message: result.modelError };
     setLoaded(null);
     setState({ state: "error", error: result.modelError });
   }
   throwIfAborted(options.signal);
-  return {
-    png: result.png,
-    width: result.width,
-    height: result.height,
-    bbox: result.bbox,
-    quality: result.quality,
-    ...(studio && result.quality === "best" && !result.preCut ? { studio: true as const } : {}),
-    ...(later && !studio && result.quality === "best" && !result.preCut ? { provisional: true as const } : {}),
-    twoFigures: result.figures?.twoFigures === true,
-    splitShare: result.figures?.splitShare ?? 0,
-    ...(result.face ? { face: result.face.face ? result.face.face.box : null } : {}),
-    ...(result.preCut ? { preCut: true as const } : {}),
-    durationMs: performance.now() - started,
-    timings: result.timings,
-  };
+  return cutoutResult(result, studio, later, started);
 }
 
 /**

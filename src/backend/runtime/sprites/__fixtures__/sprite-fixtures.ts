@@ -92,7 +92,7 @@ export function mockSpindle(options: MockSpindleOptions = {}) {
         model: options.model ?? (options.provider === "novelai" ? "nai-diffusion-4-5-full" : "sdxl"),
         ...(options.defaultParameters ? { default_parameters: options.defaultParameters } : {}),
       }),
-      listConnections: async () => [withMetadata({ provider: options.provider ?? "comfyui", model: "m", is_default: true })],
+      listConnections: async () => [withMetadata({ provider: options.provider ?? "comfyui", model: "m", is_default: true, ...(options.defaultParameters ? { default_parameters: options.defaultParameters } : {}) })],
       generate: async (input: GenerateCall) => {
         calls.push(input);
         seq += 1;

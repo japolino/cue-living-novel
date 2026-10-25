@@ -503,7 +503,7 @@ export class SpriteLibraryView {
       tile.setAttribute("aria-label", `${label}: ${SPRITE_STATUS_LABELS[image.status]}`);
       tile.title = image.status === "failed" && image.error
         ? `${label}: failed. ${image.error}`
-        : `${label}: ${SPRITE_STATUS_LABELS[image.status]}${image.twoFigures ? ". May show two figures" : ""}`;
+        : `${label}: ${SPRITE_STATUS_LABELS[image.status]}${image.twoFigures ? ". May show two figures" : ""}${image.scenery ? ". May show scenery behind" : ""}`;
       tile.setAttribute("aria-pressed", String(image.expression === selected));
       tile.tabIndex = image.expression === selected ? 0 : -1;
       setImage(tile.querySelector<HTMLElement>("[data-thumb]")!, image, "", 4 / 5);
@@ -521,7 +521,7 @@ export class SpriteLibraryView {
     inspector.querySelector("[data-inspector-chip]")!.replaceChildren(chip(image.status));
     const meta = inspector.querySelector<HTMLElement>("[data-inspector-meta]")!;
     meta.textContent = image.status === "ready"
-      ? `${image.width && image.height ? `${image.width}×${image.height} cut-out` : "Cut-out ready"}. Shown whenever ${set.name} feels this way.${image.twoFigures ? " It may show two figures: Regenerate draws a new one." : ""}`
+      ? `${image.width && image.height ? `${image.width}×${image.height} cut-out` : "Cut-out ready"}. Shown whenever ${set.name} feels this way.${image.twoFigures ? " It may show two figures: Regenerate draws a new one." : image.scenery ? " It may show scenery behind the character: Regenerate draws a new one." : ""}`
       : image.status === "missing"
         ? `Not made yet. ${missingHint(expression, this.count)}.`
         : image.status === "failed"

@@ -5,7 +5,7 @@ import { novelAiCapabilities, novelAiCaption, novelAiQualityTags, NOVELAI_NEGATI
 import { AssetJobSchema, type AssetJob, type SceneState, type TurnPlan, type VisualCue } from "../../shared/contracts.js";
 import { AssetScheduler } from "../core/asset-scheduler.js";
 import { sceneSizeParameters } from "./image-size.js";
-import { referenceSwitchParameters, resolveReferenceSwitch } from "./comfy-reference-switch.js";
+import { cutoutSwitchParameters, drivesComfyWorkflow, referenceSwitchParameters, resolveComfySwitches } from "./comfy-reference-switch.js";
 import {
   SceneImageCache,
   sceneEpisodeOf,
@@ -817,7 +817,8 @@ export async function generateAssets(
   const anchorable = referenceAnchoringEnabled(config) && provider !== null && REFERENCE_PROVIDERS.has(provider);
   const cardSource = anchorable && config.referenceSource === "card";
   // Cached per selection; a failed lookup is null (today's behaviour).
-  const referenceSwitch = provider === "comfyui" ? await resolveReferenceSwitch(spindle, config, userId) : null;
+  const switches = drivesComfyWorkflow(provider) ? await resolveComfySwitches(spindle, config, userId) : null;
+  const referenceSwitch = switches?.reference ?? null;
 
   const [initialPortraits, characterAppearance] = await Promise.all([
     anchorable ? loadPortraits(spindle, plan.key.chatId, userId).catch(() => ({} as Record<string, StoredPortrait>)) : Promise.resolve({} as Record<string, StoredPortrait>),
@@ -1097,10 +1098,14 @@ export async function generateAssets(
             provider,
             config.imageParameters,
             portrait && provider ? referenceParametersFor(provider, portrait, config) : null,
-            referenceSwitch
+            referenceSwitch,
+            switches?.defaults ?? null
           );
           if (config.debugLogging && switched.note) spindle.log.info(`[VN] cue p${cue.paragraphIndex}: ${switched.note}`);
-          const parameters = switched.parameters;
+          // A mapped sprite cut-out switch is off: scene pictures keep their background.
+          const cut = cutoutSwitchParameters(provider, config.imageParameters, switched.parameters, false, switches?.cutout ?? null, switches?.defaults ?? null);
+          if (config.debugLogging && cut.note) spindle.log.info(`[VN] cue p${cue.paragraphIndex}: ${cut.note}`);
+          const parameters = cut.parameters;
           const { connectionId, workflowId } = splitConnectionSelection(config.imageConnectionId);
           // Scene pictures are wide on the stage: send a landscape size
           // unless the user's image parameters already set one.

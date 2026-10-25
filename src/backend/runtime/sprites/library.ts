@@ -77,7 +77,13 @@ export const StoredSpriteImageSchema = z.object({
    * side"); null until checked (or from a frontend without the check).
    */
   twoFigures: z.boolean().nullable().default(null),
-  /** This image already had its one automatic regeneration after a flagged check. */
+  /**
+   * Browser scenery check of the current cut-out (scenery drawn behind the
+   * character); null until checked, and when it could not be checked (no
+   * model mask: a basic cut, a cut the workflow made, an older frontend).
+   */
+  scenery: z.boolean().nullable().default(null),
+  /** This image already had its one automatic regeneration after a flagged check (two figures or scenery). */
   autoRetried: z.boolean().default(false),
   /**
    * Face box of the current cut-out (browser face detector), normalized to
@@ -202,6 +208,7 @@ export function newSpriteImage(expression: string, now: string, status: SpriteIm
     seed: null,
     ownSeed: false,
     twoFigures: null,
+    scenery: null,
     autoRetried: false,
     createdAt: now,
     updatedAt: now,

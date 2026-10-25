@@ -39,6 +39,11 @@ const fakeImage = (width: number, height: number, paint: (x: number, y: number) 
 /** 16x16 white image with a dark 6x8 block (x 5..10, y 4..11). */
 const sprite = () => fakeImage(16, 16, (x, y) => (x >= 5 && x < 11 && y >= 4 && y < 12 ? [30, 30, 40, 255] : [255, 255, 255, 255]));
 const decodePng = async (blob: Blob): Promise<FakePixels> => JSON.parse(await blob.text()) as FakePixels;
+/** A fake image behind a PNG signature and IHDR saying RGBA (colour type 6): what ComfyUI's cut-out saves. */
+const pngWrapped = async (image: Blob): Promise<Blob> => {
+  const header = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 16, 0, 0, 0, 16, 8, 6, 0, 0, 0, 0, 0, 0, 0]);
+  return new Blob([header, await image.text()], { type: "image/png" });
+};
 
 const FAKE_ORT = `
 export const env = { wasm: {}, webgpu: {} };
@@ -95,7 +100,9 @@ beforeAll(() => {
   const g = globalThis as Record<string, unknown>;
   for (const key of ["createImageBitmap", "OffscreenCanvas", "ImageData", "fetch"]) saved[key] = g[key];
   g.createImageBitmap = async (blob: Blob) => {
-    const image = JSON.parse(await blob.text()) as FakePixels;
+    // A fake image may follow a real PNG header (see pngWrapped).
+    const text = await blob.text();
+    const image = JSON.parse(text.slice(text.indexOf("{"))) as FakePixels;
     return { width: image.width, height: image.height, pixels: image.data, close() {} };
   };
   g.ImageData = class { constructor(public data: Uint8ClampedArray, public width: number, public height: number) {} };
@@ -171,6 +178,8 @@ describe("cut-out runtime", () => {
     expect(png.data[3]).toBe(0);
     expect(png.data[(6 * 16 + 7) * 4 + 3]).toBe(255);
     expect(getCutoutModelState()).toEqual({ state: "absent" });
+    // No mask, no scenery check.
+    expect(result.scenery).toBeUndefined();
   });
 
   test("best: download with progress, load, ready, model used", async () => {
@@ -181,6 +190,9 @@ describe("cut-out runtime", () => {
     off();
     expect(result.quality).toBe("best");
     expect(fetches).toEqual(["https://models.test/isnet.onnx"]);
+    // The cut was checked against the model's mask: nothing opaque outside the figure.
+    expect(result.scenery).toBe(false);
+    expect(result.sceneryShare).toBe(0);
     expect(states[0]).toEqual({ state: "downloading", receivedBytes: 0, totalBytes: null });
     expect(states.some((s) => s.state === "downloading" && s.receivedBytes === 4096 && s.totalBytes === 4096)).toBe(true);
     expect(states.at(-2)).toEqual({ state: "loading" });
@@ -455,7 +467,20 @@ describe("cut-out runtime", () => {
       expect(result.quality).toBe("best");
       expect(result.preCut).toBe(true);
       expect(result.timings?.modelMs).toBe(0);
+      // Its alpha is the workflow model's mask: nothing to check it against.
+      expect(result.scenery).toBeUndefined();
     }
+  });
+
+  test("a transparent PNG the workflow cut is cut without loading the model", async () => {
+    configure();
+    const image = await pngWrapped(fakeImage(16, 16, (x, y) => (x >= 4 && x < 12 && y >= 4 && y < 12 ? [200, 40, 40, 255] : [9, 9, 9, 0])));
+    const result = await cutSprite(image, { quality: "best", modelUrl: "https://models.test/isnet.onnx" });
+    expect(result.preCut).toBe(true);
+    expect(result.quality).toBe("best");
+    expect(result.bbox).toEqual([0.25, 0.25, 0.5, 0.5]);
+    expect(fetches).toEqual([]);
+    expect(getCutoutModelState().state).toBe("absent");
   });
 
   test("abort before the cut rejects with AbortError", async () => {
