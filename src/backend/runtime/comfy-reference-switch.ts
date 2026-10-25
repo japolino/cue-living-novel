@@ -18,9 +18,9 @@ import type { VisualNovelConfig } from "../../config.js";
  * `metadata.comfyui`.
  *
  * The same lookup finds the sprite cut-out switch: a Boolean custom field
- * titled like "cut-out", "remove background" or "transparent" that makes
- * the workflow remove the background itself (a ComfyUI background-removal
- * branch before SaveImage). Cue turns it on for sprite renders and off for
+ * titled like "cut-out", "remove background" or "transparent" (and not
+ * "disable…", "skip…" or the reference) that makes the workflow remove the
+ * background itself (a ComfyUI background-removal branch before SaveImage). Cue turns it on for sprite renders and off for
  * everything else (plates, key moments, scene pictures); the browser keeps
  * the alpha of a render that arrives transparent.
  *
@@ -35,7 +35,46 @@ type Mapping = { nodeId?: unknown; fieldName?: unknown; mappedAs?: unknown };
 type ApiNode = { class_type?: unknown; inputs?: Record<string, unknown>; _meta?: { title?: unknown } };
 
 const SWITCH_TITLE = /ip[\s_-]?adapter|reference|\bref\b/i;
-const CUTOUT_TITLE = /cut[\s_-]?out|background[\s_-]?remov|remov\w*?[\s_-]*(?:the[\s_-]+)?(?:background|bg)|\bbg[\s_-]?remov|transparen/i;
+/** Node classes that remove the background themselves: their own options are never the cut-out switch. */
+const REMOVAL_CLASS = /rembg|rmbg|birefnet|matting|segment|background[\s_-]?remov|remov\w*[\s_-]?(?:the[\s_-]?)?(?:background|bg)|bg[\s_-]?remov|cut[\s_-]?out|transparen/i;
+
+const NEGATIONS = new Set(["no", "not", "non", "dont", "don't", "disable", "disabled", "disables", "skip", "skips", "skipped", "without", "bypass", "bypassed", "never"]);
+const CUTOUT_WORDS = new Set(["cutout", "cutouts", "transparent", "transparency", "rembg"]);
+const REMOVE_WORDS = new Set(["remove", "removes", "removed", "removal", "remover", "removing"]);
+const BACKGROUND_WORDS = new Set(["background", "backgrounds", "bg"]);
+/** A word after "remove background" that makes it about something else ("Remove background noise"). */
+const NOT_THE_IMAGE = new Set(["noise", "music", "sound", "audio", "hum", "color", "colour", "blur", "model", "strength", "threshold", "size", "resolution", "mask"]);
+
+/** Lower-case words of a node title ("RemoveBackground" -> remove, background; "cut-out" -> cut, out). */
+function titleWords(title: string): string[] {
+  return title
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z])([A-Z][a-z])/g, "$1 $2")
+    .replace(/[\u2019`]/g, "'")
+    .toLowerCase()
+    .split(/[^a-z0-9']+/)
+    .filter(Boolean);
+}
+
+/**
+ * Whether a node title asks for the cut-out: it names a cut-out
+ * ("cut-out", "cutout"), transparency, or removing the image's background,
+ * and holds no negation ("Disable…", "Skip…", "No…", "without"), which
+ * would make Cue drive the switch inverted.
+ */
+function namesCutout(title: string): boolean {
+  const words = titleWords(title);
+  if (words.some((word) => NEGATIONS.has(word))) return false;
+  const imageBackground = (at: number): boolean => BACKGROUND_WORDS.has(words[at] ?? "") && !NOT_THE_IMAGE.has(words[at + 1] ?? "");
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i]!;
+    if (CUTOUT_WORDS.has(word)) return true;
+    if (word === "cut" && (words[i + 1] === "out" || words[i + 1] === "outs")) return true;
+    if (REMOVE_WORDS.has(word) && imageBackground(words[i + 1] === "the" ? i + 2 : i + 1)) return true;
+    if (BACKGROUND_WORDS.has(word) && REMOVE_WORDS.has(words[i + 1] ?? "") && !NOT_THE_IMAGE.has(words[i + 2] ?? "")) return true;
+  }
+  return false;
+}
 
 /** How long a looked-up switch (or a failed lookup) is reused. */
 export const REFERENCE_SWITCH_TTL_MS = 30_000;
@@ -93,10 +132,9 @@ function nodeInfo(config: Record<string, unknown>, nodeId: string, fieldName: st
 
 /**
  * The `"<nodeId>:<fieldName>"` key of the first `custom` mapping on a Boolean
- * node (PrimitiveBoolean, or a boolean input value) whose title or class
- * type passes `matches`.
+ * node (PrimitiveBoolean, or a boolean input value) that passes `matches`.
  */
-function findBooleanSwitch(config: Record<string, unknown> | null, matches: (text: string) => boolean): string | null {
+function findBooleanSwitch(config: Record<string, unknown> | null, matches: (node: { classType: string; title: string }) => boolean): string | null {
   if (!config || !Array.isArray(config.field_mappings)) return null;
   for (const raw of config.field_mappings as Mapping[]) {
     if (!raw || raw.mappedAs !== "custom") continue;
@@ -107,7 +145,7 @@ function findBooleanSwitch(config: Record<string, unknown> | null, matches: (tex
     if (!node) continue;
     const isBoolean = node.classType === "PrimitiveBoolean" || typeof node.value === "boolean";
     if (!isBoolean) continue;
-    if (!matches(node.title) && !matches(node.classType)) continue;
+    if (!matches(node)) continue;
     return `${nodeId}:${raw.fieldName}`;
   }
   return null;
@@ -116,21 +154,27 @@ function findBooleanSwitch(config: Record<string, unknown> | null, matches: (tex
 /**
  * The `"<nodeId>:<fieldName>"` key of the reference on/off field: the first
  * `custom` mapping on a Boolean node (PrimitiveBoolean, or a boolean input
- * value) whose title or class type names the IP-Adapter or the reference
- * (and not the cut-out, which has its own switch).
+ * value) whose title or class type names the IP-Adapter or the reference.
  */
 export function findReferenceSwitch(config: Record<string, unknown> | null): string | null {
-  return findBooleanSwitch(config, (text) => SWITCH_TITLE.test(text) && !CUTOUT_TITLE.test(text));
+  return findBooleanSwitch(config, (node) => SWITCH_TITLE.test(node.title) || SWITCH_TITLE.test(node.classType));
 }
 
 /**
  * The `"<nodeId>:<fieldName>"` key of the sprite cut-out on/off field: the
- * first `custom` mapping on a Boolean node whose title or class type names
- * a cut-out, background removal or transparency ("Cue sprite cut-out",
- * "Remove background", "Transparent PNG").
+ * first `custom` mapping on a Boolean node whose title asks for the cut-out
+ * ("Cue sprite cut-out", "Remove background", "Transparent PNG"; see
+ * `namesCutout`). Never an option of a node that removes the background
+ * itself (its title is often its class name, "Image Rembg (Remove
+ * Background)"), and never a node that names the reference, which stays
+ * the reference switch.
  */
 export function findCutoutSwitch(config: Record<string, unknown> | null): string | null {
-  return findBooleanSwitch(config, (text) => CUTOUT_TITLE.test(text));
+  return findBooleanSwitch(config, (node) =>
+    namesCutout(node.title)
+    && !REMOVAL_CLASS.test(node.classType)
+    && !SWITCH_TITLE.test(node.title)
+    && !SWITCH_TITLE.test(node.classType));
 }
 
 /**

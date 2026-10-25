@@ -793,17 +793,24 @@ Setup:
    `on_false`, come from your decoded image; the switch's output goes to
    Save Image.
 3. Lumiverse workflow setup: map the Boolean's `value` as **Custom** and
-   keep a title that names the cut-out (matched by
-   `/cut[\s_-]?out|background[\s_-]?remov|remov…background|bg[\s_-]?remov|transparen/i`:
-   "Cue sprite cut-out", "Remove background", "Transparent PNG"). Leave its
-   saved value off: then anything that does not set it (Lumiverse's own
-   image generation, other extensions) gets the plain image.
+   give the Boolean node a title that says on = cut out: "Cue sprite
+   cut-out", "Remove background", "Transparent PNG". Cue reads the title's
+   words: a cut-out ("cut-out", "cutout"), transparency, or removing the
+   background ("remove (the) background/BG", "background removal"; not
+   "Remove background noise"). A title with a negation ("Disable…",
+   "Skip…", "No…", "without") or naming the reference is not the switch.
+   Leave its saved value off: then anything that does not set it
+   (Lumiverse's own image generation, other extensions) gets the plain
+   image.
 
 What Cue does (`findCutoutSwitch` / `cutoutSwitchParameters` in
 `src/backend/runtime/comfy-reference-switch.ts`): the first `custom`
-mapping on a Boolean node whose title or class type matches is the cut-out
-switch (a title that matches both this and the reference pattern counts
-as the cut-out switch only). It is read from the connection profile with
+mapping on a Boolean whose title asks for the cut-out is the switch. Only
+the title counts, and never on a node that removes the background itself
+(rembg, BiRefNet, matting nodes: API prompts title a node with its class
+name, and its own options such as `only_mask` are not the switch). A
+title that also names the reference or the IP-Adapter stays the reference
+switch. It is read from the connection profile with
 the reference switch (one lookup, cached 30 s per selection). Sprite renders
 send `true`, plates, key moments and scene pictures `false`, in
 `comfyui_custom_fields` (merged with the user's `comfyui_custom_fields` or

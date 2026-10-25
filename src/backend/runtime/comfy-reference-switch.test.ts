@@ -305,10 +305,33 @@ function withCutout(title = "Cue sprite cut-out"): typeof anima.metadata {
 
 describe("findCutoutSwitch", () => {
   test("finds a Boolean titled for the cut-out, background removal or transparency", () => {
-    for (const title of ["Cue sprite cut-out", "Cutout", "cut out sprite", "Remove background", "RemoveBackground", "Remove the BG", "Background removal", "BG remover", "Transparent PNG", "transparency"]) {
+    for (const title of ["Cue sprite cut-out", "Cutout", "cut out sprite", "Remove background", "RemoveBackground", "Remove the BG", "Background removal", "BG remover", "Remove background image", "Transparent PNG", "transparency", "Enable cut-out"]) {
       expect(findCutoutSwitch(single({ class_type: "PrimitiveBoolean", inputs: { value: true }, _meta: { title } }))).toBe("9:value");
     }
-    expect(findCutoutSwitch(single({ class_type: "RemoveBackgroundToggle", inputs: { on: false } }, "on"))).toBe("9:on");
+    // The If/Else switch itself, with its Boolean as a widget.
+    expect(findCutoutSwitch(single({ class_type: "ComfySwitchNode", inputs: { switch: false, on_true: ["13", 0], on_false: ["6", 0] }, _meta: { title: "Transparent or plain" } }, "switch"))).toBe("9:switch");
+  });
+
+  test("a negative title is not the switch (it would be driven inverted)", () => {
+    for (const title of ["Disable background removal", "Skip cut-out", "No transparency", "Bypass BG removal", "Render without cutout", "Don't remove background", "Not transparent"]) {
+      expect(findCutoutSwitch(single({ class_type: "PrimitiveBoolean", inputs: { value: true }, _meta: { title } }))).toBeNull();
+    }
+  });
+
+  test("no match for a title that only contains the words", () => {
+    for (const title of ["Shortcut output", "Remove background noise", "Remove background music", "Cutoff outline", "Background removal model"]) {
+      expect(findCutoutSwitch(single({ class_type: "PrimitiveBoolean", inputs: { value: true }, _meta: { title } }))).toBeNull();
+    }
+  });
+
+  test("a Boolean option of the background-removal node itself is never the switch", () => {
+    // API prompts title a node with its display name unless the user renamed it.
+    expect(findCutoutSwitch(single({ class_type: "Image Rembg (Remove Background)", inputs: { only_mask: false, alpha_matting: false, transparency: true }, _meta: { title: "Image Rembg (Remove Background)" } }, "only_mask"))).toBeNull();
+    expect(findCutoutSwitch(single({ class_type: "Image Remove Background Rembg (mtb)", inputs: { alpha_matting: false, post_processing: false }, _meta: { title: "Remove background (mtb)" } }, "post_processing"))).toBeNull();
+    expect(findCutoutSwitch(single({ class_type: "RemoveBackground", inputs: { transparency: true }, _meta: { title: "Transparent background" } }, "transparency"))).toBeNull();
+    expect(findCutoutSwitch(single({ class_type: "BiRefNetRMBG", inputs: { transparent: true }, _meta: { title: "Transparent" } }, "transparent"))).toBeNull();
+    // Nor is a class name alone enough.
+    expect(findCutoutSwitch(single({ class_type: "RemoveBackgroundToggle", inputs: { on: false } }, "on"))).toBeNull();
   });
 
   test("no match for a non-boolean field, an unrelated title, or the Anima workflow as shipped", () => {
@@ -318,13 +341,16 @@ describe("findCutoutSwitch", () => {
     expect(findCutoutSwitch(animaConfig)).toBeNull();
   });
 
-  test("next to the IP-Adapter switch each finds its own; a cut-out title is never the reference switch", () => {
+  test("next to the IP-Adapter switch each finds its own; a title naming the reference stays the reference switch", () => {
     const both = withCutout().comfyui as unknown as Record<string, unknown>;
     expect(findReferenceSwitch(both)).toBe("804:value");
     expect(findCutoutSwitch(both)).toBe("900:value");
-    const ambiguous = single({ class_type: "PrimitiveBoolean", inputs: { value: true }, _meta: { title: "Transparent reference" } });
-    expect(findReferenceSwitch(ambiguous)).toBeNull();
-    expect(findCutoutSwitch(ambiguous)).toBe("9:value");
+    for (const title of ["Transparent reference", "IP-Adapter (cut out)", "Reference: remove background"]) {
+      const ambiguous = single({ class_type: "PrimitiveBoolean", inputs: { value: true }, _meta: { title } });
+      expect(findReferenceSwitch(ambiguous)).toBe("9:value");
+      expect(findCutoutSwitch(ambiguous)).toBeNull();
+    }
+    expect(findCutoutSwitch(single({ class_type: "IPAdapterToggle", inputs: { on: false }, _meta: { title: "Transparent" } }, "on"))).toBeNull();
   });
 });
 
