@@ -55,6 +55,14 @@ atmosphere". The five stage feel keys (`VisualNovelStageFeel`,
 `stageFeelSettings`) reach it through `VnStage.setStageFeel`; see
 "Stage feel".
 
+Per character: `presentationMode`, `keyIllustrations`, the ten puppet keys
+and the five stage feel keys can be saved for one character card
+(Settings, "<name> only"; `CHARACTER_SCOPED_KEYS`), so one card can read in
+sprites while the others keep scene pictures. Planning, staging and the
+sprite service read the chat's config (`loadChatConfig`), so they follow
+it. `spriteCutout`, the model URLs, `spriteImageSize` and
+`spriteExpressionCount` shape the shared sprite library and stay shared.
+
 ### Image size (`spriteImageSize`)
 
 Applies to providers that take a width and height (ComfyUI, SwarmUI), in
