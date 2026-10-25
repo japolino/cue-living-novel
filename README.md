@@ -81,6 +81,18 @@ Scene mode (the default) paints a full picture for each scene. That takes 20–5
 
 **Limits.** A change of image style (connection, model, prompt prefix or suffix, negative prompt) starts new sets. Until an expression is ready, the nearest ready one stands in. A character with nothing ready yet shows a "Preparing" badge instead of a sprite; when all of a character's images failed, the badge says so and its **Try again** makes them again (a cut-out that failed is redone from its render). v1 has no lip flap or blinking and no sprite for your persona. See [docs/SPRITE_MODE.md](docs/SPRITE_MODE.md) for the design.
 
+**Who stands out.** The speaker steps forward a little (3% larger) and the others drop to half brightness (and blur by 1 px with **Blur characters who are not speaking**), but only while the speaker is on stage: narration, your own lines and a voice that is not on stage leave everyone bright. Characters fade in and rise a few pixels as they enter (0.15 s), slide to new places in 0.4 s and change expression with a 0.2 s cross-fade.
+
+## Stage feel
+
+**Settings → Look** holds a few small touches. In sprite mode, **Character motion** has **Press a character to make it bounce** (on by default): clicking or tapping a character squishes it and it bounces back, and that click does not turn the page; clicking anywhere else, Enter or Space still does. Right after the character groups, **Stage feel** (both modes) has:
+
+- **Click effect**: **Sparks** (default) shows a small burst of gold sparks where you click or tap; **Sparks + !** adds a little "!" with a pop sound; **Off**. Motion **Still** and the system's reduced-motion setting turn the sparks and the bounce off.
+- **Interface sounds** (off by default) with its own volume: a soft tick as the text types and a pop on a "!" click, a character press, or a tap that changes a line or card on the waiting screen. They play alongside Choir's music and effects, but stay quiet while Cue or Choir reads the story aloud.
+- **Inner voices**: lines spoken by a voice in a character's head (the skills from games like Disco Elysium, such as Logic or Inland Empire, are known already) dim everyone on stage and make the screen edges glow in the voice's colour for that paragraph. Add your own names here, separated by commas (for example `Conscience, The Ancient Reptilian Brain`).
+
+The picture, the characters and the buttons can no longer be selected or dragged by mistake (a double-click no longer paints the browser's selection over the scene); the dialogue and History stay selectable.
+
 ## Scene image reuse (temporary cache)
 
 Cue keeps a small, in-memory cache of the scene images it generated so an

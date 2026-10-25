@@ -13,8 +13,12 @@ import {
   spriteFaceVars,
   spriteGeometry,
   spriteGeometryVars,
+  spriteDimmedKeys,
+  spriteFigureBox,
   spriteMirrored,
   spritePreloadUrls,
+  spritePressTarget,
+  SPRITE_PRESS_MS,
   spriteStatusBadges,
   SpriteLayer,
   withPlate,
@@ -605,5 +609,130 @@ describe("SpriteLayer face vars", () => {
     expect(mira.style["--vn-sprite-face-bottom"]).toBe("0.75");
     expect(mira.style["--vn-sprite-face-w"]).toBe("0.2");
     expect(layer.snapshot().actors[0]!.face).toBe("detected");
+  });
+});
+
+describe("spotlight: who dims", () => {
+  const names: Record<string, string> = { mira: "Mira", ren: "Ren", aoi: "Aoi" };
+  const nameOf = (key: string) => names[key] ?? key;
+  const two = [actor("mira", { focus: true }), actor("ren")];
+
+  test("a staged line whose speaker stands on stage dims the others", () => {
+    expect([...spriteDimmedKeys(two, { speaker: "Mira", innerVoice: false, staged: true }, nameOf)]).toEqual(["ren"]);
+  });
+
+  test("an inner voice dims everyone, focus or not", () => {
+    expect([...spriteDimmedKeys(two, { speaker: "Logic", innerVoice: true, staged: true }, nameOf)].sort()).toEqual(["mira", "ren"]);
+    expect([...spriteDimmedKeys([actor("mira"), actor("ren")], { speaker: "Logic", innerVoice: true, staged: true }, nameOf)].sort()).toEqual(["mira", "ren"]);
+  });
+
+  test("nobody dims when the speaker is not on stage: narration, no focus, the reader's line on a kept stage", () => {
+    // Narration (no nameplate) focusing a mentioned character.
+    expect(spriteDimmedKeys(two, { speaker: "", innerVoice: false, staged: true }, nameOf).size).toBe(0);
+    // A labelled off-stage voice: staging focuses nobody.
+    expect(spriteDimmedKeys([actor("mira"), actor("ren")], { speaker: "Stranger", innerVoice: false, staged: true }, nameOf).size).toBe(0);
+    // The reader's own character speaks over the last stage, whose focus is Mira.
+    expect(spriteDimmedKeys(two, { speaker: "Kai", innerVoice: false, staged: false }, nameOf).size).toBe(0);
+  });
+
+  test("on a kept stage the focus counts only when the nameplate names it", () => {
+    expect([...spriteDimmedKeys(two, { speaker: "[Mira]", innerVoice: false, staged: false }, nameOf)]).toEqual(["ren"]);
+  });
+
+  test("figure box: the layer box times the cut-out bbox, mirrored around the anchor", () => {
+    const layerBox = { left: 100, top: 0, width: 200, height: 400 };
+    const g = { cx: 0.4, by: 1, bw: 0.5, bh: 0.9 };
+    expect(spriteFigureBox(layerBox, g, false)).toEqual({ left: 130, right: 230, top: 40, bottom: 400 });
+    expect(spriteFigureBox(layerBox, g, true)).toEqual({ left: 170, right: 270, top: 40, bottom: 400 });
+  });
+
+  test("press target: a hit bounces in sprite mode with motion allowed, otherwise the click reads on", () => {
+    const base = { enabled: true, sprites: true, intensity: "full" as const, reducedMotion: false, hit: "mira" };
+    expect(spritePressTarget(base)).toBe("mira");
+    expect(spritePressTarget({ ...base, hit: null })).toBeNull();
+    expect(spritePressTarget({ ...base, enabled: false })).toBeNull();
+    expect(spritePressTarget({ ...base, sprites: false })).toBeNull();
+    expect(spritePressTarget({ ...base, intensity: "off" })).toBeNull();
+    expect(spritePressTarget({ ...base, reducedMotion: true })).toBeNull();
+    expect(spritePressTarget({ ...base, intensity: "gentle" })).toBe("mira");
+  });
+});
+
+describe("SpriteLayer spotlight and press", () => {
+  let restore: () => void;
+  let container: FakeNode;
+  let layer: SpriteLayer;
+  const byKey = (key: string) => container.querySelector(`[data-vn-sprite][data-vn-sprite-key="${key}"]`)!;
+  const dims = () => layer.snapshot().actors.map((a) => [a.characterKey, a.dim]);
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const view = turnView([
+    { actors: [actor("mira", { slot: "left", focus: true }), actor("ren", { slot: "right" })], plateKey: null, light: "day" },
+    { actors: [actor("mira", { slot: "left", focus: true }), actor("ren", { slot: "right" })], plateKey: null, light: "day" },
+  ]);
+
+  beforeEach(() => {
+    restore = installFakeDocument();
+    container = new FakeNode("div");
+    layer = new SpriteLayer({ container: () => container as unknown as HTMLElement });
+    layer.setEnabled(true);
+    layer.setTurn(view);
+  });
+  afterEach(() => { layer.destroy(); restore(); });
+
+  test("the speaker on stage dims the others; narration on the same stage leaves everyone bright", () => {
+    layer.show(0, { animate: false, speaker: "Mira" });
+    expect(dims()).toEqual([["mira", false], ["ren", true]]);
+    layer.show(1, { animate: false, speaker: "" });
+    expect(dims()).toEqual([["mira", false], ["ren", false]]);
+  });
+
+  test("an inner voice dims everyone and marks the layer; re-shown as an ordinary line it lifts", () => {
+    layer.show(0, { animate: false, speaker: "Logic", innerVoice: true });
+    expect(dims()).toEqual([["mira", true], ["ren", true]]);
+    expect(layer.snapshot().innerVoice).toBe(true);
+    expect(container.dataset.vnSpriteVoice).toBe("true");
+    // The same paragraph shown again (the reader changed the names): applied in place.
+    layer.show(0, { animate: false, speaker: "Mira" });
+    expect(dims()).toEqual([["mira", false], ["ren", true]]);
+    expect(container.dataset.vnSpriteVoice).toBeUndefined();
+  });
+
+  test("the reader's own line keeps the stage with nobody dimmed; a line past the staging needs the name", () => {
+    layer.show(0, { animate: false, speaker: "Mira" });
+    layer.showReaderLine();
+    expect(dims()).toEqual([["mira", false], ["ren", false]]);
+    // Past the staged paragraphs the last stage stays up (carried).
+    layer.show(1, { animate: false, speaker: "Mira" });
+    layer.show(5, { animate: false, speaker: "Kai" });
+    expect(dims()).toEqual([["mira", false], ["ren", false]]);
+    layer.show(6, { animate: false, speaker: "Mira" });
+    expect(dims()).toEqual([["mira", false], ["ren", true]]);
+  });
+
+  test("actorAt finds the figure under a point, front-most first; press bounces it once", async () => {
+    layer.show(0, { animate: false, speaker: "Mira" });
+    // The fake DOM has no layout: give each active image layer a box.
+    const boxes: Record<string, { left: number; top: number; width: number; height: number }> = {
+      mira: { left: 0, top: 0, width: 200, height: 400 },
+      ren: { left: 120, top: 0, width: 200, height: 400 },
+    };
+    for (const key of ["mira", "ren"]) {
+      const active = byKey(key).querySelector("[data-vn-sprite-image][data-vn-sprite-layer='active']")! as FakeNode & { getBoundingClientRect?: () => unknown };
+      active.getBoundingClientRect = () => boxes[key];
+    }
+    // bbox [0.1, 0.02, 0.8, 0.98]: Mira's figure spans x 20-180, Ren's 140-300.
+    expect(layer.actorAt(60, 200)).toBe("mira");
+    expect(layer.actorAt(260, 200)).toBe("ren");
+    // Where they overlap the focused speaker is in front.
+    expect(layer.actorAt(160, 200)).toBe("mira");
+    expect(layer.actorAt(10, 200)).toBeNull();
+    expect(layer.actorAt(60, 2)).toBeNull();
+
+    expect(layer.press("ren")).toBe(true);
+    expect(byKey("ren").dataset.vnSpritePress).toBe("true");
+    expect(byKey("mira").dataset.vnSpritePress).toBeUndefined();
+    expect(layer.press("aoi")).toBe(false);
+    await wait(SPRITE_PRESS_MS + 80);
+    expect(byKey("ren").dataset.vnSpritePress).toBeUndefined();
   });
 });

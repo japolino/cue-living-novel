@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { FakeEvent, FakeNode, installFakeDocument } from "./stage-test-dom";
 import { DEFAULT_READING_FLOW, VnStage, type VnReadingFlow, type VnStageOptions } from "./vn-stage";
 import type { VnTurnInput } from "../store";
+import type { InterfaceSounds } from "./interface-sounds";
 
 /**
  * How a reply opens, waits and ends on the stage: the opening card, the
@@ -183,6 +184,20 @@ describe("scene flow on the stage", () => {
     expect(must(s, "[data-vn-waiting-status]").textContent).toBe("Setting the next scene…");
     s.loadTurn(turn({ paragraphs: [{ id: "u:0", text: "Outside.", speaker: "" }] }));
     expect(screen.hidden).toBe(true);
+  });
+
+  test("a tap on the waiting screen's cards shows the next one with the interface pop", () => {
+    let pops = 0;
+    const sounds = { configure() {}, setHold() {}, releaseHold() {}, canPlay: () => true, typed: () => true, pop: () => { pops += 1; return true; } };
+    const s = create({ waitingRecap: "cards" }, { interfaceSounds: sounds as unknown as InterfaceSounds });
+    s.loadTurn(turn());
+    toEnd(s);
+    s.setPhase("waiting-for-response");
+    const card = must(s, "[data-vn-recap-card]");
+    const before = card.textContent;
+    must(s, "[data-vn-recap-cards]").dispatchEvent(new FakeEvent("click"));
+    expect(pops).toBe(1);
+    expect(card.textContent).not.toBe(before);
   });
 
   test("waiting backdrop off: only the status line, as before", () => {

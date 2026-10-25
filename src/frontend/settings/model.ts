@@ -10,6 +10,8 @@ import {
   SPRITE_CUTOUT_QUALITIES,
   SPRITE_IMAGE_SIZES,
   KEY_ILLUSTRATION_MODES,
+  CLICK_EFFECTS,
+  type VisualNovelClickEffect,
   type VisualNovelSpriteExpressionCount,
   type VisualNovelKeyIllustrations,
   type VisualNovelPresentationMode,
@@ -724,6 +726,31 @@ export function describeSpriteMotion(percent: number): string {
 /** "Off" / "3 px" for the sticker outline slider. */
 export function describeSpriteOutline(px: number): string {
   return px <= 0 ? "Off" : `${Math.round(px)} px`;
+}
+
+/* ------------------------------------------------------------------------ */
+/* Stage feel (Look): click effect, interface sounds, inner voices.          */
+/* ------------------------------------------------------------------------ */
+
+/** The click effect choices, in the order shown. */
+export const CLICK_EFFECT_OPTIONS: ReadonlyArray<{ value: VisualNovelClickEffect; label: string }> = [
+  { value: "sparks-pop", label: "Sparks + !" },
+  { value: "sparks", label: "Sparks" },
+  { value: "off", label: "Off" },
+];
+
+export function normalizeClickEffect(value: string): VisualNovelClickEffect {
+  return (CLICK_EFFECTS as readonly string[]).includes(value)
+    ? value as VisualNovelClickEffect
+    : DEFAULT_CONFIG.clickEffect;
+}
+
+/** Group hint under "Stage feel". */
+export const STAGE_FEEL_HELP = "Small touches while you read. Motion Still and your system's reduced-motion setting turn the sparks and the bounce off.";
+
+/** "Off" / "40%" for the interface sound volume. */
+export function describeInterfaceVolume(on: boolean, volume: number): string {
+  return on ? `${Math.round(volume * 100)}%` : "Off";
 }
 
 export function normalizeSpriteExpressionCount(value: string): VisualNovelSpriteExpressionCount {

@@ -13,6 +13,11 @@
  * The layer owns no plate: the stage paints plates through its scene image
  * layers and asks `plateFor(index)` which one to show.
  *
+ * Spotlight (`spriteDimmedKeys`): the others dim only while the paragraph's
+ * speaker stands on stage; an inner voice dims everyone; narration, the
+ * reader's own line and an off-stage voice leave everyone bright. A press on
+ * a character (`actorAt`, `press`) squishes it and it bounces back.
+ *
  * Facing rule: generated sprites are prompted "looking at viewer", so a
  * cut-out has no known side. We treat its natural orientation as
  * SPRITE_NATURAL_FACING ("left": front-facing or turned toward screen left)
@@ -38,11 +43,12 @@ import {
   type SpriteSlot,
   type SpriteTurnView,
 } from "../../shared/sprites.js";
-import { DEFAULT_CONFIG, spritePuppetSettings, type VisualNovelSpritePuppet } from "../../config.js";
+import { DEFAULT_CONFIG, spritePuppetSettings, type VisualNovelEffectIntensity, type VisualNovelSpritePuppet } from "../../config.js";
 import { SpritePuppet, type PuppetEffects, type PuppetImage, type PuppetMode } from "./sprite-puppet.js";
 import { puppetColdPlace } from "./sprite-puppet-fx.js";
 import { puppetNarrating, puppetSpeech, puppetSpoken, type PuppetSpeech } from "./sprite-puppet-acting.js";
 import { puppetReactionFor, type PuppetPose } from "./sprite-puppet-rig.js";
+import { bareSpeakerName } from "./voices.js";
 
 /** Natural orientation assumed for every cut-out (see the file comment). */
 export const SPRITE_NATURAL_FACING: Exclude<SpriteFacing, "viewer"> = "left";
@@ -64,10 +70,14 @@ export const SPRITE_MOTION_DURATION_MS: Readonly<Record<SpriteMotion, number>> =
   sink: 1100,
 };
 
-export const SPRITE_ENTER_MS = 460;
+/** An entering character fades in and rises a few px (sprite-css.ts `vn-sprite-enter`). */
+export const SPRITE_ENTER_MS = 150;
 export const SPRITE_EXIT_MS = 420;
-export const SPRITE_CROSSFADE_MS = 260;
+/** Expression and pose changes cross-fade between the two image layers. */
+export const SPRITE_CROSSFADE_MS = 200;
 export const SPRITE_EMOTE_POP_MS = 420;
+/** A pressed character squishes and bounces back (sprite-css.ts `vn-sprite-press`). */
+export const SPRITE_PRESS_MS = 350;
 
 /** Sprites fade out under a key illustration (and back) with the scene-image crossfade. */
 export const SPRITE_ILLUSTRATION_FADE_MS = 350;
@@ -143,6 +153,79 @@ export function narrowSpriteX(placements: readonly SpriteActorPlacement[]): numb
   if (placements.length !== 3) return placements.map(({ x }) => x);
   const focus = placements.findIndex(({ actor }) => actor.focus) as -1 | 0 | 1 | 2;
   return [...SPRITE_NARROW_X[focus]];
+}
+
+/** Who speaks the line on screen, for the spotlight (`spriteDimmedKeys`). */
+export type SpriteSpotlight = {
+  /** Nameplate of the line ("" for narration). */
+  speaker: string;
+  /** The nameplate is an inner voice (voices.ts): nobody on stage speaks, everyone dims. */
+  innerVoice: boolean;
+  /**
+   * The stage was staged for this line. False while the last stage stays up
+   * for a line it does not cover (the reader's own line, past the staged
+   * paragraphs): its focus then counts only if the nameplate names it.
+   */
+  staged: boolean;
+};
+
+/**
+ * Characters to dim for a line. An inner voice dims everyone. Otherwise the
+ * others dim only while the line's speaker stands on stage: the staged focus
+ * of a line with a nameplate (staging focuses a labelled line's speaker only
+ * when that speaker is on stage), or on a kept stage the focused actor whose
+ * name the nameplate gives. Narration, the reader's own line and an off-stage
+ * voice leave everyone bright, whatever the focus says.
+ */
+export function spriteDimmedKeys(
+  actors: readonly Pick<SpriteActorStage, "characterKey" | "focus">[],
+  spotlight: SpriteSpotlight,
+  nameOf: (characterKey: string) => string = (key) => key,
+): Set<string> {
+  if (spotlight.innerVoice) return new Set(actors.map((actor) => actor.characterKey));
+  const speaker = bareSpeakerName(spotlight.speaker);
+  const focused = speaker ? actors.find((actor) => actor.focus) : undefined;
+  if (!focused) return new Set();
+  if (!spotlight.staged && bareSpeakerName(nameOf(focused.characterKey)) !== speaker) return new Set();
+  return new Set(actors.filter((actor) => actor.characterKey !== focused.characterKey).map((actor) => actor.characterKey));
+}
+
+/** A box in client px. */
+export type SpriteBox = { left: number; right: number; top: number; bottom: number };
+
+/**
+ * The opaque figure of a cut-out on screen: its image layer's box times the
+ * cut-out bbox (a mirrored figure flips around its anchor, so its bbox centre
+ * is measured from the other edge).
+ */
+export function spriteFigureBox(
+  layer: Pick<DOMRect, "left" | "top" | "width" | "height">,
+  geometry: Pick<SpriteGeometry, "cx" | "by" | "bw" | "bh">,
+  mirrored: boolean,
+): SpriteBox {
+  const width = layer.width * geometry.bw;
+  const height = layer.height * geometry.bh;
+  const centre = layer.left + layer.width * (mirrored ? 1 - geometry.cx : geometry.cx);
+  const bottom = layer.top + layer.height * geometry.by;
+  return { left: centre - width / 2, right: centre + width / 2, top: bottom - height, bottom };
+}
+
+/**
+ * What a press on the stage does in sprite mode: the character to bounce
+ * (and the press reads nothing on), or null to read on as before. Off with
+ * `spritePressBounce` off, outside sprite mode, off a character, and when the
+ * character could not bounce (Motion "off", reduced motion).
+ */
+export function spritePressTarget(options: {
+  enabled: boolean;
+  sprites: boolean;
+  intensity: VisualNovelEffectIntensity;
+  reducedMotion: boolean;
+  hit: string | null;
+}): string | null {
+  if (!options.enabled || !options.sprites || !options.hit) return null;
+  if (options.intensity === "off" || options.reducedMotion) return null;
+  return options.hit;
 }
 
 /** Expressions of a set that can be shown now (ready and with a URL). */
@@ -450,6 +533,8 @@ export type SpriteShowOptions = {
   animate: boolean;
   /** Nameplate of the paragraph; the focused actor with this name gets the talking bob. */
   speaker?: string | undefined;
+  /** The nameplate is an inner voice: everyone on stage dims (`spriteDimmedKeys`). */
+  innerVoice?: boolean | undefined;
 };
 
 export type SpriteActorSnapshot = {
@@ -462,6 +547,8 @@ export type SpriteActorSnapshot = {
   shownExpression: string | null;
   url: string | null;
   focus: boolean;
+  /** Dimmed for this line (`spriteDimmedKeys`). */
+  dim: boolean;
   facing: SpriteFacing;
   mirrored: boolean;
   motion: SpriteMotion;
@@ -487,6 +574,8 @@ export type SpriteLayerSnapshot = {
   illustration: string | null;
   light: SpriteLight | null;
   plateKey: string | null;
+  /** The line on screen is an inner voice (everyone dims). */
+  innerVoice: boolean;
   actors: SpriteActorSnapshot[];
   badges: SpriteStatusBadge[];
   /** Puppet motion strength in effect (0 = still) and whether its frame loop runs now. */
@@ -503,6 +592,8 @@ type ActorEntry = {
   emote: HTMLElement;
   layers: [HTMLElement, HTMLElement];
   faceSource: SpriteFaceSpot["source"] | null;
+  /** Geometry of the image shown (null while none is): where a press lands. */
+  geometry: SpriteGeometry | null;
   active: 0 | 1;
   url: string | null;
   shownExpression: string | null;
@@ -519,6 +610,7 @@ type ActorEntry = {
   fadeTimer: ReturnType<typeof setTimeout> | null;
   /** Whether the last staging animated (an expression change then plays its puppet transition). */
   animate: boolean;
+  pressTimer: ReturnType<typeof setTimeout> | null;
 };
 
 const reflow = (element: HTMLElement): void => {
@@ -543,6 +635,12 @@ export class SpriteLayer {
   private appliedView: SpriteTurnView | null = null;
   private stage: SpriteParagraphStage | null = null;
   private speaker = "";
+  /** The line on screen is an inner voice (everyone dims). */
+  private innerVoice = false;
+  /** The last stage stays up for a line past the staged paragraphs. */
+  private carried = false;
+  /** The reader's own line is on screen (`showReaderLine`). */
+  private readerLine = false;
   private talking = false;
   /** The typing line's quotes: in a paragraph with quotes the speaker only talks inside them. */
   private speech: PuppetSpeech = puppetSpeech("");
@@ -680,6 +778,9 @@ export class SpriteLayer {
     this.appliedView = null;
     this.stage = null;
     this.talking = false;
+    this.innerVoice = false;
+    this.carried = false;
+    this.readerLine = false;
     this.illustration = null;
     this.illustrationFade?.cancel();
     this.illustrationFade = null;
@@ -689,6 +790,7 @@ export class SpriteLayer {
       delete container.dataset.vnSpriteIllustrated;
       if (container.style) container.style.opacity = "";
       delete container.dataset.vnSpriteLight;
+      delete container.dataset.vnSpriteVoice;
       container.dataset.vnSpriteCount = "0";
       container.hidden = !this.enabled;
     }
@@ -706,8 +808,11 @@ export class SpriteLayer {
       if (this.actors.size > 0 || this.index !== -1) this.clear();
       return;
     }
+    this.readerLine = false;
     if (index === this.index && view === this.appliedView) {
       this.speaker = (options.speaker ?? "").trim();
+      this.innerVoice = Boolean(options.innerVoice);
+      this.applySpotlight();
       return;
     }
     const staged = stagedParagraph(view, index);
@@ -716,13 +821,71 @@ export class SpriteLayer {
     this.index = index;
     this.appliedView = view;
     this.speaker = (options.speaker ?? "").trim();
-    if (keepCurrent) return;
+    this.innerVoice = Boolean(options.innerVoice);
+    this.carried = keepCurrent;
+    if (keepCurrent) {
+      this.applySpotlight();
+      return;
+    }
     this.stage = staged;
     // Breath shows in the cold: a snowy, wintry or freezing place (snow as the ambient counts on its own).
     this.container().dataset.vnSpriteCold = puppetColdPlace(this.plateFor(index)) ? "true" : "false";
     this.applyStage(staged, options.animate);
     this.preload(view, index);
     this.options.onStatusChange?.();
+  }
+
+  /**
+   * The reader's own line is on screen: the last stage stays, and nobody on
+   * it speaks or dims. The next `show` of a staged paragraph ends it.
+   */
+  showReaderLine(): void {
+    if (this.destroyed || !this.enabled) return;
+    this.readerLine = true;
+    this.speaker = "";
+    this.innerVoice = false;
+    this.setTalking(false);
+    this.applySpotlight();
+  }
+
+  /**
+   * The character drawn at a point (client px), front-most first, or null:
+   * its opaque figure box (`spriteFigureBox`). Only characters on stage
+   * with a picture count, and none under a key illustration.
+   */
+  actorAt(x: number, y: number): string | null {
+    if (this.destroyed || !this.enabled || this.illustration !== null || !Number.isFinite(x) || !Number.isFinite(y)) return null;
+    let best: { key: string; z: number } | null = null;
+    for (const entry of this.actors.values()) {
+      if (entry.exiting || entry.url === null || !entry.geometry) continue;
+      const state = entry.el.dataset.vnSpriteState;
+      if (state !== "shown" && state !== "entering") continue;
+      const layer = entry.layers[entry.active];
+      if (typeof layer.getBoundingClientRect !== "function") continue;
+      const box = spriteFigureBox(layer.getBoundingClientRect(), entry.geometry, spriteMirrored(entry.stage.facing));
+      if (x < box.left || x > box.right || y < box.top || y > box.bottom) continue;
+      // Stacking as in sprite-css.ts: the focused actor, then the middle one, then the sides.
+      const order = entry.el.dataset.vnSpriteOrder;
+      const z = entry.stage.focus ? 4 : order === "1" ? 2 : 1;
+      if (!best || z > best.z) best = { key: entry.key, z };
+    }
+    return best?.key ?? null;
+  }
+
+  /** A press on a character: it squishes and bounces back. False when it is not on stage. */
+  press(key: string): boolean {
+    const entry = this.actors.get(key);
+    if (this.destroyed || !entry || entry.exiting || entry.url === null) return false;
+    if (entry.pressTimer) clearTimeout(entry.pressTimer);
+    // Restart the bounce on a quick second press.
+    delete entry.el.dataset.vnSpritePress;
+    reflow(entry.el);
+    entry.el.dataset.vnSpritePress = "true";
+    entry.pressTimer = setTimeout(() => {
+      entry.pressTimer = null;
+      delete entry.el.dataset.vnSpritePress;
+    }, SPRITE_PRESS_MS + 40);
+    return true;
   }
 
   /** The focused speaker reacts and talks (puppet head motion, or the CSS bob) while the line types out. */
@@ -784,6 +947,7 @@ export class SpriteLayer {
         shownExpression: entry.shownExpression,
         url: entry.url,
         focus: entry.stage.focus,
+        dim: entry.el.dataset.vnSpriteDim === "true",
         facing: entry.stage.facing,
         mirrored: spriteMirrored(entry.stage.facing),
         motion: entry.stage.motion,
@@ -804,6 +968,7 @@ export class SpriteLayer {
       illustration: this.illustration,
       light: this.stage?.light ?? null,
       plateKey: this.index >= 0 ? effectivePlateKey(view, this.index) : null,
+      innerVoice: this.innerVoice,
       actors,
       badges: this.badges(),
       puppet: { strength: this.puppet.strength(), running: this.puppet.isRunning() },
@@ -848,7 +1013,8 @@ export class SpriteLayer {
     if (stage) container.dataset.vnSpriteLight = stage.light;
     else delete container.dataset.vnSpriteLight;
     container.dataset.vnSpriteCount = String(placements.length);
-    const anyFocus = placements.some(({ actor }) => actor.focus);
+    const dimmed = this.dimmedKeys(placements.map(({ actor }) => actor));
+    this.syncVoiceFlag(container);
     const narrowX = narrowSpriteX(placements);
     const keep = new Set(placements.map(({ actor }) => actor.characterKey));
 
@@ -875,7 +1041,7 @@ export class SpriteLayer {
       el.dataset.vnSpriteFacing = actor.facing;
       el.dataset.vnSpriteMirrored = String(spriteMirrored(actor.facing));
       el.dataset.vnSpriteFocus = actor.focus ? "true" : "false";
-      el.dataset.vnSpriteDim = anyFocus && !actor.focus ? "true" : "false";
+      el.dataset.vnSpriteDim = dimmed.has(actor.characterKey) ? "true" : "false";
       setVars(el, {
         "--vn-sprite-x": `${x}%`,
         // Narrow portrait stages with three actors (sprite-css.ts).
@@ -891,6 +1057,31 @@ export class SpriteLayer {
       this.syncTalking(entry);
     });
     this.puppet.refresh();
+  }
+
+  /** Characters to dim for the line on screen (`spriteDimmedKeys`). */
+  private dimmedKeys(actors: readonly SpriteActorStage[]): Set<string> {
+    const view = this.view;
+    return spriteDimmedKeys(actors, {
+      speaker: this.speaker,
+      innerVoice: this.innerVoice,
+      staged: !this.carried && !this.readerLine,
+    }, (key) => (view ? castName(view, key) : key));
+  }
+
+  /** Marks the layer while an inner voice dims everyone (the portrait trio keeps its sizes then). */
+  private syncVoiceFlag(container: HTMLElement): void {
+    if (this.innerVoice) container.dataset.vnSpriteVoice = "true";
+    else delete container.dataset.vnSpriteVoice;
+  }
+
+  /** Re-apply who dims for the line on screen, on the stage as it stands. */
+  private applySpotlight(): void {
+    if (!this.enabled && !this.containerEl) return;
+    const entries = [...this.actors.values()].filter((entry) => !entry.exiting);
+    const dimmed = this.dimmedKeys(entries.map((entry) => entry.stage));
+    for (const entry of entries) entry.el.dataset.vnSpriteDim = dimmed.has(entry.key) ? "true" : "false";
+    if (this.containerEl) this.syncVoiceFlag(this.containerEl);
   }
 
   private createActor(key: string): ActorEntry {
@@ -926,10 +1117,10 @@ export class SpriteLayer {
     el.append(body);
     this.puppet.attach({ key, el, body, marks, layers });
     return {
-      key, el, body, figure, marks, emote, layers, faceSource: null, active: 0, url: null, shownExpression: null,
+      key, el, body, figure, marks, emote, layers, faceSource: null, geometry: null, active: 0, url: null, shownExpression: null,
       stage: { characterKey: key, expression: "idle", slot: "center", facing: "viewer", focus: false, motion: "none", emote: "none", intensity: 3 },
       x: 50, emoteName: "none", talking: false, token: 0, exiting: false,
-      exitTimer: null, motionTimer: null, emoteTimer: null, enterTimer: null, fadeTimer: null, animate: true,
+      exitTimer: null, motionTimer: null, emoteTimer: null, enterTimer: null, fadeTimer: null, animate: true, pressTimer: null,
     };
   }
 
@@ -942,6 +1133,7 @@ export class SpriteLayer {
       entry.token += 1;
       entry.url = null;
       entry.shownExpression = null;
+      entry.geometry = null;
       entry.el.dataset.vnSpriteState = "waiting";
       for (const layer of entry.layers) this.emptyLayer(layer);
       return;
@@ -953,6 +1145,7 @@ export class SpriteLayer {
     entry.faceSource = spot.source;
     if (entry.url === image.url) {
       entry.shownExpression = image.expression;
+      entry.geometry = geometry;
       setVars(entry.layers[entry.active], vars);
       setVars(entry.el, vars);
       entry.el.dataset.vnSpriteFace = spot.source;
@@ -966,6 +1159,7 @@ export class SpriteLayer {
     entry.shownExpression = image.expression;
     const apply = () => {
       if (this.destroyed || token !== entry.token) return;
+      entry.geometry = geometry;
       entry.el.dataset.vnSpriteFace = spot.source;
       if (firstImage) this.paintFirst(entry, puppetImage, image.expression, vars, enter);
       else this.crossfade(entry, puppetImage, image.expression, vars);
@@ -1130,10 +1324,10 @@ export class SpriteLayer {
   }
 
   private disposeActor(entry: ActorEntry): void {
-    for (const timer of [entry.exitTimer, entry.motionTimer, entry.emoteTimer, entry.enterTimer, entry.fadeTimer]) {
+    for (const timer of [entry.exitTimer, entry.motionTimer, entry.emoteTimer, entry.enterTimer, entry.fadeTimer, entry.pressTimer]) {
       if (timer) clearTimeout(timer);
     }
-    entry.exitTimer = entry.motionTimer = entry.emoteTimer = entry.enterTimer = entry.fadeTimer = null;
+    entry.exitTimer = entry.motionTimer = entry.emoteTimer = entry.enterTimer = entry.fadeTimer = entry.pressTimer = null;
     entry.token += 1;
     this.puppet.detach(entry.key, entry.el);
     entry.el.remove();

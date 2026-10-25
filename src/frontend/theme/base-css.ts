@@ -2,6 +2,7 @@ import { VN_EFFECTS_CSS } from "./effects-css.js";
 import { VN_TEXT_EFFECTS_CSS } from "./text-effects-css.js";
 import { VN_SPRITE_CSS } from "./sprite-css.js";
 import { VN_WAITING_CSS } from "./waiting-css.js";
+import { VN_FEEL_CSS } from "./feel-css.js";
 
 export const VN_BASE_CSS = `
 :host {
@@ -1983,6 +1984,7 @@ button[data-vn-badge]:active {
 
 ${VN_WAITING_CSS}
 ${VN_SPRITE_CSS}
+${VN_FEEL_CSS}
 ${VN_EFFECTS_CSS}
 
 ${VN_TEXT_EFFECTS_CSS}

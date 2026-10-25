@@ -293,7 +293,7 @@ try {
     assert.equal(byKey(geo, "ren").dim, "true");
     assert.ok(Number(byKey(geo, "mira").z) > Number(byKey(geo, "ren").z), "the speaker stands in front");
     const dimFilter = await page.evaluate(() => getComputedStyle(document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!.querySelector("[data-vn-sprite-key='ren']")!).filter);
-    assert.match(dimFilter, /brightness\(0\.68\)/, `dimmed actor filter (${dimFilter})`);
+    assert.match(dimFilter, /brightness\(0\.5\)/, `dimmed actor filter (${dimFilter})`);
     await shot(page, "focus-mira");
     await go(page, 1);
     await page.waitForTimeout(450);
@@ -742,8 +742,8 @@ try {
       const mira = theme.querySelector<HTMLElement>("[data-vn-sprite-key='mira']")!;
       return { filter: getComputedStyle(ren).filter, zoom: getComputedStyle(mira.querySelector("[data-vn-sprite-body]")!).scale, canvas: mira.querySelector<HTMLElement>("[data-vn-sprite-image][data-vn-sprite-layer='active']")!.dataset.vnSpriteCanvas ?? null };
     });
-    assert.match(css.filter, /brightness\(0\.68\).*blur\(1\.2px\)/, `CSS fallback: others dimmed and blurred (${css.filter})`);
-    assert.equal(css.zoom, "1.035", "the speaker steps forward");
+    assert.match(css.filter, /brightness\(0\.5\).*blur\(1px\)/, `CSS fallback: others dimmed and blurred (${css.filter})`);
+    assert.equal(css.zoom, "1.03", "the speaker steps forward");
     assert.equal(css.canvas, null, "no outline: the img shows");
     // A baked outline shows as a static canvas on the CSS path.
     await page.evaluate(() => (window as any).fx.puppet({ spriteOutline: 4 }));
@@ -878,7 +878,7 @@ try {
     assert.ok(dips > 3, `the speaker nods at the start of the line (head travel ${dips.toFixed(1)} px)`);
     assert.equal(await page.evaluate(() => document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!.querySelector<HTMLElement>("[data-vn-sprite-key='mira']")!.dataset.vnSpriteTalking), "true");
     const zoom = await page.evaluate(() => getComputedStyle(document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!.querySelector("[data-vn-sprite-key='mira'] [data-vn-sprite-body]")!).scale);
-    assert.equal(zoom, "1.035", "the speaker steps forward");
+    assert.equal(zoom, "1.03", "the speaker steps forward");
     await shot(page, "puppet-speaker");
 
     // Outline: white pixels appear just outside the figure.

@@ -42,11 +42,18 @@ own expression and there is no picture cap.
 | `spriteAtmosphere` | boolean | `true` | at once (everyday, sprite mode only) |
 | `spriteOutline` | `0`–`6` (px) | `0` | at once (everyday, sprite mode only) |
 | `spriteFocusBlur` | boolean | `true` | at once (everyday, sprite mode only) |
+| `clickEffect` | `"sparks-pop"` \| `"sparks"` \| `"off"` | `"sparks"` | at once (everyday, both modes) |
+| `spritePressBounce` | boolean | `true` | at once (everyday, sprite mode only) |
+| `interfaceSounds` | boolean | `false` | at once (everyday, both modes) |
+| `interfaceSoundVolume` | `0`–`1` | `0.4` | at once (everyday, both modes) |
+| `innerVoices` | comma-separated names, ≤ 2000 chars | `""` | when you leave the field (everyday, both modes) |
 
 The ten puppet keys (`VisualNovelSpritePuppet`, `spritePuppetSettings`)
 reach the stage through `VnStage.setSpritePuppet`; see "Puppet motion",
 "Puppet acting", "Puppet physics", "Puppet transitions" and "Puppet
-atmosphere".
+atmosphere". The five stage feel keys (`VisualNovelStageFeel`,
+`stageFeelSettings`) reach it through `VnStage.setStageFeel`; see
+"Stage feel".
 
 ### Image size (`spriteImageSize`)
 
@@ -706,12 +713,22 @@ layers, crossfaded) → ambient overlay (behind sprites) → `[data-vn-sprites]`
 (one `[data-vn-sprite]` per actor) → ornaments, fx, dialogue.
 
 - Slot layout for 1, 2 or 3 actors; sprites bottom-anchored, sized from the
-  stage height and the cut-out bbox; slot changes animate.
-- Expression change: crossfade between two image layers per actor.
+  stage height and the cut-out bbox; slot changes slide over 0.4 s
+  (`--vn-sprite-move-ms`). An entering actor fades in and rises 6 px in
+  0.15 s (`SPRITE_ENTER_MS`, `vn-sprite-enter`); reduced motion fades only.
+- Expression and pose change: 0.2 s crossfade between two image layers per
+  actor (`SPRITE_CROSSFADE_MS`).
 - Focus: the speaker is bright, on top and, when others share the stage,
-  3.5% larger (`--vn-sprite-zoom` on `[data-vn-sprite-body]`, around the
-  feet; the slot clamp includes it). Others dim slightly and, with
-  `spriteFocusBlur`, blur by 1.2 px.
+  3% larger (`--vn-sprite-zoom` on `[data-vn-sprite-body]`, around the
+  feet; the slot clamp includes it). Others drop to 50% brightness and,
+  with `spriteFocusBlur`, blur by 1 px (`PUPPET_FOCUS_BLUR_PX` in the
+  puppet). Who dims is the spotlight rule (`spriteDimmedKeys`): the others
+  dim only while the line's speaker stands on stage; narration, the
+  reader's own line (`SpriteLayer.showReaderLine`) and a voice that is not
+  on stage leave everyone bright, and an inner voice dims everyone (see
+  "Stage feel"). Focus itself (z-order, zoom, the portrait trio layout)
+  still follows the staging. On a stage kept up for a line past the staged
+  paragraphs, the focus counts only when the nameplate names it.
 - Motion and emotes: CSS/inline SVG, scaled by intensity, respect effect
   intensity and reduced motion. Idle motion and the talking head come from
   the PNG puppet ("Puppet motion"); without it, CSS idle breathing and a
@@ -735,6 +752,55 @@ layers, crossfaded) → ambient overlay (behind sprites) → `[data-vn-sprites]`
 - While a cut-out model downloads, the stage shows its progress as a status
   line ("Downloading the cut-out model: 12 MB of 88 MB", `cutoutDownloadNote`).
 - Previous/History navigation re-applies the paragraph's stage.
+
+### Stage feel (`click-sparks.ts`, `interface-sounds.ts`, `inner-voice.ts`, `feel-css.ts`)
+
+Small answers to the reader's hand, in both presentation modes unless noted.
+
+- **Click sparks** (`clickEffect`). Every press on the stage (pointerdown,
+  primary button, not in a text field) spawns a burst at the pointer:
+  seven small gold stars fly 16–30 px out over 0.3 s around a soft glint,
+  and "Sparks + !" adds a "!" that pops up (0.44 s) with the pop sound.
+  `spawnClickSparks(container, clientX, clientY, mode)` is self-contained
+  (inline styles, Web Animations, aria-hidden, no pointer events, at most
+  6 bursts per container) so other stage screens reuse it;
+  `clickEffectFor(setting, effectIntensity, reducedMotion)` turns it off
+  for Motion "Still" and reduced motion.
+- **Press a character** (`spritePressBounce`, sprite mode only). A click
+  whose point falls inside a cut-out's opaque figure box
+  (`SpriteLayer.actorAt`: active layer box x bbox, front-most by focus and
+  order; never through the dialogue or other chrome) squishes that
+  character around its feet and bounces it back in 0.35 s
+  (`data-vn-sprite-press`, `vn-sprite-press` on the anchor's `transform`,
+  so it composes with the zoom, motions and talking bob), and that click
+  does not read on. A click anywhere else, and every key, reads on as
+  before. Off with the setting off, Motion "Still" or reduced motion
+  (`spritePressTarget`): the press then reads on.
+- **Interface sounds** (`interfaceSounds`, `interfaceSoundVolume`; off by
+  default). WebAudio-synthesized, no files: a soft tick per typed letter,
+  at most every 60 ms (`TYPING_TICK_GAP_MS`), and a rising pop (0.15 s) on
+  a "!" spark or a sprite press. One shared `InterfaceSounds` serves every
+  stage screen (`playInterfacePop()`, `playTypingTick(text)`). They are not
+  story sound, so Choir's music and effects do not silence them, but a voice
+  reading the story does: the host holds them while Cue's read aloud loads
+  or plays, or while Choir reads by itself (`speechHoldsInterfaceSounds`;
+  Choir's own Auto reading cannot be observed, so its read-by-itself switch
+  stands in for it).
+- **Inner voices** (`innerVoiceFor` in `voices.ts`, plus `innerVoices`, the
+  reader's extra names). A paragraph whose nameplate is an inner voice
+  (Logic, Inland Empire, … or an extra name) has nobody on stage speaking:
+  every character dims (in a portrait trio nobody steps back,
+  `data-vn-sprite-voice`), and `[data-vn-voice-glow]`, made above the
+  scene on the first such line, lights the screen edges in the voice's
+  colour (inset glow, 0.3 s fade in and out) for the paragraph. Scene mode
+  gets the glow alone. The root carries `data-vn-inner-voice` (the family)
+  meanwhile.
+- **No selection, no dragging.** The scene (plate, sprites, ambient), the
+  ornament and effect layers and the controls are `user-select: none` and
+  `-webkit-user-drag: none`; a double-click (mousedown with `detail > 1`)
+  or a drag that starts outside selectable text is prevented, so the
+  browser never paints its selection over the picture. The dialogue,
+  History and error details stay selectable.
 
 ### Puppet motion (`sprite-puppet.ts`, `sprite-puppet-rig.ts`, `sprite-outline.ts`)
 
@@ -972,11 +1038,14 @@ Under Look (sprite mode only, `[data-sprites-look]`): "Character motion"
 (intensity 0–150% in steps of 10, "Still" at 0; Breathing, Body sway,
 Head movement, Acting, Hair and cloth physics, Weather and light on
 characters, and Expression changes: Match the emotion / Soft / Simple fade,
-all disabled at 0) and
+all disabled at 0; Press a character to make it bounce) and
 "Character look" (outline 0–6 px, "Off" at 0; Blur characters who are not
 speaking). All save at once. Under Motion "Still", or the system's reduced
 motion, "Character motion" reads as not applying (`data-inactive`) with a
 note (`spriteMotionHold`, `[data-motion-note]`); the choices are kept.
+Right after them, in both modes, "Stage feel": Click effect (Sparks + ! /
+Sparks / Off), Interface sounds with its volume (disabled while off), and
+Inner voices (extra names, saved when you leave the field).
 
 ## Cut-out (frontend)
 

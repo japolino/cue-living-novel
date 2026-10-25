@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { DEFAULT_CONFIG, THEME_PRESET_IDS, SCENE_IMAGE_FITS, EFFECT_INTENSITIES, normalizeConfig, textEffectModeFor } from "../../config.js";
+import { CLICK_EFFECTS, DEFAULT_CONFIG, THEME_PRESET_IDS, SCENE_IMAGE_FITS, EFFECT_INTENSITIES, normalizeConfig, textEffectModeFor } from "../../config.js";
 import {
   AUTO_PLAY_STEPS,
   BUDGET_PRESETS,
@@ -38,6 +38,9 @@ import {
   normalizeSettingsSection,
   searchSettings,
   spriteMotionHold,
+  CLICK_EFFECT_OPTIONS,
+  normalizeClickEffect,
+  describeInterfaceVolume,
   type SettingsSearchEntry,
 } from "./model";
 
@@ -433,5 +436,21 @@ describe("character motion and the Motion setting", () => {
     expect(spriteMotionHold("gentle", true)).toContain("reduced motion");
     expect(spriteMotionHold("full", false)).toBeNull();
     expect(spriteMotionHold("gentle", false)).toBeNull();
+  });
+});
+
+describe("stage feel settings", () => {
+  test("click effect choices cover every value, default Sparks, unknowns fall back", () => {
+    expect(CLICK_EFFECT_OPTIONS.map((option) => option.value)).toEqual([...CLICK_EFFECTS]);
+    expect(CLICK_EFFECT_OPTIONS.map((option) => option.label)).toEqual(["Sparks + !", "Sparks", "Off"]);
+    expect(normalizeClickEffect("sparks-pop")).toBe("sparks-pop");
+    expect(normalizeClickEffect("off")).toBe("off");
+    expect(normalizeClickEffect("confetti")).toBe(DEFAULT_CONFIG.clickEffect);
+  });
+
+  test("the interface volume reads Off while sounds are off", () => {
+    expect(describeInterfaceVolume(false, 0.4)).toBe("Off");
+    expect(describeInterfaceVolume(true, 0.4)).toBe("40%");
+    expect(describeInterfaceVolume(true, 1)).toBe("100%");
   });
 });
