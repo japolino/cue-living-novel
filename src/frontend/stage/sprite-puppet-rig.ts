@@ -14,6 +14,7 @@
  * yaw); physics trails the loose parts and the hair.
  */
 import type { SpriteFaceSpot, SpriteGeometry } from "./sprite-layer.js";
+import { puppetShiftGesture, type PuppetShiftKind } from "./sprite-puppet-fx.js";
 import {
   PUPPET_NEUTRAL_MOOD,
   puppetGesture,
@@ -240,10 +241,18 @@ export const PUPPET_AMPLITUDE = {
   shoulders: 0.008,
   /** Head pitch at level 1 (as a nod). */
   pitch: 0.011,
-  /** Head yaw at full gaze, as a fraction of the face width. */
-  turn: 0.09,
+  /**
+   * Head yaw at full gaze, as a fraction of the face width. It slides the
+   * face's middle inside its outline, which reads as liquid when large, so
+   * looking at someone is mostly the head tilt and lean below.
+   */
+  turn: 0.035,
   /** Torso yaw at full gaze. */
-  bodyTurn: 0.0035,
+  bodyTurn: 0.0012,
+  /** Head tilt toward whoever is looked at, at full gaze. */
+  gazeTilt: (1.6 * Math.PI) / 180,
+  /** Lean of the figure top toward whoever is looked at, at full gaze. */
+  gazeLean: 0.0022,
   /** Tremble sway at level 1. */
   tremble: 0.0012,
   /** Held tilt at a "?". */
@@ -268,6 +277,15 @@ export function puppetPhase(key: string): number {
     hash = Math.imul(hash, 16777619);
   }
   return ((hash >>> 0) % 10007) / 10007;
+}
+
+/**
+ * Where a breath is (0..1): 0 lungs empty, rising to full at 0.5, then the
+ * exhale. Each actor breathes on its own phase and period (3.9–4.6 s).
+ */
+export function puppetBreathCycle(clock: number, phase: number): number {
+  const turns = (clock + phase * 37.1) / (3.9 + phase * 0.7);
+  return turns - Math.floor(turns);
 }
 
 /** Physics offsets the caller simulated (image heights). */
@@ -314,6 +332,8 @@ export type PuppetPoseInput = {
   side?: number;
   gestures?: ReadonlyArray<{ kind: PuppetGestureKind; age: number; gain: number; side: number }>;
   physics?: PuppetPhysics | null;
+  /** An expression change playing (sprite-puppet-fx.ts): its body move, whatever the acting setting. */
+  shift?: { kind: PuppetShiftKind; age: number; gain: number } | null;
 };
 
 const TAU = Math.PI * 2;
@@ -338,10 +358,8 @@ export function puppetPose(input: PuppetPoseInput): PuppetPose {
 
   // Each actor runs on its own clock and slightly different periods.
   const t = input.time + phase * 37.1;
-  const tb = (input.clocks?.breath ?? input.time) + phase * 37.1;
   const ts = (input.clocks?.sway ?? input.time) + phase * 37.1;
-  const breathPeriod = 3.9 + phase * 0.7;
-  const theta = (TAU * tb) / breathPeriod;
+  const theta = TAU * puppetBreathCycle(input.clocks?.breath ?? input.time, phase);
   const breath = clamp01(0.5 - 0.5 * Math.cos(theta) + 0.06 * Math.sin(2 * theta));
   const swayWave = 0.78 * Math.sin((TAU * ts) / 7.3 + phase * 4.1) + 0.22 * Math.sin((TAU * ts) / 3.1 + phase * 9.7);
   const tiltWave = 0.72 * Math.sin((TAU * ts) / 5.9 + phase * 2.3) + 0.28 * Math.sin((TAU * ts) / 2.3 + phase * 7.9);
@@ -366,7 +384,7 @@ export function puppetPose(input: PuppetPoseInput): PuppetPose {
   if (m.sob * act > 0) {
     const k = Math.floor(t / 0.42);
     const catchAt = k * 0.42 + 0.08 + 0.2 * puppetNoise(k + phase * 31);
-    const spike = puppetNoise(k * 1.7 + phase) < 0.55 ? Math.exp(-(((t - catchAt) / 0.05) ** 2)) : 0;
+    const spike = puppetNoise(k * 1.7 + phase) < 0.55 ? Math.exp(-(((t - catchAt) / 0.08) ** 2)) : 0;
     lift += m.sob * act * spike * 0.9 * A.lift * figH;
     shoulders += m.sob * act * spike * 0.5;
     nod += m.sob * act * spike * 0.25 * A.nod * figH * head;
@@ -413,6 +431,16 @@ export function puppetPose(input: PuppetPoseInput): PuppetPose {
     lift += r.lift * A.lift * figH;
     stretch += r.stretch;
   }
+  // An expression change's take, melt, flare or blush plays whatever the acting and head settings.
+  if (input.shift && input.shift.age >= 0) {
+    const sd = puppetShiftGesture(input.shift.kind, input.shift.age, input.shift.gain, puppetGestureDelta());
+    nod += sd.nod * A.nod * figH;
+    lift += sd.lift * A.lift * figH;
+    stretch += sd.stretch;
+    tilt += sd.tilt;
+    shoulders += sd.shoulders;
+    posture += sd.posture;
+  }
   // Gestures: listener nods, emote and staged-motion reactions.
   const d = puppetGestureDelta();
   for (const g of input.gestures ?? []) puppetGesture(g.kind, g.age, g.gain, g.side, d);
@@ -426,16 +454,20 @@ export function puppetPose(input: PuppetPoseInput): PuppetPose {
   sway += d.sway * A.sway * figH;
   tremble += d.tremble;
 
-  // Attention: the head turns toward whoever is looked at, the torso a little.
+  // Attention: the head tilts and turns a little toward whoever is looked at, the body leans a hair.
   turn += gaze * A.turn * faceW * head;
+  tilt += gaze * A.gazeTilt * head;
+  sway += gaze * A.gazeLean * figH;
   const bodyTurn = gaze * A.bodyTurn * figH;
 
+  // A shiver, not a spasm: a few hertz, in the body and shoulders; the head rolls only a hair
+  // (a fast head roll on a warped image reads as convulsing).
   if (tremble > 0) {
-    const j1 = Math.sin(TAU * 9.3 * t) + 0.6 * Math.sin(TAU * 13.7 * t + 1.3);
-    const j2 = Math.sin(TAU * 11.1 * t + 0.4) + 0.5 * Math.sin(TAU * 17.9 * t + 2.1);
+    const j1 = Math.sin(TAU * 6.3 * t) + 0.5 * Math.sin(TAU * 8.9 * t + 1.3);
+    const j2 = Math.sin(TAU * 7.1 * t + 0.4) + 0.4 * Math.sin(TAU * 9.7 * t + 2.1);
     sway += tremble * A.tremble * figH * j1 * 0.6;
-    tilt += tremble * 0.5 * (Math.PI / 180) * j2 * head;
-    shoulders += tremble * 0.2 * Math.abs(j2) * 0.5;
+    tilt += tremble * 0.18 * (Math.PI / 180) * j2 * head;
+    shoulders += tremble * 0.06 * (1 + 0.7 * j2);
   }
 
   // Physics: the body's loose mass shears and squashes; hems, sleeves and hair trail.

@@ -118,6 +118,8 @@ export type PuppetVoice = {
   prevVowel: boolean;
   dots: number;
   syllables: number;
+  /** Syllables so far in the current word (the first one carries the beat). */
+  wordSyllables: number;
   syllableAt: number;
   syllableGain: number;
   stopAt: number;
@@ -137,7 +139,7 @@ const EVENT_RANK: Readonly<Record<PuppetVoiceEvent, number>> = { exclaim: 7, que
 
 export function puppetVoice(): PuppetVoice {
   return {
-    prev: " ", prevVowel: false, dots: 0, syllables: 0,
+    prev: " ", prevVowel: false, dots: 0, syllables: 0, wordSyllables: 0,
     syllableAt: -Infinity, syllableGain: 0, stopAt: -Infinity, exclaimAt: -Infinity, questionAt: -Infinity,
     trailAt: -Infinity, playAt: -Infinity, breathAt: -Infinity, breathGain: 0, lastAt: -Infinity,
   };
@@ -201,16 +203,19 @@ export function puppetVoiceType(voice: PuppetVoice, text: string, time: number):
         note("play");
       } else if (SYLLABIC.test(ch)) {
         voice.syllableAt = time;
-        voice.syllableGain = voice.syllables % 2 === 0 ? 1 : 0.75;
+        voice.syllableGain = voice.syllables % 2 === 0 ? 1 : 0.5;
         voice.syllables += 1;
         note("syllable");
       } else if (VOWEL.test(ch) && !voice.prevVowel) {
+        // Word starts carry the beat; the syllables inside a word barely move the head.
         voice.syllableAt = time;
-        voice.syllableGain = LETTER.test(prev) ? 0.72 : 1;
+        voice.syllableGain = voice.wordSyllables === 0 ? 1 : 0.45;
         voice.syllables += 1;
+        voice.wordSyllables += 1;
         note("syllable");
       }
     }
+    if (!LETTER.test(ch)) voice.wordSyllables = 0;
     voice.prevVowel = VOWEL.test(ch);
     voice.prev = ch;
   }
@@ -240,10 +245,11 @@ export const PUPPET_SILENT: Readonly<PuppetVoiceSample> = { active: 0, syllable:
 
 export function puppetVoiceSample(voice: PuppetVoice, time: number): PuppetVoiceSample {
   const since = (at: number) => time - at;
+  // Soft attacks: a sharp one reads as a twitch on a flat image.
   const a = since(voice.syllableAt);
-  const syllable = a < 0 || a > 0.6 ? 0 : (a < 0.045 ? a / 0.045 : Math.exp(-(a - 0.045) / 0.11)) * voice.syllableGain;
+  const syllable = a < 0 || a > 0.8 ? 0 : (a < 0.08 ? smoothstep(0, 0.08, a) : Math.exp(-(a - 0.08) / 0.16)) * voice.syllableGain;
   const e = since(voice.exclaimAt);
-  const exclaim = e < 0 || e > 0.75 ? 0 : (e < 0.06 ? e / 0.06 : Math.exp(-(e - 0.06) / 0.2));
+  const exclaim = e < 0 || e > 1 ? 0 : (e < 0.12 ? smoothstep(0, 0.12, e) : Math.exp(-(e - 0.12) / 0.22));
   const q = since(voice.questionAt);
   const question = q < 0 || q > 2.4 ? 0 : smoothstep(0, 0.25, q) * (q < 0.9 ? 1 : Math.exp(-(q - 0.9) / 0.6));
   const t = since(voice.trailAt);
@@ -262,6 +268,43 @@ export function puppetVoiceSample(voice: PuppetVoice, time: number): PuppetVoice
     inhale,
     play,
   };
+}
+
+/* ------------------------------------------------------------------------ */
+/* Speech and narration in one paragraph                                     */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * In a paragraph with quotes the speaker only speaks inside them; the
+ * narration around them ("she said, looking away") leaves it quiet. A
+ * paragraph without quotes is all speech.
+ */
+export type PuppetSpeech = { quoted: boolean; inside: boolean };
+
+const QUOTE = /["“”「」『』«»]/;
+const OPEN_QUOTE = new Set(["“", "「", "『", "«"]);
+const CLOSE_QUOTE = new Set(["”", "」", "』", "»"]);
+
+export function puppetSpeech(paragraph: string): PuppetSpeech {
+  return { quoted: QUOTE.test(paragraph), inside: false };
+}
+
+/** Whether the typing is in narration now (the speaker stays quiet). */
+export function puppetNarrating(speech: PuppetSpeech): boolean {
+  return speech.quoted && !speech.inside;
+}
+
+/** The spoken part of freshly typed text (the quote marks themselves drop out); follows the quotes as it goes. */
+export function puppetSpoken(speech: PuppetSpeech, text: string): string {
+  if (!speech.quoted) return text;
+  let spoken = "";
+  for (const ch of text) {
+    if (ch === "\"") speech.inside = !speech.inside;
+    else if (OPEN_QUOTE.has(ch)) speech.inside = true;
+    else if (CLOSE_QUOTE.has(ch)) speech.inside = false;
+    else if (speech.inside) spoken += ch;
+  }
+  return spoken;
 }
 
 /* ------------------------------------------------------------------------ */

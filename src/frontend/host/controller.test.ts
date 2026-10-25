@@ -103,6 +103,8 @@ const baseConfig: VisualNovelConfig = {
   spritePhysics: true,
   spriteOutline: 0,
   spriteFocusBlur: true,
+  spriteTransitions: "expressive",
+  spriteAtmosphere: true,
   textScale: 1,
   audioDirectory: "",
   bgmVolume: 0.7,

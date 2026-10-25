@@ -39,7 +39,9 @@ import {
   type SpriteTurnView,
 } from "../../shared/sprites.js";
 import { DEFAULT_CONFIG, spritePuppetSettings, type VisualNovelSpritePuppet } from "../../config.js";
-import { SpritePuppet, type PuppetImage, type PuppetMode } from "./sprite-puppet.js";
+import { SpritePuppet, type PuppetEffects, type PuppetImage, type PuppetMode } from "./sprite-puppet.js";
+import { puppetColdPlace } from "./sprite-puppet-fx.js";
+import { puppetNarrating, puppetSpeech, puppetSpoken, type PuppetSpeech } from "./sprite-puppet-acting.js";
 import { puppetReactionFor, type PuppetPose } from "./sprite-puppet-rig.js";
 
 /** Natural orientation assumed for every cut-out (see the file comment). */
@@ -474,6 +476,8 @@ export type SpriteActorSnapshot = {
   pose: PuppetPose | null;
   /** 0..1: how much the speaker's head follows the typed text now. */
   voice: number;
+  /** The puppet's transition and atmosphere state (null in CSS mode). */
+  effects: PuppetEffects | null;
 };
 
 export type SpriteLayerSnapshot = {
@@ -513,6 +517,8 @@ type ActorEntry = {
   emoteTimer: ReturnType<typeof setTimeout> | null;
   enterTimer: ReturnType<typeof setTimeout> | null;
   fadeTimer: ReturnType<typeof setTimeout> | null;
+  /** Whether the last staging animated (an expression change then plays its puppet transition). */
+  animate: boolean;
 };
 
 const reflow = (element: HTMLElement): void => {
@@ -538,6 +544,10 @@ export class SpriteLayer {
   private stage: SpriteParagraphStage | null = null;
   private speaker = "";
   private talking = false;
+  /** The typing line's quotes: in a paragraph with quotes the speaker only talks inside them. */
+  private speech: PuppetSpeech = puppetSpeech("");
+  /** Actors that already reacted to this line (talking again after narration does not nod again). */
+  private readonly reacted = new Set<string>();
   private readonly actors = new Map<string, ActorEntry>();
   private readonly loaded = new Set<string>();
   private readonly preloaded = new Set<string>();
@@ -708,6 +718,8 @@ export class SpriteLayer {
     this.speaker = (options.speaker ?? "").trim();
     if (keepCurrent) return;
     this.stage = staged;
+    // Breath shows in the cold: a snowy, wintry or freezing place (snow as the ambient counts on its own).
+    this.container().dataset.vnSpriteCold = puppetColdPlace(this.plateFor(index)) ? "true" : "false";
     this.applyStage(staged, options.animate);
     this.preload(view, index);
     this.options.onStatusChange?.();
@@ -716,6 +728,18 @@ export class SpriteLayer {
   /** The focused speaker reacts and talks (puppet head motion, or the CSS bob) while the line types out. */
   setTalking(talking: boolean): void {
     this.talking = talking;
+    if (!talking) this.reacted.clear();
+    for (const entry of this.actors.values()) this.syncTalking(entry);
+  }
+
+  /**
+   * The line about to type, as the typewriter will type it: with quotes in
+   * it, the speaker talks only inside them and stays quiet through the
+   * narration around them; without quotes, all of it is speech.
+   */
+  speak(text: string): void {
+    this.speech = puppetSpeech(text);
+    this.reacted.clear();
     for (const entry of this.actors.values()) this.syncTalking(entry);
   }
 
@@ -737,7 +761,13 @@ export class SpriteLayer {
 
   /** Text the typewriter just revealed: the speaking puppet follows it (syllables, punctuation). */
   typed(text: string): void {
-    if (this.talking) this.puppet.typed(text);
+    if (!this.talking) return;
+    const was = puppetNarrating(this.speech);
+    const spoken = puppetSpoken(this.speech, text);
+    const narrating = puppetNarrating(this.speech);
+    if (was && !narrating) for (const entry of this.actors.values()) this.syncTalking(entry);
+    if (spoken) this.puppet.typed(spoken);
+    if (!was && narrating) for (const entry of this.actors.values()) this.syncTalking(entry);
   }
 
   snapshot(): SpriteLayerSnapshot {
@@ -764,6 +794,7 @@ export class SpriteLayer {
         puppet: this.puppet.modeFor(entry.key) ?? "css",
         pose: this.puppet.poseFor(entry.key),
         voice: this.puppet.voiceActive(entry.key),
+        effects: this.puppet.effectsFor(entry.key),
       });
     }
     actors.sort((a, b) => a.x - b.x);
@@ -807,6 +838,7 @@ export class SpriteLayer {
       "--vn-sprite-talk-amp": String(strength),
     });
     container.dataset.vnSpriteBlur = this.puppetSettings.spriteFocusBlur ? "true" : "false";
+    container.dataset.vnSpriteTransitions = this.puppetSettings.spriteTransitions;
   }
 
   private applyStage(stage: SpriteParagraphStage | null, animate: boolean): void {
@@ -835,6 +867,7 @@ export class SpriteLayer {
       }
       entry.stage = actor;
       entry.x = x;
+      entry.animate = animate;
       this.puppet.setMood(actor.characterKey, actor.expression, actor.intensity);
       const el = entry.el;
       el.dataset.vnSpriteSlot = actor.slot;
@@ -896,7 +929,7 @@ export class SpriteLayer {
       key, el, body, figure, marks, emote, layers, faceSource: null, active: 0, url: null, shownExpression: null,
       stage: { characterKey: key, expression: "idle", slot: "center", facing: "viewer", focus: false, motion: "none", emote: "none", intensity: 3 },
       x: 50, emoteName: "none", talking: false, token: 0, exiting: false,
-      exitTimer: null, motionTimer: null, emoteTimer: null, enterTimer: null, fadeTimer: null,
+      exitTimer: null, motionTimer: null, emoteTimer: null, enterTimer: null, fadeTimer: null, animate: true,
     };
   }
 
@@ -995,6 +1028,8 @@ export class SpriteLayer {
     const outgoing = entry.layers[entry.active];
     incoming.dataset.vnSpriteLayer = "active";
     outgoing.dataset.vnSpriteLayer = "leaving";
+    // The puppet plays the change in its shader (sprite-puppet-fx.ts), or 0: the CSS crossfade.
+    const shiftMs = entry.animate ? this.puppet.shift(entry.key, incoming, outgoing, entry.stage.expression, entry.stage.intensity) : 0;
     this.fillLayer(incoming, image, expression, vars);
     entry.active = next;
     setVars(entry.el, vars);
@@ -1003,7 +1038,7 @@ export class SpriteLayer {
     entry.fadeTimer = setTimeout(() => {
       entry.fadeTimer = null;
       if (outgoing.dataset.vnSpriteLayer === "leaving") outgoing.dataset.vnSpriteLayer = "idle";
-    }, SPRITE_CROSSFADE_MS + 40);
+    }, Math.max(SPRITE_CROSSFADE_MS, shiftMs) + 40);
   }
 
   private applyEmote(entry: ActorEntry, emote: SpriteEmote, animate: boolean): void {
@@ -1051,13 +1086,16 @@ export class SpriteLayer {
 
   private syncTalking(entry: ActorEntry): void {
     const name = this.view ? castName(this.view, entry.key).trim().toLowerCase() : "";
-    const speaking = this.talking && !entry.exiting && entry.stage.focus
+    const speaking = this.talking && !puppetNarrating(this.speech) && !entry.exiting && entry.stage.focus
       && this.speaker.length > 0 && name === this.speaker.toLowerCase();
     if (entry.talking === speaking) return;
     entry.talking = speaking;
     entry.el.dataset.vnSpriteTalking = speaking ? "true" : "false";
-    // A staged one-shot motion already is the reaction to this line.
-    const reaction = speaking && !entry.body.dataset.vnSpriteMotion ? puppetReactionFor(entry.shownExpression) : null;
+    // A staged one-shot motion already is the reaction to this line; so is the first stretch of speech in it.
+    const reaction = speaking && !this.reacted.has(entry.key) && !entry.body.dataset.vnSpriteMotion
+      ? puppetReactionFor(entry.shownExpression)
+      : null;
+    if (speaking) this.reacted.add(entry.key);
     this.puppet.setTalking(entry.key, speaking, reaction);
   }
 

@@ -72,13 +72,21 @@ export const KEY_ILLUSTRATION_CAP: Readonly<Record<VisualNovelKeyIllustrations, 
  * not speaking a little. `spriteActing` (off by default) lets the body carry
  * the mood, the speaker's head follow the typed words and the others look at
  * whoever speaks ("Puppet acting"); `spritePhysics` lets hair and loose clothes
- * trail and settle ("Puppet physics"). Motion (`effectIntensity`) "off"
- * and the OS reduced-motion setting still stop all movement.
+ * trail and settle ("Puppet physics"). `spriteTransitions` picks how
+ * expression changes, entrances and exits play ("Puppet transitions"):
+ * "expressive" (the style follows the new emotion), "soft" (one gentle
+ * dissolve) or "classic" (the CSS crossfade and fade). `spriteAtmosphere`
+ * puts the scene's weather and light on the characters ("Puppet
+ * atmosphere"). Motion (`effectIntensity`) "off" and the OS reduced-motion
+ * setting still stop all movement.
  */
 export const SPRITE_MOTION_MAX = 150;
 export const SPRITE_OUTLINE_MAX = 6;
+export const SPRITE_TRANSITION_STYLES = ["expressive", "soft", "classic"] as const;
+export type VisualNovelSpriteTransitions = (typeof SPRITE_TRANSITION_STYLES)[number];
 export type VisualNovelSpritePuppet = Pick<VisualNovelConfig,
-  "spriteMotion" | "spriteBreathing" | "spriteSway" | "spriteHeadMotion" | "spriteActing" | "spritePhysics" | "spriteOutline" | "spriteFocusBlur">;
+  "spriteMotion" | "spriteBreathing" | "spriteSway" | "spriteHeadMotion" | "spriteActing" | "spritePhysics" | "spriteOutline" | "spriteFocusBlur"
+  | "spriteTransitions" | "spriteAtmosphere">;
 export type VisualNovelTextEffectMode = (typeof TEXT_EFFECT_MODES)[number];
 
 /**
@@ -233,6 +241,10 @@ export type VisualNovelConfig = {
   spriteOutline: number;
   /** Sprite mode: blur the characters who are not speaking a little. */
   spriteFocusBlur: boolean;
+  /** Sprite mode: how expression changes, entrances and exits play (SPRITE_TRANSITION_STYLES). */
+  spriteTransitions: VisualNovelSpriteTransitions;
+  /** Sprite mode: the scene's weather and light on the characters (breath in the cold, firelight, rain, mist...). */
+  spriteAtmosphere: boolean;
   /** Dialogue text size multiplier, 1 = the theme's own size. */
   textScale: number;
   audioDirectory: string;
@@ -314,6 +326,8 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   spritePhysics: true,
   spriteOutline: 0,
   spriteFocusBlur: true,
+  spriteTransitions: "expressive",
+  spriteAtmosphere: true,
   textScale: 1,
   audioDirectory: "",
   bgmVolume: 0.7,
@@ -456,7 +470,15 @@ export function spritePuppetSettings(config: VisualNovelSpritePuppet): VisualNov
     spritePhysics: config.spritePhysics,
     spriteOutline: config.spriteOutline,
     spriteFocusBlur: config.spriteFocusBlur,
+    spriteTransitions: config.spriteTransitions,
+    spriteAtmosphere: config.spriteAtmosphere,
   };
+}
+
+export function normalizeSpriteTransitions(value: unknown): VisualNovelSpriteTransitions {
+  return typeof value === "string" && (SPRITE_TRANSITION_STYLES as readonly string[]).includes(value)
+    ? value as VisualNovelSpriteTransitions
+    : DEFAULT_CONFIG.spriteTransitions;
 }
 
 function textScale(value: unknown): number {
@@ -561,6 +583,8 @@ export function normalizeConfig(value: unknown): VisualNovelConfig {
     spritePhysics: bool(input.spritePhysics, DEFAULT_CONFIG.spritePhysics),
     spriteOutline: integer(input.spriteOutline, 0, SPRITE_OUTLINE_MAX, DEFAULT_CONFIG.spriteOutline),
     spriteFocusBlur: bool(input.spriteFocusBlur, DEFAULT_CONFIG.spriteFocusBlur),
+    spriteTransitions: normalizeSpriteTransitions(input.spriteTransitions),
+    spriteAtmosphere: bool(input.spriteAtmosphere, DEFAULT_CONFIG.spriteAtmosphere),
     textScale: textScale(input.textScale),
     audioDirectory: stringValue(input.audioDirectory, DEFAULT_CONFIG.audioDirectory).trim(),
     bgmVolume: floatBetween(input.bgmVolume, 0, 1, DEFAULT_CONFIG.bgmVolume),

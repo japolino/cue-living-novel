@@ -306,6 +306,12 @@ test("sprite puppet settings default on (no outline) and clamp to their ranges",
   assert.equal(normalizeConfig({ spriteActing: true }).spriteActing, true);
   assert.equal(normalizeConfig({ spriteActing: "yes" }).spriteActing, false);
   assert.equal(normalizeConfig({ spritePhysics: "off" }).spritePhysics, true);
+  assert.equal(defaults.spriteTransitions, "expressive");
+  assert.equal(defaults.spriteAtmosphere, true);
+  assert.equal(normalizeConfig({ spriteTransitions: "classic" }).spriteTransitions, "classic");
+  assert.equal(normalizeConfig({ spriteTransitions: "wobbly" }).spriteTransitions, "expressive");
+  assert.equal(normalizeConfig({ spriteAtmosphere: false }).spriteAtmosphere, false);
+  assert.equal(normalizeConfig({ spriteAtmosphere: "no" }).spriteAtmosphere, true);
   const clamped = normalizeConfig({ spriteMotion: 400, spriteOutline: 9.6, spriteBreathing: false, spriteSway: "no", spriteFocusBlur: false });
   assert.equal(clamped.spriteMotion, SPRITE_MOTION_MAX);
   assert.equal(clamped.spriteOutline, SPRITE_OUTLINE_MAX);
@@ -314,7 +320,7 @@ test("sprite puppet settings default on (no outline) and clamp to their ranges",
   assert.equal(clamped.spriteFocusBlur, false);
   assert.equal(normalizeConfig({ spriteMotion: -5, spriteOutline: "2" }).spriteMotion, 0);
   assert.equal(normalizeConfig({ spriteOutline: "2" }).spriteOutline, 2);
-  assert.deepEqual(Object.keys(spritePuppetSettings(defaults)).sort(), ["spriteActing", "spriteBreathing", "spriteFocusBlur", "spriteHeadMotion", "spriteMotion", "spriteOutline", "spritePhysics", "spriteSway"]);
+  assert.deepEqual(Object.keys(spritePuppetSettings(defaults)).sort(), ["spriteActing", "spriteAtmosphere", "spriteBreathing", "spriteFocusBlur", "spriteHeadMotion", "spriteMotion", "spriteOutline", "spritePhysics", "spriteSway", "spriteTransitions"]);
 });
 
 test("reading-flow settings: the opening card, the waiting screen and the reply box", () => {

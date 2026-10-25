@@ -63,11 +63,35 @@ import {
   type PuppetTracker,
 } from "./sprite-puppet-physics.js";
 import {
+  PUPPET_ARRIVAL_S,
+  PUPPET_CALM_AIR,
+  PUPPET_SHIFT,
+  PUPPET_SWEEP,
+  puppetArrivalBlur,
+  puppetAtmosphere,
+  puppetDangerBeat,
+  puppetExhaleStarted,
+  puppetFireFlicker,
+  puppetFireflies,
+  puppetMouth,
+  puppetPuff,
+  puppetPuffAt,
+  puppetShiftFor,
+  puppetShiftGain,
+  puppetShiftReveal,
+  puppetSnowStep,
+  type PuppetAtmosphere,
+  type PuppetPuff,
+  type PuppetShiftKind,
+} from "./sprite-puppet-fx.js";
+import {
   IDENTITY_COLOR,
   PUPPET_REACTION_MS,
   cssFilterMatrix,
   parseCssColor,
   puppetBlendIndex,
+  puppetBreathCycle,
+  puppetDisplace,
   puppetFaceOffset,
   puppetGrid,
   puppetMeshPositions,
@@ -98,6 +122,19 @@ export type PuppetActorRef = {
 
 /** "gl": the warped canvas; "css": the img and the CSS idle motion. */
 export type PuppetMode = "gl" | "css";
+
+/** What an actor's transitions and atmosphere are doing now (sprite snapshot, tests). */
+export type PuppetEffects = {
+  /** The expression change playing, if any, and how far the new image has spread (0..1). */
+  shift: PuppetShiftKind | null;
+  reveal: number;
+  /** Blur now (CSS px): a focus pull or the dimming. */
+  blur: number;
+  /** Breath clouds in the air. */
+  puffs: number;
+  /** The weather and light on the character (snow: what has settled). */
+  air: PuppetAtmosphere;
+};
 
 /** Blur of characters who are not speaking (CSS px), with `spriteFocusBlur`. */
 export const PUPPET_FOCUS_BLUR_PX = 1.2;
@@ -152,6 +189,9 @@ type ActorState = {
   /** Breath and sway clocks: they run faster or slower with the mood, without jumps. */
   clocks: { breath: number; sway: number };
   voice: PuppetVoice;
+  /** The syllable beat through a soft spring (the head follows the words, it does not twitch on each vowel). */
+  syllable: number;
+  syllableV: number;
   gestures: Gesture[];
   /** Where the character looks (image space, -1..1) and its spring. */
   gaze: number;
@@ -171,7 +211,41 @@ type ActorState = {
   headTrack: PuppetTracker;
   /** The last pose drawn for the active layer. */
   pose: PuppetPose | null;
+  /** An expression change playing in the shader; its clock starts when the new image first draws. */
+  shift: Shift | null;
+  /** The body's part of the last shift (it settles a little after the images have changed). */
+  take: { kind: PuppetShiftKind; start: number; gain: number } | null;
+  /** The layer a finished shift left behind: not drawn while it is still "leaving". */
+  gone: HTMLElement | null;
+  /** The sprite state last seen (entering, shown, exiting) and since when (seconds): the focus pull. */
+  arrival: { state: string; since: number };
+  /** The atmosphere on this character now (eased toward the scene's), and the snow settled on it. */
+  air: PuppetAtmosphere;
+  snow: number;
+  /** Breath clouds in the air, the breath cycle last frame, and the last cloud's time. */
+  puffs: PuppetPuff[];
+  breathCycle: number;
+  puffAt: number;
+  /** Blur of the focus pull or the dimming (CSS px), this frame. */
+  blur: number;
 };
+
+type Shift = {
+  kind: PuppetShiftKind;
+  gain: number;
+  incoming: HTMLElement;
+  outgoing: HTMLElement;
+  /** When it was asked for, and when the new image first drew (seconds; null until then). */
+  asked: number;
+  start: number | null;
+};
+
+/** A shift whose new image has not drawn by then plays as the CSS crossfade instead (seconds). */
+const SHIFT_START_LIMIT = 0.6;
+/** Extra time the sprite layer waits for a shift that starts a little late (ms). */
+const SHIFT_SLACK_MS = 120;
+/** At most this many breath clouds per character. */
+const PUFF_LIMIT = 6;
 
 type Gesture = { kind: PuppetGestureKind; start: number; gain: number; side: number };
 
@@ -200,8 +274,19 @@ type GlState = {
   grid: PuppetGrid;
   positions: Float32Array<ArrayBuffer>;
   posBuffer: WebGLBuffer;
-  uniforms: Record<"tex" | "blur" | "light" | "lightOffset" | "air" | "airOffset" | "tint" | "tintMode" | "rim" | "rimOffset", WebGLUniformLocation | null>;
+  /** The plain and effects variants of the fragment shader; `uniforms` are the current one's. */
+  programs: Record<"plain" | "fx", GlProgram>;
+  current: "plain" | "fx";
+  uniforms: GlUniforms;
 };
+
+type GlUniforms = Record<
+  "tex" | "blur" | "lod" | "light" | "lightOffset" | "air" | "airOffset" | "tint" | "tintMode" | "rim" | "rimOffset"
+  | "reveal" | "revealGlow" | "revealShape" | "figure" | "texel" | "atmoA" | "atmoB" | "flyPos" | "flyGlow" | "fogColor",
+  WebGLUniformLocation | null
+>;
+
+type GlProgram = { program: WebGLProgram; uniforms: GlUniforms };
 
 const VERTEX_SHADER = `
 attribute vec2 aPos;
@@ -215,12 +300,25 @@ void main() {
 /* Mirrors the CSS stack of an image layer: img (light filter) -> ::after tint
    (blend mode, masked by the figure) -> ::before rim (screen, the figure
    minus itself shifted away from the light) -> layer filter (mood grade).
-   Colours are premultiplied in the texture and in the output. */
+   Colours are premultiplied in the texture and in the output.
+   On top (sprite-puppet-fx.ts): the reveal mask of an expression change
+   (with its glowing edge), the blur of a focus pull (mip bias), and the
+   atmosphere: shimmer and glow (dream haze), colour split (danger pulse),
+   wet sheen and running drops (rain), firelight (embers), ground mist (fog),
+   film grain (flashback), settling snow, and firefly glows. Those compile
+   only into the VN_FX variant: a layer draws with it while a change or the
+   weather touches it, else with the plain one (a software renderer pays for
+   every branch, even one a uniform turns off). */
 const FRAGMENT_SHADER = `
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
 precision mediump float;
+#endif
 varying vec2 vUv;
 uniform sampler2D uTex;
 uniform vec2 uBlur;
+uniform float uLod;
 uniform mat3 uLight;
 uniform vec3 uLightOffset;
 uniform mat3 uAir;
@@ -229,14 +327,40 @@ uniform vec4 uTint;
 uniform float uTintMode;
 uniform vec4 uRim;
 uniform vec2 uRimOffset;
+uniform vec4 uReveal;
+uniform vec4 uRevealGlow;
+uniform vec4 uRevealShape;
+uniform vec4 uFigure;
+uniform vec2 uTexel;
+uniform vec4 uAtmoA;
+uniform vec4 uAtmoB;
+uniform vec4 uFlyPos;
+uniform vec2 uFlyGlow;
+uniform vec3 uFogColor;
+
+float hash(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float vnoise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+
+vec4 tap(vec2 uv) {
+  return texture2D(uTex, uv, uLod);
+}
 
 vec4 figure(vec2 uv) {
+  // Without a blur the plain lookup: the bias form costs more where sampling runs in software.
   if (uBlur.x <= 0.0 && uBlur.y <= 0.0) return texture2D(uTex, uv);
-  vec4 sum = texture2D(uTex, uv) * 4.0;
-  sum += (texture2D(uTex, uv + vec2(uBlur.x, 0.0)) + texture2D(uTex, uv - vec2(uBlur.x, 0.0))
-    + texture2D(uTex, uv + vec2(0.0, uBlur.y)) + texture2D(uTex, uv - vec2(0.0, uBlur.y))) * 2.0;
-  sum += texture2D(uTex, uv + uBlur) + texture2D(uTex, uv - uBlur)
-    + texture2D(uTex, uv + vec2(uBlur.x, -uBlur.y)) + texture2D(uTex, uv + vec2(-uBlur.x, uBlur.y));
+  vec4 sum = tap(uv) * 4.0;
+  sum += (tap(uv + vec2(uBlur.x, 0.0)) + tap(uv - vec2(uBlur.x, 0.0))
+    + tap(uv + vec2(0.0, uBlur.y)) + tap(uv - vec2(0.0, uBlur.y))) * 2.0;
+  sum += tap(uv + uBlur) + tap(uv - uBlur)
+    + tap(uv + vec2(uBlur.x, -uBlur.y)) + tap(uv + vec2(-uBlur.x, uBlur.y));
   return sum / 16.0;
 }
 
@@ -258,20 +382,145 @@ vec3 blendMode(vec3 b, vec3 s, float mode) {
   return vec3(softLight(b.r, s.r), softLight(b.g, s.g), softLight(b.b, s.b));
 }
 
+/* How much of this layer shows during an expression change: the new image
+   spreads from the face (or from the top down, or at a cut) through a soft,
+   grainy edge; the old one goes just behind that edge, in a band of its own,
+   so one of the two is always opaque and the figure never turns see-through. */
+float revealMask(vec2 uv) {
+  if (uReveal.z < -0.5) return 1.0;
+  float w = max(uReveal.y, 0.001);
+  vec2 q = vec2(uv.x * uFigure.x, uv.y);
+  float field;
+  float n;
+  if (uReveal.z < 0.5) {
+    field = length(q - vec2(uRevealShape.x * uFigure.x, uRevealShape.y)) / max(uRevealShape.z, 0.01);
+    n = vnoise(q * 14.0) * 0.65 + vnoise(q * 37.0) * 0.35;
+  } else if (uReveal.z < 1.5) {
+    field = (uv.y - uFigure.y) / max(uFigure.z, 0.01);
+    n = vnoise(vec2(q.x * 26.0, q.y * 2.5)) * 0.8 + vnoise(q * 40.0) * 0.2;
+  } else {
+    field = 0.0;
+    n = 0.0;
+  }
+  field = mix(field, n, uRevealShape.w);
+  // The gap between the two bands absorbs small differences between the two images' rigs.
+  float gap = 0.1;
+  float p = uReveal.x * (1.0 + 2.0 * w + gap);
+  if (uReveal.w < 0.0) return 1.0 - smoothstep(field + w + gap, field + 2.0 * w + gap, p);
+  return smoothstep(field, field + w, p);
+}
+
 void main() {
-  vec4 t = figure(vUv);
+  vec2 uv = vUv;
+#ifdef VN_FX
+  float haze = uAtmoB.x;
+  if (haze > 0.0) uv.x += sin(uv.y * 26.0 + uAtmoB.w * 1.7) * 0.0016 * haze;
+#endif
+  vec4 t = figure(uv);
+#ifdef VN_FX
+  float beat = uAtmoB.y;
+  if (beat > 0.001) {
+    vec2 o = vec2(uTexel.x * 3.0 * beat, 0.0);
+    vec4 rs = figure(uv + o);
+    vec4 bs = figure(uv - o);
+    t = vec4(rs.r, t.g, bs.b, max(t.a, max(rs.a, bs.a)));
+  }
+  vec4 halo = vec4(0.0);
+  if (haze > 0.0) {
+    vec4 bloom = texture2D(uTex, uv, uLod + 4.0);
+    halo = vec4(mix(bloom.rgb, vec3(bloom.a), 0.55), bloom.a) * 0.38 * haze;
+  }
+  float mask = revealMask(uv);
+  if (t.a * mask < 0.002) {
+    gl_FragColor = halo * mask;
+    return;
+  }
+#else
   if (t.a < 0.002) {
     gl_FragColor = vec4(0.0);
     return;
   }
+#endif
   vec3 c = clamp(t.rgb / t.a, 0.0, 1.0);
   c = clamp(uLight * c + uLightOffset, 0.0, 1.0);
   c = mix(c, blendMode(c, uTint.rgb, uTintMode), uTint.a);
-  float shifted = texture2D(uTex, vUv - uRimOffset).a;
+  float shifted = texture2D(uTex, uv - uRimOffset).a;
   c = mix(c, c + uRim.rgb - c * uRim.rgb, uRim.a * clamp(1.0 - shifted, 0.0, 1.0));
-  c = clamp(uAir * c + uAirOffset, 0.0, 1.0);
-  gl_FragColor = vec4(c * t.a, t.a);
+  float a = t.a;
+#ifdef VN_FX
+  // Height in the figure: 0 at the feet, 1 at the top of the head.
+  float h = clamp((uFigure.w - uv.y) / max(uFigure.z, 0.01), 0.0, 1.0);
+  float time = uAtmoB.w;
+  float wet = uAtmoA.y;
+  if (wet > 0.0) {
+    float above = texture2D(uTex, uv - vec2(0.0, uTexel.y * 3.0)).a;
+    float top = clamp(t.a - above, 0.0, 1.0);
+    c *= 1.0 - 0.1 * wet;
+    c = mix(c, c * c * 1.12 + 0.02, 0.25 * wet);
+    c += vec3(0.8, 0.88, 1.0) * top * 0.24 * wet;
+    float cell = uv.x / (uTexel.x * 9.0);
+    float col = floor(cell);
+    float r = hash(vec2(col, 3.7));
+    if (r > 0.8) {
+      float y = fract(uv.y * 1.6 - time * (0.22 + 0.35 * fract(r * 7.0)) + r * 13.0);
+      float drop = smoothstep(0.0, 0.012, y) * (1.0 - smoothstep(0.012, 0.08, y));
+      float across = 1.0 - abs(fract(cell) - 0.5) * 2.0;
+      c += vec3(0.85, 0.9, 1.0) * drop * smoothstep(0.55, 1.0, across) * 0.3 * wet;
+    }
+  }
+  float fire = uAtmoA.z;
+  if (fire > 0.0) {
+    float k = fire * (0.12 + 0.22 * (1.0 - h) * (1.0 - h));
+    c += vec3(1.0, 0.5, 0.18) * k * (0.55 + 0.45 * c);
+  }
+  if (uFlyGlow.x + uFlyGlow.y > 0.0) {
+    vec2 d1 = (uv - uFlyPos.xy) * vec2(uFigure.x, 1.0);
+    vec2 d2 = (uv - uFlyPos.zw) * vec2(uFigure.x, 1.0);
+    float g = uFlyGlow.x * exp(-dot(d1, d1) / 0.0018) + uFlyGlow.y * exp(-dot(d2, d2) / 0.0018);
+    c += vec3(0.72, 1.0, 0.42) * g * 0.5;
+  }
+  float snow = uAtmoB.z;
+  if (snow > 0.001) {
+    float far = texture2D(uTex, uv - vec2(0.0, uTexel.y * 6.0)).a;
+    float top = clamp(t.a * (1.0 - far) * 1.6, 0.0, 1.0);
+    float n = vnoise(uv / (uTexel * 4.0)) * 0.7 + vnoise(uv / (uTexel * 13.0)) * 0.3;
+    float flake = top * smoothstep(1.0 - snow, 1.0 - snow + 0.12, n);
+    c = mix(c, vec3(0.95, 0.97, 1.0), flake * 0.92);
+  }
+#endif
+  c = clamp(uAir * clamp(c, 0.0, 1.0) + uAirOffset, 0.0, 1.0);
+#ifdef VN_FX
+  float fog = uAtmoA.x;
+  if (fog > 0.0) {
+    float drift = vnoise(vec2(uv.x * 5.0 + time * 0.04, uv.y * 3.0)) - 0.5;
+    float mist = fog * (1.0 - smoothstep(0.0, 0.5, h + drift * 0.16)) * 0.62;
+    c = mix(c, uFogColor, mist);
+    a *= 1.0 - mist * 0.4;
+  }
+  float grain = uAtmoA.w;
+  if (grain > 0.0) {
+    c += (hash(floor(uv / uTexel) + floor(time * 24.0)) - 0.5) * 0.09 * grain;
+    c *= 1.0 + (hash(vec2(floor(time * 12.0), 1.3)) - 0.5) * 0.05 * grain;
+  }
+  float glow = uReveal.w > 0.0 && uReveal.z > -0.5 ? mask * (1.0 - mask) * 4.0 : 0.0;
+  c = clamp(c + uRevealGlow.rgb * uRevealGlow.a * glow, 0.0, 1.0);
+  a *= mask;
+  vec4 col = vec4(c * a, a);
+  gl_FragColor = col + halo * mask * (1.0 - col.a);
+#else
+  gl_FragColor = vec4(c * a, a);
+#endif
 }`;
+
+/** A colour through a colour matrix, clamped to 0..1. */
+function applyColor(matrix: ColorMatrix, rgb: readonly [number, number, number]): [number, number, number] {
+  const m = matrix.m;
+  const out: [number, number, number] = [0, 0, 0];
+  for (let i = 0; i < 3; i += 1) {
+    out[i] = Math.max(0, Math.min(1, m[i * 3]! * rgb[0] + m[i * 3 + 1]! * rgb[1] + m[i * 3 + 2]! * rgb[2] + matrix.o[i]!));
+  }
+  return out;
+}
 
 /** Row-major 3x3 -> the column-major array uniformMatrix3fv wants. */
 const columnMajor = (m: readonly number[]): Float32Array => new Float32Array([m[0]!, m[3]!, m[6]!, m[1]!, m[4]!, m[7]!, m[2]!, m[5]!, m[8]!]);
@@ -286,6 +535,17 @@ function compile(gl: WebGLRenderingContext, type: number, source: string): WebGL
     return null;
   }
   return shader;
+}
+
+/** The head's syllable beat: a critically damped spring at about 3.5 Hz keeps the words' rhythm, drops the vowel ticks. */
+function followSyllable(actor: ActorState, target: number, dt: number): void {
+  const omega = Math.PI * 2 * 3.5;
+  const steps = Math.max(1, Math.ceil(dt * 240));
+  const h = dt / steps;
+  for (let i = 0; i < steps; i += 1) {
+    actor.syllableV += (omega * omega * (target - actor.syllable) - 2 * omega * actor.syllableV) * h;
+    actor.syllable += actor.syllableV * h;
+  }
 }
 
 /** Whether a context renders on the CPU (not every browser flags that as a performance caveat). */
@@ -328,22 +588,58 @@ function createGl(doc: Document): GlState | null {
     return null;
   }
   const vertex = compile(gl, gl.VERTEX_SHADER, VERTEX_SHADER);
-  const fragment = compile(gl, gl.FRAGMENT_SHADER, FRAGMENT_SHADER);
-  const program = gl.createProgram();
-  if (!vertex || !fragment || !program) return null;
-  gl.attachShader(program, vertex);
-  gl.attachShader(program, fragment);
-  gl.linkProgram(program);
-  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) return null;
-  gl.useProgram(program);
+  if (!vertex) return null;
+  const link = (source: string): GlProgram | null => {
+    const fragment = compile(gl!, gl!.FRAGMENT_SHADER, source);
+    const program = gl!.createProgram();
+    if (!fragment || !program) return null;
+    gl!.attachShader(program, vertex);
+    gl!.attachShader(program, fragment);
+    // Both variants read the same buffers.
+    gl!.bindAttribLocation(program, 0, "aUv");
+    gl!.bindAttribLocation(program, 1, "aPos");
+    gl!.linkProgram(program);
+    if (!gl!.getProgramParameter(program, gl!.LINK_STATUS)) return null;
+    const uniform = (name: string) => gl!.getUniformLocation(program, name);
+    const uniforms: GlUniforms = {
+      tex: uniform("uTex"),
+      blur: uniform("uBlur"),
+      light: uniform("uLight"),
+      lightOffset: uniform("uLightOffset"),
+      air: uniform("uAir"),
+      airOffset: uniform("uAirOffset"),
+      tint: uniform("uTint"),
+      tintMode: uniform("uTintMode"),
+      rim: uniform("uRim"),
+      rimOffset: uniform("uRimOffset"),
+      lod: uniform("uLod"),
+      reveal: uniform("uReveal"),
+      revealGlow: uniform("uRevealGlow"),
+      revealShape: uniform("uRevealShape"),
+      figure: uniform("uFigure"),
+      texel: uniform("uTexel"),
+      atmoA: uniform("uAtmoA"),
+      atmoB: uniform("uAtmoB"),
+      flyPos: uniform("uFlyPos"),
+      flyGlow: uniform("uFlyGlow"),
+      fogColor: uniform("uFogColor"),
+    };
+    gl!.useProgram(program);
+    gl!.uniform1i(uniforms.tex, 0);
+    return { program, uniforms };
+  };
+  const fx = link(FRAGMENT_SHADER.replace("\n", "\n#define VN_FX\n"));
+  const plain = link(FRAGMENT_SHADER);
+  if (!fx || !plain) return null;
+  gl.useProgram(plain.program);
 
   const grid = puppetGrid();
   const uvBuffer = gl.createBuffer();
   const posBuffer = gl.createBuffer();
   const indexBuffer = gl.createBuffer();
   if (!uvBuffer || !posBuffer || !indexBuffer) return null;
-  const aUv = gl.getAttribLocation(program, "aUv");
-  const aPos = gl.getAttribLocation(program, "aPos");
+  const aUv = 0;
+  const aPos = 1;
   gl.bindBuffer(gl.ARRAY_BUFFER, uvBuffer);
   gl.bufferData(gl.ARRAY_BUFFER, grid.uv, gl.STATIC_DRAW);
   gl.enableVertexAttribArray(aUv);
@@ -360,21 +656,7 @@ function createGl(doc: Document): GlState | null {
   gl.clearColor(0, 0, 0, 0);
   gl.activeTexture(gl.TEXTURE0);
 
-  const uniform = (name: string) => gl!.getUniformLocation(program, name);
-  const uniforms = {
-    tex: uniform("uTex"),
-    blur: uniform("uBlur"),
-    light: uniform("uLight"),
-    lightOffset: uniform("uLightOffset"),
-    air: uniform("uAir"),
-    airOffset: uniform("uAirOffset"),
-    tint: uniform("uTint"),
-    tintMode: uniform("uTintMode"),
-    rim: uniform("uRim"),
-    rimOffset: uniform("uRimOffset"),
-  };
-  gl.uniform1i(uniforms.tex, 0);
-  return { canvas, gl, webgl2, grid, positions, posBuffer, uniforms };
+  return { canvas, gl, webgl2, grid, positions, posBuffer, programs: { plain, fx }, current: "plain", uniforms: plain.uniforms };
 }
 
 const reducedMotionQuery = (): MediaQueryList | null =>
@@ -397,6 +679,8 @@ export class SpritePuppet {
   private readonly bakes = new Map<string, HTMLCanvasElement>();
   private raf = 0;
   private lastFrame = 0;
+  /** The danger pulse's beat this frame (readBeat). */
+  private beat = 0;
   /** When the actors' screen positions were last read (seconds). */
   private placedAt = -Infinity;
   private paused = false;
@@ -452,6 +736,8 @@ export class SpritePuppet {
       physics: this.settings.spritePhysics ? 1 : 0,
       clocks: { breath: 0, sway: 0 },
       voice: puppetVoice(),
+      syllable: 0,
+      syllableV: 0,
       gestures: [],
       gaze: 0,
       gazeV: 0,
@@ -466,6 +752,16 @@ export class SpritePuppet {
       bodyTrack: puppetTracker(),
       headTrack: puppetTracker(),
       pose: null,
+      shift: null,
+      take: null,
+      gone: null,
+      arrival: { state: "", since: 0 },
+      air: { ...PUPPET_CALM_AIR },
+      snow: 0,
+      puffs: [],
+      breathCycle: -1,
+      puffAt: -Infinity,
+      blur: 0,
     };
     ref.el.dataset.vnPuppet = "css";
     this.actors.set(ref.key, actor);
@@ -481,6 +777,7 @@ export class SpritePuppet {
   detach(key: string, el?: HTMLElement): void {
     const actor = this.actors.get(key);
     if (!actor || (el && actor.ref.el !== el)) return;
+    this.endShift(actor);
     this.actors.delete(key);
     for (const el of actor.ref.layers) {
       const state = this.layerStates.get(el);
@@ -553,7 +850,8 @@ export class SpritePuppet {
 
   /**
    * Text the typewriter just revealed for the current line: the talking
-   * actors follow it, and the others react at the ends of sentences.
+   * actors follow it, and the others react at the ends of sentences. In the
+   * cold, a pause or a sentence end lets a breath cloud out.
    */
   typed(text: string): void {
     if (!text || this.destroyed) return;
@@ -562,7 +860,48 @@ export class SpritePuppet {
       if (!actor.talking || actor.mode !== "gl") continue;
       const event = puppetVoiceType(actor.voice, text, time);
       if (event === "stop" || event === "exclaim" || event === "question") this.listen(actor, event, time);
+      if (event && event !== "syllable" && actor.air.breath > 0.3) this.puff(actor, time, event === "pause" ? 0.75 : 0.9);
     }
+  }
+
+  /**
+   * An expression change on `key`: the new image (on `incoming`) spreads
+   * over the old one (`outgoing`) in the shader, in the style the transition
+   * setting and the new emotion pick. Returns how long the old layer must
+   * stay (ms), or 0 when the CSS crossfade plays instead (CSS mode,
+   * "classic", still). Call it before the incoming layer is filled.
+   */
+  shift(key: string, incoming: HTMLElement, outgoing: HTMLElement, expression: string | null | undefined, intensity: number): number {
+    const actor = this.actors.get(key);
+    if (!actor || actor.mode !== "gl" || this.destroyed) return 0;
+    const strength = this.strength();
+    const kind = strength > 0 ? puppetShiftFor(expression, this.settings.spriteTransitions) : null;
+    if (!kind) return 0;
+    this.endShift(actor);
+    const gentle = this.rootEl?.dataset.vnEffectIntensity === "gentle" ? 0.6 : 1;
+    actor.shift = { kind, gain: puppetShiftGain(intensity) * gentle, incoming, outgoing, asked: now() / 1000, start: null };
+    actor.gone = null;
+    // The new layer shows at once (sprite-css.ts), so nothing older may sit on its canvas until the first draw.
+    this.clearCanvas(incoming);
+    incoming.dataset.vnSpriteShift = kind;
+    outgoing.dataset.vnSpriteShift = kind;
+    this.schedule();
+    return Math.round(PUPPET_SHIFT[kind].duration * 1000) + SHIFT_SLACK_MS;
+  }
+
+  /** The transition and atmosphere state of an actor (tests and debugging), or null in CSS mode. */
+  effectsFor(key: string): PuppetEffects | null {
+    const actor = this.actors.get(key);
+    if (!actor || actor.mode !== "gl") return null;
+    const time = now() / 1000;
+    const shift = actor.shift;
+    return {
+      shift: shift?.kind ?? null,
+      reveal: shift ? (shift.start === null ? 0 : puppetShiftReveal(shift.kind, time - shift.start)) : 1,
+      blur: Math.round(actor.blur * 100) / 100,
+      puffs: actor.puffs.filter((puff) => puppetPuffAt(puff, time) !== null).length,
+      air: { ...actor.air, snow: actor.snow },
+    };
   }
 
   /** The last pose drawn for an actor (tests and debugging), or null in CSS mode. */
@@ -602,7 +941,11 @@ export class SpritePuppet {
       if (actor.mode !== mode) {
         actor.mode = mode;
         actor.ref.el.dataset.vnPuppet = mode;
-        if (mode === "css") this.resetMarks(actor);
+        if (mode === "css") {
+          this.resetMarks(actor);
+          this.endShift(actor);
+          actor.puffs = [];
+        }
       }
       for (const el of actor.ref.layers) {
         const state = this.layerStates.get(el);
@@ -931,12 +1274,13 @@ export class SpritePuppet {
       }
       // Screen to image space: a mirrored figure looks the other way in its own image.
       if (actor.ref.el.dataset.vnSpriteMirrored === "true") target = -target;
-      // A slightly underdamped spring: the head turns, overshoots a hair, settles.
-      const omega = Math.PI * 2 * 1.4;
+      // A critically damped spring: the head turns and settles without overshoot (a wobbling
+      // turn reads as liquid on a flat image).
+      const omega = Math.PI * 2 * 1.2;
       const steps = Math.max(1, Math.ceil(dt * 240));
       const h = dt / steps;
       for (let i = 0; i < steps; i += 1) {
-        actor.gazeV += (omega * omega * (target - actor.gaze) - 2 * 0.72 * omega * actor.gazeV) * h;
+        actor.gazeV += (omega * omega * (target - actor.gaze) - 2 * omega * actor.gazeV) * h;
         actor.gaze += actor.gazeV * h;
       }
     }
@@ -979,6 +1323,7 @@ export class SpritePuppet {
     if (this.destroyed || !this.shouldRun()) return;
     const dt = this.lastFrame ? Math.min(0.1, Math.max(0, (time - this.lastFrame) / 1000)) : 1 / 60;
     this.lastFrame = time;
+    this.beat = this.readBeat();
     this.attend(time / 1000, dt);
     for (const actor of this.actors.values()) {
       if (actor.mode === "gl") this.drawActor(actor, time / 1000, dt);
@@ -1013,10 +1358,11 @@ export class SpritePuppet {
       clocks: actor.clocks,
       acting: actor.acting,
       mood: actor.mood,
-      voice: actor.talk > 0 ? puppetVoiceSample(actor.voice, time) : null,
+      voice: actor.talk > 0 ? { ...puppetVoiceSample(actor.voice, time), syllable: actor.syllable } : null,
       gaze: actor.gaze,
       side: actor.side,
       gestures: actor.gestures.map((g) => ({ kind: g.kind, age: time - g.start, gain: g.gain * actor.acting, side: g.side })),
+      shift: actor.take ? { kind: actor.take.kind, age: time - actor.take.start, gain: actor.take.gain } : null,
       physics: pw > 0.001
         ? {
           bodyX: actor.body.x * pw,
@@ -1048,13 +1394,15 @@ export class SpritePuppet {
     actor.clocks.sway += dt * (1 + (actor.mood.swayRate - 1) * actor.acting);
     if (actor.reaction && time - actor.reaction.start > PUPPET_REACTION_MS[actor.reaction.kind] / 1000) actor.reaction = null;
     if (actor.gestures.length) actor.gestures = actor.gestures.filter((g) => time - g.start < PUPPET_GESTURE_S[g.kind]);
-    const active = actor.ref.layers.map((el) => this.layerStates.get(el)).find((state) => state?.el.dataset.vnSpriteLayer === "active" && state.rig);
+    followSyllable(actor, actor.talk > 0 ? puppetVoiceSample(actor.voice, time).syllable : 0, dt);
+    this.frameEffects(actor, time, dt);
+    const active = this.activeLayer(actor);
     if (active && actor.physics > 0.001) this.simulate(actor, active, time, dt);
     let marked = false;
     for (const el of actor.ref.layers) {
       const state = this.layerStates.get(el);
       const role = el.dataset.vnSpriteLayer;
-      if (!state?.rig || (role !== "active" && role !== "leaving")) continue;
+      if (!state?.rig || (role !== "active" && role !== "leaving") || el === actor.gone) continue;
       const pose = this.poseOf(actor, state.rig, time);
       if (!this.drawLayer(state, pose, time * 1000)) continue;
       if (role === "active") {
@@ -1063,6 +1411,132 @@ export class SpritePuppet {
       }
     }
     if (!marked) this.resetMarks(actor);
+  }
+
+  private activeLayer(actor: ActorState): LayerState | undefined {
+    return actor.ref.layers.map((el) => this.layerStates.get(el)).find((state) => state?.el.dataset.vnSpriteLayer === "active" && state.rig);
+  }
+
+  /* ---- transitions and atmosphere ------------------------------------ */
+
+  /** Finish a shift now: both layers go back to the CSS rules, and the old image is cleared. */
+  private endShift(actor: ActorState): void {
+    const shift = actor.shift;
+    if (!shift) return;
+    actor.shift = null;
+    delete shift.incoming.dataset.vnSpriteShift;
+    delete shift.outgoing.dataset.vnSpriteShift;
+    // The sprite layer may already have retired the old layer (a slow frame let its timer run first).
+    if (shift.outgoing.dataset.vnSpriteLayer !== "active") {
+      actor.gone = shift.outgoing;
+      this.clearCanvas(shift.outgoing);
+    }
+  }
+
+  private clearCanvas(el: HTMLElement): void {
+    const state = this.layerStates.get(el);
+    if (state?.canvas && state.ctx) state.ctx.clearRect(0, 0, state.canvas.width, state.canvas.height);
+  }
+
+  /** Whether the stage is cold (the sprite layer reads the plate; snow counts on its own). */
+  private coldScene(): boolean {
+    return this.options.container().dataset.vnSpriteCold === "true";
+  }
+
+  /**
+   * Once per frame for an actor: the shift's end, the focus pull, the
+   * atmosphere easing toward the scene's (weather changes fade in and out),
+   * settling snow, and breath clouds on each exhale and while it speaks.
+   */
+  private frameEffects(actor: ActorState, time: number, dt: number): void {
+    const s = this.settings;
+    const shift = actor.shift;
+    if (shift) {
+      const late = shift.start === null && time - shift.asked > SHIFT_START_LIMIT;
+      if (late || (shift.start !== null && time - shift.start >= PUPPET_SHIFT[shift.kind].duration)) this.endShift(actor);
+    }
+    if (actor.take && time - actor.take.start > PUPPET_SHIFT[actor.take.kind].duration + 0.5) actor.take = null;
+    if (actor.gone && actor.gone.dataset.vnSpriteLayer !== "leaving") actor.gone = null;
+
+    const state = actor.ref.el.dataset.vnSpriteState ?? "";
+    if (state !== actor.arrival.state) actor.arrival = { state, since: time };
+    let blur = actor.dim * PUPPET_FOCUS_BLUR_PX;
+    if (s.spriteTransitions !== "classic" && (state === "entering" || state === "exiting")) {
+      blur = Math.max(blur, puppetArrivalBlur(state, (time - actor.arrival.since) / PUPPET_ARRIVAL_S[state]));
+    }
+    actor.blur = blur;
+
+    const level = s.spriteAtmosphere ? (this.rootEl?.dataset.vnEffectIntensity === "gentle" ? 0.6 : 1) : 0;
+    const target = puppetAtmosphere(this.sceneEl?.dataset.vnSceneAmbient, this.coldScene());
+    // The weather changes over a second or so; switching the setting off fades like the other settings.
+    const k = 1 - Math.exp(-dt / (s.spriteAtmosphere ? 1.2 : 0.4));
+    for (const key of Object.keys(actor.air) as Array<keyof PuppetAtmosphere>) {
+      const goal = target[key] * level;
+      const next = actor.air[key] + (goal - actor.air[key]) * k;
+      actor.air[key] = Math.abs(next - goal) < 0.003 ? goal : next;
+    }
+    actor.snow = s.spriteAtmosphere ? puppetSnowStep(actor.snow, actor.air.snow, dt) : actor.snow * (1 - k);
+    if (actor.snow < 0.001) actor.snow = 0;
+
+    const cycle = puppetBreathCycle(actor.clocks.breath, actor.phase);
+    if (actor.air.breath > 0.3) {
+      if (actor.breathCycle >= 0 && puppetExhaleStarted(actor.breathCycle, cycle)) this.puff(actor, time, 1);
+      // Words carry breath too: a little vapour every so often while the line types.
+      else if (actor.talking && time - actor.puffAt > 0.8 && puppetVoiceSample(actor.voice, time).active > 0.5) this.puff(actor, time, 0.55);
+    }
+    actor.breathCycle = cycle;
+    if (actor.puffs.length) actor.puffs = actor.puffs.filter((puff) => puppetPuffAt(puff, time) !== null);
+  }
+
+  /** A breath cloud at the mouth, heading the way the figure faces. */
+  private puff(actor: ActorState, time: number, size: number): void {
+    const state = this.activeLayer(actor);
+    const rig = state?.rig;
+    if (!rig || !this.onStage(actor)) return;
+    const facing = actor.ref.el.dataset.vnSpriteFacing;
+    // In its own image a figure turned to a side faces left (SPRITE_NATURAL_FACING); mirroring turns it.
+    const dir = facing === "left" || facing === "right" ? -1 : 0;
+    const [mx, my] = puppetMouth(rig.faceX, rig.faceY, rig.faceW, rig.faceH, dir);
+    const [dx, dy] = puppetDisplace(rig, actor.pose ?? this.poseOf(actor, rig, time), mx, my);
+    actor.puffs.push(puppetPuff(mx + dx, my + dy, dir, rig.faceW, time, size, puppetNoise(time * 7.3 + actor.phase * 11)));
+    if (actor.puffs.length > PUFF_LIMIT) actor.puffs.shift();
+    actor.puffAt = time;
+  }
+
+  /** The danger pulse's beat now (0..1), read from the overlay's animated opacity. */
+  private readBeat(): number {
+    if (this.sceneEl?.dataset.vnSceneAmbient !== "danger_pulse") return 0;
+    const overlay = this.rootEl?.querySelector("[data-vn-ambient]");
+    return overlay ? puppetDangerBeat(Number.parseFloat(getComputedStyle(overlay, "::before").opacity)) : 0;
+  }
+
+  /** Breath clouds over the figure, lit like it (light preset and mood grade). */
+  private drawPuffs(state: LayerState, rig: PuppetRig, look: Look, width: number, height: number, time: number): void {
+    const ctx = state.ctx;
+    const actor = state.actor;
+    if (!ctx) return;
+    const white = applyColor(look.air, applyColor(look.light, [0.96, 0.97, 1]));
+    const rgb = white.map((v) => Math.round(v * 255)).join(", ");
+    for (const puff of actor.puffs) {
+      const at = puppetPuffAt(puff, time);
+      if (!at) continue;
+      const alpha = at.alpha * Math.min(1, actor.air.breath);
+      const cx = (rig.cx + at.x / rig.aspect) * width;
+      const cy = (rig.by - at.y) * height;
+      const r = at.r * height;
+      for (let i = 0; i < 3; i += 1) {
+        const ox = (puppetNoise(puff.seed * 13 + i) - 0.5) * r * 0.9;
+        const oy = (puppetNoise(puff.seed * 29 + i) - 0.5) * r * 0.6;
+        const rr = r * (0.55 + 0.45 * puppetNoise(puff.seed * 41 + i));
+        const gradient = ctx.createRadialGradient(cx + ox, cy + oy, 0, cx + ox, cy + oy, rr);
+        gradient.addColorStop(0, `rgba(${rgb}, ${(alpha * 0.6).toFixed(3)})`);
+        gradient.addColorStop(1, `rgba(${rgb}, 0)`);
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(cx + ox, cy + oy, rr, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
   }
 
   /** The emote box follows the face (the marks are not mirrored, so x flips for mirrored sprites). */
@@ -1159,9 +1633,16 @@ export class SpritePuppet {
     puppetMeshPositions(rig, pose, g.grid, g.positions);
     gl.bindBuffer(gl.ARRAY_BUFFER, g.posBuffer);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, g.positions);
+    this.useVariant(this.needsEffects(state) ? "fx" : "plain");
     const u = g.uniforms;
-    const blur = state.actor.dim * PUPPET_FOCUS_BLUR_PX;
+    const actor = state.actor;
+    const t = time / 1000;
+    const blur = actor.blur;
     gl.uniform2f(u.blur, blur / cssW, blur / cssH);
+    // A big blur (the focus pull) samples blurrier mip levels, so 9 taps stay smooth.
+    gl.uniform1f(u.lod, blur > 2 ? Math.log2((blur * scale) / 2) : 0);
+    this.revealUniforms(state, rig, t);
+    this.airUniforms(state, rig, look, t, width, height);
     gl.uniformMatrix3fv(u.light, false, columnMajor(look.light.m));
     gl.uniform3f(u.lightOffset, ...look.light.o);
     gl.uniformMatrix3fv(u.air, false, columnMajor(look.air.m));
@@ -1176,7 +1657,75 @@ export class SpritePuppet {
     // The frame sits in the bottom-left corner of the shared drawing buffer.
     ctx.clearRect(0, 0, width, height);
     ctx.drawImage(g.canvas, 0, g.canvas.height - height, width, height, 0, 0, width, height);
+    if (actor.puffs.length && state.el.dataset.vnSpriteLayer === "active") this.drawPuffs(state, rig, look, width, height, t);
     this.show(state, "puppet");
     return true;
+  }
+
+  /** Whether a change or the weather touches this layer now (else it draws with the plain shader). */
+  private needsEffects(state: LayerState): boolean {
+    const actor = state.actor;
+    const shift = actor.shift;
+    if (shift && (state.el === shift.incoming || state.el === shift.outgoing)) return true;
+    const air = actor.air;
+    return air.fog > 0.001 || air.wet > 0.001 || air.fire > 0.001 || air.grain > 0.001 || air.haze > 0.001
+      || air.pulse * this.beat > 0.001 || air.fireflies > 0.01 || actor.snow > 0.001;
+  }
+
+  private useVariant(variant: "plain" | "fx"): void {
+    const g = this.glState!;
+    if (g.current === variant) return;
+    g.current = variant;
+    g.uniforms = g.programs[variant].uniforms;
+    g.gl.useProgram(g.programs[variant].program);
+  }
+
+  /** The expression change's mask for this layer: the new image spreads, the old one goes behind the edge. */
+  private revealUniforms(state: LayerState, rig: PuppetRig, time: number): void {
+    const g = this.glState!;
+    const u = g.uniforms;
+    const actor = state.actor;
+    const shift = actor.shift;
+    const faceU = rig.cx + rig.faceX / rig.aspect;
+    const faceV = rig.by - rig.faceY;
+    const top = rig.by - rig.figH;
+    g.gl.uniform4f(u.figure, rig.aspect, top, rig.figH, rig.by);
+    if (!shift || (state.el !== shift.incoming && state.el !== shift.outgoing)) {
+      g.gl.uniform4f(u.reveal, 1, 0, -1, 1);
+      g.gl.uniform4f(u.revealGlow, 0, 0, 0, 0);
+      return;
+    }
+    const incoming = state.el === shift.incoming;
+    if (incoming && shift.start === null) {
+      // The new image is ready: the change starts now.
+      shift.start = time;
+      actor.take = { kind: shift.kind, start: time, gain: shift.gain };
+    }
+    const spec = PUPPET_SHIFT[shift.kind];
+    const progress = shift.start === null ? 0 : puppetShiftReveal(shift.kind, time - shift.start);
+    const reach = Math.hypot(Math.max(faceU, 1 - faceU) * rig.aspect * 0.85, Math.max(faceV - top, rig.by - faceV));
+    g.gl.uniform4f(u.reveal, progress, spec.edge, PUPPET_SWEEP[spec.sweep], incoming ? 1 : -1);
+    g.gl.uniform4f(u.revealGlow, spec.glow[0], spec.glow[1], spec.glow[2], spec.glow[3] * Math.min(1.4, shift.gain));
+    g.gl.uniform4f(u.revealShape, faceU, faceV, reach, spec.grain);
+  }
+
+  /** The scene's weather and light on this layer. */
+  private airUniforms(state: LayerState, rig: PuppetRig, look: Look, time: number, width: number, height: number): void {
+    const g = this.glState!;
+    const u = g.uniforms;
+    const actor = state.actor;
+    const air = actor.air;
+    g.gl.uniform2f(u.texel, 1 / width, 1 / height);
+    g.gl.uniform4f(u.atmoA, air.fog, air.wet, air.fire > 0.001 ? air.fire * puppetFireFlicker(time, actor.phase) : 0, air.grain);
+    g.gl.uniform4f(u.atmoB, air.haze, air.pulse * this.beat, actor.snow, time % 1000);
+    if (air.fireflies > 0.01) {
+      const [a, b] = puppetFireflies(time, actor.phase, rig.faceX, rig.faceY, rig.figH);
+      const uv = (fly: { x: number; y: number }): [number, number] => [rig.cx + fly.x / rig.aspect, rig.by - fly.y];
+      g.gl.uniform4f(u.flyPos, ...uv(a!), ...uv(b!));
+      g.gl.uniform2f(u.flyGlow, a!.glow * air.fireflies, b!.glow * air.fireflies);
+    } else {
+      g.gl.uniform2f(u.flyGlow, 0, 0);
+    }
+    if (air.fog > 0.001) g.gl.uniform3f(u.fogColor, ...applyColor(look.light, [0.8, 0.84, 0.9]));
   }
 }
