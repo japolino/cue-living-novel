@@ -153,6 +153,15 @@ export const VN_WAITING_CSS = `
   --vn-status-top-clearance: calc(3.6rem + var(--vn-location-h) + 0.45rem);
 }
 
+/*
+ * NVL's page reaches up to 7rem from the top: while the label shows, the page
+ * starts just below it instead (its top is 100dvh - height - 1.5rem).
+ */
+[data-vn-root][data-vn-preset="nvl"]:has([data-vn-location]:not([hidden])) [data-vn-dialogue][data-vn-nvl-paged] {
+  --vn-dialogue-text-max: calc(100 * var(--vn-dvh, 1dvh) - 16.85rem - var(--vn-location-h));
+  height: calc(100 * var(--vn-dvh, 1dvh) - 6.35rem - var(--vn-location-h));
+}
+
 [data-vn-location-kicker] {
   color: var(--vn-scene-gold);
   font-size: 0.6rem;

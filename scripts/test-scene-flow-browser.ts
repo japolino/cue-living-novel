@@ -235,6 +235,27 @@ try {
   await lineupTap(phone, "phone");
   await phoneContext.close();
 
+  // The new layouts: the label stays clear of their dialogue (NVL's page reaches high up).
+  for (const [preset, size] of [["cinema", desktopSize], ["nvl", desktopSize], ["daylight", desktopSize], ["nvl", { width: 393, height: 851 }]] as const) {
+    const page = await browser.newPage({ viewport: size });
+    watch(page);
+    await page.goto(url({ card: "title", preset }));
+    await page.locator("[data-vn-opening]").waitFor();
+    await page.locator("[data-vn-opening]").click();
+    await page.locator("[data-vn-opening]").waitFor({ state: "hidden" });
+    await page.evaluate(() => { const s = (window as any).fx.stage; for (let i = 0; i < 3; i++) s.advance(); });
+    await page.waitForTimeout(400);
+    const label = await page.locator("[data-vn-location]").boundingBox();
+    assert.ok(label, `${preset}: the label shows`);
+    for (const selector of ["[data-vn-dialogue]", "[data-vn-nvl-page]", "[data-vn-speaker]", "[data-vn-controls]"]) {
+      const other = page.locator(selector).first();
+      if (await other.count() === 0 || !(await other.isVisible())) continue;
+      assert.equal(overlaps(label, await other.boundingBox()), false, `${preset}: the label does not cover ${selector}`);
+    }
+    await page.screenshot({ path: `${OUT}/reading-label-${preset}-${size.width}.png` });
+    await page.close();
+  }
+
   // Motion off: everything still, the card and screen still show.
   const still = await browser.newPage({ viewport: desktopSize });
   watch(still);
