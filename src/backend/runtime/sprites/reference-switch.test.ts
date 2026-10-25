@@ -3,6 +3,7 @@ import type { VisualNovelConfig } from "../../../config.js";
 import { AssetJobSchema, type AssetJob } from "../../../shared/contracts.js";
 import { SPRITE_HOT_SET, spriteSetKeyFor } from "../../../shared/sprites.js";
 import anima from "../__fixtures__/anima29b-connection.json";
+import { lumiverseCustomValue } from "../__fixtures__/lumiverse-custom.js";
 import { CUT_META, MIRA, fakePng, mockSpindle, sampleStaging, spriteConfig, toBase64, type MockSpindleOptions } from "./__fixtures__/sprite-fixtures.js";
 import { SpriteService } from "./jobs.js";
 import type { KeyMomentScene } from "./moment-prompts.js";
@@ -189,5 +190,39 @@ describe("sprite jobs: ComfyUI cut-out switch", () => {
     await plain.service.prepareCast("u1", [MIRA], plain.config);
     await plain.service.settle("u1");
     for (const call of plain.calls) expect(Object.keys(call.parameters.comfyui_custom_fields as Record<string, unknown>)).toEqual(["804:value"]);
+  });
+});
+
+describe("sprite jobs: switches over the Image Gen panel's saved values", () => {
+  const panel = (custom: Record<string, unknown>) => ({ comfyui_field_values: { custom } });
+
+  test("panel saved Enabled: plates and key moments stay opaque; sprites are cut", async () => {
+    const defaults = panel({ "900:value": true });
+    const f = setup({ metadata: withCutout(), defaultParameters: defaults, config: { referenceAnchoring: true } });
+    await f.service.ensureForStaging("u1", sampleStaging(f.styleKey), f.config);
+    await f.service.settle("u1");
+    await f.answerAll();
+    await f.service.settle("u1");
+    const calls = f.callsBy();
+    const plates = calls.filter((entry) => !entry.name.includes("/"));
+    const sprites = calls.filter((entry) => entry.name.includes("/"));
+    expect(plates.length).toBeGreaterThan(0);
+    for (const entry of plates) expect(lumiverseCustomValue(defaults, entry.parameters, "900:value")).toBe(false);
+    for (const entry of sprites) expect(lumiverseCustomValue(defaults, entry.parameters, "900:value")).toBe(true);
+    const moment = setup({ metadata: withCutout(), defaultParameters: defaults });
+    await moment.service.runKeyMoments("u1", { jobs: [job("job-a")], scenes: new Map([["job-a", kiss]]), chatId: "chat-1", signal: new AbortController().signal, onUpdate: () => {} });
+    expect(lumiverseCustomValue(defaults, moment.calls[0]!.parameters, "900:value")).toBe(false);
+    expect(moment.log).toContain("key moment: cut-out switch 900:value -> off (Image Gen panel had true)");
+  });
+
+  test("panel saved Disabled: sprites are still cut, and anchored ones still use the reference", async () => {
+    const defaults = panel({ "900:value": false, "804:value": false });
+    const { idle, expressions } = await anchoredSpriteCalls({ metadata: withCutout(), defaultParameters: defaults });
+    expect(lumiverseCustomValue(defaults, idle, "900:value")).toBe(true);
+    expect(lumiverseCustomValue(defaults, idle, "804:value")).toBe(false);
+    for (const parameters of expressions) {
+      expect(lumiverseCustomValue(defaults, parameters, "900:value")).toBe(true);
+      expect(lumiverseCustomValue(defaults, parameters, "804:value")).toBe(true);
+    }
   });
 });

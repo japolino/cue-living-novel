@@ -3,6 +3,7 @@ import type { SpindleAPI } from "lumiverse-spindle-types";
 import { DEFAULT_CONFIG, type VisualNovelConfig } from "../../config.js";
 import { TurnPlanSchema, type SceneState, type TurnPlan, type VisualCue } from "../../shared/contracts.js";
 import anima from "./__fixtures__/anima29b-connection.json";
+import { lumiverseCustomValue } from "./__fixtures__/lumiverse-custom.js";
 import {
   REFERENCE_SWITCH_TTL_MS,
   comfyWorkflowConfigFor,
@@ -118,7 +119,8 @@ describe("referenceSwitchParameters", () => {
     expect(referenceSwitchParameters("comfyui", { comfyui_custom_fields: { a: 1 }, custom: { b: 2 } }, null, "804:value").parameters.comfyui_custom_fields)
       .toEqual({ a: 1, "804:value": false });
     const owned = referenceSwitchParameters("comfyui", { custom: { "804:value": true } }, null, "804:value");
-    expect(owned.parameters).toEqual({ custom: { "804:value": true }, denoise: 0 });
+    // Written where it wins over the Image Gen panel's saved values too.
+    expect(owned.parameters).toEqual({ custom: { "804:value": true }, denoise: 0, comfyui_custom_fields: { "804:value": true } });
     expect(owned.note).toBe("reference switch 804:value -> user value true (no reference, denoise 0.0)");
   });
 
@@ -208,7 +210,7 @@ function plan(cues: VisualCue[]): TurnPlan {
   });
 }
 
-function sceneRuntime(metadata: unknown | (() => unknown)) {
+function sceneRuntime(metadata: unknown | (() => unknown), defaults?: Record<string, unknown>) {
   const data = new Map<string, unknown>();
   const calls: Array<{ parameters: Record<string, unknown> }> = [];
   const logs: string[] = [];
@@ -219,7 +221,7 @@ function sceneRuntime(metadata: unknown | (() => unknown)) {
     },
     imageGen: {
       getConnection: async () => {
-        const connection: Record<string, unknown> = { provider: "comfyui" };
+        const connection: Record<string, unknown> = { provider: "comfyui", ...(defaults ? { default_parameters: defaults } : {}) };
         if (typeof metadata === "function") Object.defineProperty(connection, "metadata", { get: metadata as () => unknown });
         else if (metadata !== undefined) connection.metadata = metadata;
         return connection;
@@ -236,8 +238,8 @@ function sceneRuntime(metadata: unknown | (() => unknown)) {
   return { spindle, calls, logs };
 }
 
-async function sceneCalls(metadata: unknown | (() => unknown), patch: Partial<VisualNovelConfig> = {}) {
-  const runtime = sceneRuntime(metadata);
+async function sceneCalls(metadata: unknown | (() => unknown), patch: Partial<VisualNovelConfig> = {}, defaults?: Record<string, unknown>) {
+  const runtime = sceneRuntime(metadata, defaults);
   const config: VisualNovelConfig = { ...DEFAULT_CONFIG, imageConnectionId: "conn", imageConcurrency: 1, debugLogging: true, ...patch };
   const turn = plan([cue("one", 0), cue("two", 1, "sad")]);
   await generateAssets(runtime.spindle, turn, createAssetJobs(turn, config), config, new AbortController().signal, () => {});
@@ -331,14 +333,14 @@ describe("resolveComfySwitches", () => {
     const reads: string[] = [];
     const spindle = { imageGen: { getConnection: async (id: string) => { reads.push(id); return { provider: "comfyui", metadata: withCutout() }; }, listConnections: async () => [] } } as unknown as SpindleAPI;
     const config = { ...DEFAULT_CONFIG, imageConnectionId: "conn" } as VisualNovelConfig;
-    expect(await resolveComfySwitches(spindle, config, "u1", 1000)).toEqual({ reference: "804:value", cutout: "900:value" });
+    expect(await resolveComfySwitches(spindle, config, "u1", 1000)).toEqual({ reference: "804:value", cutout: "900:value", defaults: null });
     expect(await resolveReferenceSwitch(spindle, config, "u1", 1001)).toBe("804:value");
     expect(reads).toEqual(["conn"]);
   });
 
   test("a failed lookup has neither switch", async () => {
     const spindle = { imageGen: { getConnection: async () => { throw new Error("host down"); }, listConnections: async () => [] } } as unknown as SpindleAPI;
-    expect(await resolveComfySwitches(spindle, { ...DEFAULT_CONFIG, imageConnectionId: "conn" } as VisualNovelConfig, "u1")).toEqual({ reference: null, cutout: null });
+    expect(await resolveComfySwitches(spindle, { ...DEFAULT_CONFIG, imageConnectionId: "conn" } as VisualNovelConfig, "u1")).toEqual({ reference: null, cutout: null, defaults: null });
   });
 });
 
@@ -384,5 +386,84 @@ describe("scene images: ComfyUI cut-out switch", () => {
       "[VN] cue p0: cut-out switch 900:value -> off",
       "[VN] cue p1: cut-out switch 900:value -> off"
     ]);
+  });
+});
+
+/* ---- the Image Gen panel's saved values ---- */
+
+/** Connection default parameters as the Image Gen panel saves its Custom controls. */
+const panel = (custom: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({ steps: 28, comfyui_field_values: { custom, ...extra } });
+
+describe("switches over the Image Gen panel's saved values", () => {
+  const reference = { resolvedSourceImages: [{ data: "QUJD", mimeType: "image/png" }], denoise: 0.5 };
+  /** Cue's parameters for one render, and the value Lumiverse then writes into a field. */
+  const sent = (defaults: Record<string, unknown>, cutout: boolean, user: Record<string, unknown> = {}, withReference = false) => {
+    const switched = referenceSwitchParameters("comfyui", user, withReference ? reference : null, "804:value", defaults);
+    const cut = cutoutSwitchParameters("comfyui", user, switched.parameters, cutout, "900:value", defaults);
+    return { parameters: cut.parameters, notes: [switched.note, cut.note], value: (key: string) => lumiverseCustomValue(defaults, cut.parameters, key) };
+  };
+
+  test("panel saved Enabled: scenes, plates and key moments stay opaque and unreferenced", () => {
+    const off = sent(panel({ "900:value": true, "804:value": true }), false);
+    expect(off.value("900:value")).toBe(false);
+    expect(off.value("804:value")).toBe(false);
+    expect(sent(panel({ "900:value": true }), true).value("900:value")).toBe(true);
+  });
+
+  test("panel saved Disabled, or only another Custom control: sprites are still cut", () => {
+    const disabled = sent(panel({ "900:value": false, "804:value": false }), true, {}, true);
+    expect(disabled.value("900:value")).toBe(true);
+    expect(disabled.value("804:value")).toBe(true);
+    const other = sent(panel({ "7:text": "x" }), true);
+    expect(other.value("900:value")).toBe(true);
+    expect(other.value("7:text")).toBe("x");
+  });
+
+  test("node_fields (which beat custom) lose the switch keys only; the other saved values stay", () => {
+    const result = sent(panel({}, { node_fields: { "900:value": true, "5:steps": 30 }, seed: 7 }), false);
+    expect(result.value("900:value")).toBe(false);
+    expect(result.parameters.comfyui_field_values).toEqual({ custom: { "804:value": false, "900:value": false }, node_fields: { "5:steps": 30 }, seed: 7 });
+  });
+
+  test("the user's custom fields join the saved ones; their own comfyui_field_values replace the saved ones", () => {
+    const merged = sent(panel({ "7:text": "panel" }), true, { custom: { "8:text": "mine" } });
+    expect(merged.value("7:text")).toBe("panel");
+    expect(merged.value("8:text")).toBe("mine");
+    expect(merged.value("900:value")).toBe(true);
+    const own = sent(panel({ "7:text": "panel" }), true, { comfyui_field_values: { custom: { "6:text": "own" } } });
+    expect(own.value("7:text")).toBeUndefined();
+    expect(own.value("6:text")).toBe("own");
+    expect(own.value("900:value")).toBe(true);
+  });
+
+  test("the log says when the panel had a value for a switch", () => {
+    expect(sent(panel({ "900:value": true }), false).notes).toEqual([
+      "reference switch 804:value -> off",
+      "cut-out switch 900:value -> off (Image Gen panel had true)"
+    ]);
+    expect(sent(panel({ "804:value": true }, { node_fields: { "804:value": false } }), true).notes[0]).toBe("reference switch 804:value -> off (Image Gen panel had false)");
+  });
+
+  test("a switch value the user set in Cue's image parameters still wins over the panel", () => {
+    const owned = sent(panel({ "804:value": false }), true, { comfyui_custom_fields: { "804:value": true } });
+    expect(owned.value("804:value")).toBe(true);
+    expect(owned.notes[0]).toBe("reference switch 804:value -> user value true (no reference, denoise 0.0)");
+    const inFieldValues = sent(panel({}), true, { comfyui_field_values: { custom: { "804:value": true } } });
+    expect(inFieldValues.value("804:value")).toBe(true);
+  });
+
+  test("the connection's default parameters come with the switches", async () => {
+    const defaults = panel({ "900:value": true });
+    const spindle = { imageGen: { getConnection: async () => ({ provider: "comfyui", metadata: withCutout(), default_parameters: defaults }), listConnections: async () => [] } } as unknown as SpindleAPI;
+    expect(await resolveComfySwitches(spindle, { ...DEFAULT_CONFIG, imageConnectionId: "conn" } as VisualNovelConfig, "u1")).toEqual({ reference: "804:value", cutout: "900:value", defaults });
+  });
+
+  test("scene pictures: a panel saved Enabled leaves them opaque", async () => {
+    const defaults = panel({ "900:value": true, "804:value": true });
+    const { calls, logs } = await sceneCalls(withCutout(), {}, defaults);
+    expect(calls).toHaveLength(2);
+    expect(calls.map((call) => lumiverseCustomValue(defaults, call.parameters, "900:value"))).toEqual([false, false]);
+    expect(calls.map((call) => lumiverseCustomValue(defaults, call.parameters, "804:value"))).toEqual([false, true]);
+    expect(logs).toContain("[VN] cue p0: cut-out switch 900:value -> off (Image Gen panel had true)");
   });
 });

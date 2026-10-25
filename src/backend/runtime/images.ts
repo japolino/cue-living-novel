@@ -1098,11 +1098,12 @@ export async function generateAssets(
             provider,
             config.imageParameters,
             portrait && provider ? referenceParametersFor(provider, portrait, config) : null,
-            referenceSwitch
+            referenceSwitch,
+            switches?.defaults ?? null
           );
           if (config.debugLogging && switched.note) spindle.log.info(`[VN] cue p${cue.paragraphIndex}: ${switched.note}`);
           // A mapped sprite cut-out switch is off: scene pictures keep their background.
-          const cut = cutoutSwitchParameters(provider, config.imageParameters, switched.parameters, false, switches?.cutout ?? null);
+          const cut = cutoutSwitchParameters(provider, config.imageParameters, switched.parameters, false, switches?.cutout ?? null, switches?.defaults ?? null);
           if (config.debugLogging && cut.note) spindle.log.info(`[VN] cue p${cue.paragraphIndex}: ${cut.note}`);
           const parameters = cut.parameters;
           const { connectionId, workflowId } = splitConnectionSelection(config.imageConnectionId);

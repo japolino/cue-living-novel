@@ -800,8 +800,22 @@ the reference switch (one lookup, cached 30 s per selection). Sprite renders
 send `true`, plates, key moments and scene pictures `false`, in
 `comfyui_custom_fields` (merged with the user's `comfyui_custom_fields` or
 `custom` and the reference switch; a value the user set for the same key
-wins). The debug log says `cut-out switch 14:value -> on` (node 14 in the
-example). No such field,
+in Cue's image parameters wins). The debug log says
+`cut-out switch 14:value -> on` (node 14 in the example).
+
+Lumiverse's Image Gen panel shows the mapped Boolean as an Enabled/Disabled
+control and saves it, with every other Custom control, in the connection's
+`default_parameters.comfyui_field_values.custom`. Lumiverse merges each
+request over those defaults, and `comfyui_field_values` then replaces
+`comfyui_custom_fields` as a whole (its `node_fields` beat both). So Cue
+reads the connection's default parameters with the switches and sends
+`comfyui_field_values` too: the saved values, the user's own custom fields,
+then its switch values, with the switch keys taken out of `node_fields`.
+Whatever the panel saved, sprites are cut and nothing else is, and the
+reference switch follows the reference. The log notes a saved value it
+overrode (`cut-out switch 14:value -> off (Image Gen panel had true)`).
+
+No such field,
 or a failed lookup: nothing changes. A sprite whose cut the workflow made
 reports quality "best", gets the duplicate check on its alpha and no
 scenery check (see "Scenery check" above); the raw render the backend keeps

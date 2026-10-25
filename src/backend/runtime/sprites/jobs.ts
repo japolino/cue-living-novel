@@ -1181,9 +1181,9 @@ export class SpriteService {
     label: string,
   ): Promise<Record<string, unknown>> {
     const switches = provider === "comfyui" ? await resolveComfySwitches(this.spindle, config, userId) : null;
-    const switched = referenceSwitchParameters(provider, config.imageParameters, reference, switches?.reference ?? null);
+    const switched = referenceSwitchParameters(provider, config.imageParameters, reference, switches?.reference ?? null, switches?.defaults ?? null);
     if (switched.note) this.deps.log?.(`${label}: ${switched.note}`, userId);
-    const cut = cutoutSwitchParameters(provider, config.imageParameters, switched.parameters, cutout, switches?.cutout ?? null);
+    const cut = cutoutSwitchParameters(provider, config.imageParameters, switched.parameters, cutout, switches?.cutout ?? null, switches?.defaults ?? null);
     if (cut.note) this.deps.log?.(`${label}: ${cut.note}`, userId);
     return cut.parameters;
   }

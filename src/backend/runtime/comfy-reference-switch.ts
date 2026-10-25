@@ -23,6 +23,12 @@ import type { VisualNovelConfig } from "../../config.js";
  * branch before SaveImage). Cue turns it on for sprite renders and off for
  * everything else (plates, key moments, scene pictures); the browser keeps
  * the alpha of a render that arrives transparent.
+ *
+ * Lumiverse merges each request over the connection's `default_parameters`,
+ * where its Image Gen panel saves the workflow's Custom controls
+ * (`comfyui_field_values.custom`, which replaces `comfyui_custom_fields` as a
+ * whole, and `node_fields`, which beats both). The lookup returns those
+ * defaults, and Cue writes its switch values where they win over them.
  */
 
 type Mapping = { nodeId?: unknown; fieldName?: unknown; mappedAs?: unknown };
@@ -127,10 +133,13 @@ export function findCutoutSwitch(config: Record<string, unknown> | null): string
   return findBooleanSwitch(config, (text) => CUTOUT_TITLE.test(text));
 }
 
-/** The Boolean custom fields Cue drives in the selected workflow (null: none). */
-export type ComfySwitches = { reference: string | null; cutout: string | null };
+/**
+ * The Boolean custom fields Cue drives in the selected workflow (null: none),
+ * and the connection's `default_parameters` its requests are merged over.
+ */
+export type ComfySwitches = { reference: string | null; cutout: string | null; defaults: Record<string, unknown> | null };
 
-const NO_SWITCHES: ComfySwitches = { reference: null, cutout: null };
+const NO_SWITCHES: ComfySwitches = { reference: null, cutout: null, defaults: null };
 
 type CacheEntry = { until: number; switches: Promise<ComfySwitches> };
 const caches = new WeakMap<object, Map<string, CacheEntry>>();
@@ -157,14 +166,14 @@ async function lookup(spindle: SpindleAPI, config: VisualNovelConfig, userId: st
   try {
     const { connectionId, workflowId } = splitSelection(config.imageConnectionId);
     const api = spindle.imageGen;
-    let connection: { metadata?: unknown } | null | undefined;
+    let connection: { metadata?: unknown; default_parameters?: unknown } | null | undefined;
     if (connectionId) connection = await api.getConnection(connectionId, userId);
     else {
       const connections = await api.listConnections(userId);
       connection = connections.find((candidate) => candidate.is_default) ?? connections[0];
     }
     const workflow = comfyWorkflowConfigFor(connection?.metadata, workflowIdOf(config, workflowId));
-    return { reference: findReferenceSwitch(workflow), cutout: findCutoutSwitch(workflow) };
+    return { reference: findReferenceSwitch(workflow), cutout: findCutoutSwitch(workflow), defaults: asRecord(connection?.default_parameters) };
   } catch {
     return NO_SWITCHES;
   }
@@ -203,6 +212,55 @@ function userCustomFields(parameters: Record<string, unknown>): Record<string, u
   return asRecord(parameters.comfyui_custom_fields) ?? asRecord(parameters.custom);
 }
 
+/**
+ * The value `parameters` hold for one custom field, where Lumiverse looks
+ * last first: `comfyui_field_values.node_fields`, its `custom`, then
+ * `comfyui_custom_fields` (else `custom`). Null when none has the key.
+ */
+function customValueIn(parameters: Record<string, unknown> | null, key: string): { value: unknown } | null {
+  if (!parameters) return null;
+  const fieldValues = asRecord(parameters.comfyui_field_values);
+  for (const source of [asRecord(fieldValues?.node_fields), asRecord(fieldValues?.custom), userCustomFields(parameters)]) {
+    if (source && Object.hasOwn(source, key)) return { value: source[key] };
+  }
+  return null;
+}
+
+/** The value the connection's saved defaults (the Image Gen panel) hold for a field the request leaves to them. */
+function panelValue(defaults: Record<string, unknown> | null, userParameters: Record<string, unknown>, key: string): { value: unknown } | null {
+  if (!defaults) return null;
+  const visible = Object.fromEntries(Object.entries(defaults).filter(([name]) => !Object.hasOwn(userParameters, name)));
+  return customValueIn(visible, key);
+}
+
+/**
+ * `parameters` with `values` set where Lumiverse reads them last, over the
+ * connection's saved defaults: in `comfyui_custom_fields` (with the custom
+ * fields Lumiverse would read), and, when the request or the defaults carry
+ * `comfyui_field_values`, in its `custom` (saved values, then the user's
+ * own custom fields, then `values`) with the keys taken out of its
+ * `node_fields`. The request's `comfyui_field_values` replaces the saved one
+ * whole, so the saved values that are not switches go along.
+ */
+function withSwitchValues(parameters: Record<string, unknown>, defaults: Record<string, unknown> | null, values: Record<string, unknown>): Record<string, unknown> {
+  const effective = { ...(defaults ?? {}), ...parameters };
+  const out: Record<string, unknown> = { ...parameters, comfyui_custom_fields: { ...(userCustomFields(effective) ?? {}), ...values } };
+  const fieldValues = asRecord(effective.comfyui_field_values);
+  if (fieldValues) {
+    const next: Record<string, unknown> = { ...fieldValues, custom: { ...(asRecord(fieldValues.custom) ?? {}), ...(userCustomFields(parameters) ?? {}), ...values } };
+    const nodeFields = asRecord(fieldValues.node_fields);
+    if (nodeFields) next.node_fields = Object.fromEntries(Object.entries(nodeFields).filter(([key]) => !Object.hasOwn(values, key)));
+    out.comfyui_field_values = next;
+  }
+  return out;
+}
+
+/** " (Image Gen panel had ...)" when the saved defaults held a value for the switch Cue sets. */
+function panelNote(defaults: Record<string, unknown> | null, userParameters: Record<string, unknown>, key: string): string {
+  const saved = panelValue(defaults, userParameters, key);
+  return saved ? ` (Image Gen panel had ${JSON.stringify(saved.value)})` : "";
+}
+
 export type ReferenceSwitchResult = {
   /** Provider parameters for the request (before prompt/size/workflow extras). */
   parameters: Record<string, unknown>;
@@ -216,60 +274,64 @@ export type ReferenceSwitchResult = {
  * `reference` holds the provider's reference parameters
  * (`referenceParametersFor`), or null when this image has no reference.
  * ComfyUI with a switch: on with a reference (reference parameters as
- * before), off without one and no `denoise: 0.0`. The switch value goes into
- * `comfyui_custom_fields`, merged over the user's own `comfyui_custom_fields`
- * (or `custom`); a value the user set for the same key wins. No switch (or a
- * user-owned key): unchanged, `denoise: 0.0` without a reference.
+ * before), off without one and no `denoise: 0.0`. The switch value is
+ * written over the user's own custom fields and the connection's saved
+ * `defaults` (see `withSwitchValues`); a value the user set for the same key
+ * in their own image parameters wins (and keeps `denoise: 0.0` without a
+ * reference). No switch: unchanged, `denoise: 0.0` without a reference.
  */
 export function referenceSwitchParameters(
   provider: string | null,
   userParameters: Record<string, unknown>,
   reference: Record<string, unknown> | null,
-  switchKey: string | null
+  switchKey: string | null,
+  defaults: Record<string, unknown> | null = null
 ): ReferenceSwitchResult {
   if (provider !== "comfyui") {
     return { parameters: reference ? { ...userParameters, ...reference } : { ...userParameters }, note: null };
   }
-  const custom = userCustomFields(userParameters);
-  const userOwns = Boolean(switchKey && custom && Object.hasOwn(custom, switchKey));
-  const controlled = Boolean(switchKey) && !userOwns;
-  const fields = controlled ? { comfyui_custom_fields: { ...(custom ?? {}), [switchKey!]: reference !== null } } : {};
-  const zeroDenoise = !reference && !controlled && userParameters.denoise === undefined;
-  const parameters = reference
-    ? { ...userParameters, ...reference, ...fields }
-    : { ...userParameters, ...(zeroDenoise ? { denoise: 0.0 } : {}), ...fields };
+  const own = switchKey ? customValueIn(userParameters, switchKey) : null;
+  const zeroDenoise = !reference && (!switchKey || own !== null) && userParameters.denoise === undefined;
+  const base = reference
+    ? { ...userParameters, ...reference }
+    : { ...userParameters, ...(zeroDenoise ? { denoise: 0.0 } : {}) };
+  const parameters = switchKey ? withSwitchValues(base, defaults, { [switchKey]: own ? own.value : reference !== null }) : base;
   const tail = reference ? "with reference" : zeroDenoise ? "no reference, denoise 0.0" : "no reference";
   const note = !switchKey
     ? `reference switch none (${tail})`
-    : userOwns
-      ? `reference switch ${switchKey} -> user value ${JSON.stringify(custom![switchKey])} (${tail})`
-      : `reference switch ${switchKey} -> ${reference ? "on" : "off"}`;
+    : own
+      ? `reference switch ${switchKey} -> user value ${JSON.stringify(own.value)} (${tail})`
+      : `reference switch ${switchKey} -> ${reference ? "on" : "off"}${panelNote(defaults, userParameters, switchKey)}`;
   return { parameters, note };
 }
 
 /**
  * Parameters with the sprite cut-out switch set: on for a sprite render
  * (`cutout`), off for anything else, so a workflow that saves transparent
- * PNGs only does so for sprites. Applied after `referenceSwitchParameters`:
- * the value is merged into the `comfyui_custom_fields` there are (else the
- * user's `custom`), and a value the user set for the same key in their own
- * image parameters wins. No switch, or not ComfyUI: unchanged, no note.
+ * PNGs only does so for sprites. Applied after `referenceSwitchParameters`,
+ * written the same way over the custom fields there are and the
+ * connection's saved `defaults`; a value the user set for the same key in
+ * their own image parameters wins. No switch, or not ComfyUI: unchanged, no
+ * note.
  */
 export function cutoutSwitchParameters(
   provider: string | null,
   userParameters: Record<string, unknown>,
   parameters: Record<string, unknown>,
   cutout: boolean,
-  switchKey: string | null
+  switchKey: string | null,
+  defaults: Record<string, unknown> | null = null
 ): ReferenceSwitchResult {
   if (provider !== "comfyui" || !switchKey) return { parameters, note: null };
-  const own = userCustomFields(userParameters);
-  if (own && Object.hasOwn(own, switchKey)) {
-    return { parameters, note: `cut-out switch ${switchKey} -> user value ${JSON.stringify(own[switchKey])}` };
+  const own = customValueIn(userParameters, switchKey);
+  if (own) {
+    return {
+      parameters: withSwitchValues(parameters, defaults, { [switchKey]: own.value }),
+      note: `cut-out switch ${switchKey} -> user value ${JSON.stringify(own.value)}`
+    };
   }
-  const custom = userCustomFields(parameters);
   return {
-    parameters: { ...parameters, comfyui_custom_fields: { ...(custom ?? {}), [switchKey]: cutout } },
-    note: `cut-out switch ${switchKey} -> ${cutout ? "on" : "off"}`
+    parameters: withSwitchValues(parameters, defaults, { [switchKey]: cutout }),
+    note: `cut-out switch ${switchKey} -> ${cutout ? "on" : "off"}${panelNote(defaults, userParameters, switchKey)}`
   };
 }
