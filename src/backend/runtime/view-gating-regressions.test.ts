@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import type { SpindleAPI } from "lumiverse-spindle-types";
 import { registerVisualNovelBackend, viewRegistry } from "./controller.js";
 import { chatStatePath, turnPath, type StoredChatState, type StoredTurnRecord } from "./storage.js";
+import { isPlannedTurn } from "./__fixtures__/turns.js";
 
 const CONTENT = "First paragraph.\n\nSecond paragraph.";
 
@@ -124,7 +125,7 @@ test("closing the view during post-plan awaits persists nothing and sends no vn_
   await new Promise((r) => setTimeout(r, 80));
 
   // 1. Did it send vn_turn to frontend after view closed?
-  const turnSent = sent.find((m) => m.type === "vn_turn");
+  const turnSent = sent.find(isPlannedTurn);
   expect(Boolean(turnSent)).toBe(false);
 
   // 2. Did it claim activeTurnKeys and persist active turn?

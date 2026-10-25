@@ -108,6 +108,13 @@ export interface VnStageState {
    * input is accepted until the host sets a new phase.
    */
   highestRevealedIndex: number;
+  /**
+   * The turn's text arrived before its visual plan (a provisional turn): the
+   * last paragraph index the reader may reach until the plan lands, or null
+   * when nothing is pending. The reader never passes the final paragraph to
+   * Your turn while the plan is pending (its choices are not known yet).
+   */
+  planHold: number | null;
 }
 
 export interface VnTurnInput {
@@ -119,10 +126,21 @@ export interface VnTurnInput {
   ambient?: AmbientEffect | null;
   /** Sprite mode staging for this turn (`TurnView.sprites`); the stage keeps it, the store ignores it. */
   sprites?: SpriteTurnView | null;
+  /**
+   * Set for a provisional turn (text before the plan): the paragraph index the
+   * reader waits at until the plan lands (clamped to the final paragraph).
+   */
+  planHold?: number;
 }
 
 export type VnStageAction =
   | { type: "load-turn"; turn: VnTurnInput }
+  /**
+   * The planned turn for the provisional one on screen. Same reader position;
+   * the paragraphs (speakers, effects, ambients), choices and mode come from the
+   * plan. A turn whose read paragraphs differ is loaded instead (see `canUpgradeTurn`).
+   */
+  | { type: "upgrade-turn"; turn: VnTurnInput }
   | { type: "advance" }
   | { type: "previous" }
   | { type: "set-mode"; mode: VnMode }
@@ -157,6 +175,8 @@ export interface VnStageView {
   showChoices: boolean;
   showStandardInput: boolean;
   isBusy: boolean;
+  /** The reader is at the paragraph a provisional turn holds them at, waiting for the plan. */
+  waitingForPlan: boolean;
 }
 
 export const createInitialVnStageState = (
@@ -181,6 +201,7 @@ export const createInitialVnStageState = (
   isUserTurn: false,
   ambient: null,
   highestRevealedIndex: 0,
+  planHold: null,
   ...values,
 });
 
@@ -192,17 +213,44 @@ const clampParagraphIndex = (
   return Math.min(Math.max(index, 0), paragraphs.length - 1);
 };
 
+const planHoldFor = (turn: VnTurnInput): number | null =>
+  turn.planHold === undefined || turn.paragraphs.length === 0
+    ? null
+    : clampParagraphIndex(turn.paragraphs, turn.planHold);
+
+/**
+ * Whether `turn` can upgrade the turn on the stage in place: the same
+ * paragraphs (ids and text) up to the furthest one the reader has seen.
+ * The reader's own line on screen, or no text yet, means a normal load.
+ */
+export const canUpgradeTurn = (state: VnStageState, turn: VnTurnInput): boolean => {
+  if (state.paragraphs.length === 0 || state.isUserTurn) return false;
+  const seen = Math.max(state.highestRevealedIndex, state.currentParagraphIndex);
+  if (turn.paragraphs.length <= seen) return false;
+  for (let index = 0; index <= seen; index += 1) {
+    const before = state.paragraphs[index];
+    const after = turn.paragraphs[index];
+    if (!before || !after || before.id !== after.id || before.text !== after.text) return false;
+  }
+  return true;
+};
+
 export const selectVnStageView = (state: VnStageState): VnStageView => {
   const paragraph =
     state.paragraphs[clampParagraphIndex(state.paragraphs, state.currentParagraphIndex)] ??
     null;
   const acceptsInput = state.phase === "awaiting-input";
+  const waitingForPlan = paragraph !== null
+    && state.phase === "revealing"
+    && !state.isUserTurn
+    && state.planHold !== null
+    && state.currentParagraphIndex >= state.planHold;
 
   return {
     paragraph,
     paragraphNumber: paragraph ? state.currentParagraphIndex + 1 : 0,
     paragraphCount: state.paragraphs.length,
-    canAdvance: paragraph !== null && (
+    canAdvance: paragraph !== null && !waitingForPlan && (
       state.phase === "revealing"
       || (state.phase === "error" && state.currentParagraphIndex < state.highestRevealedIndex)
     ),
@@ -215,6 +263,7 @@ export const selectVnStageView = (state: VnStageState): VnStageView => {
       state.phase === "waiting-for-response" ||
       state.phase === "planning" ||
       state.phase === "submitting",
+    waitingForPlan,
   };
 };
 
@@ -247,6 +296,25 @@ export const reduceVnStage = (
         isUserTurn: false,
         ambient: action.turn.ambient !== undefined ? action.turn.ambient : state.ambient,
         highestRevealedIndex: 0,
+        planHold: planHoldFor(action.turn),
+      };
+    }
+
+    case "upgrade-turn": {
+      if (!canUpgradeTurn(state, action.turn)) {
+        return reduceVnStage(state, { type: "load-turn", turn: { ...action.turn, preserveImage: true } });
+      }
+      const paragraphs = [...action.turn.paragraphs];
+      return {
+        ...state,
+        mode: action.turn.mode,
+        // A retry pressed while the text waited for its plan ends with the plan.
+        phase: state.phase === "planning" ? "revealing" : state.phase,
+        paragraphs,
+        choices: [...(action.turn.choices ?? [])],
+        inputPlaceholder: action.turn.inputPlaceholder ?? state.inputPlaceholder,
+        ambient: action.turn.ambient !== undefined ? action.turn.ambient : state.ambient,
+        planHold: planHoldFor(action.turn),
       };
     }
 
@@ -257,6 +325,7 @@ export const reduceVnStage = (
         return { ...state, currentParagraphIndex: state.currentParagraphIndex + 1 };
       }
       if (state.phase !== "revealing" || state.paragraphs.length === 0) return state;
+      if (selectVnStageView(state).waitingForPlan) return state;
 
       const finalIndex = state.paragraphs.length - 1;
       if (state.currentParagraphIndex < finalIndex) {
@@ -288,8 +357,11 @@ export const reduceVnStage = (
       if (!selectVnStageView(state).canGoBack) return state;
       // Rereading during an error keeps the error card (and phase) visible.
       const phase = state.phase === "error" ? "error" : "revealing";
+      // The host shows the earlier paragraph's image. Text waiting for its plan
+      // has none: it keeps the scene it shows.
+      const images = state.planHold !== null ? {} : { displayedImage: null, pendingImage: null, imageError: null };
       return { ...state, currentParagraphIndex: state.currentParagraphIndex - 1, phase,
-        turnFinished: false, showRerollPrompt: false, displayedImage: null, pendingImage: null, imageError: null };
+        turnFinished: false, showRerollPrompt: false, ...images };
     }
 
     case "present-user-paragraph": {

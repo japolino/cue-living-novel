@@ -20,7 +20,7 @@ import {
   prepareStudioCutoutModel,
   syncStudioCutout,
 } from "../sprites/cutout/index.js";
-import type { VnChoice, VnTurnInput } from "../store/index.js";
+import { canUpgradeTurn, type VnChoice, type VnTurnInput } from "../store/index.js";
 import { createVnHeaderLauncher } from "./manual-launcher.js";
 import { captureSimTrackerCards } from "./panel-capture.js";
 import { GameBridge } from "./game-bridge.js";
@@ -177,7 +177,25 @@ export type TurnApplicationDecision =
   | { kind: "planning" }
   | { kind: "error"; error: string }
   | { kind: "same-turn"; paragraphIndex: number }
+  /** The planned turn (or other text) for the provisional one on the stage: upgrade it in place at the cursor. */
+  | { kind: "upgrade"; paragraphIndex: number }
   | { kind: "load-turn" };
+
+/**
+ * How far the reader may read a reply's text before its visual plan lands:
+ * the paragraph index they wait at, with "Preparing the scene", clamped to
+ * the final paragraph (whose acknowledgement always waits: the plan brings
+ * the choices). Infinity lets them read on to the end.
+ */
+export const PROVISIONAL_PLAN_HOLD = Number.POSITIVE_INFINITY;
+
+/**
+ * A provisional turn (text before the plan) that arrives for a turn already
+ * planned, late or repeated, never replaces it.
+ */
+export function keepsPlannedTurn(previous: TurnView | null, next: TurnView): boolean {
+  return Boolean(next.provisional && previous && !previous.provisional && sameTurnIdentity(previous, next));
+}
 
 /**
  * Whether the stage should preserve the currently displayed image across turns.
@@ -270,6 +288,7 @@ export function stageTurnInput(
   mode: VnTurnInput["mode"],
   preserveImage: boolean,
   intensity: VisualNovelEffectIntensity = "full",
+  planHold: number = PROVISIONAL_PLAN_HOLD,
 ): VnTurnInput {
   return {
     mode,
@@ -283,8 +302,16 @@ export function stageTurnInput(
     choices: next.choices.map((choice) => ({ id: choice.id, label: choice.label, value: choice.value })),
     preserveImage,
     ...(next.ambients !== undefined ? { ambient: firstAmbient(next, intensity) } : {}),
-    ...(next.sprites ? { sprites: next.sprites } : {})
+    ...(next.sprites ? { sprites: next.sprites } : {}),
+    ...(next.provisional ? { planHold } : {})
   };
+}
+
+/** Same paragraphs and the same speakers for them. */
+function sameTurnText(a: TurnView, b: TurnView): boolean {
+  const same = (x: readonly unknown[] | undefined, y: readonly unknown[] | undefined) =>
+    (x ?? []).length === (y ?? []).length && (x ?? []).every((value, index) => value === (y ?? [])[index]);
+  return same(a.paragraphs, b.paragraphs) && same(a.paragraphSpeakers, b.paragraphSpeakers);
 }
 
 export function decideTurnApplication(
@@ -293,15 +320,28 @@ export function decideTurnApplication(
   cursor: number,
   active: boolean,
   hasLoadedTurn: boolean,
+  /**
+   * The stage holds text that waits for its plan (`planHold`). The host's own
+   * turn can be the planned one already: it arrived while the view was closed.
+   */
+  stageAwaitsPlan = false,
 ): TurnApplicationDecision {
   if (!active) return { kind: "none" };
-  if (next.status === "planning") return { kind: "planning" };
-  if (next.status === "failed") return { kind: "error", error: next.error ?? "Visual planning failed." };
   // Only treat a re-broadcast as the same turn when the stage is actually showing
   // it. A vn_state that arrives while inactive records the turn but never loads
   // the paragraphs, so the first active delivery still needs a real load-turn.
-  if (previous && hasLoadedTurn && sameTurnIdentity(previous, next)) {
-    return { kind: "same-turn", paragraphIndex: cursor };
+  const shown = Boolean(previous && hasLoadedTurn && sameTurnIdentity(previous, next));
+  // The text before the plan reads like a turn, although its status is "planning".
+  // The same text again is a cursor sync; other text for the same reply (Try
+  // again after a failed line check) is applied where the reader is.
+  if (next.provisional) {
+    if (!shown) return { kind: "load-turn" };
+    return previous && sameTurnText(previous, next) ? { kind: "same-turn", paragraphIndex: cursor } : { kind: "upgrade", paragraphIndex: cursor };
+  }
+  if (next.status === "planning") return { kind: "planning" };
+  if (next.status === "failed") return { kind: "error", error: next.error ?? "Visual planning failed." };
+  if (shown) {
+    return previous?.provisional || stageAwaitsPlan ? { kind: "upgrade", paragraphIndex: cursor } : { kind: "same-turn", paragraphIndex: cursor };
   }
   return { kind: "load-turn" };
 }
@@ -552,14 +592,31 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   let speech: SpeechController;
   let speechDock: SpeechDock;
 
+  /**
+   * The text before the plan read aloud (speakBeforePlan): the speech cursor
+   * that came from it, and the one whose speech actually started (loading or
+   * playing). The upgrade leaves a started paragraph be and gives any other
+   * the plan's speaker.
+   */
+  let provisionalCursorKey: string | null = null;
+  let provisionalSpokenKey: string | null = null;
   const isSpeechHoldingAuto = (): boolean => {
     if (!speech) return false;
     const s = speech.getStatus();
-    return s.kind === "loading" || s.kind === "playing" || s.kind === "paused";
+    if (s.kind === "loading" || s.kind === "playing" || s.kind === "paused") return true;
+    // Speech waits for the plan to know who speaks: auto play waits with it, so no paragraph goes unspoken.
+    const settings = configRef.current?.speech;
+    return Boolean(turn?.provisional && settings?.enabled && settings.autoplay && !settings.speakBeforePlan);
   };
 
   const syncSpeechCursor = (view: TurnView | null, paragraphIndex: number): void => {
-    speech?.setCursor(view && view.status === "ready" ? speechCursorFor(view, paragraphIndex) : null);
+    // The text before the plan is read only with speakBeforePlan; otherwise speech waits for the plan.
+    const speakable = view && (view.status === "ready" || (view.provisional && configRef.current?.speech.speakBeforePlan));
+    const cursor = speakable ? speechCursorFor(view, paragraphIndex) : null;
+    const key = cursor && view?.provisional ? `${view.sourceFingerprint}:${paragraphIndex}` : null;
+    if (key !== provisionalCursorKey) provisionalSpokenKey = null;
+    provisionalCursorKey = key;
+    speech?.setCursor(cursor);
   };
   const onVisibilityChanged = (): void => {
     if (speech) speech.setVisible(!document.hidden);
@@ -571,6 +628,13 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   /** Choir's switches can change inside Choir or with the chat, so this runs before each cue too. */
   function syncSoundSource(): void {
     packSound.useChoir(choirPlaysSound(configRef.current?.speech, choirBridge), active);
+  }
+  /** The music in effect at a paragraph, without its sound effect (a rewind, or the plan reaching the paragraph on screen). */
+  function restoreMusicAt(activeTurn: TurnView | null, paragraphIndex: number): void {
+    const earlierMusic = activeTurn?.audioCues?.filter((cue) => cue.paragraphIndex <= paragraphIndex && (cue.bgmUrl || cue.bgm))
+      .sort((a, b) => b.paragraphIndex - a.paragraphIndex)[0];
+    syncSoundSource();
+    packSound.restore(earlierMusic?.bgmUrl || earlierMusic?.bgm || turnOpeningBgm);
   }
   function syncAudioForParagraph(activeTurn: TurnView, paragraphIndex: number): void {
     syncSoundSource();
@@ -599,10 +663,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     onPrevious: (paragraphIndex) => {
       panels.setCursor(paragraphIndex);
       syncSpeechCursor(turn, paragraphIndex);
-      const earlierMusic = turn?.audioCues?.filter((cue) => cue.paragraphIndex <= paragraphIndex && (cue.bgmUrl || cue.bgm))
-        .sort((a, b) => b.paragraphIndex - a.paragraphIndex)[0];
-      syncSoundSource();
-      packSound.restore(earlierMusic?.bgmUrl || earlierMusic?.bgm || turnOpeningBgm);
+      restoreMusicAt(turn, paragraphIndex);
       void syncImageForParagraph(paragraphIndex);
     },
     onAdvance: (paragraphIndex) => {
@@ -681,6 +742,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     transport: createSpeechTransport(),
     onStatus: (status) => {
       speechDock.setStatus(status);
+      if (provisionalCursorKey && (status.kind === "loading" || status.kind === "playing")) provisionalSpokenKey = provisionalCursorKey;
       if (status.kind === "loading" || status.kind === "playing" || status.kind === "paused") {
         stage.holdAutoPlay();
       } else if (active) {
@@ -1121,6 +1183,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
    * generated, preventing a blank screen between turns.
    */
   function applyTurn(next: TurnView, previous: TurnView | null): void {
+    // The text before the plan, late or repeated, never replaces the planned turn.
+    if (keepsPlannedTurn(previous, next)) return;
     if (panelCapture) {
       if (panelCapture.chatId !== next.chatId || panelCapture.messageId !== next.messageId || (panelCapture.fingerprint !== null && panelCapture.fingerprint !== next.sourceFingerprint)) panelCapture = null;
       else panelCapture.fingerprint = next.sourceFingerprint;
@@ -1128,7 +1192,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     turn = next;
     spriteFaces.wantView(next.sprites);
     stage.setAssetProgress(computeAssetProgress(next));
-    const decision = decideTurnApplication(previous, next, stage.getState().currentParagraphIndex, active, stage.getState().paragraphs.length > 0);
+    const staged = stage.getState();
+    const decision = decideTurnApplication(previous, next, staged.currentParagraphIndex, active, staged.paragraphs.length > 0, staged.planHold !== null);
     vnDebug("turn decision", decision.kind, {
       message: next.messageId,
       paragraphs: next.paragraphs.length,
@@ -1149,8 +1214,9 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     if (decision.kind === "same-turn") {
       // A retry that kept this turn (images only, or a replan of the same
       // text) never reloads it: end its planning phase where the reader was.
-      if (stage.getState().phase === "planning" && next.status === "ready") {
-        stage.resumeAfterRetry(retryResumePhase ?? "revealing");
+      // A retry while the text waited for its plan shows that text again.
+      if (stage.getState().phase === "planning" && (next.status === "ready" || next.provisional)) {
+        stage.resumeAfterRetry(next.provisional ? "revealing" : retryResumePhase ?? "revealing");
       }
       retryResumePhase = null;
       // Identical cursor identity: SpeechController treats this as a no-op, so
@@ -1163,11 +1229,31 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     }
     retryResumePhase = null;
     const requestedMode = configRef.current?.mode ?? "standard";
-    panels.setTurn(next, 0);
     const mode = requestedMode === "cyoa" && next.choices.length > 0 ? "cyoa" : "standard";
+    const intensity = configRef.current?.effectIntensity ?? "full";
+    if (decision.kind === "upgrade") {
+      const input = stageTurnInput(next, mode, true, intensity);
+      if (canUpgradeTurn(stage.getState(), input)) {
+        const cursor = decision.paragraphIndex;
+        // Speech first, so auto play that resumes with the plan waits on it. A
+        // paragraph already read aloud before the plan is not read again.
+        if (provisionalSpokenKey !== `${next.sourceFingerprint}:${cursor}`) syncSpeechCursor(next, cursor);
+        provisionalCursorKey = null;
+        provisionalSpokenKey = null;
+        panels.setTurn(next, cursor);
+        // The opening paragraph the plan reached right away plays its moment,
+        // sound effect included; otherwise only its music: the moment has passed.
+        if (stage.upgradeTurn(input)) syncAudioForParagraph(next, cursor);
+        else restoreMusicAt(next, cursor);
+        void syncImageForParagraph(cursor);
+        return;
+      }
+      // The text changed after all: load the planned turn from the start.
+    }
+    panels.setTurn(next, 0);
     const preserveImage = shouldPreserveImage(previous, next);
     turnOpeningBgm = preserveImage ? packSound.currentMusic : null;
-    stage.loadTurn(stageTurnInput(next, mode, preserveImage, configRef.current?.effectIntensity ?? "full"));
+    stage.loadTurn(stageTurnInput(next, mode, preserveImage, intensity));
     syncSpeechCursor(next, 0);
     void syncImageForParagraph(0);
     syncAudioForParagraph(next, 0);
@@ -1257,10 +1343,12 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       settingsPanel?.setSaveStatus?.({ kind: "saved" });
       return;
     }
-    if (type === "vn_turn" && message.type === "vn_turn") {
+    if ((type === "vn_turn" && message.type === "vn_turn") || (type === "vn_turn_text" && message.type === "vn_turn_text")) {
       if (message.turn.chatId !== chatId()) return;
+      // The text before the plan comes only as vn_turn_text, and only that carries it.
+      if ((message.type === "vn_turn_text") !== Boolean(message.turn.provisional)) return;
       if (stage.isReadingUserParagraph()) {
-        pendingNextTurn = message.turn;
+        if (!keepsPlannedTurn(pendingNextTurn, message.turn)) pendingNextTurn = message.turn;
       } else {
         applyTurn(message.turn, turn);
       }

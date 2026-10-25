@@ -5,6 +5,7 @@ import { chatStatePath, type StoredChatState, type StoredTurnRecord } from "./st
 import { computeAssetProgress } from "../../frontend/host/controller.js";
 import { retryScopeForTurn } from "../../frontend/host/turn-status.js";
 import { sceneImageScope } from "../core/scene-image-cache.js";
+import { isPlannedTurn } from "./__fixtures__/turns.js";
 
 /**
  * Controller wiring through the real planner: the image cap is 1, the planner
@@ -178,7 +179,7 @@ describe("controller wiring: extra swaps beyond the cap without extra requests",
     expect(retryScopeForTurn(view)).toEqual({ scope: "unfinished-images", unfinished: 0, kept: 1, automatic: false });
 
     // The first vn_turn carried only the budgeted job (the candidate was cold then).
-    const firstTurn = sent.find((message) => message.type === "vn_turn") as { turn: { assets: unknown[] } };
+    const firstTurn = sent.find(isPlannedTurn) as { turn: { assets: unknown[] } };
     expect(firstTurn.turn.assets).toHaveLength(1);
   });
 
@@ -193,8 +194,8 @@ describe("controller wiring: extra swaps beyond the cap without extra requests",
 
     fire("GENERATION_STARTED", { chatId: "chat" }, "user-1");
     fire("GENERATION_ENDED", { chatId: "chat", messageId: "assistant-2", content }, "user-1");
-    await settle(() => sent.filter((message) => message.type === "vn_turn").length >= 2);
-    const secondTurn = sent.filter((message) => message.type === "vn_turn").at(-1) as { turn: { messageId: string; assets: Array<Record<string, unknown>> } };
+    await settle(() => sent.filter(isPlannedTurn).length >= 2);
+    const secondTurn = sent.filter(isPlannedTurn).at(-1) as { turn: { messageId: string; assets: Array<Record<string, unknown>> } };
     expect(secondTurn.turn.messageId).toBe("assistant-2");
     // Budgeted job for p0 plus the warm candidate for p1, both before any generation ran for this message.
     expect(secondTurn.turn.assets).toHaveLength(2);

@@ -155,6 +155,14 @@ export type TurnView = {
   sprites?: SpriteTurnView;
   status: "planning" | "ready" | "failed" | "cancelled";
   error?: string;
+  /**
+   * The reply's text before its visual plan (status "planning"): paragraphs,
+   * panels and the speakers the text settles, no cues, effects, choices or
+   * staging. The planned turn with the same `sourceFingerprint` upgrades it in
+   * place. Never stored; a reopened view gets it again while the plan runs.
+   * Sent only as `vn_turn_text`.
+   */
+  provisional?: boolean;
 };
 
 export type ConnectionCatalogOption = {
@@ -183,6 +191,12 @@ export type BackendResponse =
     errors?: ConnectionCatalogErrors;
   }
   | { type: "vn_turn"; turn: TurnView }
+  /**
+   * The reply's text before its plan (`turn.provisional`). Its own type, so a
+   * frontend from before it (a tab still on the previous bundle) ignores it
+   * and waits for the planned `vn_turn` as it always did.
+   */
+  | { type: "vn_turn_text"; turn: TurnView }
   | { type: "vn_asset"; chatId: string; messageId: string; asset: AssetView }
   | { type: "vn_planning"; chatId: string }
   /**

@@ -6,6 +6,7 @@ import {
 } from "./rich-text.js";
 import { applyTextEffects, TEXT_EFFECT_LETTER_ATTRIBUTE } from "./text-effects.js";
 import {
+  canUpgradeTurn,
   createInitialVnStageState,
   reduceVnStage,
   selectVnStageView,
@@ -246,6 +247,13 @@ const THEME_MARKUP = `
 `;
 
 /** Scene-image request ids of sprite-mode plates start with this. */
+/**
+ * How soon after the opening paragraph appears its plan may land and still
+ * play that paragraph's effect and sound effect (the plan was right behind
+ * its text). Later, the moment has passed.
+ */
+const OPENING_MOMENT_MS = 1500;
+
 const PLATE_REQUEST_PREFIX = "plate:";
 /** Scene-image request ids of sprite-mode key illustrations start with this. */
 const ILLUSTRATION_REQUEST_PREFIX = "illustration:";
@@ -447,6 +455,14 @@ export class VnStage {
   private readonly continueButton: HTMLButtonElement;
   private readonly previousButton: HTMLButtonElement;
   private isRewinding = false;
+  /** True while the planned turn replaces the provisional one on screen (see upgradeTurn). */
+  private isUpgrading = false;
+  /**
+   * When the opening paragraph appeared, read forward with its effects; null
+   * once the reader is elsewhere. A plan that lands within OPENING_MOMENT_MS
+   * plays the opening paragraph's moment (see upgradeTurn).
+   */
+  private openingShownAt: number | null = null;
   private readonly interaction: HTMLElement;
   private readonly choiceList: HTMLOListElement;
   private readonly gameChoiceList: HTMLElement;
@@ -484,7 +500,8 @@ export class VnStage {
   private flashTimer: ReturnType<typeof setTimeout> | null = null;
   private fadeTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly readParagraphIds = new Set<string>();
-  private readonly backlogEntries: Array<{ speaker?: string | undefined; text: string; formatted: string }> = [];
+  /** History, in reading order; `id` is the paragraph's (an upgraded turn updates its entries). */
+  private readonly backlogEntries: Array<{ id: string; speaker?: string | undefined; text: string; formatted: string }> = [];
   private activeTextNodes: TypewriterNode[] = [];
   private currentRenderedParagraphId = "";
   private currentRenderedFormatted = "";
@@ -764,6 +781,11 @@ export class VnStage {
     this.isBacklogOpen = true;
     this.backlogModal.hidden = false;
     this.logButton.setAttribute("aria-expanded", "true");
+    this.renderBacklog();
+    this.backlogClose.focus({ preventScroll: true });
+  }
+
+  private renderBacklog(): void {
     this.backlogContent.innerHTML = this.backlogEntries
       .map(
         (entry) => `
@@ -778,7 +800,6 @@ export class VnStage {
     this.syncBacklogTextEffects();
     applyTextEffects(this.backlogContent);
     this.backlogContent.scrollTop = this.backlogContent.scrollHeight;
-    this.backlogClose.focus({ preventScroll: true });
   }
 
   closeBacklog(): void {
@@ -1209,6 +1230,7 @@ export class VnStage {
     this.isTyping = false;
     this.currentRenderedParagraphId = "";
     this.currentRenderedFormatted = "";
+    this.openingShownAt = null;
     this.errorDetails = null;
     this.hostImageError = null;
     this.lastSkipStop = null;
@@ -1233,8 +1255,89 @@ export class VnStage {
     this.lastSkipStop = null;
     // Sprite staging belongs to the turn: set it before the first paragraph renders.
     this.spriteLayer.setTurn(turn.sprites ?? null);
+    this.forgetChangedParagraphs(turn.paragraphs);
     this.dispatch({ type: "load-turn", turn });
     this.focus();
+  }
+
+  /**
+   * The turn on the stage loaded again with other text (the plan's text
+   * differs from the text that came before it): History entries and read
+   * marks from its first changed paragraph on describe text that is gone, and
+   * would keep the new text out of History and Skip unread. Another turn
+   * (its first paragraph id differs) and the reader's own line leave History
+   * alone.
+   */
+  private forgetChangedParagraphs(next: readonly VnParagraph[]): void {
+    const current = this.state.paragraphs;
+    if (this.state.isUserTurn || current.length === 0 || current[0]!.id !== next[0]?.id) return;
+    let first = 0;
+    while (first < current.length && current[first]!.id === next[first]?.id && current[first]!.text === next[first]!.text) first += 1;
+    const stale = new Set(current.slice(first).map((paragraph) => paragraph.id));
+    if (stale.size === 0) return;
+    for (const id of stale) this.readParagraphIds.delete(id);
+    for (let index = this.backlogEntries.length - 1; index >= 0; index -= 1) {
+      if (stale.has(this.backlogEntries[index]!.id)) this.backlogEntries.splice(index, 1);
+    }
+    if (this.isBacklogOpen) this.renderBacklog();
+  }
+
+  /**
+   * The planned turn for the provisional one on screen (the text that came
+   * before its plan). The reader stays where they are. The paragraph on screen
+   * gets its nameplate, sprites and ambient, without its one-shot effect, a
+   * restarted typewriter or a second History entry; paragraphs already read
+   * update their History entries; the rest play as usual when reached. A turn
+   * whose read text differs is loaded instead.
+   *
+   * Returns true when the paragraph on screen played its moment: the opening
+   * paragraph the plan reaches within OPENING_MOMENT_MS of its appearing (the
+   * plan was right behind its text) gets its effect after all, and the host
+   * plays its sound effect. A turn loaded instead plays its opening as usual.
+   */
+  upgradeTurn(turn: VnTurnInput): boolean {
+    if (!canUpgradeTurn(this.state, turn)) {
+      this.loadTurn({ ...turn, preserveImage: true });
+      return true;
+    }
+    this.spriteLayer.setTurn(turn.sprites ?? null);
+    // The persistent ambient in effect at the reader's paragraph, as on rewind.
+    this.ambientOverride = undefined;
+    for (const paragraph of turn.paragraphs.slice(0, this.state.currentParagraphIndex + 1)) {
+      const ambient = paragraph.ambient !== undefined ? paragraph.ambient : paragraph.cue?.ambient;
+      if (ambient === null || isAmbientEffect(ambient)) this.ambientOverride = ambient;
+    }
+    const opening = this.state.currentParagraphIndex === 0 && this.state.highestRevealedIndex === 0
+      && this.openingShownAt !== null && Date.now() - this.openingShownAt < OPENING_MOMENT_MS;
+    this.isUpgrading = true;
+    try { this.dispatch({ type: "upgrade-turn", turn }); }
+    finally { this.isUpgrading = false; }
+    if (opening) {
+      // Its effect only: the text's own shake and the ambient were applied already.
+      const effect = this.state.paragraphs[0]?.effect ?? this.state.paragraphs[0]?.cue?.effect;
+      if (effect && isStageEffect(effect)) this.triggerEffect(effect);
+    }
+    this.refreshBacklogEntries();
+    // Auto play (or skip) held at the plan carries on.
+    if (this.isSkipping && !this.isTyping) this.scheduleSkipAdvance();
+    else this.checkAutoPlay();
+    return opening;
+  }
+
+  /** History entries take the speakers and formatting of their paragraphs as they are now. */
+  private refreshBacklogEntries(): void {
+    const byId = new Map(this.state.paragraphs.map((paragraph) => [paragraph.id, paragraph]));
+    let changed = false;
+    for (const entry of this.backlogEntries) {
+      const paragraph = byId.get(entry.id);
+      if (!paragraph || paragraph.text !== entry.text) continue;
+      const formatted = this.formatParagraph(paragraph);
+      if (entry.speaker === paragraph.speaker && entry.formatted === formatted) continue;
+      entry.speaker = paragraph.speaker;
+      entry.formatted = formatted;
+      changed = true;
+    }
+    if (changed && this.isBacklogOpen) this.renderBacklog();
   }
 
   presentUserParagraph(text: string, speaker: string = "You"): void {
@@ -2064,6 +2167,9 @@ export class VnStage {
     const view = selectVnStageView(this.state);
     this.root.dataset.vnMode = this.state.mode;
     this.root.dataset.vnPhase = this.state.phase;
+    // A provisional turn on stage: the text is here, its visual plan is not yet.
+    if (this.state.planHold !== null) this.root.dataset.vnPlanPending = "";
+    else delete this.root.dataset.vnPlanPending;
     this.root.dataset.vnImageStatus = this.state.pendingImage
       ? "loading"
       : this.state.imageError
@@ -2201,7 +2307,7 @@ export class VnStage {
     this.readParagraphIds.add(id);
     const last = this.backlogEntries[this.backlogEntries.length - 1];
     if (!last || last.text !== text || last.speaker !== speaker) {
-      this.backlogEntries.push({ speaker, text, formatted });
+      this.backlogEntries.push({ id, speaker, text, formatted });
     }
   }
 
@@ -2268,6 +2374,8 @@ export class VnStage {
     this.clearSkipTimer();
     if (!this.isSkipping) return;
     const view = selectVnStageView(this.state);
+    // Held by the plan: skip stays on and carries on when it lands (upgradeTurn).
+    if (!view.canAdvance && view.waitingForPlan) return;
     if (!view.canAdvance) {
       this.isSkipping = false;
       this.updateControlButtons();
@@ -2392,23 +2500,33 @@ export class VnStage {
       this.currentRenderedFormatted = "";
       return;
     }
-    const currentPreset = this.root.dataset.vnPreset;
-    const shouldStripMarkdown = currentPreset === "literature-club" || currentPreset === "yamaku-classic";
-    const formatted = formatDialogueText(paragraph.text, this.customRegexRules, {
-      stripMarkdown: shouldStripMarkdown,
-      forceQuotes: shouldStripMarkdown,
-      hasSpeaker: Boolean(paragraph.speaker && paragraph.speaker.trim())
-    });
+    const formatted = this.formatParagraph(paragraph);
     if (
       this.currentRenderedParagraphId === paragraph.id &&
       this.currentRenderedFormatted === formatted
     ) {
       return;
     }
+    if (this.isUpgrading && this.currentRenderedParagraphId === paragraph.id) {
+      // The plan reached the paragraph on screen and its nameplate changed the
+      // formatting (forced quotes): show it whole, without effects or retyping.
+      this.currentRenderedFormatted = formatted;
+      this.clearTypewriter();
+      this.activeTextNodes = [];
+      this.dialogueText.innerHTML = formatted;
+      applyTextEffects(this.dialogueText);
+      if (this.isTyping) {
+        this.isTyping = false;
+        this.updateContinueButton();
+        this.onTextRenderFinished();
+      }
+      return;
+    }
     this.currentRenderedParagraphId = paragraph.id;
     this.currentRenderedFormatted = formatted;
     this.recordBacklogAndRead(paragraph.id, paragraph.speaker, paragraph.text, formatted);
     if (!this.isRewinding) this.triggerParagraphEffects(paragraph);
+    this.openingShownAt = !this.isRewinding && this.state.currentParagraphIndex === 0 ? Date.now() : null;
 
     if (this.textSpeed <= 0 || this.isSkipping || this.isRewinding) {
       this.clearTypewriter();
@@ -2420,6 +2538,17 @@ export class VnStage {
     } else {
       this.startTypewriter(formatted);
     }
+  }
+
+  /** Dialogue markup for a paragraph under the current preset and display rules. */
+  private formatParagraph(paragraph: VnParagraph): string {
+    const currentPreset = this.root.dataset.vnPreset;
+    const shouldStripMarkdown = currentPreset === "literature-club" || currentPreset === "yamaku-classic";
+    return formatDialogueText(paragraph.text, this.customRegexRules, {
+      stripMarkdown: shouldStripMarkdown,
+      forceQuotes: shouldStripMarkdown,
+      hasSpeaker: Boolean(paragraph.speaker && paragraph.speaker.trim())
+    });
   }
 
   private renderStatus(): void {
@@ -2439,6 +2568,9 @@ export class VnStage {
     const phaseLabel = phaseLoadingLabel(this.state.phase);
     if (phaseLabel) {
       badges.push({ kind: "loading", label: phaseLabel, icon: "spinner" });
+    } else if (selectVnStageView(this.state).waitingForPlan) {
+      // The text came before its plan and the reader caught up with it.
+      badges.push({ kind: "loading", label: phaseLoadingLabel("planning")!, icon: "spinner" });
     }
 
     if (this.state.assetProgress && this.state.assetProgress.total > 0) {

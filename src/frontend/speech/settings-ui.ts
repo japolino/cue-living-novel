@@ -548,6 +548,17 @@ export class SpeechSettingsSection {
     autoplayText.innerHTML = "Auto-play each new paragraph<small>Starts only after you press Play once (browsers require a user gesture). Each paragraph is one synthesis request on your TTS profile.</small>";
     autoplay.append(autoplayInput, autoplayText);
 
+    const beforePlan = document.createElement("label");
+    beforePlan.className = "check";
+    const beforePlanInput = document.createElement("input");
+    beforePlanInput.type = "checkbox";
+    beforePlanInput.setAttribute("data-speech-field", "speak-before-plan");
+    beforePlanInput.checked = settings.speakBeforePlan;
+    beforePlanInput.addEventListener("change", () => this.save((next) => { next.speakBeforePlan = beforePlanInput.checked; }));
+    const beforePlanText = document.createElement("span");
+    beforePlanText.innerHTML = "Read before the scene is ready<small>A reply’s text shows before its scene plan. Off: speech starts once the plan says who speaks. On: speech starts at once, with the narrator voice wherever the text does not name the speaker.</small>";
+    beforePlan.append(beforePlanInput, beforePlanText);
+
     const volume = document.createElement("label");
     const volumeTitle = document.createElement("span");
     volumeTitle.textContent = `Speech volume (${Math.round(settings.volume * 100)}%)`;
@@ -616,7 +627,7 @@ export class SpeechSettingsSection {
 
       body.append(
         speechCard,
-        card("Playback", autoplay, volume),
+        card("Playback", autoplay, beforePlan, volume),
         choirCard,
       );
       this.shadow.replaceChildren(style, body);
@@ -632,7 +643,7 @@ export class SpeechSettingsSection {
       fallback,
       overrides,
       delivery,
-      card("Playback", autoplay, volume),
+      card("Playback", autoplay, beforePlan, volume),
     );
     this.shadow.replaceChildren(style, body);
 

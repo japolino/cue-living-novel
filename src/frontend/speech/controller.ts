@@ -133,8 +133,9 @@ export class SpeechController {
     const previous = this.settings;
     this.settings = next;
     if (this.audio) this.audio.volume = next.volume;
-    const voicesChanged = JSON.stringify({ ...previous, volume: 0, autoplay: false, choirSound: false })
-      !== JSON.stringify({ ...next, volume: 0, autoplay: false, choirSound: false });
+    // Playback switches, not voices: when to speak, how loud, whose sound.
+    const playbackOnly = { volume: 0, autoplay: false, choirSound: false, speakBeforePlan: false };
+    const voicesChanged = JSON.stringify({ ...previous, ...playbackOnly }) !== JSON.stringify({ ...next, ...playbackOnly });
     if (voicesChanged) {
       // A profile/voice/delivery change invalidates everything synthesized so far.
       this.stop("settings-changed");
