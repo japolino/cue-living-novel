@@ -234,6 +234,8 @@ export type DialogueFormatOptions = {
   stripMarkdown?: boolean;
   forceQuotes?: boolean;
   hasSpeaker?: boolean;
+  /** Wrap quoted runs in `<span data-vn-quote>` (see markDialogueQuotes). */
+  markQuotes?: boolean;
 };
 
 function stripMarkdown(text: string): string {
@@ -319,6 +321,142 @@ export function formatDialogueText(
   // 7. Paired text effect tags become effect spans (unpaired ones are dropped)
   formatted = restoreTextEffectTags(formatted);
 
+  // 8. Spoken words get a hook of their own (the stage asks for it)
+  if (options.markQuotes) {
+    formatted = markDialogueQuotes(formatted);
+  }
+
   return formatted;
+}
+
+/** Attribute on the span around a quoted run (`markDialogueQuotes`). */
+export const DIALOGUE_QUOTE_ATTRIBUTE = "data-vn-quote";
+
+/** Quote marks that open spoken dialogue, with the mark that closes each. */
+const DIALOGUE_QUOTE_CLOSERS: ReadonlyMap<string, string> = new Map([
+  ["「", "」"],
+  ["『", "』"],
+  ["“", "”"],
+  ['"', '"'],
+]);
+
+const VOID_TAGS: ReadonlySet<string> = new Set(["br"]);
+
+type QuoteRun = {
+  /** Token and character index of the opening mark. */
+  startToken: number;
+  startChar: number;
+  /** Token and character index just past the closing mark. */
+  endToken: number;
+  endChar: number;
+  /** Every tag opened inside the run closes inside it, in order. */
+  balanced: boolean;
+};
+
+/**
+ * Wrap each quoted run of formatted dialogue markup (「…」, 『…』, “…”, "…",
+ * marks included) in `<span data-vn-quote>`, so a theme can set spoken words
+ * apart from narration (Cinema does; the others leave it unstyled).
+ *
+ * Only text is scanned: tags are never split and text inside `<code>` never
+ * opens or closes a quote. A run whose markup is balanced (every tag opened
+ * in it closes in it) gets one span, effect spans and all; a run that crosses
+ * a tag boundary (`<em>"Wait</em> here"`) gets one span per text piece, so
+ * the output always nests. A quote still open when the paragraph ends is
+ * narration (a stray inch mark, or a quote that goes on in the next
+ * paragraph). The text and its order are unchanged, so the typewriter and
+ * text effects see the same characters.
+ */
+export function markDialogueQuotes(html: string): string {
+  if (!html) return html;
+  // Even indices are text, odd ones are tags (sanitized markup has no stray `<`).
+  const tokens = html.split(/(<[^>]*>)/);
+  const runs: QuoteRun[] = [];
+  const stack: string[] = [];
+  let codeDepth = 0;
+  let open: { closer: string; token: number; char: number; depth: number; clean: boolean } | null = null;
+
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]!;
+    if (index % 2 === 1) {
+      const match = /^<(\/?)([a-zA-Z][a-zA-Z0-9]*)/.exec(token);
+      if (!match) continue;
+      const name = match[2]!.toLowerCase();
+      if (VOID_TAGS.has(name)) continue;
+      if (match[1] === "/") {
+        if (name === "code" && codeDepth > 0) codeDepth -= 1;
+        if (stack[stack.length - 1] === name) {
+          stack.pop();
+          // Closing a tag opened before the run makes it cross a boundary.
+          if (open && stack.length < open.depth) open.clean = false;
+        } else {
+          // A stray or misnested closing tag: never wrap across it.
+          const at = stack.lastIndexOf(name);
+          if (at >= 0) stack.length = at;
+          if (open) open.clean = false;
+        }
+      } else {
+        stack.push(name);
+        if (name === "code") codeDepth += 1;
+      }
+      continue;
+    }
+    if (codeDepth > 0) continue;
+    for (let char = 0; char < token.length; char += 1) {
+      const mark = token[char]!;
+      if (open) {
+        if (mark !== open.closer) continue;
+        runs.push({
+          startToken: open.token,
+          startChar: open.char,
+          endToken: index,
+          endChar: char + 1,
+          balanced: open.clean && stack.length === open.depth,
+        });
+        open = null;
+        continue;
+      }
+      const closer = DIALOGUE_QUOTE_CLOSERS.get(mark);
+      if (closer) open = { closer, token: index, char, depth: stack.length, clean: true };
+    }
+  }
+  if (runs.length === 0) return html;
+
+  // Insertions per text token: [position, markup]; a close sorts before an
+  // open at the same position, so back-to-back quotes stay separate spans.
+  const OPEN = `<span ${DIALOGUE_QUOTE_ATTRIBUTE}>`;
+  const CLOSE = "</span>";
+  const inserts = new Map<number, Array<[number, string]>>();
+  const add = (token: number, at: number, markup: string): void => {
+    const list = inserts.get(token) ?? [];
+    list.push([at, markup]);
+    inserts.set(token, list);
+  };
+  for (const run of runs) {
+    if (run.balanced) {
+      add(run.startToken, run.startChar, OPEN);
+      add(run.endToken, run.endChar, CLOSE);
+      continue;
+    }
+    for (let token = run.startToken; token <= run.endToken; token += 2) {
+      const from = token === run.startToken ? run.startChar : 0;
+      const to = token === run.endToken ? run.endChar : tokens[token]!.length;
+      if (to <= from) continue;
+      add(token, from, OPEN);
+      add(token, to, CLOSE);
+    }
+  }
+  for (const [token, list] of inserts) {
+    list.sort((a, b) => a[0] - b[0] || (a[1] === CLOSE ? -1 : 0) - (b[1] === CLOSE ? -1 : 0));
+    const text = tokens[token]!;
+    let output = "";
+    let cursor = 0;
+    for (const [at, markup] of list) {
+      output += text.slice(cursor, at) + markup;
+      cursor = at;
+    }
+    tokens[token] = output + text.slice(cursor);
+  }
+  return tokens.join("");
 }
 

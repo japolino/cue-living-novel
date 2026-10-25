@@ -639,7 +639,7 @@ export class VisualNovelSettingsPanel {
 
           ${pane("look", `
             <div data-sample-slot></div>
-            ${group("Theme", themeTiles(), { find: find("Theme", "preset style colours colors skin golden paper noir console yamaku literature") })}
+            ${group("Theme", themeTiles(), { find: find("Theme", "preset style colours colors skin golden paper noir console yamaku literature cinema subtitles nvl page daylight light bright") })}
             ${group("Text", `
               <fieldset ${find("Text size", "font scale bigger smaller large")}>
                 <legend>Text size</legend>

@@ -119,6 +119,9 @@ export const THEME_PRESET_IDS = [
   "midnight-noir",
   "yamaku-classic",
   "literature-club",
+  "cinema",
+  "nvl",
+  "daylight",
 ] as const;
 
 export type VisualNovelThemePreset = (typeof THEME_PRESET_IDS)[number];

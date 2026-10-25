@@ -29,7 +29,7 @@ const SPARKLE_PATH = "M 0 -12 L 2.6 -2.6 L 12 0 L 2.6 2.6 L 0 12 L -2.6 2.6 L -1
 const DIAMOND_PATH = "M 0 -8 L 8 0 L 0 8 L -8 0 Z";
 
 /**
- * The seven ornament groups, keyed by the canonical preset id. The map is the
+ * The ornament groups, one per canonical preset id. The map is the
  * single source of truth for the ornament payload so a test can assert that
  * every preset id has exactly one non-empty, well-formed group.
  *
@@ -173,6 +173,23 @@ export const VN_ORNAMENT_GROUPS: Record<VisualNovelThemePreset, string> = {
     <g opacity="0.3" transform="translate(1536 210) scale(0.85)"><path d="M 0 -4 C -4 -12 -14 -8 -14 0 C -14 7 0 14 0 16 C 0 14 14 7 14 0 C 14 -8 4 -12 0 -4 Z"/></g>
     <g opacity="0.24" transform="translate(1490 360) scale(0.6)"><path d="M 0 -4 C -4 -12 -14 -8 -14 0 C -14 7 0 14 0 16 C 0 14 14 7 14 0 C 14 -8 4 -12 0 -4 Z"/></g>
     <g opacity="0.22" transform="translate(120 380) scale(0.55)"><path d="M 0 -4 C -4 -12 -14 -8 -14 0 C -14 7 0 14 0 16 C 0 14 14 7 14 0 C 14 -8 4 -12 0 -4 Z"/></g>
+  </g>`,
+  cinema: `<g data-vn-ornament-group="" data-vn-preset="cinema" aria-hidden="true" focusable="false" vector-effect="non-scaling-stroke" fill="none" stroke="currentColor">
+    <!-- Viewfinder corner marks at the top of the frame (the subtitles own the bottom) -->
+    <g stroke-width="1.4" opacity="0.32">
+      <path d="M 48 92 L 48 52 L 88 52"/>
+      <path d="M 1512 52 L 1552 52 L 1552 92"/>
+    </g>
+  </g>`,
+  nvl: `<g data-vn-ornament-group="" data-vn-preset="nvl" aria-hidden="true" focusable="false" vector-effect="non-scaling-stroke" fill="none" stroke="currentColor">
+    <!-- A faint page frame around the darkened screen -->
+    <rect x="22" y="22" width="1556" height="856" stroke-width="1" opacity="0.12"/>
+  </g>`,
+  daylight: `<g data-vn-ornament-group="" data-vn-preset="daylight" aria-hidden="true" focusable="false" vector-effect="non-scaling-stroke" fill="currentColor" stroke="none">
+    <!-- Soft glints of sunlight in the open sky -->
+    <g transform="translate(1470 120) scale(1.1)" opacity="0.55"><g data-vn-anim="sparkle" data-vn-anim-delay="0s"><path d="${SPARKLE_PATH}"/></g></g>
+    <g transform="translate(1530 205) scale(0.6)" opacity="0.45"><g data-vn-anim="sparkle" data-vn-anim-delay="0.6s"><path d="${SPARKLE_PATH}"/></g></g>
+    <g transform="translate(130 150) scale(0.7)" opacity="0.4"><g data-vn-anim="sparkle" data-vn-anim-delay="1.2s"><path d="${SPARKLE_PATH}"/></g></g>
   </g>`,
 };
 

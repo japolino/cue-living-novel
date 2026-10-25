@@ -1577,6 +1577,612 @@ const LITERATURE_CLUB_CSS = `
 [data-vn-root][data-vn-preset="literature-club"] [data-vn-backlog-close]:hover { border-color: #e8507c; background: #ffe6f0; }
 `;
 
+/*
+ * cinema — film subtitles: no box, text bottom-centre over a dark gradient
+ * rising from the bottom, the name centred between two rules in the
+ * speaker's colour (--vn-speaker-color, voices.ts), narration muted and
+ * spoken words ([data-vn-quote], rich-text.ts) bold white, a gold ▼ once the
+ * line is typed, and small text controls at the bottom right by the progress.
+ */
+const CINEMA_CSS = `
+[data-vn-root][data-vn-preset="cinema"] {
+  --vn-accent: #e8c26a;
+  --vn-text: #ffffff;
+  --vn-muted-text: rgba(214, 217, 224, 0.8);
+  --vn-dialogue-bg: linear-gradient(0deg, rgba(3, 4, 7, 0.94) 0%, rgba(3, 4, 7, 0.72) 42%, rgba(3, 4, 7, 0) 100%);
+  --vn-dialogue-border: transparent;
+  --vn-dialogue-width: min(62rem, calc(100 * var(--vn-vw, 1vw) - 3rem));
+  --vn-font-family: "Segoe UI", "Noto Sans", "Apple SD Gothic Neo", system-ui, sans-serif;
+  --vn-dialogue-font-size: clamp(1.02rem, 1.05 * var(--vn-vw, 1vw) + 0.78rem, 1.36rem);
+  --vn-transition-duration: 300ms;
+  --vn-accent-contrast: #17120a;
+  --vn-chrome-bg: transparent;
+  --vn-chrome-border: transparent;
+  --vn-chrome-text: rgba(222, 225, 232, 0.66);
+  --vn-chrome-hover: rgba(255, 255, 255, 0.08);
+  --vn-control-radius: 4px;
+  --vn-panel-bg: rgba(9, 10, 15, 0.9);
+  --vn-panel-solid: #090a0f;
+  --vn-panel-border: rgba(255, 255, 255, 0.14);
+  /* Narration and spoken words inside one paragraph. */
+  --vn-cinema-narration: rgba(196, 200, 209, 0.9);
+  --vn-cinema-speech: #ffffff;
+  font-family: var(--vn-font-family);
+}
+[data-vn-root][data-vn-preset="cinema"] [data-vn-ornament-group][data-vn-preset="cinema"] { display: block; }
+/* The gradient rises from the bottom of the screen behind the subtitles. */
+[data-vn-root][data-vn-preset="cinema"] [data-vn-narrative] {
+  padding-top: clamp(5rem, 18 * var(--vn-dvh, 1dvh), 11rem);
+  background: var(--vn-dialogue-bg);
+}
+[data-vn-root][data-vn-preset="cinema"] [data-vn-dialogue] {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "speaker speaker" "text text" "next next" "footer controls";
+  align-items: center;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  text-align: center;
+}
+/* —— Name —— : centred between two thin rules, in the speaker's colour. */
+[data-vn-root][data-vn-preset="cinema"] [data-vn-speaker] {
+  grid-area: speaker;
+  position: static;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  justify-self: center;
+  gap: 0.85rem;
+  min-height: 0;
+  max-width: 100%;
+  margin: 0 0 0.6rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  color: var(--vn-speaker-color, var(--vn-accent));
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: none;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+}
+[data-vn-root][data-vn-preset="cinema"] [data-vn-speaker]::before,
+[data-vn-root][data-vn-preset="cinema"] [data-vn-speaker]::after {
+  flex: none;
+  width: clamp(1.6rem, 5 * var(--vn-vw, 1vw), 3.4rem);
+  height: 1px;
+  background: currentColor;
+  content: "";
+  opacity: 0.75;
+}
+[data-vn-root][data-vn-preset="cinema"] [data-vn-dialogue-text] {
+  grid-area: text;
+  color: var(--vn-cinema-narration);
+  font-weight: 400;
+  line-height: 1.7;
+  text-align: center;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9), 0 0 12px rgba(0, 0, 0, 0.6);
+}
+/* Spoken words stand out from the narration around them. */
+[data-vn-root][data-vn-preset="cinema"] [data-vn-dialogue-text] [data-vn-quote],
+[data-vn-root][data-vn-preset="cinema"] [data-vn-backlog-text] [data-vn-quote] {
+  color: var(--vn-cinema-speech);
+  font-weight: 700;
+}
+/* A gold ▼ under the line once it is typed (data-vn-ready). */
+[data-vn-root][data-vn-preset="cinema"] [data-vn-continue] {
+  grid-area: next;
+  position: relative;
+  right: auto;
+  bottom: auto;
+  justify-self: center;
+  width: 2.8rem;
+  height: 1.8rem;
+  margin-top: 0.1rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--vn-accent);
+}
+[data-vn-root][data-vn-preset="cinema"] [data-vn-continue]::before {
+  width: auto;
+  height: auto;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  content: "▼";
+  font-size: 0.78rem;
+  line-height: 1;
+  text-shadow: 0 0 8px rgba(232, 194, 106, 0.6);
+  transform: none;
+}
+[data-vn-root][data-vn-preset="cinema"] [data-vn-continue][data-vn-ready="true"]:hover { border-color: transparent; box-shadow: none; color: #fff0c4; }
+[data-vn-root][data-vn-preset="cinema"] [data-vn-dialogue-footer] {
+  grid-area: footer;
+  justify-self: end;
+  justify-content: flex-end;
+  min-height: 0;
+  margin: 0;
+  padding-right: 0.5rem;
+}
+[data-vn-root][data-vn-preset="cinema"] [data-vn-progress] { color: rgba(222, 225, 232, 0.6); font-size: 0.74rem; font-variant-numeric: tabular-nums; letter-spacing: 0.08em; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8); }
+/* Small text buttons at the bottom right, beside the progress. */
+[data-vn-root][data-vn-preset="cinema"] [data-vn-controls] {
+  grid-area: controls;
+  position: static;
+  justify-self: end;
+  gap: 0.1rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+[data-vn-root][data-vn-preset="cinema"] [data-vn-control] {
+  padding: 0.2rem 0.5rem;
+  color: var(--vn-chrome-text);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+[data-vn-root][data-vn-preset="cinema"] [data-vn-control-icon] { display: none; }
+[data-vn-root][data-vn-preset="cinema"] [data-vn-control]:hover:not(:disabled) { background: transparent; color: #ffffff; }
+[data-vn-root][data-vn-preset="cinema"] [data-vn-control][data-vn-active="true"] {
+  border-color: transparent;
+  background-color: transparent;
+  background-image: none;
+  color: var(--vn-accent);
+  box-shadow: none;
+}
+[data-vn-root][data-vn-preset="cinema"] [data-vn-control][data-vn-active="true"]:hover:not(:disabled) { background-color: transparent; color: #fff0c4; }
+@media (max-width: 640px) {
+  /* One bottom row on a phone: progress, ▼, controls, so the subtitles keep
+     the screen above them. */
+  [data-vn-root][data-vn-preset="cinema"] [data-vn-dialogue] {
+    grid-template-columns: auto minmax(2.8rem, 1fr) auto;
+    grid-template-areas: "speaker speaker speaker" "text text text" "footer next controls";
+    padding: 0;
+  }
+  [data-vn-root][data-vn-preset="cinema"] [data-vn-dialogue-footer] { justify-self: start; padding-right: 0; padding-left: 0.25rem; }
+  /* Clear of the text's padding (it bleeds 0.25em for moving effects). */
+  [data-vn-root][data-vn-preset="cinema"] [data-vn-dialogue-footer],
+  [data-vn-root][data-vn-preset="cinema"] [data-vn-continue],
+  [data-vn-root][data-vn-preset="cinema"] [data-vn-controls] { margin-top: 0.4rem; }
+  [data-vn-root][data-vn-preset="cinema"] [data-vn-continue] { height: 2.8rem; }
+  [data-vn-root][data-vn-preset="cinema"] [data-vn-control] { padding-right: 0.35rem; padding-left: 0.35rem; }
+}
+[data-vn-root][data-vn-preset="cinema"] [data-vn-interaction] {
+  background: radial-gradient(ellipse 70% 60% at 50% 45%, rgba(2, 3, 6, 0.5), transparent 75%), linear-gradient(180deg, rgba(2, 3, 6, 0.3), rgba(2, 3, 6, 0.5));
+}
+[data-vn-root][data-vn-preset="cinema"] [data-vn-interaction-title]::before { border-radius: 0; background: var(--vn-accent); box-shadow: 0 0 0.6rem rgba(232, 194, 106, 0.55); }
+[data-vn-root][data-vn-preset="cinema"] [data-vn-choice] {
+  justify-content: center;
+  padding-right: 2.4rem;
+  padding-left: 2.4rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 4px;
+  background-color: rgba(9, 10, 15, 0.86);
+  background-image: none;
+  color: #f2f3f6;
+  text-align: center;
+  box-shadow: 0 0.4rem 1.2rem rgba(0, 0, 0, 0.4);
+}
+[data-vn-root][data-vn-preset="cinema"] [data-vn-choice]::after { position: absolute; right: 1.1rem; }
+[data-vn-root][data-vn-preset="cinema"] [data-vn-choice]:hover:not(:disabled),
+[data-vn-root][data-vn-preset="cinema"] [data-vn-choice]:focus-visible {
+  border-color: rgba(232, 194, 106, 0.8);
+  background-color: rgba(26, 23, 16, 0.94);
+  color: #ffffff;
+  box-shadow: 0 0.5rem 1.4rem rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(232, 194, 106, 0.3);
+  transform: none;
+}
+[data-vn-root][data-vn-preset="cinema"] [data-vn-input-form] { border-radius: 6px; background-image: none; }
+[data-vn-root][data-vn-preset="cinema"] [data-vn-input] { border-radius: 4px; }
+[data-vn-root][data-vn-preset="cinema"] [data-vn-submit] { border-radius: 4px; }
+[data-vn-root][data-vn-preset="cinema"] [data-vn-badge] { border-color: rgba(255, 255, 255, 0.18); border-radius: 4px; background: rgba(8, 9, 14, 0.88); }
+[data-vn-root][data-vn-preset="cinema"] [data-vn-badge-icon="spinner"] { color: var(--vn-accent); }
+[data-vn-root][data-vn-preset="cinema"] [data-vn-backlog] { background: linear-gradient(0deg, rgba(3, 4, 7, 0.98), rgba(6, 7, 11, 0.95)); }
+[data-vn-root][data-vn-preset="cinema"] [data-vn-backlog-item] { border-radius: 4px; box-shadow: none; text-align: center; }
+[data-vn-root][data-vn-preset="cinema"] [data-vn-backlog-text] { color: var(--vn-cinema-narration); }
+`;
+
+/*
+ * nvl — full-page text: the screen darkens, characters fade back, and a
+ * turn's paragraphs stack as a page in a centre column, each under its
+ * speaker's name in their colour. The stage renders the earlier paragraphs
+ * into [data-vn-nvl-page] and marks the dialogue [data-vn-nvl-paged] while the
+ * page shows; the new paragraph types beneath and, if it would overflow,
+ * starts a fresh page (nvl-page.ts). At Your turn the page folds into an
+ * ordinary box under the reply area.
+ */
+const NVL_CSS = `
+[data-vn-root][data-vn-preset="nvl"] {
+  --vn-accent: #a9bcff;
+  --vn-text: #f1f2f6;
+  --vn-muted-text: rgba(214, 218, 230, 0.74);
+  --vn-dialogue-bg: rgba(7, 8, 14, 0.66);
+  --vn-dialogue-border: rgba(255, 255, 255, 0.08);
+  --vn-dialogue-width: min(48rem, calc(100 * var(--vn-vw, 1vw) - 3rem));
+  --vn-font-family: Georgia, "Iowan Old Style", "Noto Serif", "Palatino Linotype", serif;
+  --vn-dialogue-font-size: clamp(1rem, 0.85 * var(--vn-vw, 1vw) + 0.82rem, 1.26rem);
+  --vn-transition-duration: 300ms;
+  --vn-accent-contrast: #0c1020;
+  --vn-chrome-bg: rgba(10, 11, 19, 0.72);
+  --vn-chrome-border: rgba(255, 255, 255, 0.1);
+  --vn-chrome-text: rgba(214, 218, 230, 0.78);
+  --vn-chrome-hover: rgba(169, 188, 255, 0.12);
+  --vn-control-radius: 6px;
+  --vn-panel-bg: rgba(9, 10, 17, 0.9);
+  --vn-panel-solid: #090a11;
+  --vn-panel-border: rgba(169, 188, 255, 0.24);
+  /* The page reads like a book: the whole layout takes the serif. */
+  font-family: var(--vn-font-family);
+}
+[data-vn-root][data-vn-preset="nvl"] [data-vn-ornament-group][data-vn-preset="nvl"] { display: block; }
+/* The screen darkens behind the page. */
+[data-vn-root][data-vn-preset="nvl"] [data-vn-scrim] {
+  background: radial-gradient(ellipse at center, rgba(4, 5, 10, 0.5) 30%, rgba(4, 5, 10, 0.72) 100%);
+}
+/* Characters fade back; they stand on the stage floor behind the page. */
+[data-vn-root][data-vn-preset="nvl"] [data-vn-sprites] {
+  --vn-dialogue-top: 0px;
+  opacity: 0.5;
+  filter: brightness(0.66) saturate(0.82);
+}
+[data-vn-root][data-vn-preset="nvl"] [data-vn-dialogue] {
+  min-height: 0;
+  padding: 1.35rem 3.6rem 1.25rem 1.9rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.6rem;
+  background: rgba(7, 8, 14, 0.66);
+  box-shadow: 0 1rem 3rem rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(0.35rem);
+}
+/* The page: a column as tall as the screen allows; the text starts at its top. */
+[data-vn-root][data-vn-preset="nvl"] [data-vn-dialogue][data-vn-nvl-paged] {
+  --vn-dialogue-text-max: calc(100 * var(--vn-dvh, 1dvh) - 19rem);
+  display: flex;
+  flex-direction: column;
+  height: calc(100 * var(--vn-dvh, 1dvh) - 8.5rem);
+  overflow: hidden;
+  padding: 2.4rem 2.6rem calc(var(--vn-control-size) + 1.9rem);
+  background: linear-gradient(180deg, rgba(6, 7, 12, 0.46), rgba(6, 7, 12, 0.6));
+}
+/* Earlier paragraphs of the page, dimmer. They give way first when the page
+   fills (the stage then starts a new page). */
+[data-vn-root][data-vn-preset="nvl"] [data-vn-nvl-page] {
+  display: flex;
+  flex: 0 1000 auto;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 1.05rem;
+  min-height: 0;
+  margin-bottom: 1.05rem;
+  overflow: hidden;
+}
+[data-vn-root][data-vn-preset="nvl"] [data-vn-nvl-page]:empty { display: none; }
+[data-vn-root][data-vn-preset="nvl"] [data-vn-nvl-entry] { flex: none; opacity: 0.56; }
+[data-vn-root][data-vn-preset="nvl"] [data-vn-speaker],
+[data-vn-root][data-vn-preset="nvl"] [data-vn-nvl-speaker] {
+  color: var(--vn-speaker-color, var(--vn-accent));
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 0.8rem;
+  font-weight: 750;
+  letter-spacing: 0.1em;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+[data-vn-root][data-vn-preset="nvl"] [data-vn-speaker] {
+  position: static;
+  flex: none;
+  align-self: flex-start;
+  min-height: 0;
+  margin: 0 0 0.3rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+[data-vn-root][data-vn-preset="nvl"] [data-vn-nvl-speaker] { display: block; margin-bottom: 0.3rem; }
+[data-vn-root][data-vn-preset="nvl"] [data-vn-dialogue-text],
+[data-vn-root][data-vn-preset="nvl"] [data-vn-nvl-text] {
+  color: var(--vn-text);
+  line-height: 1.62;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+}
+[data-vn-root][data-vn-preset="nvl"] [data-vn-nvl-text] {
+  margin: 0;
+  font-size: calc(var(--vn-dialogue-font-size) * var(--vn-text-scale, 1));
+  letter-spacing: 0.005em;
+  text-wrap: pretty;
+  white-space: pre-wrap;
+}
+[data-vn-root][data-vn-preset="nvl"] [data-vn-dialogue][data-vn-nvl-paged] [data-vn-dialogue-text] { flex: 0 1 auto; min-height: 0; }
+[data-vn-root][data-vn-preset="nvl"] [data-vn-progress] { color: rgba(214, 218, 230, 0.55); font-family: "Segoe UI", system-ui, sans-serif; font-variant-numeric: tabular-nums; letter-spacing: 0.08em; }
+[data-vn-root][data-vn-preset="nvl"] [data-vn-dialogue][data-vn-nvl-paged] [data-vn-dialogue-footer] {
+  position: absolute;
+  top: 0.8rem;
+  right: 1.3rem;
+  min-height: 0;
+  margin: 0;
+}
+/* A small ▼ marks the end of the typed paragraph. */
+[data-vn-root][data-vn-preset="nvl"] [data-vn-continue] {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--vn-accent);
+}
+[data-vn-root][data-vn-preset="nvl"] [data-vn-continue]::before {
+  width: auto;
+  height: auto;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  content: "▼";
+  font-size: 0.72rem;
+  line-height: 1;
+  transform: none;
+}
+[data-vn-root][data-vn-preset="nvl"] [data-vn-continue][data-vn-ready="true"]:hover { border-color: transparent; box-shadow: none; color: #ffffff; }
+[data-vn-root][data-vn-preset="nvl"] [data-vn-dialogue][data-vn-nvl-paged] [data-vn-continue] {
+  position: relative;
+  right: auto;
+  bottom: auto;
+  flex: none;
+  align-self: flex-start;
+  width: 2.4rem;
+  height: 1.7rem;
+}
+[data-vn-root][data-vn-preset="nvl"] [data-vn-controls] { box-shadow: 0 0.3rem 1rem rgba(0, 0, 0, 0.35); }
+[data-vn-root][data-vn-preset="nvl"] [data-vn-dialogue][data-vn-nvl-paged] [data-vn-controls] {
+  top: auto;
+  right: 1.1rem;
+  bottom: 0.85rem;
+  left: auto;
+}
+@media (max-width: 640px) {
+  [data-vn-root][data-vn-preset="nvl"] [data-vn-dialogue][data-vn-nvl-paged] {
+    height: calc(100 * var(--vn-dvh, 1dvh) - 8rem);
+    padding: 2.2rem 1.25rem calc(var(--vn-control-size) + 1.5rem);
+  }
+  [data-vn-root][data-vn-preset="nvl"] [data-vn-dialogue][data-vn-nvl-paged] [data-vn-controls] {
+    right: 0.6rem;
+    bottom: 0.6rem;
+    left: 0.6rem;
+  }
+  [data-vn-root][data-vn-preset="nvl"] [data-vn-dialogue][data-vn-nvl-paged] [data-vn-continue] { width: 2.8rem; height: 2.8rem; }
+}
+[data-vn-root][data-vn-preset="nvl"] [data-vn-control] { font-family: "Segoe UI", system-ui, sans-serif; }
+[data-vn-root][data-vn-preset="nvl"] [data-vn-control]:hover:not(:disabled) { color: #ffffff; }
+[data-vn-root][data-vn-preset="nvl"] [data-vn-control][data-vn-active="true"] {
+  border-color: rgba(169, 188, 255, 0.7);
+  background-image: none;
+  box-shadow: 0 0 0.7rem rgba(169, 188, 255, 0.35);
+}
+[data-vn-root][data-vn-preset="nvl"] [data-vn-interaction] { background: radial-gradient(ellipse 70% 60% at 50% 45%, rgba(3, 4, 9, 0.45), transparent 75%), rgba(3, 4, 9, 0.3); }
+[data-vn-root][data-vn-preset="nvl"] [data-vn-choice] {
+  border-color: rgba(169, 188, 255, 0.22);
+  border-radius: 6px;
+  background-color: rgba(9, 10, 17, 0.88);
+  background-image: none;
+  font-family: var(--vn-font-family);
+}
+[data-vn-root][data-vn-preset="nvl"] [data-vn-choice]:hover:not(:disabled),
+[data-vn-root][data-vn-preset="nvl"] [data-vn-choice]:focus-visible {
+  border-color: rgba(169, 188, 255, 0.75);
+  background-color: rgba(22, 26, 44, 0.94);
+  transform: none;
+}
+[data-vn-root][data-vn-preset="nvl"] [data-vn-input-form] { border-radius: 8px; background-image: none; }
+[data-vn-root][data-vn-preset="nvl"] [data-vn-input] { border-radius: 6px; font-family: var(--vn-font-family); }
+[data-vn-root][data-vn-preset="nvl"] [data-vn-badge] { border-radius: 6px; background: rgba(8, 9, 15, 0.9); }
+[data-vn-root][data-vn-preset="nvl"] [data-vn-backlog] { font-family: var(--vn-font-family); }
+[data-vn-root][data-vn-preset="nvl"] [data-vn-backlog-speaker] { font-family: "Segoe UI", system-ui, sans-serif; }
+`;
+
+/*
+ * daylight — a bright school-day stage: the scene is brightened and washed
+ * with a pale veil (slightly softened, so text stays readable), a white
+ * translucent box, a dark bold name with a blue underline, a blue ▼, light
+ * controls. Dark ink throughout, so text effects use deeper hues.
+ */
+const DAYLIGHT_CSS = `
+[data-vn-root][data-vn-preset="daylight"] {
+  --vn-accent: #2f7de1;
+  --vn-text: #1d2736;
+  --vn-muted-text: rgba(45, 58, 78, 0.78);
+  --vn-dialogue-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.93), rgba(245, 249, 255, 0.86));
+  --vn-dialogue-border: rgba(255, 255, 255, 0.95);
+  --vn-dialogue-width: min(70rem, calc(100 * var(--vn-vw, 1vw) - 3rem));
+  --vn-font-family: "Segoe UI", "Noto Sans", "Apple SD Gothic Neo", system-ui, sans-serif;
+  --vn-dialogue-font-size: clamp(1.02rem, 1.05 * var(--vn-vw, 1vw) + 0.78rem, 1.36rem);
+  --vn-transition-duration: 260ms;
+  --vn-accent-contrast: #ffffff;
+  --vn-focus-ring: #1f63c4;
+  --vn-chrome-bg: rgba(255, 255, 255, 0.92);
+  --vn-chrome-border: rgba(150, 172, 205, 0.6);
+  --vn-chrome-text: #2a3547;
+  --vn-chrome-hover: rgba(47, 125, 225, 0.1);
+  --vn-panel-bg: rgba(255, 255, 255, 0.93);
+  --vn-panel-solid: #ffffff;
+  --vn-panel-border: rgba(160, 182, 215, 0.7);
+  /* The Your turn heading and hint sit on the pale stage: dark ink. */
+  --vn-overlay-text: #1b2433;
+  --vn-overlay-muted: rgba(35, 48, 68, 0.84);
+  --vn-odds-good: #1f7a46;
+  --vn-odds-fair: #8c5d00;
+  --vn-odds-poor: #c0392b;
+  --vn-error: #c43a4b;
+  --vn-error-title: #b02a3c;
+  --vn-text-fx-rainbow-mix: 90%;
+  --vn-text-fx-rainbow-1: #c21f3c;
+  --vn-text-fx-rainbow-2: #b04a00;
+  --vn-text-fx-rainbow-3: #8a6500;
+  --vn-text-fx-rainbow-4: #16793b;
+  --vn-text-fx-rainbow-5: #05708f;
+  --vn-text-fx-rainbow-6: #3349cc;
+  --vn-text-fx-rainbow-7: #8130bd;
+  --vn-text-fx-glow: #6fb0ff;
+  --vn-text-fx-glow-ink: 88%;
+  background: #eef3fa;
+  font-family: var(--vn-font-family);
+}
+[data-vn-root][data-vn-preset="daylight"] [data-vn-ornament-group][data-vn-preset="daylight"] { display: block; color: #ffffff; }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-scene] { background: linear-gradient(180deg, #cfe3fb 0%, #e8f1fc 55%, #f6f9fd 100%); }
+/* The scene goes light: brightened and softened behind a pale veil that
+   thickens toward the box. Characters (sprite mode) stand in front of it. */
+[data-vn-root][data-vn-preset="daylight"] [data-vn-scrim] {
+  background:
+    linear-gradient(0deg, rgba(246, 250, 255, 0.78) 0%, rgba(246, 250, 255, 0.3) 42%, rgba(255, 255, 255, 0.12) 100%),
+    rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(1.5px) brightness(1.12) saturate(1.04);
+  -webkit-backdrop-filter: blur(1.5px) brightness(1.12) saturate(1.04);
+}
+[data-vn-root][data-vn-preset="daylight"] [data-vn-dialogue] {
+  padding: 1.6rem 4rem 1.3rem 2rem;
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  border-radius: 1.1rem;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.93), rgba(245, 249, 255, 0.86));
+  box-shadow: 0 0.8rem 2.4rem rgba(40, 70, 120, 0.22), 0 0.15rem 0.4rem rgba(40, 70, 120, 0.12), inset 0 1px 0 #ffffff;
+  backdrop-filter: blur(0.9rem) saturate(1.2);
+}
+/* The name sits inside the box: dark, bold, underlined in blue. */
+[data-vn-root][data-vn-preset="daylight"] [data-vn-speaker] {
+  position: static;
+  min-height: 0;
+  margin: 0 0 0.55rem;
+  padding: 0 0.15rem 0.22rem;
+  border: 0;
+  border-bottom: 3px solid #2f7de1;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  color: #172133;
+  font-size: 1.05rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+[data-vn-root][data-vn-preset="daylight"] [data-vn-dialogue-text] { color: #1d2736; line-height: 1.66; text-shadow: none; }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-dialogue-text] code { background: rgba(47, 125, 225, 0.1); }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-progress] { color: #5b6b82; }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-reading-state] { color: #1f63c4; }
+/* Blue ▼. */
+[data-vn-root][data-vn-preset="daylight"] [data-vn-continue] {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: #2f7de1;
+}
+[data-vn-root][data-vn-preset="daylight"] [data-vn-continue]::before {
+  width: auto;
+  height: auto;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  content: "▼";
+  font-size: 0.9rem;
+  line-height: 1;
+  transform: none;
+}
+[data-vn-root][data-vn-preset="daylight"] [data-vn-continue][data-vn-ready="true"]:hover { border-color: transparent; box-shadow: none; color: #1f63c4; }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-controls] {
+  border-color: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 0.3rem 1rem rgba(40, 70, 120, 0.2), inset 0 1px 0 #ffffff;
+}
+@media (max-width: 640px) {
+  /* The name is inside the box, so the strip sits just above it, and the box
+     stays as short as the overhanging nameplates of the other themes. */
+  [data-vn-root][data-vn-preset="daylight"] [data-vn-controls] { top: calc(-1 * var(--vn-control-size) - 0.5rem); }
+  [data-vn-root][data-vn-preset="daylight"] [data-vn-dialogue] { padding: 0.9rem 3.6rem 1rem 1.2rem; }
+  [data-vn-root][data-vn-preset="daylight"] [data-vn-speaker] { margin-bottom: 0.4rem; font-size: 1rem; }
+}
+[data-vn-root][data-vn-preset="daylight"] [data-vn-control]:hover:not(:disabled) { color: #1f63c4; }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-control][data-vn-active="true"] {
+  border-color: #2f7de1;
+  background-image: none;
+  box-shadow: 0 0.2rem 0.6rem rgba(47, 125, 225, 0.35);
+}
+[data-vn-root][data-vn-preset="daylight"] [data-vn-interaction] {
+  background: radial-gradient(ellipse 70% 60% at 50% 45%, rgba(255, 255, 255, 0.45), transparent 75%), linear-gradient(180deg, rgba(240, 246, 255, 0.2), rgba(240, 246, 255, 0.5));
+}
+[data-vn-root][data-vn-preset="daylight"] [data-vn-interaction-title],
+[data-vn-root][data-vn-preset="daylight"] [data-vn-interaction-hint],
+[data-vn-root][data-vn-preset="daylight"] [data-vn-game-group-label] { text-shadow: 0 0 6px rgba(255, 255, 255, 0.95), 0 0 14px rgba(255, 255, 255, 0.8); }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-choice] {
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  border-radius: 999px;
+  background-color: rgba(255, 255, 255, 0.92);
+  background-image: none;
+  color: #1d2736;
+  font-weight: 650;
+  box-shadow: inset 3px 0 0 rgba(47, 125, 225, 0.55), 0 0.35rem 1rem rgba(40, 70, 120, 0.18);
+}
+[data-vn-root][data-vn-preset="daylight"] [data-vn-choice]:hover:not(:disabled),
+[data-vn-root][data-vn-preset="daylight"] [data-vn-choice]:focus-visible {
+  border-color: #2f7de1;
+  background-color: #ffffff;
+  color: #1f63c4;
+  box-shadow: inset 5px 0 0 #2f7de1, 0 0.5rem 1.3rem rgba(40, 70, 120, 0.24);
+}
+[data-vn-root][data-vn-preset="daylight"] [data-vn-input-form] { border-color: rgba(255, 255, 255, 0.95); background-image: none; box-shadow: 0 0.9rem 2.2rem rgba(40, 70, 120, 0.22); }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-input] { border-color: rgba(150, 172, 205, 0.7); background: #ffffff; color: #1d2736; box-shadow: inset 0 1px 3px rgba(40, 70, 120, 0.12); }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-input]:focus { border-color: #2f7de1; box-shadow: inset 0 1px 3px rgba(40, 70, 120, 0.12), 0 0 0 3px rgba(47, 125, 225, 0.18); }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-submit] { border-color: #2f7de1; box-shadow: 0 0.35rem 1rem rgba(47, 125, 225, 0.3); }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-game-choice] { border-color: rgba(150, 172, 205, 0.6); background-image: none; color: #1d2736; box-shadow: 0 0.3rem 0.8rem rgba(40, 70, 120, 0.16); }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-game-choice]:hover:not(:disabled) { border-color: #2f7de1; background-color: #ffffff; color: #1f63c4; }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-choice-key] { color: #5b6b82; }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-badge] {
+  border: 1px solid rgba(150, 172, 205, 0.6);
+  background: rgba(255, 255, 255, 0.95);
+  color: #1d2736;
+  box-shadow: 0 0.25rem 0.8rem rgba(40, 70, 120, 0.18);
+}
+[data-vn-root][data-vn-preset="daylight"] [data-vn-badge-icon="spinner"],
+[data-vn-root][data-vn-preset="daylight"] [data-vn-badge-icon="reroll"] { color: #2f7de1; }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-badge-icon="image"] { color: #2d5a87; }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-badge-icon="check"] { color: #1f7a46; }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-badge-icon="alert"] { color: #8c5d00; }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-badge][data-vn-badge-interactive="true"]:hover,
+[data-vn-root][data-vn-preset="daylight"] button[data-vn-badge]:hover { border-color: #2f7de1; background: #ffffff; }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-badge-kind="error"] { border-color: #e8a0aa; background: #fff2f4; color: #5a1a24; }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-badge-title] { color: #b02a3c; }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-badge-details] summary,
+[data-vn-root][data-vn-preset="daylight"] [data-vn-badge-note] { color: #7a3a44; }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-badge-details] pre { background: rgba(40, 70, 120, 0.08); color: #1d2736; }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-badge-action] { border-color: #2f7de1; background: #2f7de1; color: #ffffff; box-shadow: none; }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-badge-action]:hover { background: #1f63c4; }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-empty-text] { color: #1d2736; }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-backlog] {
+  background: radial-gradient(ellipse 80% 50% at 50% 0%, rgba(47, 125, 225, 0.1), transparent 70%), rgba(246, 249, 255, 0.97);
+  color: #1d2736;
+}
+[data-vn-root][data-vn-preset="daylight"] [data-vn-backlog-header] { border-bottom-color: rgba(47, 125, 225, 0.35); }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-backlog-title] { color: #1f63c4; }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-backlog-item] { border-color: rgba(150, 172, 205, 0.35); background: #ffffff; box-shadow: inset 3px 0 0 #2f7de1; }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-backlog-item]:last-child { border-color: rgba(47, 125, 225, 0.4); background: #f4f8ff; }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-backlog-speaker] { color: #172133; }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-backlog-text] { color: #1d2736; }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-backlog-close] { border-color: rgba(150, 172, 205, 0.6); background: #ffffff; color: #1f63c4; }
+[data-vn-root][data-vn-preset="daylight"] [data-vn-backlog-close]:hover { border-color: #2f7de1; background: #eef4ff; }
+`;
+
 export const THEME_PRESET_CSS: Record<ThemePresetId, string> = {
   lumiverse: LUMIVERSE_CSS,
   "golden-hour": GOLDEN_HOUR_CSS,
@@ -1585,6 +2191,9 @@ export const THEME_PRESET_CSS: Record<ThemePresetId, string> = {
   "midnight-noir": MIDNIGHT_NOIR_CSS,
   "yamaku-classic": YAMAKU_CLASSIC_CSS,
   "literature-club": LITERATURE_CLUB_CSS,
+  cinema: CINEMA_CSS,
+  nvl: NVL_CSS,
+  daylight: DAYLIGHT_CSS,
 };
 
 export const isThemePresetId = (value: unknown): value is ThemePresetId =>

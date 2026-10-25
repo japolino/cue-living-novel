@@ -207,6 +207,9 @@ export const THEME_PRESET_LABELS: Record<VisualNovelThemePreset, string> = {
   "midnight-noir": "Midnight noir",
   "yamaku-classic": "Yamaku classic (sentimental)",
   "literature-club": "Literature club (pastel pop)",
+  cinema: "Cinema (subtitles)",
+  nvl: "NVL (full-page text)",
+  daylight: "Daylight (bright school day)",
 };
 
 export const THEME_PRESET_OPTIONS: ReadonlyArray<{

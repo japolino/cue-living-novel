@@ -143,6 +143,47 @@ export const VN_OUTER_CSS = `
   --vn-shell-shadow: 0 4px 14px rgba(232, 80, 124, 0.35), inset 0 0 0 1px #ffc2d7;
 }
 
+[data-vn-shell][data-vn-preset="cinema"] {
+  --vn-shell-bg: rgba(6, 7, 11, 0.72);
+  --vn-shell-bg-hover: rgba(22, 20, 15, 0.9);
+  --vn-shell-panel: #090a0f;
+  --vn-shell-field: #050609;
+  --vn-shell-button: #16171d;
+  --vn-shell-text: #f2f3f6;
+  --vn-shell-muted: rgba(222, 225, 232, 0.72);
+  --vn-shell-border: rgba(255, 255, 255, 0.2);
+  --vn-shell-accent: #e8c26a;
+  --vn-shell-radius: 4px;
+  --vn-shell-shadow: 0 0.3rem 1rem rgba(0, 0, 0, 0.45);
+}
+
+[data-vn-shell][data-vn-preset="nvl"] {
+  --vn-shell-bg: rgba(10, 11, 19, 0.82);
+  --vn-shell-bg-hover: rgba(22, 26, 44, 0.94);
+  --vn-shell-panel: #090a11;
+  --vn-shell-field: #05060b;
+  --vn-shell-button: #161a2b;
+  --vn-shell-text: #f1f2f6;
+  --vn-shell-muted: rgba(214, 218, 230, 0.74);
+  --vn-shell-border: rgba(169, 188, 255, 0.32);
+  --vn-shell-accent: #a9bcff;
+  --vn-shell-radius: 6px;
+}
+
+[data-vn-shell][data-vn-preset="daylight"] {
+  --vn-shell-bg: rgba(255, 255, 255, 0.92);
+  --vn-shell-bg-hover: #ffffff;
+  --vn-shell-panel: #f6f9ff;
+  --vn-shell-field: #ffffff;
+  --vn-shell-button: #e8f0fc;
+  --vn-shell-text: #1d2736;
+  --vn-shell-muted: rgba(45, 58, 78, 0.78);
+  --vn-shell-border: rgba(150, 172, 205, 0.7);
+  --vn-shell-accent: #2f7de1;
+  --vn-shell-family: "Segoe UI", "Noto Sans", system-ui, sans-serif;
+  --vn-shell-shadow: 0 0.3rem 1rem rgba(40, 70, 120, 0.22), inset 0 1px 0 #ffffff;
+}
+
 [data-vn-theme-host] {
   position: absolute;
   inset: 0;
