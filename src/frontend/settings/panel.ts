@@ -66,6 +66,7 @@ import {
   SPRITE_EXPRESSION_COUNT_HELP,
   SPRITE_EXPRESSION_COUNT_OPTIONS,
   SPRITE_MOTION_HELP,
+  spriteMotionHold,
   describeSpriteMotion,
   describeSpriteOutline,
   normalizeSpriteExpressionCount,
@@ -358,10 +359,11 @@ input, select, textarea, button { scroll-margin: 4.5rem 0 8.5rem; }
 [data-generated-only], [data-sprites-only] { display: grid; gap: .9rem; }
 
 /* Sprite mode: scene-only controls stay editable but read as not applying. */
-[data-scene-note] { display: flex; gap: .45rem; align-items: baseline; padding: .4rem .65rem; border-radius: .55rem; background: var(--set-hover); color: var(--set-muted); font-size: .84rem; }
-[data-scene-note]::before { content: "i"; flex: none; display: grid; place-items: center; width: 1.05rem; height: 1.05rem; border: 1.5px solid currentColor; border-radius: 50%; font: 700 .68rem/1 Georgia, serif; }
+[data-scene-note], [data-motion-note] { display: flex; gap: .45rem; align-items: baseline; padding: .4rem .65rem; border-radius: .55rem; background: var(--set-hover); color: var(--set-muted); font-size: .84rem; }
+[data-scene-note]::before, [data-motion-note]::before { content: "i"; flex: none; display: grid; place-items: center; width: 1.05rem; height: 1.05rem; border: 1.5px solid currentColor; border-radius: 50%; font: 700 .68rem/1 Georgia, serif; }
 [data-scene-only][data-inactive] > :not(header):not([data-scene-note]):not(legend) { opacity: .5; }
 [data-scene-only][data-inactive] > header h3 { color: var(--set-muted); }
+[data-group-id="sprite-motion"][data-inactive] > :not(header):not([data-motion-note]) { opacity: .5; }
 [data-readiness] progress { width: 100%; height: .45rem; margin-top: .35rem; accent-color: var(--set-accent); }
 ${SPRITE_LIBRARY_CSS}
 `;
@@ -620,6 +622,7 @@ export class VisualNovelSettingsPanel {
             `)}
             <div data-sprites-look hidden>
               ${group("Character motion", `
+                <p data-motion-note hidden></p>
                 <label data-field ${find("Motion strength", "sprites puppet png breathing sway head move subtle strength still")}><span>Strength <span data-sprite-motion-val>100%</span></span><input name="spriteMotion" type="range" min="0" max="${SPRITE_MOTION_MAX}" step="10" /></label>
                 <label data-check ${find("Breathing", "sprites puppet breathe chest idle")}><input name="spriteBreathing" type="checkbox" /><span>Breathing</span></label>
                 <label data-check ${find("Body sway", "sprites puppet sway lean idle")}><input name="spriteSway" type="checkbox" /><span>Body sway</span></label>
@@ -2021,6 +2024,13 @@ export class VisualNovelSettingsPanel {
     }
     this.control<HTMLInputElement>("spriteFocusBlur").checked = config.spriteFocusBlur;
     this.updatePuppetLabels();
+    // Motion Still (or the system's reduced motion) keeps the characters still; the choices here are kept.
+    const hold = spriteMotionHold(config.effectIntensity, typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches);
+    const motionGroup = this.root.querySelector<HTMLElement>('[data-group-id="sprite-motion"]')!;
+    motionGroup.toggleAttribute("data-inactive", hold !== null);
+    const motionNote = motionGroup.querySelector<HTMLElement>("[data-motion-note]")!;
+    motionNote.hidden = hold === null;
+    motionNote.textContent = hold ?? "";
     // Key moments sit under the presentation choice and also exist only for sprites.
     this.root.querySelector<HTMLElement>("[data-key-moments]")!.hidden = !sprites;
     // Scene-only controls keep their values; they only read as not applying.

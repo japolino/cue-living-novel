@@ -889,7 +889,9 @@ Under Look (sprite mode only, `[data-sprites-look]`): "Character motion"
 (intensity 0–150% in steps of 10, "Still" at 0; Breathing, Body sway,
 Head movement, Acting, Hair and cloth physics, disabled at 0) and
 "Character look" (outline 0–6 px, "Off" at 0; Blur characters who are not
-speaking). All save at once.
+speaking). All save at once. Under Motion "Still", or the system's reduced
+motion, "Character motion" reads as not applying (`data-inactive`) with a
+note (`spriteMotionHold`, `[data-motion-note]`); the choices are kept.
 
 ## Cut-out (frontend)
 

@@ -37,6 +37,7 @@ import {
   SETUP_DONE_KEY,
   normalizeSettingsSection,
   searchSettings,
+  spriteMotionHold,
   type SettingsSearchEntry,
 } from "./model";
 
@@ -421,5 +422,16 @@ describe("settings search", () => {
 
   test("respects the result limit", () => {
     expect(searchSettings(entries, "s", 2)).toHaveLength(2);
+  });
+});
+
+describe("character motion and the Motion setting", () => {
+  test("Still and the system's reduced motion keep characters still; Full and Gentle leave it to Character motion", () => {
+    expect(spriteMotionHold("off", false)).toContain("Still");
+    expect(spriteMotionHold("off", true)).toContain("Still");
+    expect(spriteMotionHold("full", true)).toContain("reduced motion");
+    expect(spriteMotionHold("gentle", true)).toContain("reduced motion");
+    expect(spriteMotionHold("full", false)).toBeNull();
+    expect(spriteMotionHold("gentle", false)).toBeNull();
   });
 });

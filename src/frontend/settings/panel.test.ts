@@ -84,6 +84,12 @@ describe("settings panel markup", () => {
     expect(source).toContain('this.root.querySelector<HTMLElement>("[data-sprites-look]")!.hidden = !sprites;');
   });
 
+  test("character motion reads as not applying under Motion Still or reduced motion, with a note", () => {
+    expect(source).toContain('<p data-motion-note hidden></p>');
+    expect(source).toContain("spriteMotionHold(config.effectIntensity,");
+    expect(source).toContain('motionGroup.toggleAttribute("data-inactive", hold !== null);');
+  });
+
   test("System One mode, URL and model save live; no Apply or Discard remains", () => {
     expect(advancedKeys).not.toContain("systemOneMode");
     expect(advancedKeys).not.toContain("systemOneApiUrl");
