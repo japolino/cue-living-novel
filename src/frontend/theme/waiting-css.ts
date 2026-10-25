@@ -674,7 +674,8 @@ export const VN_WAITING_CSS = `
 }
 
 [data-vn-film]:hover [data-vn-film-track],
-[data-vn-film]:focus-within [data-vn-film-track] {
+[data-vn-film]:focus-within [data-vn-film-track],
+[data-vn-film][data-vn-film-open] [data-vn-film-track] {
   animation-play-state: paused;
 }
 
@@ -757,33 +758,92 @@ export const VN_WAITING_CSS = `
   text-align: center;
 }
 
-[data-vn-film-detail] {
+/* A tapped film card, enlarged in the middle over a dimmed screen; a tap anywhere closes it. */
+[data-vn-film-zoom] {
   position: absolute;
-  z-index: 3;
-  right: var(--vn-scene-right);
-  bottom: var(--vn-scene-bottom);
-  width: min(24rem, calc(100% - 4rem));
-  max-height: 38%;
-  padding: 0.85rem 1rem;
-  overflow: auto;
-  border: 1px solid var(--vn-scene-gold);
-  border-radius: 0.5rem;
-  background: rgba(9, 10, 16, 0.9);
+  z-index: 4;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+  background: rgba(4, 5, 9, 0.5);
+  cursor: pointer;
+  animation: vn-scene-fade-in 200ms ease-out both;
+}
+
+[data-vn-film-zoom][hidden] {
+  display: none;
+}
+
+[data-vn-film-detail] {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  width: min(36rem, 100%);
+  max-height: min(72%, 30rem);
+  padding: 1.2rem 1.35rem 0.9rem;
+  overflow: hidden;
+  border: 1px solid var(--vn-figure-color, var(--vn-scene-gold));
+  border-radius: 0.8rem;
+  background: rgba(10, 11, 18, 0.95);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--vn-figure-color, var(--vn-scene-gold)) 22%, transparent), 0 26px 60px rgba(0, 0, 0, 0.55);
+  color: #fff;
+  outline: none;
   user-select: text;
+  animation: vn-film-zoom-in 280ms cubic-bezier(0.2, 1, 0.3, 1) both;
+}
+
+[data-vn-film-detail-top] {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  min-width: 0;
+}
+
+[data-vn-film-detail-avatar] {
+  flex: 0 0 auto;
+  display: flex;
+}
+
+[data-vn-film-detail-avatar][hidden] {
+  display: none;
 }
 
 [data-vn-film-detail-head] {
-  margin: 0 0 0.35rem;
+  margin: 0;
   color: var(--vn-figure-color, var(--vn-scene-gold));
-  font-size: 0.8rem;
-  font-weight: 600;
+  font-size: 1.1rem;
+  font-weight: 700;
 }
 
 [data-vn-film-detail-text] {
   margin: 0;
-  font-size: 0.9rem;
-  line-height: 1.55;
+  overflow: auto;
+  font-size: 1.05rem;
+  line-height: 1.6;
   white-space: pre-wrap;
+}
+
+[data-vn-film-detail-hint] {
+  align-self: flex-end;
+  opacity: 0.55;
+  font-size: 0.72rem;
+}
+
+/* A tap on empty space: a ring that grows from the pointer and fades. */
+[data-vn-waiting-ripple] {
+  position: absolute;
+  z-index: 3;
+  top: var(--vn-ripple-y);
+  left: var(--vn-ripple-x);
+  width: 2.4rem;
+  height: 2.4rem;
+  margin: -1.2rem 0 0 -1.2rem;
+  border: 3px solid rgba(255, 255, 255, 0.9);
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px rgba(120, 170, 255, 0.35), inset 0 0 12px rgba(255, 255, 255, 0.5);
+  pointer-events: none;
+  animation: vn-waiting-ripple 700ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
 }
 
 /* Tidy: a dark veil, the scene centred. */
@@ -886,8 +946,58 @@ export const VN_WAITING_CSS = `
   opacity: 0.3;
 }
 
+/*
+ * The stripes move across the screen (one 44px period, 44px * sqrt(2)
+ * sideways, per loop, so it never jumps), drift a little against the
+ * pointer, and a tap on empty space sends a light sweep across them.
+ */
 [data-vn-waiting][data-vn-backdrop="daylight"] [data-vn-waiting-veil] {
+  inset: -2.5rem;
+  background: none;
+  transform: translate3d(calc(var(--vn-waiting-px, 0) * -1.4rem), calc(var(--vn-waiting-py, 0) * -1rem), 0);
+  transition: transform 700ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+[data-vn-waiting][data-vn-backdrop="daylight"] [data-vn-waiting-veil]::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 0 -63px;
   background: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.55) 0 22px, rgba(186, 216, 255, 0.5) 22px 44px);
+  animation: vn-daylight-stripes 2.6s linear infinite;
+  will-change: transform;
+}
+
+[data-vn-waiting][data-vn-backdrop="daylight"] [data-vn-waiting-veil]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(105deg, transparent 30%, rgba(255, 255, 255, 0.75) 48%, rgba(170, 210, 255, 0.4) 54%, transparent 70%);
+  opacity: 0;
+  transform: translateX(-100%);
+}
+
+[data-vn-waiting][data-vn-backdrop="daylight"][data-vn-waiting-rush] [data-vn-waiting-veil]::after {
+  animation: vn-daylight-sweep 700ms cubic-bezier(0.3, 0.7, 0.2, 1) both;
+}
+
+[data-vn-waiting][data-vn-backdrop="daylight"] [data-vn-waiting-bg] {
+  transform: translate3d(calc(var(--vn-waiting-px, 0) * 0.8rem), calc(var(--vn-waiting-py, 0) * 0.6rem), 0);
+  transition: transform 900ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+[data-vn-waiting][data-vn-backdrop="daylight"] [data-vn-waiting-ripple] {
+  border-color: #fff;
+  box-shadow: 0 0 0 3px rgba(30, 100, 200, 0.35), inset 0 0 14px rgba(255, 255, 255, 0.8);
+}
+
+[data-vn-waiting][data-vn-backdrop="daylight"] [data-vn-film-zoom] {
+  background: rgba(220, 236, 255, 0.55);
+}
+
+[data-vn-waiting][data-vn-backdrop="daylight"] [data-vn-film-detail] {
+  background: #fff;
+  box-shadow: 0 0 0 4px rgba(30, 100, 200, 0.18), 0 22px 50px rgba(20, 40, 80, 0.28);
+  color: #14203a;
 }
 
 [data-vn-waiting][data-vn-backdrop="daylight"] [data-vn-waiting-info] {
@@ -1294,10 +1404,11 @@ export const VN_WAITING_CSS = `
   [data-vn-waiting][data-vn-backdrop="cast"] :is([data-vn-film], [data-vn-film-recap]) { bottom: auto; }
 
   [data-vn-film-detail] {
-    right: var(--vn-scene-right);
-    left: var(--vn-scene-left);
-    width: auto;
+    max-height: 80%;
+    padding: 1rem 1rem 0.75rem;
   }
+
+  [data-vn-film-detail-text] { font-size: 0.98rem; }
 
   [data-vn-waiting][data-vn-backdrop="tidy"] [data-vn-waiting-info],
   [data-vn-waiting][data-vn-backdrop="tidy"][data-vn-recap="off"] [data-vn-waiting-info] {
@@ -1385,6 +1496,18 @@ export const VN_WAITING_CSS = `
 @keyframes vn-daylight-banner { from { opacity: 0; transform: skewX(-14deg) translateX(-110%); } to { opacity: 1; transform: skewX(-14deg); } }
 @keyframes vn-daylight-dots { from { width: 0; } to { width: 1.6em; } }
 @keyframes vn-daylight-bar { from { transform: translateX(-10%); } to { transform: translateX(160%); } }
+@keyframes vn-daylight-stripes { to { transform: translate3d(62.2254px, 0, 0); } }
+@keyframes vn-daylight-sweep {
+  from { opacity: 1; transform: translateX(-100%); }
+  to { opacity: 1; transform: translateX(100%); }
+}
+@keyframes vn-waiting-ripple {
+  from { opacity: 1; transform: scale(0.25); }
+  to { opacity: 0; transform: scale(4.5); }
+}
+@keyframes vn-film-zoom-in {
+  from { opacity: 0; transform: scale(0.82) translateY(1rem); }
+}
 @keyframes vn-silhouette-fill {
   from { filter: brightness(0) drop-shadow(0 0 1.2px rgba(255, 255, 255, 0.5)); }
   to { filter: drop-shadow(0 0 1.2px #fff) drop-shadow(0 0 1.2px #fff) drop-shadow(0 10px 18px rgba(0, 0, 0, 0.45)); }

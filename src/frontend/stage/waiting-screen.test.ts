@@ -146,13 +146,46 @@ describe("waiting screen", () => {
     expect(cards.slice(0, 3).map((card) => card.querySelector("[data-vn-film-name]")!.textContent)).toEqual(["Mira", "Narration", "Ren"]);
     expect(cards[0]!.querySelector("[data-vn-film-count]")!.textContent).toBe("1/3");
     expect(q("[data-vn-film-recap]")!.textContent).toBe("Last scene: Kitchen, Hale house · 3 paragraphs · with Mira, Ren");
-    expect(q("[data-vn-film-detail]")!.hidden).toBe(true);
+    expect(q("[data-vn-film-zoom]")!.hidden).toBe(true);
     click(cards[2]!.querySelector("[data-vn-film-text]")!);
-    expect(taps).toBe(1);
-    expect(q("[data-vn-film-detail]")!.hidden).toBe(false);
+    expect([taps, pops]).toEqual([1, 1]);
+    // The card opens enlarged in the middle with the whole paragraph, and the film stops under it.
+    expect(q("[data-vn-film-zoom]")!.hidden).toBe(false);
     expect(q("[data-vn-film-detail-head]")!.textContent).toBe("Ren · Angry");
     expect(q("[data-vn-film-detail-text]")!.textContent).toBe("“Too loud,” Ren mutters.");
+    expect(q("[data-vn-film-detail-avatar] [data-vn-avatar]")).not.toBeNull();
     expect(cards[2]!.getAttribute("data-vn-film-selected")).toBe("");
+    expect(q("[data-vn-film]")!.hasAttribute("data-vn-film-open")).toBe(true);
+    // Any tap closes it and the film moves on; the screen stays.
+    click(q("[data-vn-film-detail]")!);
+    expect(q("[data-vn-film-zoom]")!.hidden).toBe(true);
+    expect(q("[data-vn-film]")!.hasAttribute("data-vn-film-open")).toBe(false);
+    expect(cards[2]!.hasAttribute("data-vn-film-selected")).toBe(false);
+    expect(screen.isOpen()).toBe(true);
+  });
+
+  test("in a preview an enlarged film card closes first; the next tap away closes the preview", () => {
+    screen.show(recap(), options({ recap: "film", preview: true }), "");
+    click(el().querySelectorAll("[data-vn-film-card]")[0]!);
+    expect(q("[data-vn-film-zoom]")!.hidden).toBe(false);
+    click(q("[data-vn-film-zoom]")!);
+    expect(q("[data-vn-film-zoom]")!.hidden).toBe(true);
+    expect(screen.isOpen()).toBe(true);
+    click(q("[data-vn-waiting-stage]")!);
+    expect(screen.isOpen()).toBe(false);
+  });
+
+  test("a tap on empty space sends a ripple and a light sweep; none with motion off", () => {
+    screen.show(recap(), options({ backdrop: "daylight", recap: "off", motion: true }), "");
+    click(q("[data-vn-waiting-stage]")!);
+    expect(el().querySelectorAll("[data-vn-waiting-ripple]")).toHaveLength(1);
+    expect(el().hasAttribute("data-vn-waiting-rush")).toBe(true);
+    expect(taps).toBe(1);
+    expect(screen.isOpen()).toBe(true);
+    screen.show(recap(), options({ backdrop: "daylight", recap: "off", motion: false }), "");
+    click(q("[data-vn-waiting-stage]")!);
+    expect(el().querySelectorAll("[data-vn-waiting-ripple]")).toHaveLength(0);
+    expect(el().hasAttribute("data-vn-waiting-rush")).toBe(false);
   });
 
   test("the other backdrops: light loading screen, cast introduction, tidy faces", () => {

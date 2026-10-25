@@ -9,7 +9,10 @@
  * (everyone side by side with a speech bubble of one of their lines; a tap
  * gives the next line and their picture for it), "cards" (one character at a
  * time with their last line), "film" (the reply as a strip of cards scrolling
- * by) or "off"; "auto" lines up to three and rotates cards from four.
+ * by; a tap on a card enlarges it) or "off"; "auto" lines up to three and
+ * rotates cards from four. The backdrop answers the pointer: it drifts a
+ * little with it, and a tap on empty space sends a ripple (on daylight, a
+ * light sweep across the moving stripes too).
  *
  * Markup and timers only. VnStage builds the WaitingRecap (recap.ts) and
  * decides when the screen shows; styles are in theme/waiting-css.ts.
@@ -53,6 +56,8 @@ export const WAITING_FILM_SECONDS_PER_CARD = 4;
 export const WAITING_BUBBLE_SWAP_MS = 200;
 /** The screen fades out this long (ms); matches the CSS. */
 export const WAITING_FADE_MS = 320;
+/** A tap's ripple (and daylight's light sweep) lasts this long (ms); matches the CSS. */
+export const WAITING_RIPPLE_MS = 700;
 
 const TIPS = [
   "Tap a character to hear another of their lines.",
@@ -137,6 +142,9 @@ export class WaitingScreen {
   private fadeTimer: ReturnType<typeof setTimeout> | null = null;
   private nextFigure = 0;
   private status = "";
+  /** The pointer drift waiting for the next frame (null: none pending). */
+  private drift: { x: number; y: number } | null = null;
+  private rushTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(hooks: WaitingScreenHooks = {}) {
     this.hooks = hooks;
@@ -146,8 +154,16 @@ export class WaitingScreen {
     this.element.setAttribute("aria-label", "While the next reply is written");
     this.element.hidden = true;
     this.element.addEventListener("click", (event) => this.onClick(event));
+    this.element.addEventListener("pointermove", (event) => this.onPointerMove(event));
     this.element.addEventListener("keydown", (event) => {
-      if (event.key === "Escape" && this.options?.preview) {
+      if (event.key !== "Escape") return;
+      if (this.filmZoomOpen()) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.hideFilmDetail();
+        return;
+      }
+      if (this.options?.preview) {
         event.preventDefault();
         event.stopPropagation();
         this.close();
@@ -337,7 +353,13 @@ export class WaitingScreen {
           <div data-vn-film-track style="--vn-film-duration: ${seconds}s">${cards}<span data-vn-film-copy aria-hidden="true">${cards}</span></div>
         </div>
         <p data-vn-film-recap>${escapeHtml(recapLine)}</p>
-        <aside data-vn-film-detail hidden><p data-vn-film-detail-head></p><p data-vn-film-detail-text></p></aside>`;
+        <div data-vn-film-zoom hidden>
+          <article data-vn-film-detail tabindex="-1" aria-live="polite">
+            <header data-vn-film-detail-top><span data-vn-film-detail-avatar></span><p data-vn-film-detail-head></p></header>
+            <p data-vn-film-detail-text></p>
+            <small data-vn-film-detail-hint>Tap to close</small>
+          </article>
+        </div>`;
     }
     return "";
   }
@@ -376,6 +398,11 @@ export class WaitingScreen {
     // The stage never reads on underneath.
     event.stopPropagation();
     const target = event.target instanceof Element ? event.target : null;
+    // An enlarged film card closes first (also in a preview, which stays open).
+    if (this.filmZoomOpen()) {
+      this.hideFilmDetail();
+      return;
+    }
     const figure = target?.closest<HTMLElement>("[data-vn-waiting-figure]");
     if (figure) {
       this.hooks.onTap?.(event);
@@ -396,10 +423,58 @@ export class WaitingScreen {
     const film = target?.closest<HTMLElement>("[data-vn-film-card]");
     if (film) {
       this.hooks.onTap?.(event);
+      this.hooks.onPop?.();
       this.showFilmDetail(film);
       return;
     }
-    if (this.options?.preview) this.close();
+    if (this.options?.preview) {
+      this.close();
+      return;
+    }
+    this.ripple(event);
+  }
+
+  /** The backdrop drifts a little against the pointer (one update per frame). */
+  private onPointerMove(event: PointerEvent): void {
+    if (!this.open || !this.options?.motion || event.pointerType === "touch") return;
+    const box = this.element.getBoundingClientRect();
+    if (box.width <= 0 || box.height <= 0) return;
+    const pending = this.drift === null;
+    this.drift = {
+      x: Math.max(-1, Math.min(1, ((event.clientX - box.left) / box.width) * 2 - 1)),
+      y: Math.max(-1, Math.min(1, ((event.clientY - box.top) / box.height) * 2 - 1)),
+    };
+    if (!pending) return;
+    requestAnimationFrame(() => {
+      const drift = this.drift;
+      this.drift = null;
+      if (!drift || !this.open) return;
+      this.element.style.setProperty("--vn-waiting-px", drift.x.toFixed(3));
+      this.element.style.setProperty("--vn-waiting-py", drift.y.toFixed(3));
+    });
+  }
+
+  /** A tap on empty space: a ripple at the pointer and, on daylight, a light sweep across the stripes. */
+  private ripple(event: MouseEvent): void {
+    if (!this.options?.motion) return;
+    // Hosts without layout (tests) have no box: the ring starts at the corner.
+    const box = typeof this.element.getBoundingClientRect === "function" ? this.element.getBoundingClientRect() : { left: 0, top: 0 };
+    const ring = document.createElement("span");
+    ring.setAttribute("data-vn-waiting-ripple", "");
+    ring.setAttribute("aria-hidden", "true");
+    ring.style.setProperty("--vn-ripple-x", `${event.clientX - box.left}px`);
+    ring.style.setProperty("--vn-ripple-y", `${event.clientY - box.top}px`);
+    this.element.append(ring);
+    setTimeout(() => ring.remove(), WAITING_RIPPLE_MS);
+    this.element.removeAttribute("data-vn-waiting-rush");
+    void this.element.offsetWidth;
+    this.element.setAttribute("data-vn-waiting-rush", "");
+    if (this.rushTimer !== null) clearTimeout(this.rushTimer);
+    this.rushTimer = setTimeout(() => {
+      this.rushTimer = null;
+      this.element.removeAttribute("data-vn-waiting-rush");
+    }, WAITING_RIPPLE_MS);
+    this.hooks.onTap?.(event);
   }
 
   private bounce(element: HTMLElement): void {
@@ -494,18 +569,40 @@ export class WaitingScreen {
     if (front) delete front.dataset.vnFront;
   }
 
+  /** The film card, enlarged in the middle with its whole paragraph; the film stops under it. */
   private showFilmDetail(card: HTMLElement): void {
-    const detail = this.element.querySelector<HTMLElement>("[data-vn-film-detail]");
+    const zoom = this.element.querySelector<HTMLElement>("[data-vn-film-zoom]");
+    const detail = zoom?.querySelector<HTMLElement>("[data-vn-film-detail]");
     const index = Number(card.dataset.vnFilmIndex);
     const kind = card.dataset.vnFilmKind;
     const entry = this.data?.entries.find((item) => item.index === index && item.kind === kind);
-    if (!detail || !entry) return;
+    if (!zoom || !detail || !entry) return;
     for (const other of this.element.querySelectorAll("[data-vn-film-card][data-vn-film-selected]")) other.removeAttribute("data-vn-film-selected");
     card.setAttribute("data-vn-film-selected", "");
     detail.style.setProperty("--vn-figure-color", entry.color);
+    const mark = entry.kind === "voice" ? "✦" : entry.kind === "reader" ? "You" : undefined;
+    const pictured = entry.kind === "voice" || entry.kind === "reader" ? null : entry.image;
+    const avatar = detail.querySelector<HTMLElement>("[data-vn-film-detail-avatar]")!;
+    avatar.innerHTML = entry.kind === "narration" ? "" : this.avatar(pictured, entry.speaker || "·", 64, mark);
+    avatar.hidden = entry.kind === "narration";
     detail.querySelector<HTMLElement>("[data-vn-film-detail-head]")!.textContent = [entry.speaker || "Narration", entry.chip].filter(Boolean).join(" · ");
     detail.querySelector<HTMLElement>("[data-vn-film-detail-text]")!.textContent = entry.text.replace(/<[^>]+>/g, "");
-    detail.hidden = false;
+    this.element.querySelector("[data-vn-film]")?.setAttribute("data-vn-film-open", "");
+    zoom.hidden = false;
+    detail.focus({ preventScroll: true });
+  }
+
+  private filmZoomOpen(): boolean {
+    const zoom = this.element.querySelector<HTMLElement>("[data-vn-film-zoom]");
+    return Boolean(zoom && !zoom.hidden);
+  }
+
+  /** The enlarged film card closes and the film moves on. */
+  private hideFilmDetail(): void {
+    const zoom = this.element.querySelector<HTMLElement>("[data-vn-film-zoom]");
+    if (zoom) zoom.hidden = true;
+    this.element.querySelector("[data-vn-film]")?.removeAttribute("data-vn-film-open");
+    for (const card of this.element.querySelectorAll("[data-vn-film-card][data-vn-film-selected]")) card.removeAttribute("data-vn-film-selected");
   }
 
   private startTimers(mode: WaitingRecapMode): void {
@@ -546,5 +643,8 @@ export class WaitingScreen {
     for (const figure of this.figures) if (figure.swapTimer !== null) clearTimeout(figure.swapTimer);
     if (this.fadeTimer !== null) clearTimeout(this.fadeTimer);
     this.fadeTimer = null;
+    if (this.rushTimer !== null) clearTimeout(this.rushTimer);
+    this.rushTimer = null;
+    this.element.removeAttribute("data-vn-waiting-rush");
   }
 }
