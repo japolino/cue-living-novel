@@ -36,7 +36,7 @@ own expression and there is no picture cap.
 | `spriteExpressionCount` | `4` \| `8` \| `12` | `4` | at once (Advanced, sprite mode only) |
 | `spriteMotion` | `0`–`150` (%) | `100` | at once (everyday, sprite mode only) |
 | `spriteBreathing` / `spriteSway` / `spriteHeadMotion` | boolean | `true` | at once (everyday, sprite mode only) |
-| `spriteActing` | boolean | `true` | at once (everyday, sprite mode only) |
+| `spriteActing` | boolean | `false` | at once (everyday, sprite mode only) |
 | `spritePhysics` | boolean | `true` | at once (everyday, sprite mode only) |
 | `spriteOutline` | `0`–`6` (px) | `0` | at once (everyday, sprite mode only) |
 | `spriteFocusBlur` | boolean | `true` | at once (everyday, sprite mode only) |
@@ -801,8 +801,10 @@ and the head tilts and bobs around the neck while the feet stay planted.
 ### Puppet acting (`sprite-puppet-acting.ts`, `spriteActing`)
 
 The reference overlays breathe, sway and bob on every line the same way.
-Cue's puppet acts: what the body does depends on who the character is
-feeling like, what it is saying, and who else is talking.
+With Acting on, Cue's puppet acts: what the body does depends on how the
+character feels, what it is saying, and who else is talking. It is off by
+default (Settings → Look → Character motion → Acting), so a new install
+keeps the calmer idle motion of "Puppet motion".
 
 - **Mood posture**: each staged expression has a body (`PUPPET_MOODS`, one
   per hot-set id; rare ids use `spriteFallbackExpression`), scaled by the
@@ -843,7 +845,7 @@ feeling like, what it is saying, and who else is talking.
   head and posture act them out: nod is a real head nod, shake turns the
   head left and right, turn_away turns head and tilt away, lean_in and
   step_back bend the posture and pitch the head, sink slumps, tremble shakes.
-- Off (`spriteActing: false`): the idle motion and the line-start nod or
+- Off (`spriteActing: false`, the default): the idle motion and the line-start nod or
   bounce only, as in "Puppet motion".
 
 ### Puppet physics (`sprite-puppet-physics.ts`, `spritePhysics`)

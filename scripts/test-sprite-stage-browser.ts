@@ -737,7 +737,8 @@ try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
     watch(page);
     await open(page, { speed: "40" });
-    await load(page, [{ actors: [{ characterKey: "mira", slot: "left", focus: true, emote: "sparkle" }, { characterKey: "ren", slot: "right" }], light: "sunset" }], 600);
+    // Settle past the entrance: the hair and cloth springs ring for about a second after it.
+    await load(page, [{ actors: [{ characterKey: "mira", slot: "left", focus: true, emote: "sparkle" }, { characterKey: "ren", slot: "right" }], light: "sunset" }], 1800);
     const layers = await page.evaluate(() => {
       const theme = document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!;
       return [...theme.querySelectorAll<HTMLElement>("[data-vn-sprite-image][data-vn-sprite-layer='active']")].map((layer) => ({
@@ -878,6 +879,11 @@ try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
     watch(page);
     await open(page, { speed: "45" });
+    // Acting is off by default: a listener keeps looking ahead.
+    await load(page, [{ speaker: "Mira", text: "With acting off, nobody turns to look at me while I talk, and that is fine.", actors: [{ characterKey: "mira", slot: "left", focus: true, facing: "right" }, { characterKey: "ren", slot: "right", facing: "left" }] }], 900);
+    const calm = series(await samplePoses(page, 300), "ren", "turn");
+    assert.ok(calm.length && calm.every((v) => Math.abs(v) < 0.0002), `acting off by default: the listener does not turn (${calm.map((v) => v.toFixed(5))})`);
+    await page.evaluate(() => (window as any).fx.puppet({ spriteActing: true }));
     // Attention and voice: Ren listens and looks at Mira; her head follows the words; he nods after her full stop.
     await load(page, [{ speaker: "Mira", text: "Okay. So you are Ren, from the class next door? I have heard so much about you, and all of it good.", actors: [{ characterKey: "mira", slot: "left", focus: true, facing: "right" }, { characterKey: "ren", slot: "right", facing: "left" }] }], 0);
     const talk = await samplePoses(page, 1800);
@@ -904,7 +910,7 @@ try {
     const jolt = series(await samplePoses(page, 500), "mira", "shoulders");
     assert.ok(Math.max(...jolt) > 0.004, `an exclamation mark jolts the shoulders (peak ${Math.max(...jolt).toFixed(4)})`);
 
-    // Physics: a slot move makes the loose parts trail; with physics off they do not.
+    // Physics (acting back to its default, off): a slot move makes the loose parts trail; with physics off they do not.
     const slotMove: P[] = [{ actors: [{ characterKey: "mira", focus: true }] }, { actors: [{ characterKey: "mira", slot: "left", focus: true }, { characterKey: "ren", slot: "right" }] }];
     await load(page, slotMove, 600);
     await go(page, 1);
@@ -926,7 +932,9 @@ try {
     assert.ok(miraWind < -0.0005 && renWind > 0.0005, `wind pushes both toward the stage's right (mira ${miraWind.toFixed(4)} mirrored, ren ${renWind.toFixed(4)})`);
     await shot(page, "puppet-physics-wind");
 
-    // Acting off: no mood, no gaze, the plain idle motion.
+    // Acting off again: no mood, no gaze, the plain idle motion.
+    await page.evaluate(() => (window as any).fx.puppet({ spriteActing: true }));
+    await page.waitForTimeout(300);
     await page.evaluate(() => (window as any).fx.puppet({ spriteActing: false }));
     await load(page, [{ actors: [{ characterKey: "mira", focus: true, expression: "sad", intensity: 5 }] }], 2200);
     pose = (await snap(page)).actors[0].pose;

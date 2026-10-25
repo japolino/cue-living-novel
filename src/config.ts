@@ -69,9 +69,9 @@ export const KEY_ILLUSTRATION_CAP: Readonly<Record<VisualNovelKeyIllustrations, 
  * 100 = default, up to SPRITE_MOTION_MAX); breathing, body sway and head
  * movement switch on and off separately. `spriteOutline` is a white sticker
  * outline in px (0 = none). `spriteFocusBlur` blurs the characters who are
- * not speaking a little. `spriteActing` lets the body carry the mood, the
- * speaker's head follow the typed words and the others look at whoever
- * speaks ("Puppet acting"); `spritePhysics` lets hair and loose clothes
+ * not speaking a little. `spriteActing` (off by default) lets the body carry
+ * the mood, the speaker's head follow the typed words and the others look at
+ * whoever speaks ("Puppet acting"); `spritePhysics` lets hair and loose clothes
  * trail and settle ("Puppet physics"). Motion (`effectIntensity`) "off"
  * and the OS reduced-motion setting still stop all movement.
  */
@@ -273,7 +273,7 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   spriteBreathing: true,
   spriteSway: true,
   spriteHeadMotion: true,
-  spriteActing: true,
+  spriteActing: false,
   spritePhysics: true,
   spriteOutline: 0,
   spriteFocusBlur: true,
