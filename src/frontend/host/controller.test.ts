@@ -107,6 +107,13 @@ describe("systemOneKeyMessage", () => {
       .toBe("Key saved, but the test call failed: System One request failed (401). System One was not turned on.");
   });
 
+  test("a failed test with System One already on says it stays on and that the story reader answers meanwhile", () => {
+    expect(systemOneKeyMessage({ saved: true, test: "failed", error: "System One request failed (401)" }, "on"))
+      .toBe("Key saved, but the test call failed: System One request failed (401). System One stays on; until the key works, Cue uses the story reader.");
+    expect(systemOneKeyMessage({ saved: true, test: "failed", error: "timeout" }, "compare"))
+      .toBe("Key saved, but the test call failed: timeout. System One stays on; until the key works, Cue uses the story reader.");
+  });
+
   test("a plain status keeps the panel's own saved / not saved line", () => {
     expect(systemOneKeyMessage({ saved: true }, "on")).toBeUndefined();
     expect(systemOneKeyMessage({ saved: false }, "off")).toBeUndefined();

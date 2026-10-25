@@ -64,6 +64,7 @@ import {
   saveTurnRecord,
   turnPath,
   updateConfig,
+  changeConfig,
   type StoredChatState,
   type StoredTurnRecord,
   type TurnBaseline
@@ -1814,22 +1815,18 @@ async function handleFrontendMessage(spindle: SpindleAPI, request: FrontendReque
         spindle.sendToFrontend({ type: "vn_system_one_key_status", saved: true, test: "failed", error: reason }, userId);
         return;
       }
-      // An explicit Compare stays Compare; only Off turns On.
-      if (config.systemOneMode === "off") {
-        const next = await updateConfig(spindle, { systemOneMode: "on" }, userId);
-        spindle.sendToFrontend({ type: "vn_config", config: next }, userId);
-      }
+      // An explicit Compare stays Compare; only Off turns On. Read again after
+      // the test: a mode chosen while it ran wins.
+      const turnedOn = await changeConfig(spindle, (current) => current.systemOneMode === "off" ? { systemOneMode: "on" } : null, userId);
+      if (turnedOn.changed) spindle.sendToFrontend({ type: "vn_config", config: turnedOn.config }, userId);
       spindle.sendToFrontend({ type: "vn_system_one_key_status", saved: true, test: "passed" }, userId);
       return;
     }
     case "vn_clear_system_one_key": {
       // Without a key System One cannot answer, so it turns off with it.
       await spindle.enclave.delete(SYSTEM_ONE_KEY, userId);
-      const config = await loadConfig(spindle, userId);
-      if (config.systemOneMode !== "off") {
-        const next = await updateConfig(spindle, { systemOneMode: "off" }, userId);
-        spindle.sendToFrontend({ type: "vn_config", config: next }, userId);
-      }
+      const turnedOff = await changeConfig(spindle, (current) => current.systemOneMode !== "off" ? { systemOneMode: "off" } : null, userId);
+      if (turnedOff.changed) spindle.sendToFrontend({ type: "vn_config", config: turnedOff.config }, userId);
       spindle.sendToFrontend({ type: "vn_system_one_key_status", saved: false }, userId);
       return;
     }

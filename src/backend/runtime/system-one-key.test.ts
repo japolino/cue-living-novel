@@ -3,7 +3,7 @@ import { registerVisualNovelBackend } from "./controller.js";
 import { SYSTEM_ONE_KEY } from "./system-one.js";
 
 /** The backend with an in-memory config, an in-memory enclave and a scripted System One. */
-function harness(options: { mode?: "off" | "compare" | "on"; status?: number; body?: string } = {}) {
+function harness(options: { mode?: "off" | "compare" | "on"; status?: number; body?: string; gate?: Promise<void> } = {}) {
   const data = new Map<string, unknown>();
   if (options.mode) data.set("config.json", { systemOneMode: options.mode });
   const secrets = new Map<string, string>();
@@ -25,6 +25,7 @@ function harness(options: { mode?: "off" | "compare" | "on"; status?: number; bo
     },
     cors: async (url: string, init: { headers: Record<string, string>; body: string }) => {
       requests.push({ url, init });
+      await options.gate;
       return { status: options.status ?? 200, body: options.body ?? JSON.stringify({ model: "jev-latest", answers: { key_check: { type: "noul", noul: 0.97 } } }) };
     },
     sendToFrontend: (message: Record<string, unknown>) => { sent.push(message); },
@@ -40,7 +41,7 @@ function harness(options: { mode?: "off" | "compare" | "on"; status?: number; bo
       await new Promise((resolve) => setTimeout(resolve, 2));
     }
   };
-  return { send, sent, requests, secrets, savedMode };
+  return { send, sent, requests, secrets, savedMode, handle: (message: unknown) => frontendHandler(message, "user") };
 }
 
 describe("System One key: save turns it on, remove turns it off", () => {
@@ -77,6 +78,20 @@ describe("System One key: save turns it on, remove turns it off", () => {
   test("an explicit Compare stays Compare after a new key", async () => {
     const h = harness({ mode: "compare" });
     await h.send({ type: "vn_set_system_one_key", key: "sk-test" });
+    expect(h.savedMode()).toBe("compare");
+    expect(h.sent.at(-1)).toMatchObject({ test: "passed" });
+  });
+
+  test("a mode chosen while the key is tested wins over turning it on", async () => {
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => { open = resolve; });
+    const h = harness({ gate });
+    const saving = h.send({ type: "vn_set_system_one_key", key: "sk-test" });
+    for (let i = 0; i < 50 && h.requests.length === 0; i += 1) await new Promise((resolve) => setTimeout(resolve, 2));
+    // The reader picks Compare in Advanced while the test call is out.
+    await h.handle({ type: "vn_set_config", patch: { systemOneMode: "compare" } });
+    open();
+    await saving;
     expect(h.savedMode()).toBe("compare");
     expect(h.sent.at(-1)).toMatchObject({ test: "passed" });
   });

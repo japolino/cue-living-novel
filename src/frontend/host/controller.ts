@@ -80,7 +80,12 @@ export function systemOneKeyMessage(
   mode: "off" | "compare" | "on" | undefined,
 ): string | undefined {
   if (status.test === "passed") return mode === "compare" ? "Key saved and tested. System One compares with the story reader." : "Key saved and tested. System One is on.";
-  if (status.test === "failed") return `Key saved, but the test call failed: ${status.error ?? "no answer"}. System One was not turned on.`;
+  if (status.test === "failed") {
+    const failed = `Key saved, but the test call failed: ${status.error ?? "no answer"}.`;
+    return mode === "on" || mode === "compare"
+      ? `${failed} System One stays on; until the key works, Cue uses the story reader.`
+      : `${failed} System One was not turned on.`;
+  }
   return undefined;
 }
 

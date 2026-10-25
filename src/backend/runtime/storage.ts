@@ -572,13 +572,36 @@ export async function updateConfig(
   patch: Partial<VisualNovelConfig>,
   userId?: string
 ): Promise<VisualNovelConfig> {
-  const current = await loadConfig(spindle, userId);
-  const next = normalizeConfig({ ...current, ...patch });
-  await serializedWrite(scopedKey(userId, "config.json"), () => spindle.userStorage.setJson("config.json", next, {
-    indent: 2,
-    ...(userOptions(userId) ?? {})
-  }));
-  return next;
+  return (await changeConfig(spindle, () => patch, userId)).config;
+}
+
+/**
+ * Read, change and write the config as one step per user, so saves that
+ * overlap (per-field auto-save, Undo, the System One key flow) never write
+ * back what they read before another save landed. `change` gets the config
+ * as stored now and returns a patch, or null to write nothing.
+ */
+export async function changeConfig(
+  spindle: SpindleAPI,
+  change: (current: VisualNovelConfig) => Partial<VisualNovelConfig> | null,
+  userId?: string
+): Promise<{ config: VisualNovelConfig; changed: boolean }> {
+  let result: { config: VisualNovelConfig; changed: boolean } | null = null;
+  await serializedWrite(scopedKey(userId, "config.json"), async () => {
+    const current = await loadConfig(spindle, userId);
+    const patch = change(current);
+    if (!patch) {
+      result = { config: current, changed: false };
+      return;
+    }
+    const next = normalizeConfig({ ...current, ...patch });
+    await spindle.userStorage.setJson("config.json", next, {
+      indent: 2,
+      ...(userOptions(userId) ?? {})
+    });
+    result = { config: next, changed: true };
+  });
+  return result!;
 }
 
 export async function loadChatState(spindle: SpindleAPI, chatId: string, userId?: string): Promise<StoredChatState> {
