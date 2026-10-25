@@ -329,16 +329,33 @@ try {
       { speaker: "Mira", text: "What?!", actors: [{ characterKey: "mira", focus: true, expression: "shocked" }] },
     ]);
     await go(page, 1);
-    await page.waitForTimeout(130);
-    const fade = await page.evaluate(() => {
+    // Sampled every frame from the switch: with the puppet on software GL a frame takes about 50 ms,
+    // so the fade can start a frame or two later than a fixed wait expects.
+    await page.evaluate(() => {
       const theme = document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!;
-      return [...theme.querySelectorAll<HTMLElement>("[data-vn-sprite-key='mira'] [data-vn-sprite-image]")].map((l) => ({ role: l.dataset.vnSpriteLayer, expression: l.dataset.vnSpriteExpression, opacity: Number(getComputedStyle(l).opacity) }));
+      const frames: Array<Array<{ role?: string; expression?: string; opacity: number }>> = [];
+      const start = performance.now();
+      (window as any).fadeFrames = frames;
+      const step = () => {
+        const layers = [...theme.querySelectorAll<HTMLElement>("[data-vn-sprite-key='mira'] [data-vn-sprite-image]")].map((l) => ({ role: l.dataset.vnSpriteLayer, expression: l.dataset.vnSpriteExpression, opacity: Number(getComputedStyle(l).opacity) }));
+        frames.push(layers);
+        const incoming = layers.find((l) => l.role === "active");
+        if (incoming && incoming.opacity >= 0.98 && frames.length > 1) (window as any).fadeDone = true;
+        else if (performance.now() - start < 1500) requestAnimationFrame(step);
+        else (window as any).fadeDone = true;
+      };
+      (window as any).fadeDone = false;
+      requestAnimationFrame(step);
     });
+    await page.waitForTimeout(130);
     await shot(page, "expression-crossfade-midframe");
-    const incoming = fade.find((l) => l.role === "active")!;
-    const leaving = fade.find((l) => l.role === "leaving")!;
+    await page.waitForFunction(() => (window as any).fadeDone === true, undefined, { timeout: 5000 });
+    const fades = await page.evaluate(() => (window as any).fadeFrames as Array<Array<{ role?: string; expression?: string; opacity: number }>>);
+    const mid = fades.find((layers) => { const a = layers.find((l) => l.role === "active"); return a !== undefined && a.opacity > 0.05 && a.opacity < 0.98; });
+    assert.ok(mid, `incoming layer mid-fade (${fades.map((layers) => layers.find((l) => l.role === "active")?.opacity.toFixed(3)).join(" ")})`);
+    const incoming = mid.find((l) => l.role === "active")!;
+    const leaving = mid.find((l) => l.role === "leaving")!;
     assert.equal(incoming.expression, "surprised", "shocked falls back to the hot-set surprised sprite");
-    assert.ok(incoming.opacity > 0.05 && incoming.opacity < 0.98, `incoming layer mid-fade (${incoming.opacity})`);
     assert.ok(leaving.opacity > 0.5, `old layer still covers (${leaving.opacity})`);
     await page.waitForTimeout(500);
     await shot(page, "expression-after");
