@@ -162,6 +162,12 @@ export interface VnSceneImageRequest {
 }
 
 /** The empty stage before the host knows of a chat to write in. */
+/**
+ * After Your turn focuses the reply box, a plain Enter this soon is the
+ * reader's last advance key, not a send (a kept draft would go out half
+ * written). Typing in the box ends it; Ctrl/Cmd+Enter always sends.
+ */
+const REPLY_ENTER_GRACE_MS = 500;
 const EMPTY_TEXT = "There is no reply to show yet. Go back to chat, send the first message, then open Cue again.";
 
 const THEME_MARKUP = `
@@ -485,6 +491,8 @@ export class VnStage {
   private readonly createImage: VnImageFactory | undefined;
   private imageRequestSequence = 0;
   private destroyed = false;
+  /** When Your turn last focused the reply box (see REPLY_ENTER_GRACE_MS). */
+  private replyFocusedAt = Number.NEGATIVE_INFINITY;
   private customRegexRules: CustomRegexRule[] = [];
   private textSpeed = 20;
   private autoPlayDelay = 2000;
@@ -1970,6 +1978,7 @@ export class VnStage {
     });
 
     this.input.addEventListener("input", () => {
+      this.replyFocusedAt = Number.NEGATIVE_INFINITY;
       this.dispatch({ type: "set-draft", draft: this.input.value });
     });
 
@@ -1982,10 +1991,15 @@ export class VnStage {
         this.root.focus({ preventScroll: true });
         return;
       }
-      if (event.key !== "Enter" || event.isComposing) return;
-      const send = event.ctrlKey || event.metaKey || (!event.shiftKey && !event.altKey && !isTouchOnly());
+      // keyCode 229: an IME is still composing (Safari reports isComposing false on its confirm).
+      if (event.key !== "Enter" || event.isComposing || event.keyCode === 229) return;
+      const forced = event.ctrlKey || event.metaKey;
+      const send = forced || (!event.shiftKey && !event.altKey && !isTouchOnly());
       if (!send) return;
       event.preventDefault();
+      // A held Enter repeats; only the press sends.
+      if (event.repeat) return;
+      if (!forced && performance.now() - this.replyFocusedAt < REPLY_ENTER_GRACE_MS) return;
       this.inputForm.requestSubmit();
     });
 
@@ -2139,6 +2153,7 @@ export class VnStage {
       queueMicrotask(() => {
         if (this.destroyed || this.state.phase !== "awaiting-input") return;
         this.input.focus({ preventScroll: true });
+        this.replyFocusedAt = performance.now();
       });
     }
   }

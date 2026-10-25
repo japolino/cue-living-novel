@@ -14,7 +14,7 @@ Under Advanced, NovelAI has toggles for model-specific quality tags and default 
 - Previous button and Left Arrow to reread earlier paragraphs in the current reply. Going back pauses Auto and Skip, keeps your response draft, and does not rewind the chat.
 - **Skip** runs to the end of the reply and stops at Your turn. **Auto** stays on across replies: it pauses at Your turn (it never sends anything) and goes on when the next reply arrives.
 - Keys: Enter, Space or Right Arrow continue, Left Arrow goes back, L opens History, A toggles Auto, S skips, 1–9 pick a suggested reply. They work from any button on the stage, never while you type in the reply box (Escape leaves it, keeping the draft). Scrolling up over the dialogue box opens History.
-- One **Your turn** for everyone: the reply box is always there (Enter sends, Shift+Enter adds a line; on phones Send sits beside it), with suggested replies above it when the reply offers choices or **Suggest replies** is on
+- One **Your turn** for everyone: the reply box is always there (Enter sends, Shift+Enter adds a line; on phones Send sits beside it; an Enter in the first half second after the box takes focus, an input-method confirm and a held Enter never send, Ctrl+Enter always does), with suggested replies above it when the reply offers choices or **Suggest replies** is on
 - a single native image pipeline — planner → asset scheduler — with per-provider bounded concurrency and progressive delivery
 - previous-image retention and decode-before-swap so a late image never blanks the stage
 - exactly one centered protagonist per frame: no second character, crowd, or bystander

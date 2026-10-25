@@ -87,6 +87,50 @@ describe("reading UX", () => {
     expect(q(s, "[data-vn-empty-text]").textContent).toContain("Go back to chat");
   });
 
+  test("Enter never sends by accident: not right after Your turn focuses the box, not an IME confirm, not a held key", async () => {
+    const sent: string[] = [];
+    const s = create({ onSubmit: async (text) => { sent.push(text); } });
+    s.loadTurn({ paragraphs: paragraphs(1) });
+    const input = q(s, "[data-vn-input]");
+    // A draft kept from an earlier visit.
+    (input as unknown as { value: string }).value = "Half a reply";
+    input.dispatchEvent(new FakeEvent("input"));
+    s.setPhase("awaiting-input");
+    await wait(0); // the reply box takes focus
+    const enter = (init: Partial<FakeEvent> = {}) => {
+      const event = new FakeEvent("keydown", { key: "Enter", ...init });
+      input.dispatchEvent(event);
+      return event;
+    };
+    // The Enter that was meant to advance the last paragraph: ignored, and adds no line.
+    expect(enter().defaultPrevented).toBe(true);
+    await wait(0);
+    expect(sent).toEqual([]);
+    await wait(550);
+    // Safari's IME confirm (keyCode 229, isComposing false) and a held Enter never send.
+    enter({ keyCode: 229 });
+    enter({ repeat: true });
+    await wait(0);
+    expect(sent).toEqual([]);
+    enter();
+    await wait(0);
+    expect(sent).toEqual(["Half a reply"]);
+  });
+
+  test("Ctrl+Enter sends at once, even right after the box took focus", async () => {
+    const sent: string[] = [];
+    const s = create({ onSubmit: async (text) => { sent.push(text); } });
+    s.loadTurn({ paragraphs: paragraphs(1) });
+    const input = q(s, "[data-vn-input]");
+    (input as unknown as { value: string }).value = "Now";
+    input.dispatchEvent(new FakeEvent("input"));
+    s.setPhase("awaiting-input");
+    await wait(0);
+    input.dispatchEvent(new FakeEvent("keydown", { key: "Enter", ctrlKey: true }));
+    await wait(0);
+    expect(sent).toEqual(["Now"]);
+  });
+
   test("exitLabel option still overrides the Back to chat accessible name", () => {
     const s = create({ exitLabel: "Leave the story" });
     expect(shell(s).querySelector("[data-vn-exit]")!.getAttribute("aria-label")).toBe("Leave the story");
