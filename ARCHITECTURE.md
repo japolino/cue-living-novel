@@ -165,7 +165,18 @@ batch starts. It resumes only when images are on, the turn is `ready`, no
 reply is being generated, no owner (retry, reply, reuse) holds the chat's turn
 and no batch is running for it; `failed` jobs are never resumed — the reader
 reruns them with Try again (`vn_retry_turn`). The stage counts a stopped
-picture as neither done nor in flight.
+picture as neither done nor in flight. An aborted batch runs on until its
+provider request returns (`imageGen.generate` takes no signal; the late result
+is thrown away), so every batch and every close cleanup is tracked per chat
+(`assetSettles`). A view that reopens while they are out gets the stopped
+pictures as `queued` in `vn_state` (not saved) and resumes them only once they
+settled (`resumeAfterSettle`, same turn, view still open): one request per
+picture at a time, which a one-at-a-time provider such as NovelAI needs, and
+no late `cancelled` save over the resumed record. Only the chat's current,
+unaborted batch (`assetControllers` identity) that also owns the turn may save
+or send, which also keeps a batch replaced by Retry from writing over it. The
+resume claims the turn before saving and gives the claim back if the save
+fails. `vn_cancel` aborts like a close, cleanup included.
 
 A scene picture that fails for a passing reason (a timeout, a dropped
 connection, a busy provider: HTTP 408, 425, 429, 5xx, including NovelAI's

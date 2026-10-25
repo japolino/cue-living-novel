@@ -219,6 +219,9 @@ describe("view gating: automatic work only runs for open views", () => {
     await waitFor(() => f.record("gate-h3b", "m1")?.jobs[0]?.status === "generating");
     f.request({ type: "vn_view", chatId: "gate-h3b", open: false }, "user-h3b");
     await waitFor(() => f.record("gate-h3b", "m1")!.jobs.every((job) => job.status === "cancelled"));
+    // The stopped request returns while the view is closed; its result is thrown away.
+    f.gates[0]!.resolve({ imageId: "late-img", imageUrl: "/api/v1/images/late-img" });
+    await settle();
 
     f.request({ type: "vn_get_state", chatId: "gate-h3b", viewOpen: true }, "user-h3b");
     await waitFor(() => f.gates.length >= 2);
@@ -229,6 +232,84 @@ describe("view gating: automatic work only runs for open views", () => {
     await waitFor(() => f.record("gate-h3b", "m1")?.jobs[0]?.status === "generated");
     expect(f.record("gate-h3b", "m1")!.jobs[0]!.imageId).toBe("img-resumed");
     expect(f.plannerCalls()).toBe(1);
+  });
+
+  test("H3e: a reopen while the stopped request is still out waits for it; the old batch never overwrites the resumed pictures", async () => {
+    const f = fixture({ gated: true });
+    f.request({ type: "vn_view", chatId: "gate-h3e", open: true }, "user-h3e");
+    f.reply("gate-h3e", "m1", "user-h3e");
+    await waitFor(() => f.gates.length >= 1);
+    await waitFor(() => f.record("gate-h3e", "m1")?.jobs[0]?.status === "generating");
+    f.request({ type: "vn_view", chatId: "gate-h3e", open: false }, "user-h3e");
+    await waitFor(() => f.record("gate-h3e", "m1")!.jobs.every((job) => job.status === "cancelled"));
+
+    // Reopen before the provider answered the stopped request: no second request yet.
+    f.request({ type: "vn_get_state", chatId: "gate-h3e", viewOpen: true }, "user-h3e");
+    await waitFor(() => f.sent.some((m) => m.type === "vn_state"));
+    const state = f.sent.filter((m) => m.type === "vn_state").at(-1) as { turn: { assets: Array<{ status: string }> } };
+    expect(state.turn.assets.map((asset) => asset.status)).not.toContain("cancelled");
+    await settle();
+    expect(f.gates.length).toBe(1);
+
+    // The stopped request returns (thrown away); only then the picture is asked for again.
+    const resumedAt = f.sent.length;
+    f.gates[0]!.resolve({ imageId: "late-img", imageUrl: "/api/v1/images/late-img" });
+    await waitFor(() => f.gates.length >= 2);
+    await settle();
+    expect(f.gates.length).toBe(2);
+    expect(f.record("gate-h3e", "m1")!.jobs[0]!.status).toBe("generating");
+    const later = f.sent.slice(resumedAt).filter((m) => m.type === "vn_asset").map((m) => (m.asset as { status: string }).status);
+    expect(later).not.toContain("cancelled");
+    f.gates[1]!.resolve({ imageId: "img-resumed", imageUrl: "/api/v1/images/img-resumed" });
+    await waitFor(() => f.record("gate-h3e", "m1")?.jobs[0]?.status === "generated");
+    expect(f.record("gate-h3e", "m1")!.jobs[0]!.imageId).toBe("img-resumed");
+    expect(f.plannerCalls()).toBe(1);
+  });
+
+  test("H3g: a resume whose save fails gives the turn back, so the next open resumes", async () => {
+    const f = fixture({ gated: true });
+    f.request({ type: "vn_view", chatId: "gate-h3g", open: true }, "user-h3g");
+    f.reply("gate-h3g", "m1", "user-h3g");
+    await waitFor(() => f.gates.length >= 1);
+    f.request({ type: "vn_view", chatId: "gate-h3g", open: false }, "user-h3g");
+    f.gates[0]!.resolve({ imageId: "late-img", imageUrl: "/api/v1/images/late-img" });
+    await waitFor(() => f.record("gate-h3g", "m1")!.jobs.every((job) => job.status === "cancelled"));
+    await settle();
+
+    const storage = f.spindle.userStorage as unknown as { setJson: (path: string, value: unknown) => Promise<void> };
+    const setJson = storage.setJson;
+    let failed = 0;
+    storage.setJson = async (path, value) => {
+      if (path === turnPath("gate-h3g", "m1", 0) && failed === 0) { failed += 1; throw new Error("disk full"); }
+      return setJson(path, value);
+    };
+    f.request({ type: "vn_get_state", chatId: "gate-h3g", viewOpen: true }, "user-h3g");
+    await waitFor(() => failed === 1);
+    await settle();
+    expect(f.gates.length).toBe(1);
+
+    f.request({ type: "vn_get_state", chatId: "gate-h3g", viewOpen: true }, "user-h3g");
+    await waitFor(() => f.gates.length >= 2);
+  });
+
+  test("H3f: Retry while a picture is out: the replaced batch's late cancel is never saved over the retry", async () => {
+    const f = fixture({ gated: true });
+    f.request({ type: "vn_view", chatId: "gate-h3f", open: true }, "user-h3f");
+    f.reply("gate-h3f", "m1", "user-h3f");
+    await waitFor(() => f.gates.length >= 1);
+    await waitFor(() => f.record("gate-h3f", "m1")?.jobs[0]?.status === "generating");
+    f.request({ type: "vn_retry_turn", chatId: "gate-h3f", messageId: "m1" }, "user-h3f");
+    await waitFor(() => f.gates.length >= 2);
+    await waitFor(() => f.record("gate-h3f", "m1")?.jobs[0]?.status === "generating");
+    const retriedAt = f.sent.length;
+    f.gates[0]!.resolve({ imageId: "late-img", imageUrl: "/api/v1/images/late-img" });
+    await settle();
+    expect(f.record("gate-h3f", "m1")!.jobs[0]!.status).toBe("generating");
+    const later = f.sent.slice(retriedAt).filter((m) => m.type === "vn_asset").map((m) => (m.asset as { status: string }).status);
+    expect(later).not.toContain("cancelled");
+    f.gates[1]!.resolve({ imageId: "img-retry", imageUrl: "/api/v1/images/img-retry" });
+    await waitFor(() => f.record("gate-h3f", "m1")?.jobs[0]?.status === "generated");
+    expect(f.record("gate-h3f", "m1")!.jobs[0]!.imageId).toBe("img-retry");
   });
 
   test("H3c: nothing resumes while a reply is being generated; it does once generation stops", async () => {
@@ -245,6 +326,10 @@ describe("view gating: automatic work only runs for open views", () => {
 
     f.fire("GENERATION_STOPPED", { chatId: "gate-h3c" }, "user-h3c");
     f.request({ type: "vn_get_state", chatId: "gate-h3c", viewOpen: true }, "user-h3c");
+    // The request the generation stopped is still out: the picture is asked for again only after it returns.
+    await settle();
+    expect(f.gates.length).toBe(1);
+    f.gates[0]!.resolve({ imageId: "late-img", imageUrl: "/api/v1/images/late-img" });
     await waitFor(() => f.gates.length >= 2);
     expect(f.plannerCalls()).toBe(1);
   });

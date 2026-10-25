@@ -83,6 +83,19 @@ function externalImages(spindle: SpindleAPI) {
 }
 const assetControllers = new Map<string, AbortController>();
 /**
+ * Per chat: settles once every asset batch started there (aborted or not) has
+ * returned and every view-close cleanup has saved. An aborted batch keeps
+ * running until its provider request returns (requests take no signal), so
+ * pictures resume only after this settles: no second paid request for the
+ * same picture, and no late "cancelled" save over the resumed record.
+ */
+const assetSettles = new Map<string, Promise<void>>();
+function trackAssetWork(key: string, work: Promise<unknown>): void {
+  const settled = Promise.all([assetSettles.get(key), work.then(() => undefined, () => undefined)]).then(() => undefined);
+  assetSettles.set(key, settled);
+  void settled.then(() => { if (assetSettles.get(key) === settled) assetSettles.delete(key); });
+}
+/**
  * Sprite mode: one library/generation service per backend worker. It gates
  * generation on the same view registry as scene mode (any open Cue view of
  * the user) and reads config through storage.
@@ -220,16 +233,23 @@ async function cancelIncompleteJobs(
  * turn ownership so late results cannot persist or send, abort the asset
  * batch, cancel queued planning, and release the scene-cache admission.
  */
-function abortChatWork(spindle: SpindleAPI, userId: string | undefined, chatId: string, reason: string): void {
+function abortChatWork(
+  spindle: SpindleAPI,
+  userId: string | undefined,
+  chatId: string,
+  reason: string,
+  admissionReason = "view_closed"
+): void {
   const key = runtimeKey(userId, chatId);
   planningQueue.cancelChat(userId, chatId, undefined, reason);
   const abortedTurn = activeTurnKeys.get(key) ?? null;
   activeTurnKeys.delete(key);
   assetControllers.get(key)?.abort(reason);
-  releaseSceneCacheAdmission(spindle, userId, chatId, "view_closed");
-  void cancelIncompleteJobs(spindle, chatId, userId, abortedTurn).catch((error) => {
+  releaseSceneCacheAdmission(spindle, userId, chatId, admissionReason);
+  // Tracked: a resume waits until these cancelled stamps are saved.
+  trackAssetWork(key, cancelIncompleteJobs(spindle, chatId, userId, abortedTurn).catch((error) => {
     spindle.log.warn(`Visual novel view-close cleanup failed: ${errorText(error)}`);
-  });
+  }));
 }
 
 /** Mark a chat's view open. Opening displaces the user's previously open chat, whose work is aborted. */
@@ -849,26 +869,34 @@ export async function sendState(
   const canPlan = config.enabled && views.isOpen(userId, chatId);
   // Pictures a close (or a newer generation) stopped resume with the view.
   let resumed: StoredTurnRecord | null = null;
+  // The stopped batch is still out: show its pictures as queued (not saved) and resume once it settles.
+  let waitingResume: { settling: Promise<void>; preview: StoredTurnRecord } | null = null;
   if (record && !stale && canPlan && chatState.activeTurnPath) {
-    resumed = await resumeStoppedPictures(spindle, record, chatState.activeTurnPath, userId, config).catch((error: unknown) => {
-      spindle.log.warn(`Resuming stopped pictures failed: ${errorText(error)}`);
-      return null;
-    });
-    if (resumed) record = resumed;
+    const key = runtimeKey(userId, chatId);
+    const settling = assetSettles.get(key);
+    if (settling && picturesCanResume(record, config, key)) {
+      waitingResume = { settling, preview: requeueStoppedPictures(record).next };
+    } else {
+      resumed = await resumeStoppedPictures(spindle, record, chatState.activeTurnPath, userId, config).catch((error: unknown) => {
+        spindle.log.warn(`Resuming stopped pictures failed: ${errorText(error)}`);
+        return null;
+      });
+      if (resumed) record = resumed;
+    }
   }
+  const shown = waitingResume?.preview ?? record;
   spindle.sendToFrontend({
     type: "vn_state",
     chatId,
     config,
-    turn: record && !stale ? await buildTurnView(spindle, record, userId, config) : null
+    turn: shown && !stale ? await buildTurnView(spindle, shown, userId, config) : null
   }, userId);
-  if (resumed && chatState.activeTurnPath) {
-    const resumedRecord = resumed;
-    void startAssets(spindle, resumedRecord, chatState.activeTurnPath, userId).catch((error) => {
-      if (!isAbortError(error)) {
-        spindle.log.error(`Visual novel asset pipeline resume failed: ${errorText(error)}`);
-        spindle.sendToFrontend({ type: "vn_error", chatId, operation: "generate_assets", error: errorText(error) }, userId);
-      }
+  if (resumed && chatState.activeTurnPath) launchResumedPictures(spindle, resumed, chatState.activeTurnPath, userId);
+  if (waitingResume && record) {
+    const turnKey = record.plan.key;
+    dbg(spindle, userId, `view open waits for the stopped picture batch before resuming chat=${chatId}`);
+    void waitingResume.settling.then(() => resumeAfterSettle(spindle, chatId, turnKey, userId)).catch((error: unknown) => {
+      spindle.log.warn(`Resuming stopped pictures failed: ${errorText(error)}`);
     });
   }
   if (config.presentationMode === "sprites" && views.isOpen(userId, chatId)) {
@@ -961,7 +989,9 @@ async function startAssets(
   // view means nobody sees (or pays for) these images.
   if (!views.isOpen(userId, record.plan.key.chatId)) {
     dbg(spindle, userId, `skipped asset batch: view closed chat=${record.plan.key.chatId}`);
-    await cancelIncompleteJobs(spindle, record.plan.key.chatId, userId, record.plan.key);
+    const cleanup = cancelIncompleteJobs(spindle, record.plan.key.chatId, userId, record.plan.key);
+    trackAssetWork(runtimeKey(userId, record.plan.key.chatId), cleanup);
+    await cleanup;
     return;
   }
   const cacheServed = record.jobs.filter((job) => job.provider === CACHE_JOB_PROVIDER).length;
@@ -970,6 +1000,14 @@ async function startAssets(
   assetControllers.get(key)?.abort("A newer turn replaced this asset batch.");
   const controller = new AbortController();
   assetControllers.set(key, controller);
+  let settle!: () => void;
+  trackAssetWork(key, new Promise<void>((resolve) => { settle = resolve; }));
+  // Only the chat's current, unaborted batch may save or send: a replaced or
+  // aborted batch (close, Retry, a newer turn) can still be marking its jobs
+  // cancelled while the next owner of the same turn runs.
+  const owns = (turnKey: StoredTurnRecord["plan"]["key"]): boolean =>
+    !controller.signal.aborted && assetControllers.get(key) === controller
+    && compareTurnKeys(activeTurnKeys.get(key) ?? null, turnKey).accepted;
   // Every batch start supersedes the previous batch's cache admission, so a
   // late result from the replaced batch can never populate the active cache.
   releaseSceneCacheAdmission(spindle, userId, record.plan.key.chatId, "batch_start");
@@ -981,8 +1019,7 @@ async function startAssets(
 
   const onUpdate = async (jobs: AssetJob[], changed: AssetJob): Promise<void> => {
     dbg(spindle, userId, `asset ${changed.jobId} p${changed.paragraphIndex} [${changed.priority}] -> ${changed.status}${changed.imageId ? ` image=${changed.imageId}` : ""}${changed.error ? ` error="${changed.error}"` : ""}`);
-    const active = activeTurnKeys.get(key) ?? null;
-    if (!compareTurnKeys(active, changed.ownerTurnKey).accepted) return;
+    if (!owns(changed.ownerTurnKey)) return;
     current = { ...current, jobs, updatedAt: new Date().toISOString() };
     await saveTurnRecord(spindle, path, current, userId);
     // Sprite mode: the host maps this onto `sprites.illustrations` (no turn re-send).
@@ -1015,13 +1052,13 @@ async function startAssets(
           userId,
           { sceneCache, admission, ...(options.bypassJobIds ? { bypassJobIds: options.bypassJobIds } : {}), ...sourceTextOption(record) }
         );
-    const active = activeTurnKeys.get(key) ?? null;
-    if (compareTurnKeys(active, record.plan.key).accepted) {
+    if (owns(record.plan.key)) {
       current = { ...current, jobs: finalJobs, updatedAt: new Date().toISOString() };
       await saveTurnRecord(spindle, path, current, userId);
     }
   } finally {
     if (assetControllers.get(key) === controller) assetControllers.delete(key);
+    settle();
   }
 }
 
@@ -1034,6 +1071,12 @@ async function startAssets(
  * (planning, a running batch, a retry), while a reply is being generated for
  * the chat (that turn is about to be replaced), or when the turn was planned
  * for the other presentation mode. Returns the re-queued record, or null.
+ *
+ * A batch the close aborted keeps running until its provider request returns,
+ * and the close's cleanup saves "cancelled" after it; both are tracked in
+ * `assetSettles`. While they are out nothing resumes here (null): the caller
+ * shows the pictures as queued and resumes once they settle
+ * (`resumeAfterSettle`).
  */
 async function resumeStoppedPictures(
   spindle: SpindleAPI,
@@ -1044,29 +1087,83 @@ async function resumeStoppedPictures(
 ): Promise<StoredTurnRecord | null> {
   const chatId = record.plan.key.chatId;
   const key = runtimeKey(userId, chatId);
-  if (!config.generateImages || config.useNativeCardImages || record.status !== "ready" || record.jobs.length === 0) return null;
-  if (activeTurnKeys.has(key) || generatingChats.has(key)) return null;
+  if (!picturesCanResume(record, config, key) || assetSettles.has(key)) return null;
+  const { next, resumed } = requeueStoppedPictures(record);
+  // Claim before saving so no other owner starts in between; a failed save gives the claim back.
+  activeTurnKeys.set(key, next.plan.key);
+  try {
+    await saveTurnRecord(spindle, path, next, userId);
+  } catch (error) {
+    if (activeTurnKeys.get(key) === next.plan.key) activeTurnKeys.delete(key);
+    throw error;
+  }
+  dbg(spindle, userId, `view open resumed ${resumed} stopped picture(s) chat=${chatId} message=${record.plan.key.assistantMessageId}`);
+  return next;
+}
+
+const stoppedPicture = (job: AssetJob): boolean => job.status === "cancelled" || job.status === "queued" || job.status === "generating";
+
+/** Whether the turn has stopped pictures and nothing else owns the chat's turn (see resumeStoppedPictures). */
+function picturesCanResume(record: StoredTurnRecord, config: VisualNovelConfig, key: string): boolean {
+  if (!config.generateImages || config.useNativeCardImages || record.status !== "ready" || record.jobs.length === 0) return false;
+  if (activeTurnKeys.has(key) || generatingChats.has(key)) return false;
   const running = assetControllers.get(key);
-  if (running && !running.signal.aborted) return null;
+  if (running && !running.signal.aborted) return false;
   const spritePlanned = isSpritePlannedRecord(record);
-  if (spritePlanned ? config.presentationMode !== "sprites" || keyIllustrationCap(config) === 0 : config.presentationMode === "sprites") return null;
-  const stopped = (job: AssetJob): boolean => job.status === "cancelled" || job.status === "queued" || job.status === "generating";
-  if (!record.jobs.some(stopped)) return null;
+  if (spritePlanned ? config.presentationMode !== "sprites" || keyIllustrationCap(config) === 0 : config.presentationMode === "sprites") return false;
+  return record.jobs.some(stoppedPicture);
+}
+
+function requeueStoppedPictures(record: StoredTurnRecord): { next: StoredTurnRecord; resumed: number } {
   const nowTime = new Date().toISOString();
   let resumed = 0;
   const jobs = record.jobs.map((job) => {
-    if (!stopped(job)) return job;
+    if (!stoppedPicture(job)) return job;
     resumed += 1;
     return AssetJobSchema.parse({
       ...job, status: "queued", imageId: null, imageUrl: null, error: null,
       queuedAt: nowTime, startedAt: null, generatedAt: null, readyAt: null, finishedAt: null
     });
   });
-  const next: StoredTurnRecord = { ...record, jobs, updatedAt: nowTime };
-  activeTurnKeys.set(key, next.plan.key);
-  await saveTurnRecord(spindle, path, next, userId);
-  dbg(spindle, userId, `view open resumed ${resumed} stopped picture(s) chat=${chatId} message=${record.plan.key.assistantMessageId}`);
-  return next;
+  return { next: { ...record, jobs, updatedAt: nowTime }, resumed };
+}
+
+function launchResumedPictures(spindle: SpindleAPI, record: StoredTurnRecord, path: string, userId: string | undefined): void {
+  void startAssets(spindle, record, path, userId).catch((error) => {
+    if (!isAbortError(error)) {
+      spindle.log.error(`Visual novel asset pipeline resume failed: ${errorText(error)}`);
+      spindle.sendToFrontend({ type: "vn_error", chatId: record.plan.key.chatId, operation: "generate_assets", error: errorText(error) }, userId);
+    }
+  });
+}
+
+/**
+ * The view reopened while the batch a close stopped was still out: once it
+ * (and the close's cleanup) settled, resume the same turn's pictures if the
+ * view is still open on it. A newer close waits for its own settle.
+ */
+async function resumeAfterSettle(
+  spindle: SpindleAPI,
+  chatId: string,
+  turnKey: StoredTurnRecord["plan"]["key"],
+  userId: string | undefined
+): Promise<void> {
+  const key = runtimeKey(userId, chatId);
+  if (assetSettles.has(key) || !views.isOpen(userId, chatId)) return;
+  const config = await loadConfig(spindle, userId);
+  if (!config.enabled) return;
+  const chatState = await loadChatState(spindle, chatId, userId);
+  const path = chatState.activeTurnPath;
+  if (!path) return;
+  const record = await loadTurnRecord(spindle, path, userId);
+  if (!record || !turnKeyEquals(record.plan.key, turnKey) || !views.isOpen(userId, chatId)) return;
+  const resumed = await resumeStoppedPictures(spindle, record, path, userId, config);
+  if (!resumed) return;
+  for (const job of resumed.jobs) {
+    if (job.status !== "queued" || job.queuedAt !== resumed.updatedAt) continue;
+    spindle.sendToFrontend({ type: "vn_asset", chatId, messageId: resumed.plan.key.assistantMessageId, asset: assetView(resumed, job) }, userId);
+  }
+  launchResumedPictures(spindle, resumed, path, userId);
 }
 
 /**
@@ -1825,9 +1922,8 @@ async function handleFrontendMessage(spindle: SpindleAPI, request: FrontendReque
       return;
     case "vn_cancel": {
       bumpIntakeEpoch(userId, request.chatId);
-      planningQueue.cancelChat(userId, request.chatId);
-      assetControllers.get(runtimeKey(userId, request.chatId))?.abort("Cancelled from the visual novel UI.");
-      releaseSceneCacheAdmission(spindle, userId, request.chatId, "cancel");
+      // As a close: an aborted batch no longer saves, so the cleanup stamps its pictures cancelled.
+      abortChatWork(spindle, userId, request.chatId, "Cancelled from the visual novel UI.", "cancel");
       return;
     }
     case "vn_refresh": {
