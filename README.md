@@ -14,6 +14,8 @@ Under Advanced, NovelAI has toggles for model-specific quality tags and default 
 - Previous button and Left Arrow to reread earlier paragraphs in the current reply. Going back pauses Auto and Skip, keeps your response draft, and does not rewind the chat.
 - **Skip** runs to the end of the reply and stops at Your turn. **Auto** stays on across replies: it pauses at Your turn (it never sends anything) and goes on when the next reply arrives.
 - Keys: Enter, Space or Right Arrow continue, Left Arrow goes back, L opens History, A toggles Auto, S skips, 1–9 pick a suggested reply. They work from any button on the stage, never while you type in the reply box (Escape leaves it, keeping the draft). Scrolling up over the dialogue box opens History. A long paragraph scrolls inside the box instead of covering the scene: a tap, Continue or Enter shows its next page first, then moves on.
+- an **opening card** for each reply (the scene's place, time and weather over the card's own background picture) and a **location label** at the top left while reading; see [Opening card and waiting screen](#opening-card-and-waiting-screen)
+- a **waiting screen** while the next reply is written: the last scene's characters, lines and moves over a backdrop, with what you sent
 - One **Your turn** for everyone: the reply box is always there (Enter sends, Shift+Enter adds a line; on phones Send sits beside it; an Enter in the first half second after the box takes focus, an input-method confirm and a held Enter never send, Ctrl+Enter always does), with suggested replies above it when the reply offers choices or **Suggest replies** is on (on for new installs; settings saved before Your turn was unified come back with it off unless the old reply mode was CYOA, since suggestions cost story-reader tokens on every reply)
 - a single native image pipeline — planner → asset scheduler — with per-provider bounded concurrency and progressive delivery
 - previous-image retention and decode-before-swap so a late image never blanks the stage
@@ -169,6 +171,41 @@ avoided), each miss with its reason (`absent`, `evicted`, `invalidated`,
 `aborted`, `no_image_id`), waits for in-flight owners, candidate resolutions,
 scope releases, and a per-batch summary (hits, shared, avoided, stores,
 misses, rejects, waits, evictions, entries, bytes).
+
+## Opening card and waiting screen
+
+Settings → Reading has two groups for how a reply opens and what shows while the next one is written.
+
+**Opening card** (on for new installs). A new reply opens on a card: "Scene · Seiran Academy", the place in large serif type ("Classroom 2-B, Seiran Academy"), then its weather, time of day and length ("clear · after school · 7 paragraphs"), a gold rule that grows in, and a status line ("Preparing the scene…", then "Ready"). The card stays at least **Shown at least** (1.5 s by default, 0–5 s) and until the reply's first picture is ready or will not come, but never longer than 5 s, since the text can be read while pictures load. With **Start a new reply by itself** on, it then closes by itself; off, it says "Ready · tap to start" and waits. A tap, Enter, Space or Right Arrow starts reading; S starts and skips to Your turn. The first paragraph types, plays its effect and sound, is read aloud and enters History only once the card has closed. **Replay the opening card** shows it again and reads the reply from the start.
+
+- **Use the card's own background picture**: a character asset named `bg`, `background`, `배경` or `backdrop` goes behind the opening card and the waiting screen. Without one, or with this off, the scene on the stage is used.
+- **Show the place at the top left while reading**: a small "Location" label with the place, time and weather of the paragraph being read. It follows scene changes inside a reply and is hidden while the opening card or the waiting screen covers the stage.
+
+**While you wait.** After you send, the stage shows a waiting screen until the next reply arrives. It has the status line ("Mira is writing the next scene…", "Setting the next scene…" while the scene is planned) and a "You sent" card. Choose a **Backdrop**:
+
+| Backdrop | Looks like |
+| --- | --- |
+| Scene card (default) | The scene card on the card's background picture, words at the bottom left. |
+| Tidy | A dark veil, "— Scene —" and the place centred, everyone's faces in rings. |
+| Light loading screen | Pale blue stripes, a "Now loading…" banner, a rotating tip and a progress bar. |
+| Cast introduction | A violet dark with the scene's name, everyone filling in from a silhouette. |
+| Off | Only the status line, as before. |
+
+…and what goes **On top**:
+
+| Recap | Shows |
+| --- | --- |
+| Automatic (default) | A line-up for up to three characters, flashback cards from four. |
+| Cast line-up | Everyone who was on stage at the end, side by side, with a speech bubble of one of their lines and how they said it ("Hops", "Angry", "Smile"). Tap a character: they bounce and say their next line, and their picture changes to the one of that line. The bubbles also change by themselves, one character at a time. |
+| Flashback cards | One character at a time with their last line, their picture beside the card; tap for the next. |
+| Scene film | The reply as a strip of cards scrolling by (it pauses under the pointer); tap a card to read the paragraph whole. |
+| Off | Just the backdrop. |
+
+Inner voices (Disco Elysium skills such as LOGIC or 논리) appear in the cards and the film in their family colour, without a picture. **Preview the waiting screen** opens Cue with the reply on the stage; tap away from the characters or press Escape to close it. With **Motion** on Still, or the OS "reduce motion" setting, everything shows without movement.
+
+**Your turn.** The reply box has **Previous**, **From the start** and **Close**. Close (or turning off **Open the reply box when the reply ends**) leaves the last scene in view with a **Reply** button; a tap or Enter opens the box. While a reply is sent, the box stays and the button reads "Sending…". History's **Whole reply** lists every paragraph of the reply, the ones not read yet marked.
+
+The layout is checked in a real browser on desktop and on a 393×851 phone: `bun run test:scene-flow` (screenshots in `.cache/scene-flow/`).
 
 ## Text effects
 
