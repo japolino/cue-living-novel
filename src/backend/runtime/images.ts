@@ -5,7 +5,7 @@ import { novelAiCapabilities, novelAiCaption, novelAiQualityTags, NOVELAI_NEGATI
 import { AssetJobSchema, type AssetJob, type SceneState, type TurnPlan, type VisualCue } from "../../shared/contracts.js";
 import { AssetScheduler } from "../core/asset-scheduler.js";
 import { sceneSizeParameters } from "./image-size.js";
-import { cutoutSwitchParameters, referenceSwitchParameters, resolveComfySwitches } from "./comfy-reference-switch.js";
+import { cutoutSwitchParameters, drivesComfyWorkflow, referenceSwitchParameters, resolveComfySwitches } from "./comfy-reference-switch.js";
 import {
   SceneImageCache,
   sceneEpisodeOf,
@@ -817,7 +817,7 @@ export async function generateAssets(
   const anchorable = referenceAnchoringEnabled(config) && provider !== null && REFERENCE_PROVIDERS.has(provider);
   const cardSource = anchorable && config.referenceSource === "card";
   // Cached per selection; a failed lookup is null (today's behaviour).
-  const switches = provider === "comfyui" ? await resolveComfySwitches(spindle, config, userId) : null;
+  const switches = drivesComfyWorkflow(provider) ? await resolveComfySwitches(spindle, config, userId) : null;
   const referenceSwitch = switches?.reference ?? null;
 
   const [initialPortraits, characterAppearance] = await Promise.all([

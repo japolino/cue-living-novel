@@ -25,7 +25,7 @@ import {
   resolveImageProfile,
   splitConnectionSelection,
 } from "../images.js";
-import { cutoutSwitchParameters, referenceSwitchParameters, resolveComfySwitches } from "../comfy-reference-switch.js";
+import { cutoutSwitchParameters, drivesComfyWorkflow, referenceSwitchParameters, resolveComfySwitches } from "../comfy-reference-switch.js";
 import { fetchReferenceImageViaFrontend } from "../reference-source.js";
 import {
   SpriteCutBridge,
@@ -1189,7 +1189,7 @@ export class SpriteService {
     cutout: boolean,
     label: string,
   ): Promise<Record<string, unknown>> {
-    const switches = provider === "comfyui" ? await resolveComfySwitches(this.spindle, config, userId) : null;
+    const switches = drivesComfyWorkflow(provider) ? await resolveComfySwitches(this.spindle, config, userId) : null;
     const switched = referenceSwitchParameters(provider, config.imageParameters, reference, switches?.reference ?? null, switches?.defaults ?? null);
     if (switched.note) this.deps.log?.(`${label}: ${switched.note}`, userId);
     const cut = cutoutSwitchParameters(provider, config.imageParameters, switched.parameters, cutout, switches?.cutout ?? null, switches?.defaults ?? null);

@@ -24,6 +24,9 @@ import type { VisualNovelConfig } from "../../config.js";
  * everything else (plates, key moments, scene pictures); the browser keeps
  * the alpha of a render that arrives transparent.
  *
+ * Lumiverse applies the connection's imported ComfyUI workflow for SwarmUI
+ * connections too, so both switches are driven there as well.
+ *
  * Lumiverse merges each request over the connection's `default_parameters`,
  * where its Image Gen panel saves the workflow's Custom controls
  * (`comfyui_field_values.custom`, which replaces `comfyui_custom_fields` as a
@@ -74,6 +77,11 @@ function namesCutout(title: string): boolean {
     if (BACKGROUND_WORDS.has(word) && REMOVE_WORDS.has(words[i + 1] ?? "") && !NOT_THE_IMAGE.has(words[i + 2] ?? "")) return true;
   }
   return false;
+}
+
+/** Whether Lumiverse patches this provider's requests into the connection's ComfyUI workflow. */
+export function drivesComfyWorkflow(provider: string | null): boolean {
+  return provider === "comfyui" || provider === "swarmui";
 }
 
 /** How long a looked-up switch (or a failed lookup) is reused. */
@@ -323,6 +331,8 @@ export type ReferenceSwitchResult = {
  * `defaults` (see `withSwitchValues`); a value the user set for the same key
  * in their own image parameters wins (and keeps `denoise: 0.0` without a
  * reference). No switch: unchanged, `denoise: 0.0` without a reference.
+ * SwarmUI (when its connection has the workflow) gets the switch, never
+ * the `denoise: 0.0`.
  */
 export function referenceSwitchParameters(
   provider: string | null,
@@ -331,11 +341,11 @@ export function referenceSwitchParameters(
   switchKey: string | null,
   defaults: Record<string, unknown> | null = null
 ): ReferenceSwitchResult {
-  if (provider !== "comfyui") {
+  if (provider !== "comfyui" && !(provider === "swarmui" && switchKey)) {
     return { parameters: reference ? { ...userParameters, ...reference } : { ...userParameters }, note: null };
   }
   const own = switchKey ? customValueIn(userParameters, switchKey) : null;
-  const zeroDenoise = !reference && (!switchKey || own !== null) && userParameters.denoise === undefined;
+  const zeroDenoise = provider === "comfyui" && !reference && (!switchKey || own !== null) && userParameters.denoise === undefined;
   const base = reference
     ? { ...userParameters, ...reference }
     : { ...userParameters, ...(zeroDenoise ? { denoise: 0.0 } : {}) };
@@ -354,9 +364,10 @@ export function referenceSwitchParameters(
  * (`cutout`), off for anything else, so a workflow that saves transparent
  * PNGs only does so for sprites. Applied after `referenceSwitchParameters`,
  * written the same way over the custom fields there are and the
- * connection's saved `defaults`; a value the user set for the same key in
- * their own image parameters wins. No switch, or not ComfyUI: unchanged, no
- * note.
+ * connection's saved `defaults`. A value the user set for the same key in
+ * their own image parameters can only turn it off: their `false` wins, but
+ * a `true` never makes scenes, plates or key moments transparent. No
+ * switch, or a provider without the workflow: unchanged, no note.
  */
 export function cutoutSwitchParameters(
   provider: string | null,
@@ -366,12 +377,18 @@ export function cutoutSwitchParameters(
   switchKey: string | null,
   defaults: Record<string, unknown> | null = null
 ): ReferenceSwitchResult {
-  if (provider !== "comfyui" || !switchKey) return { parameters, note: null };
+  if (!drivesComfyWorkflow(provider) || !switchKey) return { parameters, note: null };
   const own = customValueIn(userParameters, switchKey);
+  if (own?.value === false) {
+    return {
+      parameters: withSwitchValues(parameters, defaults, { [switchKey]: false }),
+      note: `cut-out switch ${switchKey} -> user value false`
+    };
+  }
   if (own) {
     return {
-      parameters: withSwitchValues(parameters, defaults, { [switchKey]: own.value }),
-      note: `cut-out switch ${switchKey} -> user value ${JSON.stringify(own.value)}`
+      parameters: withSwitchValues(parameters, defaults, { [switchKey]: cutout }),
+      note: `cut-out switch ${switchKey} -> ${cutout ? "on" : "off"} (user value ${JSON.stringify(own.value)} only allows it)`
     };
   }
   return {

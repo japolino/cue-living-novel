@@ -128,7 +128,16 @@ describe("referenceSwitchParameters", () => {
     expect(referenceSwitchParameters("comfyui", { steps: 20 }, null, null).parameters).toEqual({ steps: 20, denoise: 0 });
     expect(referenceSwitchParameters("comfyui", { denoise: 0.4 }, null, null).parameters).toEqual({ denoise: 0.4 });
     expect(referenceSwitchParameters("comfyui", {}, reference, null).parameters).toEqual(reference);
-    expect(referenceSwitchParameters("swarmui", { a: 1 }, null, "804:value")).toEqual({ parameters: { a: 1 }, note: null });
+    expect(referenceSwitchParameters("swarmui", { a: 1 }, null, null)).toEqual({ parameters: { a: 1 }, note: null });
+    expect(referenceSwitchParameters("novelai", { a: 1 }, null, "804:value")).toEqual({ parameters: { a: 1 }, note: null });
+  });
+
+  test("SwarmUI runs the connection's ComfyUI workflow too: the switch is driven, never denoise 0.0", () => {
+    const off = referenceSwitchParameters("swarmui", { a: 1 }, null, "804:value");
+    expect(off).toEqual({ parameters: { a: 1, comfyui_custom_fields: { "804:value": false } }, note: "reference switch 804:value -> off" });
+    const swarmReference = { resolvedSourceImages: [{ data: "QUJD", mimeType: "image/png" }] };
+    expect(referenceSwitchParameters("swarmui", {}, swarmReference, "804:value").parameters).toEqual({ ...swarmReference, comfyui_custom_fields: { "804:value": true } });
+    expect(referenceSwitchParameters("swarmui", { custom: { "804:value": true } }, null, "804:value").parameters.denoise).toBeUndefined();
   });
 });
 
@@ -210,7 +219,7 @@ function plan(cues: VisualCue[]): TurnPlan {
   });
 }
 
-function sceneRuntime(metadata: unknown | (() => unknown), defaults?: Record<string, unknown>) {
+function sceneRuntime(metadata: unknown | (() => unknown), defaults?: Record<string, unknown>, provider = "comfyui") {
   const data = new Map<string, unknown>();
   const calls: Array<{ parameters: Record<string, unknown> }> = [];
   const logs: string[] = [];
@@ -221,16 +230,16 @@ function sceneRuntime(metadata: unknown | (() => unknown), defaults?: Record<str
     },
     imageGen: {
       getConnection: async () => {
-        const connection: Record<string, unknown> = { provider: "comfyui", ...(defaults ? { default_parameters: defaults } : {}) };
+        const connection: Record<string, unknown> = { provider, ...(defaults ? { default_parameters: defaults } : {}) };
         if (typeof metadata === "function") Object.defineProperty(connection, "metadata", { get: metadata as () => unknown });
         else if (metadata !== undefined) connection.metadata = metadata;
         return connection;
       },
-      listConnections: async () => [{ provider: "comfyui", is_default: true }],
+      listConnections: async () => [{ provider, is_default: true }],
       generate: async (input: { parameters: Record<string, unknown>; includeDataUrl?: boolean }) => {
         calls.push({ parameters: input.parameters });
         const index = calls.length;
-        return { imageId: `img-${index}`, imageUrl: `/images/img-${index}`, ...(input.includeDataUrl ? { imageDataUrl: "data:image/png;base64,UE9SVFJBSVQ=" } : {}), model: "m", provider: "comfyui" };
+        return { imageId: `img-${index}`, imageUrl: `/images/img-${index}`, ...(input.includeDataUrl ? { imageDataUrl: "data:image/png;base64,UE9SVFJBSVQ=" } : {}), model: "m", provider };
       }
     },
     log: { info: (line: string) => { logs.push(line); }, warn() {}, error() {} }
@@ -238,8 +247,8 @@ function sceneRuntime(metadata: unknown | (() => unknown), defaults?: Record<str
   return { spindle, calls, logs };
 }
 
-async function sceneCalls(metadata: unknown | (() => unknown), patch: Partial<VisualNovelConfig> = {}, defaults?: Record<string, unknown>) {
-  const runtime = sceneRuntime(metadata, defaults);
+async function sceneCalls(metadata: unknown | (() => unknown), patch: Partial<VisualNovelConfig> = {}, defaults?: Record<string, unknown>, provider = "comfyui") {
+  const runtime = sceneRuntime(metadata, defaults, provider);
   const config: VisualNovelConfig = { ...DEFAULT_CONFIG, imageConnectionId: "conn", imageConcurrency: 1, debugLogging: true, ...patch };
   const turn = plan([cue("one", 0), cue("two", 1, "sad")]);
   await generateAssets(runtime.spindle, turn, createAssetJobs(turn, config), config, new AbortController().signal, () => {});
@@ -388,14 +397,26 @@ describe("cutoutSwitchParameters", () => {
     expect(result.parameters.custom).toEqual({ "7:text": "y" });
   });
 
-  test("a value the user set for the switch wins", () => {
+  test("a false the user set for the switch wins", () => {
     const user = { comfyui_custom_fields: { "900:value": false } };
     const result = cutoutSwitchParameters("comfyui", user, { ...user }, true, "900:value");
     expect(result.parameters.comfyui_custom_fields).toEqual({ "900:value": false });
     expect(result.note).toBe("cut-out switch 900:value -> user value false");
   });
 
-  test("no switch, or not ComfyUI: unchanged and no note", () => {
+  test("a true the user set can only leave sprites on: scenes, plates and key moments stay off", () => {
+    const user = { comfyui_custom_fields: { "900:value": true } };
+    const off = cutoutSwitchParameters("comfyui", user, { ...user }, false, "900:value");
+    expect(off.parameters.comfyui_custom_fields).toEqual({ "900:value": false });
+    expect(off.note).toBe("cut-out switch 900:value -> off (user value true only allows it)");
+    expect(cutoutSwitchParameters("comfyui", user, { ...user }, true, "900:value").parameters.comfyui_custom_fields).toEqual({ "900:value": true });
+  });
+
+  test("SwarmUI is driven like ComfyUI", () => {
+    expect(cutoutSwitchParameters("swarmui", {}, { steps: 20 }, true, "900:value")).toEqual({ parameters: { steps: 20, comfyui_custom_fields: { "900:value": true } }, note: "cut-out switch 900:value -> on" });
+  });
+
+  test("no switch, or a provider without the workflow: unchanged and no note", () => {
     const parameters = { steps: 20 };
     expect(cutoutSwitchParameters("comfyui", {}, parameters, true, null)).toEqual({ parameters, note: null });
     expect(cutoutSwitchParameters("novelai", {}, parameters, true, "900:value")).toEqual({ parameters, note: null });
@@ -403,6 +424,18 @@ describe("cutoutSwitchParameters", () => {
 });
 
 describe("scene images: ComfyUI cut-out switch", () => {
+  test("a true in the user's image parameters does not make scene pictures transparent", async () => {
+    const { calls } = await sceneCalls(withCutout(), { imageParameters: { comfyui_custom_fields: { "900:value": true } } });
+    expect(calls.map((call) => (call.parameters.comfyui_custom_fields as Record<string, unknown>)["900:value"])).toEqual([false, false]);
+  });
+
+  test("a SwarmUI connection with the workflow: scene pictures turn both switches", async () => {
+    const { calls } = await sceneCalls(withCutout(), {}, undefined, "swarmui");
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.parameters.comfyui_custom_fields).toEqual({ "804:value": false, "900:value": false });
+    expect(calls[1]!.parameters.comfyui_custom_fields).toEqual({ "804:value": true, "900:value": false });
+  });
+
   test("every scene picture turns a mapped cut-out switch off", async () => {
     const { calls, logs } = await sceneCalls(withCutout());
     expect(calls).toHaveLength(2);

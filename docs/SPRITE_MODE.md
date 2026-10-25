@@ -814,9 +814,13 @@ switch. It is read from the connection profile with
 the reference switch (one lookup, cached 30 s per selection). Sprite renders
 send `true`, plates, key moments and scene pictures `false`, in
 `comfyui_custom_fields` (merged with the user's `comfyui_custom_fields` or
-`custom` and the reference switch; a value the user set for the same key
-in Cue's image parameters wins). The debug log says
-`cut-out switch 14:value -> on` (node 14 in the example).
+`custom` and the reference switch). A value the user set for the key in
+Cue's image parameters can only turn the cut-out off: `false` wins
+everywhere, and `true` leaves Cue's choice (it never makes a scene, plate or
+key moment transparent). The debug log says `cut-out switch 14:value -> on`
+(node 14 in the example). Lumiverse applies the connection's ComfyUI
+workflow for SwarmUI connections too, so Cue drives both switches there the
+same way (without the ComfyUI-only `denoise: 0.0` for unreferenced images).
 
 Lumiverse's Image Gen panel shows the mapped Boolean as an Enabled/Disabled
 control and saves it, with every other Custom control, in the connection's

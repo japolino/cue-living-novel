@@ -180,6 +180,32 @@ describe("sprite jobs: ComfyUI cut-out switch", () => {
     expect(f.log).toContain("key moment: cut-out switch 900:value -> off");
   });
 
+  test("a true the user set leaves plates and key moments opaque", async () => {
+    const f = setup({ metadata: withCutout(), config: { imageParameters: { comfyui_custom_fields: { "900:value": true } } } });
+    await f.service.ensureForStaging("u1", sampleStaging(f.styleKey), f.config);
+    await f.service.settle("u1");
+    await f.answerAll();
+    await f.service.settle("u1");
+    const calls = f.callsBy();
+    const plates = calls.filter((entry) => !entry.name.includes("/"));
+    expect(plates.length).toBeGreaterThan(0);
+    for (const entry of plates) expect((entry.parameters.comfyui_custom_fields as Record<string, unknown>)["900:value"]).toBe(false);
+    for (const entry of calls.filter((candidate) => candidate.name.includes("/"))) expect((entry.parameters.comfyui_custom_fields as Record<string, unknown>)["900:value"]).toBe(true);
+  });
+
+  test("SwarmUI with the connection's ComfyUI workflow: sprites on, plates off", async () => {
+    const f = setup({ provider: "swarmui", metadata: withCutout() });
+    await f.service.ensureForStaging("u1", sampleStaging(f.styleKey), f.config);
+    await f.service.settle("u1");
+    await f.answerAll();
+    await f.service.settle("u1");
+    const calls = f.callsBy();
+    expect(calls.length).toBeGreaterThan(1);
+    for (const entry of calls) {
+      expect((entry.parameters.comfyui_custom_fields as Record<string, unknown>)["900:value"]).toBe(entry.name.includes("/"));
+    }
+  });
+
   test("the user's own value wins; without the switch nothing is added", async () => {
     const owned = setup({ metadata: withCutout(), config: { imageParameters: { comfyui_custom_fields: { "900:value": false } } } });
     await owned.service.prepareCast("u1", [MIRA], owned.config);
