@@ -342,6 +342,7 @@ export function stageTurnInput(
     ...(next.scenes ? { scenes: next.scenes } : {}),
     cardBackgroundUrl: next.cardBackgroundUrl ?? null,
     writer: next.speaker,
+    ...(next.userSpeaker ? { reader: next.userSpeaker } : {}),
     ...(next.provisional ? { planHold } : {})
   };
 }

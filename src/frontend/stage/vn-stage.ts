@@ -646,6 +646,8 @@ export class VnStage {
   private lastScene: VnScene | null = null;
   private cardBackgroundUrl: string | null = null;
   private writer = "";
+  /** The reader's persona name from the turn ("" before one loads). */
+  private reader = "";
   /** What the reader last sent, until the next reply loads. */
   private lastSent: string | null = null;
   /** Your turn's reply box is closed behind the Reply button. */
@@ -3596,6 +3598,7 @@ export class VnStage {
     else if (turn.planHold === undefined) this.scenes = [];
     if (turn.cardBackgroundUrl !== undefined) this.cardBackgroundUrl = turn.cardBackgroundUrl || null;
     if (turn.writer !== undefined) this.writer = turn.writer;
+    if (turn.reader !== undefined) this.reader = turn.reader;
   }
 
   /** The scene in effect at the reader's paragraph (the last known one while a provisional turn waits). */
@@ -3653,6 +3656,7 @@ export class VnStage {
       sprites: this.presentationMode === "sprites" ? this.spriteLayer.getView() : null,
       scenes: this.scenes.length > 0 ? this.scenes : this.lastScene ? [this.lastScene] : [],
       readerName: reader?.speaker ?? "",
+      personaName: this.reader,
       sent: this.lastSent,
       writer: this.writer,
       backgroundUrl: this.sceneBackdropUrl(),

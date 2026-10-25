@@ -483,6 +483,11 @@ describe("stageTurnInput (production host-to-stage mapping)", () => {
     expect(stageTurnInput(turn({ ambients: ["snow"] }), true).ambient).toBe("snow");
   });
 
+  test("passes the persona on, so the waiting screen leaves their lines out of the cast", () => {
+    expect(stageTurnInput(turn({ userSpeaker: "Jay" }), true).reader).toBe("Jay");
+    expect(Object.hasOwn(stageTurnInput(turn(), true), "reader")).toBe(false);
+  });
+
   test("forwards paragraph metadata independently of image assets", () => {
     const input = stageTurnInput(turn({
       paragraphs: ["Rain.", "A flash.", "Inside."],

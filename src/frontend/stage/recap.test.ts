@@ -122,6 +122,23 @@ describe("waiting screen recap", () => {
     expect(recap.paragraphCount).toBe(2);
   });
 
+  test("the persona's lines and a speaker named Narrator never join the cast, also without the reader's own line", () => {
+    const recap = buildWaitingRecap({
+      ...base,
+      sprites: null,
+      readerName: "",
+      personaName: "Jay",
+      paragraphs: [
+        { id: "t:0", text: "“Humans don't lick their eyebrows,” Jay says.", speaker: "Jay" },
+        { id: "t:1", text: "Years earlier, the house was quiet.", speaker: "Narrator" },
+        { id: "t:2", text: "“Fair,” says Ren.", speaker: "Ren" },
+      ],
+    });
+    expect(recap.entries.map((entry) => [entry.kind, entry.speaker])).toEqual([["reader", "Jay"], ["narration", ""], ["character", "Ren"]]);
+    expect(recap.characters.map((character) => character.name)).toEqual(["Ren"]);
+    expect(recap.voices).toEqual([]);
+  });
+
   test("inner voices go to their own list with their family colour", () => {
     const recap = buildWaitingRecap({
       ...base,

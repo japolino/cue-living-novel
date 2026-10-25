@@ -137,6 +137,8 @@ export interface VnTurnInput {
   cardBackgroundUrl?: string | null;
   /** Who writes the replies (the card's name), for "… is writing the next scene". */
   writer?: string;
+  /** The reader's persona name (`TurnView.userSpeaker`), so the waiting screen leaves their lines out of the cast. */
+  reader?: string;
   /**
    * Set for a provisional turn (text before the plan): the paragraph index the
    * reader waits at until the plan lands (clamped to the final paragraph).

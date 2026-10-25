@@ -69,12 +69,21 @@ export type WaitingRecap = {
   backgroundUrl: string | null;
 };
 
+/** Speakers that are the narration itself (the planner may name it): no picture, never a cast member. */
+const NARRATOR_NAMES = new Set(["narrator", "narration", "the narrator"]);
+
 export type WaitingRecapInput = {
   paragraphs: readonly VnParagraph[];
   sprites: SpriteTurnView | null;
   scenes: readonly VnScene[];
   /** The reader's name on their own lines. */
   readerName: string;
+  /**
+   * The reader's persona (the turn's `userSpeaker`). Lines the reply gives
+   * them count as the reader's too, also when their own line is not on the
+   * stage: the persona has no sprite, so it never takes a place in the cast.
+   */
+  personaName?: string;
   sent: string | null;
   writer: string;
   backgroundUrl: string | null;
@@ -166,7 +175,7 @@ export function buildWaitingRecap(input: WaitingRecapInput): WaitingRecap {
     const bare = bareSpeakerName(member.name);
     return { key: member.characterKey, name: member.name, bare, first: bare.split(" ")[0] ?? "" };
   });
-  const readerBare = bareSpeakerName(input.readerName);
+  const readerNames = new Set([input.readerName, input.personaName ?? ""].map(bareSpeakerName).filter(Boolean));
   const characters = new Map<string, RecapCharacter>();
   const voices = new Map<string, RecapCharacter>();
   const entries: RecapEntry[] = [];
@@ -185,9 +194,10 @@ export function buildWaitingRecap(input: WaitingRecapInput): WaitingRecap {
       ? MOTION_CHIPS[actor.motion] ?? EMOTE_CHIPS[actor.emote] ?? expressionChip(actor.expression)
       : null;
     const image = member && sprites && actor ? imageFor(sprites, member.key, actor.expression) : null;
-    const kind: RecapKind = isReader || (readerBare && bareSpeakerName(speaker) === readerBare)
+    const bare = bareSpeakerName(speaker);
+    const kind: RecapKind = isReader || readerNames.has(bare)
       ? "reader"
-      : voice ? "voice" : speaker ? "character" : "narration";
+      : voice ? "voice" : speaker && !NARRATOR_NAMES.has(bare) ? "character" : "narration";
     const name = member?.name ?? speaker;
     entries.push({
       index,
