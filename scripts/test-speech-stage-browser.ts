@@ -61,8 +61,7 @@ try {
   const logsAfterPlay = await page.evaluate(() => [...(window as any).fixture.logs]);
   console.log("Logs after Play click:", logsAfterPlay);
   assert.ok(logsAfterPlay.includes("dock:play-click"), "Play button click must trigger onPlay callback");
-  assert.ok(logsAfterPlay.includes("transport:synthesize"), "Synthesis request must be dispatched");
-  assert.ok(logsAfterPlay.includes("audio:play"), "Audio element play() must be called");
+  assert.ok(logsAfterPlay.includes("choir:play:0"), "Choir must be asked to read the paragraph");
 
   await page.screenshot({ path: ".cache/speech-integration/desktop-stage-dock.png" });
 
@@ -135,14 +134,9 @@ try {
   const logsAutoStart = await page.evaluate(() => [...(window as any).fixture.logs]);
   console.log("Logs after toggleAutoPlay(true):", logsAutoStart);
 
-  // Now trigger manual speech play while in auto mode
-  await page.evaluate(() => {
-    void (window as any).fixture.speech.playCurrent();
-  });
-  await page.waitForTimeout(50);
-  const logsPlaying = await page.evaluate(() => [...(window as any).fixture.logs]);
-  console.log("Logs while speech is playing:", logsPlaying);
-  assert.ok(logsPlaying.includes("audio:play"), "Speech must be playing");
+  // Paragraph 0 is still being read (the Play click above).
+  const status = await page.evaluate(() => (window as any).fixture.speech.getStatus().kind);
+  assert.equal(status, "playing", "Speech must be playing");
 
   // Wait 350ms (longer than autoPlayDelay: 200ms)
   await page.waitForTimeout(350);
@@ -151,24 +145,23 @@ try {
   // Stage must NOT have advanced because speech is holding auto-advance!
   assert.ok(!logsMidPlay.some(l => l.startsWith("stage:advance")), "Stage must NOT advance while speech is playing");
 
-  // Now emit audio ended
+  // Now Choir finishes the paragraph
   await page.evaluate(() => {
-    (window as any).fixture.audio.emitEnded();
+    (window as any).fixture.finishParagraph();
   });
-  // After audio ended, speech status returns to idle, autoPlay countdown starts (200ms)
+  // After it ends, speech status returns to idle, autoPlay countdown starts (200ms)
   await page.waitForTimeout(600);
   const logsAfterEnd = await page.evaluate(() => [...(window as any).fixture.logs]);
-  console.log("Logs after audio ended and delay elapsed:", logsAfterEnd);
+  console.log("Logs after the paragraph ended and delay elapsed:", logsAfterEnd);
   assert.ok(logsAfterEnd.includes("stage:advance:1"), "Stage must advance after speech finishes and delay elapses");
+  assert.ok(logsAfterEnd.includes("choir:play:1"), "The next paragraph is read as it appears, with no Play");
 
   // 4. Test Pause then Stop in Auto mode
   console.log("--- Testing Pause and Stop in Auto mode ---");
-  // At paragraph 1, start speech
+  // Paragraph 1 is being read on its own.
   await page.evaluate(() => {
     (window as any).fixture.logs.length = 0;
-    void (window as any).fixture.speech.playCurrent();
   });
-  await page.waitForTimeout(50);
   // Pause speech
   await page.evaluate(() => {
     (window as any).fixture.speech.pause();
@@ -189,54 +182,6 @@ try {
   await page.evaluate(() => {
     (window as any).fixture.stage.toggleAutoPlay(false);
   });
-
-  // 5. Settings UI Draft preservation and Enter key
-  console.log("--- Testing Settings UI Draft preservation & Enter key ---");
-  await page.evaluate(() => {
-    const sm = document.querySelector(".vn-speech-settings")?.parentElement;
-    if (sm) sm.style.display = "block";
-    const details = document.querySelector(".vn-speech-settings")?.shadowRoot?.querySelector("details");
-    if (details && !details.open) details.open = true;
-  });
-  const settingsCard = page.locator(".vn-speech-settings");
-  const addInput = settingsCard.locator("input[placeholder*='Character name']");
-  
-  // Test Enter key to add draft
-  await addInput.fill("Yuri");
-  await addInput.press("Enter");
-  await page.waitForTimeout(50);
-  const draftRows = await settingsCard.locator("[data-speech-draft-row]").count();
-  console.log("Draft rows after Enter key:", draftRows);
-  assert.equal(draftRows, 1, "Pressing Enter must create a draft override row");
-
-  // Test typing uncommitted draft name and receiving config echo
-  await addInput.fill("Sayori");
-  // Simulate a config echo arriving from host
-  await page.evaluate(() => {
-    (window as any).fixture.settingsSection.setConfig({
-      enabled: true,
-      autoplay: false,
-      volume: 0.7,
-      narrator: { connectionId: "prof-1", voice: "Puck" },
-      characterDefault: null,
-      characters: {},
-      deliveryMode: "none",
-      deliveryTag: "",
-      deliveryAllProviders: false,
-    });
-  });
-  await page.waitForTimeout(50);
-  const textAfterEcho = await addInput.inputValue();
-  console.log("Add input value after config echo:", JSON.stringify(textAfterEcho));
-  assert.equal(textAfterEcho, "Sayori", "Uncommitted draft name must be preserved across config echo");
-  // Test character with quotes in name: no selector syntax crash
-  await addInput.fill('The "Boss"');
-  await addInput.press("Enter");
-  await page.waitForTimeout(50);
-  const bossDraft = await settingsCard.locator('[data-speech-draft-row]').count();
-  console.log("Draft rows after special quotes name:", bossDraft);
-  assert.equal(bossDraft, 2, "Character with quotes must create draft row without selector syntax crash");
-
 
   console.log("ALL INTEGRATION CHECKS PASSED!");
 } finally {

@@ -5,7 +5,6 @@ import {
   SCENE_IMAGE_FITS,
   TEXT_SCALE_MAX,
   TEXT_SCALE_MIN,
-  TEXT_EFFECT_MODES,
   THEME_PRESET_IDS,
   PRESENTATION_MODES,
   SPRITE_CUTOUT_QUALITIES,
@@ -20,7 +19,6 @@ import {
   type VisualNovelEffectIntensity,
   type VisualNovelReferenceSource,
   type VisualNovelSceneImageFit,
-  type VisualNovelTextEffectMode,
   type VisualNovelThemePreset,
 } from "../../config.js";
 import { THEME_PRESET_CSS } from "../theme/presets.js";
@@ -159,10 +157,11 @@ export function describeTextScale(value: number): string {
   return step ? step.label : `Custom (${Math.round(value * 100)}%)`;
 }
 
+/** The Motion setting: stage effects and the movement of tagged dialogue words together. */
 export const EFFECT_INTENSITY_OPTIONS: ReadonlyArray<{ value: VisualNovelEffectIntensity; label: string; help: string }> = [
-  { value: "full", label: "Full", help: "Rain, sparkles, shakes and flashes as the story calls for them." },
-  { value: "gentle", label: "Gentle", help: "Softer, slower effects. No flashes or shakes." },
-  { value: "off", label: "Off", help: "Still scenes only." },
+  { value: "full", label: "Full", help: "Rain, sparkles, shakes and flashes as the story calls for them; tagged words shake, wave and shimmer." },
+  { value: "gentle", label: "Gentle", help: "Softer, slower effects, no flashes or shakes; tagged words move less." },
+  { value: "off", label: "Still", help: "No scene effects; tagged words keep their colour and style without moving." },
 ];
 
 export function normalizeEffectIntensity(value: string): VisualNovelEffectIntensity {
@@ -172,22 +171,6 @@ export function normalizeEffectIntensity(value: string): VisualNovelEffectIntens
 }
 
 export { TEXT_SCALE_MIN, TEXT_SCALE_MAX };
-
-/* ------------------------------------------------------------------------ */
-/* Inline text effects (<shake>, <rainbow>, ...).                            */
-/* ------------------------------------------------------------------------ */
-
-export const TEXT_EFFECT_MODE_OPTIONS: ReadonlyArray<{ value: VisualNovelTextEffectMode; label: string; help: string }> = [
-  { value: "animated", label: "Animated", help: "Tagged words move: shake, wave, rainbow and more." },
-  { value: "static", label: "Still", help: "Keeps the colour and style of each effect, without movement." },
-  { value: "off", label: "Off", help: "Tagged words look like normal dialogue." },
-];
-
-export function normalizeTextEffects(value: string): VisualNovelTextEffectMode {
-  return (TEXT_EFFECT_MODES as readonly string[]).includes(value)
-    ? value as VisualNovelTextEffectMode
-    : DEFAULT_CONFIG.textEffects;
-}
 
 /* ------------------------------------------------------------------------ */
 /* Picture fit in plain words.                                               */
@@ -733,6 +716,19 @@ export function formatBytes(bytes: number): string {
   return `${mb < 10 ? mb.toFixed(1).replace(/\.0$/, "") : Math.round(mb)} MB`;
 }
 
+/**
+ * The stage's line while a cut-out model downloads (sprite mode; the first
+ * sprites are cut with Basic meanwhile and re-cut when it arrives), or null.
+ */
+export function cutoutDownloadNote(state: CutoutModelState): string | null {
+  if (state.state !== "downloading") return null;
+  const model = state.studio ? "the Studio cut-out model" : "the cut-out model";
+  const total = state.totalBytes && state.totalBytes > 0 ? state.totalBytes : null;
+  return total
+    ? `Downloading ${model}: ${formatBytes(state.receivedBytes)} of ${formatBytes(total)}`
+    : `Downloading ${model}: ${formatBytes(state.receivedBytes)} so far`;
+}
+
 export type CutoutModelSummary = {
   level: "ready" | "loading" | "attention" | "blocked";
   title: string;
@@ -786,7 +782,7 @@ function describeBestModel(state: CutoutModelState, quality: VisualNovelSpriteCu
       return {
         level: quality === "basic" ? "ready" : "attention",
         title: "Model not downloaded",
-        detail: quality === "basic" ? "Basic quality needs no model." : `It downloads once${from} when the first sprite is cut. You can download it now instead.`,
+        detail: quality === "basic" ? "Basic quality needs no model." : `It downloads once${from} in the background when the first sprite is cut; sprites are cut with Basic until it arrives, then cut again with it. You can download it now instead.`,
         action: quality === "basic" ? null : "download",
         progress: null,
       };

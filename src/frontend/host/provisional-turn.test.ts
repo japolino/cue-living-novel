@@ -71,14 +71,14 @@ describe("keepsPlannedTurn", () => {
 
 describe("stageTurnInput for provisional turns", () => {
   test("a provisional turn carries the hold; a planned one does not", () => {
-    expect(stageTurnInput(provisional(), "standard", true).planHold).toBe(PROVISIONAL_PLAN_HOLD);
-    expect(stageTurnInput(provisional(), "standard", true, "full", 0).planHold).toBe(0);
-    expect(Object.hasOwn(stageTurnInput(turn(), "standard", true), "planHold")).toBe(false);
+    expect(stageTurnInput(provisional(), true).planHold).toBe(PROVISIONAL_PLAN_HOLD);
+    expect(stageTurnInput(provisional(), true, "full", 0).planHold).toBe(0);
+    expect(Object.hasOwn(stageTurnInput(turn(), true), "planHold")).toBe(false);
   });
 
   test("settled speakers become nameplates, narration hides the plate, ids match the planned turn's", () => {
-    const early = stageTurnInput(provisional(), "standard", true);
-    const late = stageTurnInput(turn({ paragraphSpeakers: ["", "Mira"] }), "standard", true);
+    const early = stageTurnInput(provisional(), true);
+    const late = stageTurnInput(turn({ paragraphSpeakers: ["", "Mira"] }), true);
     expect(early.paragraphs.map((paragraph) => paragraph.speaker)).toEqual(["", "Mira"]);
     expect(early.paragraphs.map((paragraph) => paragraph.id)).toEqual(late.paragraphs.map((paragraph) => paragraph.id));
   });

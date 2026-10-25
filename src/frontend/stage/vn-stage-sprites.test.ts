@@ -71,7 +71,7 @@ describe("VnStage sprite mode", () => {
   afterEach(() => { stage.destroy(); restore(); });
 
   test("scene mode (default) ignores sprite staging: no sprites, no plate, no badges", async () => {
-    stage.loadTurn({ mode: "standard", paragraphs, sprites });
+    stage.loadTurn({ paragraphs, sprites });
     await flush();
     expect(stage.getPresentationMode()).toBe("scene");
     expect(layerEl().hidden).toBe(true);
@@ -82,7 +82,7 @@ describe("VnStage sprite mode", () => {
 
   test("sprite mode stages each paragraph and paints the plate through the scene layers", async () => {
     stage.setPresentationMode("sprites");
-    stage.loadTurn({ mode: "standard", paragraphs, sprites });
+    stage.loadTurn({ paragraphs, sprites });
     await flush();
     let snap = stage.getSpriteSnapshot();
     expect(snap.mode).toBe("sprites");
@@ -120,7 +120,7 @@ describe("VnStage sprite mode", () => {
 
   test("Previous re-applies the earlier paragraph's stage and plate without replaying motion", async () => {
     stage.setPresentationMode("sprites");
-    stage.loadTurn({ mode: "standard", paragraphs, sprites: { ...sprites, plates: { ...sprites.plates, plate_b: { ...sprites.plates.plate_b!, status: "ready", url: "/plates/b.png" } } } });
+    stage.loadTurn({ paragraphs, sprites: { ...sprites, plates: { ...sprites.plates, plate_b: { ...sprites.plates.plate_b!, status: "ready", url: "/plates/b.png" } } } });
     await flush();
     advance();
     advance();
@@ -141,7 +141,7 @@ describe("VnStage sprite mode", () => {
   test("effect intensity off stages without motion", async () => {
     stage.setEffectIntensity("off");
     stage.setPresentationMode("sprites");
-    stage.loadTurn({ mode: "standard", paragraphs, sprites });
+    stage.loadTurn({ paragraphs, sprites });
     await flush();
     const body = layerEl().querySelector("[data-vn-sprite-key='mira'] [data-vn-sprite-body]")!;
     expect(body.dataset.vnSpriteMotion).toBeUndefined();
@@ -149,7 +149,7 @@ describe("VnStage sprite mode", () => {
 
   test("the reader's own line keeps the last stage", async () => {
     stage.setPresentationMode("sprites");
-    stage.loadTurn({ mode: "standard", paragraphs: paragraphs.slice(0, 2), sprites });
+    stage.loadTurn({ paragraphs: paragraphs.slice(0, 2), sprites });
     await flush();
     advance();
     advance(); // awaiting input
@@ -160,7 +160,7 @@ describe("VnStage sprite mode", () => {
 
   test("switching back to scene mode removes sprites and the plate; switching again restores them", async () => {
     stage.setPresentationMode("sprites");
-    stage.loadTurn({ mode: "standard", paragraphs, sprites });
+    stage.loadTurn({ paragraphs, sprites });
     await flush();
     expect(layerEl().querySelectorAll("[data-vn-sprite]")).toHaveLength(1);
     stage.setPresentationMode("scene");
@@ -176,7 +176,7 @@ describe("VnStage sprite mode", () => {
   });
 
   test("scene images in scene mode are not cleared by a switch (only plates are)", async () => {
-    stage.loadTurn({ mode: "standard", paragraphs });
+    stage.loadTurn({ paragraphs });
     await stage.setSceneImage({ url: "/scene.png", requestId: "scene-1" });
     stage.setPresentationMode("sprites");
     stage.setPresentationMode("scene");
@@ -185,9 +185,9 @@ describe("VnStage sprite mode", () => {
 
   test("a new turn without sprites clears the previous staging; reset clears everything", async () => {
     stage.setPresentationMode("sprites");
-    stage.loadTurn({ mode: "standard", paragraphs, sprites });
+    stage.loadTurn({ paragraphs, sprites });
     await flush();
-    stage.loadTurn({ mode: "standard", paragraphs: [{ id: "n:0", text: "Plain turn." }], preserveImage: true });
+    stage.loadTurn({ paragraphs: [{ id: "n:0", text: "Plain turn." }], preserveImage: true });
     await flush();
     expect(layerEl().querySelectorAll("[data-vn-sprite]")).toHaveLength(0);
     stage.setSpriteTurn(sprites);
@@ -200,7 +200,7 @@ describe("VnStage sprite mode", () => {
 
   test("the talking bob follows the typewriter state", async () => {
     stage.setPresentationMode("sprites");
-    stage.loadTurn({ mode: "standard", paragraphs, sprites });
+    stage.loadTurn({ paragraphs, sprites });
     await flush();
     const mira = () => layerEl().querySelector("[data-vn-sprite-key='mira']")!;
     // The fake DOM has no TreeWalker, so drive the typing flag directly.
@@ -241,7 +241,7 @@ describe("VnStage sprite mode: key illustrations", () => {
   afterEach(() => { stage.destroy(); restore(); });
 
   test("a ready illustration replaces the sprites for its paragraph and the plate comes back after it", async () => {
-    stage.loadTurn({ mode: "standard", paragraphs, sprites: illustrated });
+    stage.loadTurn({ paragraphs, sprites: illustrated });
     await flush();
     expect(stage.getState().displayedImage?.url).toBe("/plates/a.png");
     expect(stage.getSpriteSnapshot().illustration).toBeNull();
@@ -273,7 +273,7 @@ describe("VnStage sprite mode: key illustrations", () => {
 
   test("not ready yet: the sprite stage stays; it switches once the picture arrives", async () => {
     const pending: SpriteTurnView = { ...illustrated, illustrations: [{ paragraphIndex: 1, jobId: "job-1", status: "pending" }] };
-    stage.loadTurn({ mode: "standard", paragraphs, sprites: pending });
+    stage.loadTurn({ paragraphs, sprites: pending });
     await flush();
     advance();
     await flush();
@@ -287,7 +287,7 @@ describe("VnStage sprite mode: key illustrations", () => {
 
   test("a flag without a picture, or a picture without the flag, changes nothing", async () => {
     const noFlag: SpriteTurnView = { ...sprites, illustrations: illustrated.illustrations! };
-    stage.loadTurn({ mode: "standard", paragraphs, sprites: noFlag });
+    stage.loadTurn({ paragraphs, sprites: noFlag });
     await flush();
     advance();
     await flush();
@@ -296,7 +296,7 @@ describe("VnStage sprite mode: key illustrations", () => {
   });
 
   test("switching to scene mode clears an illustration like a plate", async () => {
-    stage.loadTurn({ mode: "standard", paragraphs, sprites: illustrated });
+    stage.loadTurn({ paragraphs, sprites: illustrated });
     await flush();
     advance();
     await flush();

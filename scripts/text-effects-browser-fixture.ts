@@ -40,7 +40,6 @@ if (view === "card") {
   if (tfx) stage.setTextEffects(tfx as never);
   const text = q.get("text") ?? '"<shout>STOP!</shout>" <rainbow><wave>la la la</wave></rainbow> <glow>light</glow> <whisper>quiet</whisper>';
   stage.loadTurn({
-    mode: "standard",
     paragraphs: [
       { id: "p0", speaker: "Mira", text },
       { id: "p1", speaker: "Mira", text: "Next line." },

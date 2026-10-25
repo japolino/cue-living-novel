@@ -114,6 +114,35 @@ export function sceneStartChunks(paragraphs: ReadonlyArray<{ text: string }>): s
   return chunks;
 }
 
+/**
+ * One small request that proves the key, URL and model work together: a
+ * single yes/no question about one sentence. Throws with the reason when the
+ * call fails or the answer does not parse.
+ */
+export async function testSystemOneKey(
+  spindle: SpindleAPI,
+  input: { key: string; config: Pick<VisualNovelConfig, "systemOneApiUrl" | "systemOneModel"> },
+): Promise<void> {
+  const model = input.config.systemOneModel.trim();
+  if (!model) throw new Error("System One model is missing");
+  const endpoint = systemOneEndpoint(input.config.systemOneApiUrl);
+  const response = await spindle.cors(endpoint, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${input.key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model,
+      state: { paragraphs: [{ index: 0, text: "Mira opens the door." }] },
+      questions: { key_check: { type: "noul", instructions: "Does someone open a door in paragraph 0?" } },
+    }),
+  }) as { status: number; body: string };
+  if (response.status < 200 || response.status >= 300) throw new Error(`System One request failed (${response.status})`);
+  try {
+    Response.parse(JSON.parse(response.body));
+  } catch {
+    throw new Error("System One answered in a form Cue does not understand. Check the URL and model.");
+  }
+}
+
 export type SystemOneDecisions = {
   speakers: Map<number, string>;
   expressions: Map<number, string>;

@@ -14,6 +14,7 @@ import {
   selectCurrentImage,
   shouldPreserveImage,
   stageTurnInput,
+  systemOneKeyMessage,
   viewStateMessages,
   type VisualStageThemeTarget,
 } from "./controller";
@@ -50,7 +51,6 @@ const baseConfig: VisualNovelConfig = {
   themePreset: "lumiverse",
   enabled: true,
   autoEnter: false,
-  mode: "standard",
   sceneImageFit: "cover",
   debugLogging: false,
   generateImages: true,
@@ -85,9 +85,7 @@ const baseConfig: VisualNovelConfig = {
   useNativeCardImages: false,
   textSpeed: 20,
   autoPlayDelay: 2000,
-  skipMode: "read",
   effectIntensity: "full",
-  textEffects: "animated",
   presentationMode: "scene",
   spriteCutout: "best",
   keyIllustrations: "off",
@@ -100,6 +98,27 @@ const baseConfig: VisualNovelConfig = {
   bgmVolume: 0.7,
   sfxVolume: 0.8,
 };
+
+describe("systemOneKeyMessage", () => {
+  test("a passed test says System One is on (or comparing); a failed one says why and that it stayed off", () => {
+    expect(systemOneKeyMessage({ saved: true, test: "passed" }, "on")).toBe("Key saved and tested. System One is on.");
+    expect(systemOneKeyMessage({ saved: true, test: "passed" }, "compare")).toBe("Key saved and tested. System One compares with the story reader.");
+    expect(systemOneKeyMessage({ saved: true, test: "failed", error: "System One request failed (401)" }, "off"))
+      .toBe("Key saved, but the test call failed: System One request failed (401). System One was not turned on.");
+  });
+
+  test("a failed test with System One already on says it stays on and that the story reader answers meanwhile", () => {
+    expect(systemOneKeyMessage({ saved: true, test: "failed", error: "System One request failed (401)" }, "on"))
+      .toBe("Key saved, but the test call failed: System One request failed (401). System One stays on; until the key works, Cue uses the story reader.");
+    expect(systemOneKeyMessage({ saved: true, test: "failed", error: "timeout" }, "compare"))
+      .toBe("Key saved, but the test call failed: timeout. System One stays on; until the key works, Cue uses the story reader.");
+  });
+
+  test("a plain status keeps the panel's own saved / not saved line", () => {
+    expect(systemOneKeyMessage({ saved: true }, "on")).toBeUndefined();
+    expect(systemOneKeyMessage({ saved: false }, "off")).toBeUndefined();
+  });
+});
 
 describe("applyVisualConfigToStage (live controller config application)", () => {
   test("applies the theme preset, scene-image fit, custom CSS, and display regex from the config", () => {
@@ -343,6 +362,21 @@ describe("computeAssetProgress (granular image generation progress)", () => {
     expect(computeAssetProgress(source)).toEqual({ current: 3, total: 3 });
   });
 
+  test("a cancelled picture never counts as done", () => {
+    const source = turn({
+      assets: [
+        asset({ jobId: "j1", status: "cancelled" }),
+        asset({ jobId: "j2", status: "generated" }),
+        asset({ jobId: "j3", status: "generating" }),
+      ],
+    });
+    expect(computeAssetProgress(source)).toEqual({ current: 2, total: 3 });
+    // Stopped with nothing running: no progress, and no failure either.
+    const stopped = turn({ assets: [asset({ jobId: "j1", status: "cancelled" }), asset({ jobId: "j2", status: "generated" })] });
+    expect(computeAssetProgress(stopped)).toBeNull();
+    expect(currentAssetFailure(stopped, 0)).toBeNull();
+  });
+
   test("returns null once all three assets have finished", () => {
     const source = turn({
       assets: [
@@ -408,10 +442,10 @@ describe("nameplateForParagraph (per-paragraph literal speaker)", () => {
 
 describe("stageTurnInput (production host-to-stage mapping)", () => {
   test("omits ambient only when the TurnView has no ambients array", () => {
-    expect(Object.hasOwn(stageTurnInput(turn(), "standard", true), "ambient")).toBe(false);
-    expect(stageTurnInput(turn({ ambients: [] }), "standard", true).ambient).toBeNull();
-    expect(stageTurnInput(turn({ ambients: [null] }), "standard", true).ambient).toBeNull();
-    expect(stageTurnInput(turn({ ambients: ["snow"] }), "standard", true).ambient).toBe("snow");
+    expect(Object.hasOwn(stageTurnInput(turn(), true), "ambient")).toBe(false);
+    expect(stageTurnInput(turn({ ambients: [] }), true).ambient).toBeNull();
+    expect(stageTurnInput(turn({ ambients: [null] }), true).ambient).toBeNull();
+    expect(stageTurnInput(turn({ ambients: ["snow"] }), true).ambient).toBe("snow");
   });
 
   test("forwards paragraph metadata independently of image assets", () => {
@@ -419,8 +453,7 @@ describe("stageTurnInput (production host-to-stage mapping)", () => {
       paragraphs: ["Rain.", "A flash.", "Inside."],
       ambients: ["rain", "rain", null], effects: [null, "flash_white", null],
       choices: [{ id: "go", label: "Go", value: "go" }]
-    }), "cyoa", false);
-    expect(input.mode).toBe("cyoa");
+    }), false);
     expect(input.preserveImage).toBe(false);
     expect(input.choices).toEqual([{ id: "go", label: "Go", value: "go" }]);
     expect(input.paragraphs.map((paragraph) => paragraph.ambient)).toEqual(["rain", "rain", null]);
@@ -437,20 +470,20 @@ describe("stageTurnInput (effect presentation preference)", () => {
   });
 
   test("defaults to full so existing playback is unchanged", () => {
-    const input = stageTurnInput(view(), "standard", false);
+    const input = stageTurnInput(view(), false);
     expect(input.paragraphs.map((paragraph) => paragraph.effect)).toEqual(["shake_hard", "flash_white", "confetti"]);
     expect(input.ambient).toBe("danger_pulse");
   });
 
   test("gentle softens strong shakes, drops flashes, keeps particles, and calms the danger pulse", () => {
-    const input = stageTurnInput(view(), "standard", false, "gentle");
+    const input = stageTurnInput(view(), false, "gentle");
     expect(input.paragraphs.map((paragraph) => paragraph.effect)).toEqual(["shake", undefined, "confetti"]);
     expect(input.paragraphs.map((paragraph) => paragraph.ambient)).toEqual(["vignette_dark", "rain", null]);
     expect(input.ambient).toBe("vignette_dark");
   });
 
   test("off removes every one-shot effect but keeps atmospheric ambients", () => {
-    const input = stageTurnInput(view(), "standard", false, "off");
+    const input = stageTurnInput(view(), false, "off");
     expect(input.paragraphs.every((paragraph) => paragraph.effect === undefined)).toBe(true);
     expect(input.paragraphs[1]?.ambient).toBe("rain");
   });

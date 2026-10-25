@@ -15,6 +15,7 @@ import {
   SPRITE_STATUS_LABELS,
   normalizeSpriteExpressionCount,
   countReady,
+  cutoutDownloadNote,
   describeCutoutModel,
   describeFaceModel,
   describeSpriteLibrary,
@@ -244,6 +245,15 @@ describe("cut-out model status", () => {
     const studio = describeCutoutModel({ state: "ready", backend: "webgpu", bytes: 499 * MB, studio: true, notStored: true }, "studio", DEFAULT_SPRITE_MODEL_URL, null, "http://localhost:8790/b.onnx");
     expect(studio.title).toBe("Studio model ready");
     expect(studio.detail).toContain("downloads again");
+  });
+
+  test("the stage's download line: Best or Studio, with the total when known; nothing outside a download", () => {
+    expect(cutoutDownloadNote({ state: "downloading", receivedBytes: 12 * MB, totalBytes: 88 * MB })).toBe("Downloading the cut-out model: 12 MB of 88 MB");
+    expect(cutoutDownloadNote({ state: "downloading", receivedBytes: 3 * MB, totalBytes: null })).toBe("Downloading the cut-out model: 3 MB so far");
+    expect(cutoutDownloadNote({ state: "downloading", receivedBytes: 100 * MB, totalBytes: 499 * MB, studio: true })).toBe("Downloading the Studio cut-out model: 100 MB of 499 MB");
+    expect(cutoutDownloadNote({ state: "loading" })).toBeNull();
+    expect(cutoutDownloadNote({ state: "ready", backend: "wasm", bytes: 88 * MB })).toBeNull();
+    expect(cutoutDownloadNote({ state: "absent" })).toBeNull();
   });
 
   test("bytes read as KB or MB", () => {

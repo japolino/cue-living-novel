@@ -1,7 +1,5 @@
 import type { SpriteTurnView } from "../../shared/sprites.js";
 
-export type VnMode = "cyoa" | "standard";
-
 export type VnPhase =
   | "idle"
   | "waiting-for-response"
@@ -83,7 +81,6 @@ export interface VnActivity {
 }
 
 export interface VnStageState {
-  mode: VnMode;
   phase: VnPhase;
   paragraphs: readonly VnParagraph[];
   currentParagraphIndex: number;
@@ -118,8 +115,8 @@ export interface VnStageState {
 }
 
 export interface VnTurnInput {
-  mode: VnMode;
   paragraphs: readonly VnParagraph[];
+  /** Suggested replies, shown above the reply box at Your turn. */
   choices?: readonly VnChoice[];
   inputPlaceholder?: string;
   preserveImage?: boolean;
@@ -143,7 +140,6 @@ export type VnStageAction =
   | { type: "upgrade-turn"; turn: VnTurnInput }
   | { type: "advance" }
   | { type: "previous" }
-  | { type: "set-mode"; mode: VnMode }
   | { type: "set-draft"; draft: string }
   | { type: "set-phase"; phase: VnPhase }
   /** End a "planning" phase that a retry of the same turn left behind, keeping the cursor. */
@@ -172,8 +168,10 @@ export interface VnStageView {
   canAdvance: boolean;
   canGoBack: boolean;
   acceptsInput: boolean;
+  /** Suggested replies above the reply box (Your turn with choices). */
   showChoices: boolean;
-  showStandardInput: boolean;
+  /** The reply box: always there at Your turn. */
+  showComposer: boolean;
   isBusy: boolean;
   /** The reader is at the paragraph a provisional turn holds them at, waiting for the plan. */
   waitingForPlan: boolean;
@@ -182,7 +180,6 @@ export interface VnStageView {
 export const createInitialVnStageState = (
   values: Partial<VnStageState> = {},
 ): VnStageState => ({
-  mode: "standard",
   phase: "idle",
   paragraphs: [],
   currentParagraphIndex: 0,
@@ -257,8 +254,8 @@ export const selectVnStageView = (state: VnStageState): VnStageView => {
     canGoBack: (state.phase === "revealing" || state.phase === "awaiting-input" || state.phase === "error")
       && !state.isUserTurn && state.currentParagraphIndex > 0,
     acceptsInput,
-    showChoices: acceptsInput && state.mode === "cyoa",
-    showStandardInput: acceptsInput && state.mode === "standard",
+    showChoices: acceptsInput && state.choices.length > 0,
+    showComposer: acceptsInput,
     isBusy:
       state.phase === "waiting-for-response" ||
       state.phase === "planning" ||
@@ -277,7 +274,6 @@ export const reduceVnStage = (
       const hasNoParagraphs = paragraphs.length === 0;
       return {
         ...state,
-        mode: action.turn.mode,
         phase: hasNoParagraphs ? "awaiting-input" : "revealing",
         paragraphs,
         currentParagraphIndex: 0,
@@ -307,7 +303,6 @@ export const reduceVnStage = (
       const paragraphs = [...action.turn.paragraphs];
       return {
         ...state,
-        mode: action.turn.mode,
         // A retry pressed while the text waited for its plan ends with the plan.
         phase: state.phase === "planning" ? "revealing" : state.phase,
         paragraphs,
@@ -379,9 +374,6 @@ export const reduceVnStage = (
         draft: "",
       };
     }
-
-    case "set-mode":
-      return { ...state, mode: action.mode };
 
     case "set-draft":
       return { ...state, draft: action.draft };

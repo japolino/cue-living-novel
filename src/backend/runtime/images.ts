@@ -6,6 +6,7 @@ import { AssetJobSchema, type AssetJob, type SceneState, type TurnPlan, type Vis
 import { AssetScheduler } from "../core/asset-scheduler.js";
 import { sceneSizeParameters } from "./image-size.js";
 import { cutoutSwitchParameters, drivesComfyWorkflow, referenceSwitchParameters, resolveComfySwitches } from "./comfy-reference-switch.js";
+import { withOneTransientRetry } from "./image-retry.js";
 import {
   SceneImageCache,
   sceneEpisodeOf,
@@ -426,6 +427,8 @@ export type SceneCacheOptions = {
   /** Jobs that must skip lookup (forced regeneration). They still claim and store. */
   bypassJobIds?: Iterable<string>;
   verifyImage?: SceneImageVerifier;
+  /** Wait before the one retry of a transient failure (tests shorten it). */
+  retryDelayMs?: number;
 };
 
 /**
@@ -1120,7 +1123,8 @@ export async function generateAssets(
           if (signal.aborted) throw abortError(signal);
           if (jobSignal.aborted) throw abortError(jobSignal);
           const generationStarted = Date.now();
-          const result = await spindle.imageGen.generate({
+          // A timeout or busy provider gets one silent retry (image-retry.ts).
+          const result = await withOneTransientRetry(() => spindle.imageGen.generate({
             ...(connectionId ? { connection_id: connectionId } : {}),
             prompt,
             ...(negativePrompt ? { negativePrompt } : {}),
@@ -1129,6 +1133,10 @@ export async function generateAssets(
             owner_chat_id: plan.key.chatId,
             includeDataUrl: wantsCapture,
             ...(userId ? { userId } : {})
+          }), {
+            signals: [signal, jobSignal],
+            ...(cacheOptions.retryDelayMs !== undefined ? { delayMs: cacheOptions.retryDelayMs } : {}),
+            onRetry: (error) => spindle.log.warn(`[VN] cue p${cue.paragraphIndex}: image request failed for a passing reason, trying once more: ${error instanceof Error ? error.message : String(error)}`)
           });
           observedGenerationMs.push(Date.now() - generationStarted);
 

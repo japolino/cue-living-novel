@@ -43,7 +43,7 @@ test("planner fallback still creates a valid revealable turn and authored choice
     previousScene: null,
     previousContinuity: null,
     recentMessages: [],
-    config: { ...DEFAULT_CONFIG, mode: "cyoa" },
+    config: { ...DEFAULT_CONFIG },
     singleCharacter: emptySingleCharacter(),
     characterAppearance: {}
   });

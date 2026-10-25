@@ -13,16 +13,14 @@ import {
   THEME_PRESET_IDS,
 } from "./config";
 
-test("configuration normalizes unsafe ranges and unknown modes", () => {
+test("configuration normalizes unsafe ranges", () => {
   const config = normalizeConfig({
-    mode: "unknown",
     maxImagesPerTurn: 500,
     imageConcurrency: 0,
     parserConnectionId: "  planner-id  ",
     imageConnectionId: "   ",
     customCss: 42
   });
-  assert.equal(config.mode, "standard");
   assert.equal(config.maxImagesPerTurn, 12);
   assert.equal(config.imageConcurrency, 1);
   assert.equal(config.parserConnectionId, "planner-id");
@@ -30,10 +28,24 @@ test("configuration normalizes unsafe ranges and unknown modes", () => {
   assert.equal(config.customCss, DEFAULT_CONFIG.customCss);
 });
 
-test("configuration preserves the CYOA and custom CSS controls", () => {
-  const config = normalizeConfig({ mode: "cyoa", customCss: "[data-vn-dialogue] { color: pink; }" });
-  assert.equal(config.mode, "cyoa");
+test("configuration preserves the custom CSS control", () => {
+  const config = normalizeConfig({ customCss: "[data-vn-dialogue] { color: pink; }" });
   assert.match(config.customCss, /color: pink/);
+});
+
+test("the old reply mode is dropped; a reader who never chose CYOA gets no suggested replies they did not get before", () => {
+  // Saved configs from before the unified Your turn still carry `mode`; in
+  // "standard" (the old default) Suggest replies did nothing. Suggestions cost
+  // story-reader tokens on every reply, so they stay off until turned on.
+  const standard = normalizeConfig({ mode: "standard", generateChoices: true });
+  assert.equal("mode" in standard, false);
+  assert.equal(standard.generateChoices, false);
+  assert.equal(normalizeConfig({ mode: "anything" }).generateChoices, false);
+  assert.equal(normalizeConfig({ mode: "cyoa" }).generateChoices, true);
+  assert.equal(normalizeConfig({ mode: "cyoa", generateChoices: false }).generateChoices, false);
+  // New configs (no `mode`) get them by default; once saved, `mode` is gone and the choice sticks.
+  assert.equal(normalizeConfig({}).generateChoices, true);
+  assert.equal(normalizeConfig({ ...standard, generateChoices: true }).generateChoices, true);
 });
 
 test("scene image fit defaults to cover for absent or invalid values", () => {
@@ -181,22 +193,20 @@ test("configuration defaults ignoredTags, displayRegexRules, and useNativeCardIm
   assert.equal(config.useNativeCardImages, false);
 });
 
-test("configuration preserves textSpeed, autoPlayDelay, and skipMode", () => {
+test("configuration preserves textSpeed and autoPlayDelay", () => {
   const config = normalizeConfig({
     textSpeed: 35,
     autoPlayDelay: 3500,
-    skipMode: "all",
   });
   assert.equal(config.textSpeed, 35);
   assert.equal(config.autoPlayDelay, 3500);
-  assert.equal(config.skipMode, "all");
 });
 
-test("configuration defaults textSpeed, autoPlayDelay, and skipMode", () => {
-  const config = normalizeConfig({});
+test("configuration defaults textSpeed and autoPlayDelay; the old skipMode is dropped", () => {
+  const config = normalizeConfig({ skipMode: "all" });
   assert.equal(config.textSpeed, 20);
   assert.equal(config.autoPlayDelay, 2000);
-  assert.equal(config.skipMode, "read");
+  assert.equal("skipMode" in config, false);
 });
 
 test("configuration preserves audioDirectory, bgmVolume, and sfxVolume", () => {

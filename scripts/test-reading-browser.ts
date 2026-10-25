@@ -23,7 +23,7 @@ try {
   // ---- Phone: touch targets, toolbar vs nameplate, Your turn reachability ----
   const phone = await browser.newContext({ ...devices["Pixel 5"], viewport: { width: 360, height: 640 } });
   const mobile = await phone.newPage();
-  await mobile.goto(url("mode=cyoa"));
+  await mobile.goto(url("suggestions"));
   await mobile.locator("[data-vn-dialogue]").waitFor();
   assert.equal(await mobile.evaluate(() => matchMedia("(pointer: coarse)").matches), true, "phone context emulates a coarse pointer");
   for (const name of ["previous", "log", "auto", "skip"]) {
@@ -52,7 +52,7 @@ try {
 
   // ---- Desktop: keyboard, focus, history, status, errors, themes ----
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-  await page.goto(url("mode=standard&css=" + encodeURIComponent("[data-vn-root][data-vn-preset] [data-vn-dialogue] { border-top-left-radius: 3px; }")));
+  await page.goto(url("css=" + encodeURIComponent("[data-vn-root][data-vn-preset] [data-vn-dialogue] { border-top-left-radius: 3px; }")));
   await page.locator("[data-vn-dialogue]").waitFor();
   const active = () => page.evaluate(deepActiveDescription);
   const focusOutline = () => page.evaluate(`(() => { let el = document.activeElement; while (el && el.shadowRoot && el.shadowRoot.activeElement) el = el.shadowRoot.activeElement; const s = el ? getComputedStyle(el) : null; return s ? s.outlineStyle + " " + s.outlineWidth : ""; })()`);
@@ -168,7 +168,7 @@ try {
   for (const preset of ["golden-hour", "midnight-noir", "yamaku-classic", "literature-club"]) {
     const ctx = await browser.newContext({ ...devices["Pixel 5"], viewport: { width: 360, height: 640 } });
     const p = await ctx.newPage();
-    await p.goto(url(`mode=standard&preset=${preset}`));
+    await p.goto(url(`preset=${preset}`));
     await p.locator("[data-vn-dialogue]").waitFor();
     // Measure only after the preset layer is attached and the touch-size token resolved.
     await p.waitForFunction((id) => {

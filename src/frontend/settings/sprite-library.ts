@@ -26,7 +26,7 @@ import { spriteExpressionSet, spriteSetReadyCount, type SpriteExpressionCount } 
 
 /** A library action as the panel reports it; the host adds `type` (and the chat id for "prepare_chat"). */
 export type SpriteLibraryAction = {
-  action: "prepare_chat" | "regenerate" | "recut" | "delete_set" | "regenerate_plate" | "delete_plate";
+  action: "prepare_chat" | "regenerate" | "recut" | "retry_failed" | "delete_set" | "regenerate_plate" | "delete_plate";
   chatId?: string;
   setKey?: string;
   expression?: string;

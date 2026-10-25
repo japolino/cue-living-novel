@@ -6,6 +6,7 @@
 import { DEFAULT_CONFIG, type VisualNovelConfig } from "../../../config.js";
 import type { BackendResponse, TurnView } from "../../../protocol.js";
 import { FakeEvent, FakeNode, installFakeDocument } from "../../stage/stage-test-dom.js";
+import type { ChoirBridgeApi, ChoirParagraphRequest } from "../choir-bridge.js";
 import { setupVisualNovelFrontend } from "../controller.js";
 
 type Globals = Record<string, unknown>;
@@ -64,10 +65,43 @@ function installHostGlobals(audio: string[]): () => void {
 
 export type HostHarness = ReturnType<typeof bootHost>;
 
-export function bootHost(options: { chatId?: string; config?: Partial<VisualNovelConfig> } = {}) {
+/** A fake Choir on the window: paragraph requests are recorded, report loading, and stay pending. */
+function installChoir(requests: ChoirParagraphRequest[], activated: boolean): () => void {
+  const g = globalThis as Globals;
+  const api: ChoirBridgeApi = {
+    version: 1,
+    isAvailable: () => true,
+    isNarratorMuted: () => false,
+    setNarratorMuted: () => {},
+    openDrawer: () => {},
+    stop: () => {},
+    playParagraph: (request) => {
+      requests.push(request);
+      request.onStatus?.({ kind: "loading" });
+      return new Promise(() => {});
+    },
+  };
+  g.__CHOIR_API__ = api;
+  // No page gesture yet: read aloud waits for Play.
+  const navigatorRef = g.navigator as Globals | undefined;
+  const hadActivation = navigatorRef ? Object.getOwnPropertyDescriptor(navigatorRef, "userActivation") : undefined;
+  if (navigatorRef && !activated) Object.defineProperty(navigatorRef, "userActivation", { value: { hasBeenActive: false }, configurable: true });
+  return () => {
+    delete g.__CHOIR_API__;
+    if (navigatorRef && !activated) {
+      if (hadActivation) Object.defineProperty(navigatorRef, "userActivation", hadActivation);
+      else delete navigatorRef.userActivation;
+    }
+  };
+}
+
+export function bootHost(options: { chatId?: string; config?: Partial<VisualNovelConfig>; choir?: { activated?: boolean } } = {}) {
   const chatId = options.chatId ?? "chat";
   const audio: string[] = [];
-  const restore = installHostGlobals(audio);
+  const restoreGlobals = installHostGlobals(audio);
+  const choirRequests: ChoirParagraphRequest[] = [];
+  const restoreChoir = options.choir ? installChoir(choirRequests, options.choir.activated !== false) : () => {};
+  const restore = () => { restoreChoir(); restoreGlobals(); };
   const sent: Array<Record<string, unknown>> = [];
   const root = new FakeNode("div");
   let backend: (payload: unknown) => void = () => {};
@@ -92,6 +126,8 @@ export function bootHost(options: { chatId?: string; config?: Partial<VisualNove
   const query = (selector: string) => root.querySelector(selector);
   const harness = {
     chatId, sent, audio, root,
+    /** Paragraphs the host asked the fake Choir to read (with `choir`). */
+    choirRequests,
     receive: (message: BackendResponse) => backend(message),
     /** A `vn_state` for this chat (the host's answer to activation and reopening). */
     state: (turn: TurnView | null) => backend({ type: "vn_state", chatId, config, turn }),

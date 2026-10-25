@@ -7,6 +7,7 @@ import {
   chooseCutoutModelUrl,
   clearCutoutModel,
   configureCutoutRuntime,
+  cutoutModelSettled,
   cutSprite,
   detectSpriteFace,
   getFaceModelState,
@@ -14,6 +15,7 @@ import {
   getCachedCutoutModelBytes,
   getCutoutRunnerMode,
   getStudioCutoutSupport,
+  onCutoutModelArrived,
   onCutoutModelState,
   ORT_CDN_BASE,
   ORT_VERSION,
@@ -143,6 +145,16 @@ afterEach(() => {
 });
 
 const configure = () => configureCutoutRuntime({ ortBaseUrl: pathToFileURL(dir).href + "/", backend: "wasm", preferWorker: false, numThreads: 1 });
+/**
+ * A model's first use: that cut is Basic while the model downloads in the
+ * background; the cut after the download uses it (these tests have no
+ * browser storage, so a model that left the worker downloads again).
+ */
+const cutWhenReady = async (image: Blob, options: Parameters<typeof cutSprite>[1]) => {
+  await cutSprite(image, options);
+  await cutoutModelSettled();
+  return cutSprite(image, options);
+};
 
 describe("cut-out runtime", () => {
   test("onnxruntime-web CDN pin matches the devDependency", () => {
@@ -182,13 +194,29 @@ describe("cut-out runtime", () => {
     expect(result.scenery).toBeUndefined();
   });
 
-  test("best: download with progress, load, ready, model used", async () => {
+  test("best on first use: that cut is Basic at once, the model downloads in the background with progress, its arrival is told, the next cut uses it", async () => {
     configure();
     const states: CutoutModelState[] = [];
     const off = onCutoutModelState((state) => states.push(state));
-    const result = await cutSprite(sprite(), { quality: "best", modelUrl: "https://models.test/isnet.onnx" });
+    let arrivals = 0;
+    const offArrival = onCutoutModelArrived(() => { arrivals += 1; });
+    const first = await cutSprite(sprite(), { quality: "best", modelUrl: "https://models.test/isnet.onnx", faceModelUrl: "https://models.test/face.onnx" });
+    expect(first.quality).toBe("basic");
+    expect(first.face).toBeUndefined(); // the face finder waits for the re-cut
+    // Flagged, so the backend keeps its re-cut for the arrival.
+    expect(first.modelPending).toBe(true);
+    // More cuts while it downloads: Basic, one download.
+    const meanwhile = await cutSprite(sprite(), { quality: "best", modelUrl: "https://models.test/isnet.onnx" });
+    expect(meanwhile.quality).toBe("basic");
+    expect(meanwhile.modelPending).toBe(true);
+    await cutoutModelSettled();
     off();
+    expect(arrivals).toBe(1);
+    const result = await cutSprite(sprite(), { quality: "best", modelUrl: "https://models.test/isnet.onnx" });
     expect(result.quality).toBe("best");
+    expect(result.modelPending).toBeUndefined();
+    // A Basic cut asked for as Basic is not waiting for anything.
+    expect((await cutSprite(sprite(), { quality: "basic", modelUrl: "https://models.test/isnet.onnx" })).modelPending).toBeUndefined();
     expect(fetches).toEqual(["https://models.test/isnet.onnx"]);
     // The cut was checked against the model's mask: nothing opaque outside the figure.
     expect(result.scenery).toBe(false);
@@ -202,9 +230,38 @@ describe("cut-out runtime", () => {
     const again = await cutSprite(sprite(), { quality: "best", modelUrl: "https://models.test/isnet.onnx" });
     expect(again.quality).toBe("best");
     expect(fetches).toHaveLength(1);
-    // A different URL loads a different model.
+    // A different URL loads a different model; Settings' download is told as an arrival too.
     await prepareCutoutModel("https://models.test/other.onnx");
     expect(fetches).toHaveLength(2);
+    expect(arrivals).toBe(2);
+    // A model already loaded is no arrival.
+    await prepareCutoutModel("https://models.test/other.onnx");
+    expect(arrivals).toBe(2);
+    offArrival();
+  });
+
+  test("a model file already in the browser loads within the cut (no Basic first, no arrival)", async () => {
+    configure();
+    const store = new Map<string, Response>();
+    (globalThis as { caches?: unknown }).caches = {
+      open: async () => ({
+        match: async (url: string) => store.get(url)?.clone(),
+        put: async (url: string, response: Response) => { store.set(url, response); },
+      }),
+      delete: async () => { store.clear(); return true; },
+    };
+    try {
+      store.set("https://models.test/isnet.onnx", new Response(modelBody, { headers: { "Content-Length": String(modelBody.length) } }));
+      let arrivals = 0;
+      const off = onCutoutModelArrived(() => { arrivals += 1; });
+      const result = await cutSprite(sprite(), { quality: "best", modelUrl: "https://models.test/isnet.onnx" });
+      off();
+      expect(result.quality).toBe("best");
+      expect(fetches).toEqual([]);
+      expect(arrivals).toBe(0);
+    } finally {
+      delete (globalThis as { caches?: unknown }).caches;
+    }
   });
 
   describe("half-precision copy", () => {
@@ -222,7 +279,7 @@ describe("cut-out runtime", () => {
 
     test("WASM runs either: the half-size copy downloads", async () => {
       configure();
-      const result = await cutSprite(sprite(), { quality: "best", modelUrl: FULL, modelUrlF16: HALF });
+      const result = await cutWhenReady(sprite(), { quality: "best", modelUrl: FULL, modelUrlF16: HALF });
       expect(result.quality).toBe("best");
       expect(fetches).toEqual([HALF]);
       expect(await chooseCutoutModelUrl(FULL, HALF)).toBe(HALF);
@@ -238,7 +295,7 @@ describe("cut-out runtime", () => {
       expect(await chooseCutoutModelUrl(FULL, HALF)).toBe(HALF);
       resetCutoutRuntime();
       setGpu(adapter([]));
-      const result = await cutSprite(sprite(), { quality: "best", modelUrl: FULL, modelUrlF16: HALF });
+      const result = await cutWhenReady(sprite(), { quality: "best", modelUrl: FULL, modelUrlF16: HALF });
       expect(result.quality).toBe("best");
       expect(fetches).toEqual([FULL]);
       expect(getCutoutModelState()).toMatchObject({ state: "ready", backend: "webgpu" });
@@ -292,23 +349,17 @@ describe("cut-out runtime", () => {
       setGpu(adapter(["shader-f16"]));
       return true;
     };
-    /** The Studio model downloads in the background (never inside a cut): wait for it. */
-    const studioDownloaded = async (): Promise<void> => {
-      for (let i = 0; i < 500; i++) {
-        const state = getCutoutModelState();
-        if (!(state.state === "downloading" && state.studio)) return;
-        await new Promise((resolve) => setTimeout(resolve, 1));
-      }
-      throw new Error("The Studio download did not finish.");
-    };
+    /** The Studio model downloads in the background (never inside a cut), and so does Best on first use: wait for them. */
+    const studioDownloaded = (): Promise<void> => cutoutModelSettled();
 
     test("WebGPU with shader-f16: the Studio model downloads in the background, then runs on WebGPU with a stretched input", async () => {
       if (!studioGpu()) return;
       expect(await getStudioCutoutSupport()).toBeNull();
       const states: CutoutModelState[] = [];
       const off = onCutoutModelState((state) => states.push(state));
-      // The first cut uses Best while the Studio model downloads.
+      // The first cut is Basic while both models download (Best would be used meanwhile once it is here).
       const first = await cutSprite(wide(), { quality: "studio", modelUrl: BEST, studioModelUrl: STUDIO });
+      expect(first.quality).toBe("basic");
       expect(first.studio).toBeUndefined();
       expect(states[0]).toEqual({ state: "downloading", receivedBytes: 0, totalBytes: null, studio: true });
       await studioDownloaded();
@@ -324,7 +375,7 @@ describe("cut-out runtime", () => {
       expect(states.at(-1)).toEqual({ state: "ready", backend: "webgpu", bytes: 4096, studio: true, notStored: true });
       expect(result.bbox).toEqual([5 / 16, 2 / 8, 6 / 16, 4 / 8]);
       // Best letterboxes the same image (zero padding on top).
-      const best = await cutSprite(wide(), { quality: "best", modelUrl: BEST, studioModelUrl: STUDIO });
+      const best = await cutWhenReady(wide(), { quality: "best", modelUrl: BEST, studioModelUrl: STUDIO });
       expect(best.studio).toBeUndefined();
       expect(g.__fakeOrtFirstRow).toEqual(new Array(16).fill(0));
     });
@@ -335,7 +386,7 @@ describe("cut-out runtime", () => {
       configureCutoutRuntime({ backend: "auto" });
       setGpu(adapter([]));
       expect(await getStudioCutoutSupport()).toMatch(/shader-f16/);
-      const result = await cutSprite(sprite(), { quality: "studio", modelUrl: BEST, studioModelUrl: STUDIO });
+      const result = await cutWhenReady(sprite(), { quality: "studio", modelUrl: BEST, studioModelUrl: STUDIO });
       expect(result.quality).toBe("best");
       expect(result.studio).toBeUndefined();
       expect(fetches).toEqual([BEST]);
@@ -352,12 +403,12 @@ describe("cut-out runtime", () => {
     test("WebAssembly backend or no Studio URL: Best, nothing else downloads", async () => {
       configure();
       expect(await getStudioCutoutSupport()).toMatch(/WebAssembly/);
-      const wasm = await cutSprite(sprite(), { quality: "studio", modelUrl: BEST, studioModelUrl: STUDIO });
+      const wasm = await cutWhenReady(sprite(), { quality: "studio", modelUrl: BEST, studioModelUrl: STUDIO });
       expect(wasm.quality).toBe("best");
       expect(wasm.studio).toBeUndefined();
       resetCutoutRuntime();
       configure();
-      const noUrl = await cutSprite(sprite(), { quality: "studio", modelUrl: BEST });
+      const noUrl = await cutWhenReady(sprite(), { quality: "studio", modelUrl: BEST });
       expect(noUrl.quality).toBe("best");
       expect(fetches).toEqual([BEST, BEST]);
       const state = getCutoutModelState();
@@ -369,7 +420,7 @@ describe("cut-out runtime", () => {
       const broken = "http://localhost:8790/studio-broken.onnx";
       await cutSprite(sprite(), { quality: "studio", modelUrl: BEST, studioModelUrl: broken });
       await studioDownloaded();
-      const result = await cutSprite(sprite(), { quality: "studio", modelUrl: BEST, studioModelUrl: broken });
+      const result = await cutWhenReady(sprite(), { quality: "studio", modelUrl: BEST, studioModelUrl: broken });
       expect(result.quality).toBe("best");
       expect(result.studio).toBeUndefined();
       // Best again on the fresh worker the failure leaves (this test has no browser cache).
@@ -383,8 +434,7 @@ describe("cut-out runtime", () => {
     test("the Studio download fails: Best cuts and the note names the Studio model", async () => {
       if (!studioGpu()) return;
       const missing = "http://localhost:8790/studio-missing.onnx";
-      const result = await cutSprite(sprite(), { quality: "studio", modelUrl: BEST, studioModelUrl: missing });
-      await studioDownloaded();
+      const result = await cutWhenReady(sprite(), { quality: "studio", modelUrl: BEST, studioModelUrl: missing });
       expect(result.quality).toBe("best");
       expect(result.studio).toBeUndefined();
       expect(fetches).toEqual([missing, BEST]);
@@ -392,10 +442,14 @@ describe("cut-out runtime", () => {
       expect(state.state === "ready" && state.note).toMatch(/^The Studio model is not available: .*404/);
     });
 
-    test("the Studio model fails while cutting: that sprite is cut again with Best", async () => {
+    test("the Studio model fails while cutting: that sprite is cut again (Basic here: Best downloads again without browser storage)", async () => {
       if (!studioGpu()) return;
       const throws = "http://localhost:8790/studio-throws.onnx";
       await cutSprite(sprite(), { quality: "studio", modelUrl: BEST, studioModelUrl: throws });
+      await studioDownloaded();
+      const failed = await cutSprite(sprite(), { quality: "studio", modelUrl: BEST, studioModelUrl: throws });
+      expect(failed.quality).toBe("basic");
+      expect(failed.studio).toBeUndefined();
       await studioDownloaded();
       const result = await cutSprite(sprite(), { quality: "studio", modelUrl: BEST, studioModelUrl: throws });
       expect(result.quality).toBe("best");
@@ -415,6 +469,7 @@ describe("cut-out runtime", () => {
     configure();
     const result = await cutSprite(sprite(), { quality: "best", modelUrl: "https://models.test/missing.onnx" });
     expect(result.quality).toBe("basic");
+    await cutoutModelSettled();
     const state = getCutoutModelState();
     expect(state.state).toBe("error");
     expect(state.state === "error" && state.error).toMatch(/HTTP 404/);
@@ -428,6 +483,7 @@ describe("cut-out runtime", () => {
     configure();
     const result = await cutSprite(sprite(), { quality: "best", modelUrl: "https://models.test/broken.onnx" });
     expect(result.quality).toBe("basic");
+    await cutoutModelSettled();
     const state = getCutoutModelState();
     expect(state.state).toBe("unsupported");
     expect(state.state === "unsupported" && state.reason).toMatch(/failed to allocate/);
@@ -437,7 +493,7 @@ describe("cut-out runtime", () => {
 
   test("inference failure: that cut is basic and the state is error", async () => {
     configure();
-    const result = await cutSprite(sprite(), { quality: "best", modelUrl: "https://models.test/throws.onnx" });
+    const result = await cutWhenReady(sprite(), { quality: "best", modelUrl: "https://models.test/throws.onnx" });
     expect(result.quality).toBe("basic");
     expect(getCutoutModelState()).toEqual({ state: "error", error: "device lost" });
   });
@@ -502,7 +558,7 @@ describe("cut-out runtime", () => {
 
   test("best cut with the face model: the face box rides along", async () => {
     configure();
-    const result = await cutSprite(sprite(), { quality: "best", modelUrl: "https://models.test/isnet.onnx", faceModelUrl: "https://models.test/face.onnx" });
+    const result = await cutWhenReady(sprite(), { quality: "best", modelUrl: "https://models.test/isnet.onnx", faceModelUrl: "https://models.test/face.onnx" });
     expect(result.quality).toBe("best");
     expect(fetches).toEqual(["https://models.test/isnet.onnx", "https://models.test/face.onnx"]);
     expect(result.face).toEqual([5 / 16, 4 / 16, 6 / 16, 8 / 16]);
@@ -514,7 +570,7 @@ describe("cut-out runtime", () => {
 
   test("face model download fails: the cut still works, face is unknown", async () => {
     configure();
-    const result = await cutSprite(sprite(), { quality: "best", modelUrl: "https://models.test/isnet.onnx", faceModelUrl: "https://models.test/missing-face.onnx" });
+    const result = await cutWhenReady(sprite(), { quality: "best", modelUrl: "https://models.test/isnet.onnx", faceModelUrl: "https://models.test/missing-face.onnx" });
     expect(result.quality).toBe("best");
     expect(result.face).toBeUndefined();
     expect(getFaceModelState().state).toBe("error");

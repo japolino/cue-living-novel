@@ -201,8 +201,8 @@ try {
     (window as any).settingsFixture.fixture.simulateError = true;
   });
 
-  // Click Apply in the unapplied-changes bar
-  await page.locator("[data-draft-bar] [data-apply]").click();
+  // Commit the field (Ctrl+S saves the focused Advanced field)
+  await page.keyboard.press("Control+s");
 
   // Verify error state is shown
   const statusEl = page.locator("[data-status]");
@@ -274,7 +274,7 @@ try {
   await continueBtn.click({ force: true });
   await page.waitForFunction(() => (window as any).readingFixture.stage.getState().phase === "awaiting-input");
 
-  // Wait for interaction to display in standard mode
+  // Wait for Your turn
   const interactionSection = page.locator("[data-vn-interaction]");
   assert.equal(await interactionSection.isVisible(), true, "Interaction section visible");
   assert.equal(await getPhase(), "awaiting-input", "Phase is awaiting-input");
@@ -288,7 +288,7 @@ try {
 
   // Standard input form is visible
   const inputForm = page.locator("[data-vn-input-form]");
-  assert.equal(await inputForm.isVisible(), true, "Input form visible in standard mode");
+  assert.equal(await inputForm.isVisible(), true, "Input form visible at Your turn");
   const inputArea = page.locator("[data-vn-input]");
 
   // Fill in draft response
@@ -314,16 +314,17 @@ try {
     "User draft text in textarea remains intact across backward/forward navigation"
   );
 
-  // Now test CYOA mode and choices rendering
+  // Reload the turn: its suggested replies render above the reply box
   await page.evaluate(() => {
     const { stage, turn } = (window as any).readingFixture;
-    stage.loadTurn({ ...turn, mode: "cyoa" });
+    stage.loadTurn({ ...turn });
     stage.advance();
     stage.advance();
     stage.advance();
   });
   const choiceItems = page.locator("[data-vn-choice]");
-  assert.equal(await choiceItems.count(), 2, "Two choices rendered in CYOA mode");
+  assert.equal(await choiceItems.count(), 2, "Two suggested replies rendered");
+  assert.equal(await inputForm.isVisible(), true, "The reply box stays next to the suggestions");
 
   // Capture desktop screenshot of "Your turn" with choices
   // =========================================================================

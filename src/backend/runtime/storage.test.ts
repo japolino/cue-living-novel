@@ -17,6 +17,7 @@ import {
   loadPortraits,
   loadTurnRecord,
   saveTurnRecord,
+  updateConfig,
   type StoredPortrait
 } from "./storage.js";
 import {
@@ -461,5 +462,28 @@ describe("loadTurnRecord", () => {
     const { spindle } = storageRuntime(new Map<string, unknown>([["turns/b.json", record()], ["turns/c.json", record({ userSpeaker: "  " })]]));
     expect("userSpeaker" in (await loadTurnRecord(spindle, "turns/b.json"))!).toBe(false);
     expect("userSpeaker" in (await loadTurnRecord(spindle, "turns/c.json"))!).toBe(false);
+  });
+});
+
+describe("config saves", () => {
+  test("two saves that overlap both land: each reads the config after the other wrote", async () => {
+    const data = new Map<string, unknown>([["config.json", {}]]);
+    const spindle = {
+      userStorage: {
+        // A slow read lets the second save start before the first one wrote.
+        getJson: async (path: string, options: { fallback: unknown }) => {
+          const value = data.get(path) ?? options.fallback;
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          return value;
+        },
+        setJson: async (path: string, value: unknown) => { data.set(path, structuredClone(value)); },
+      },
+    } as unknown as SpindleAPI;
+    await Promise.all([
+      updateConfig(spindle, { debugLogging: true }, "user"),
+      updateConfig(spindle, { generateImages: false }, "user"),
+      updateConfig(spindle, { systemOneMode: "compare" }, "user"),
+    ]);
+    expect(data.get("config.json")).toMatchObject({ debugLogging: true, generateImages: false, systemOneMode: "compare" });
   });
 });

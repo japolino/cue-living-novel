@@ -21,6 +21,8 @@ export type FrontendRequest =
    */
   | { type: "vn_get_state"; chatId?: string; viewOpen?: boolean }
   | { type: "vn_get_connection_catalog" }
+  /** A cut-out model finished downloading in this browser: cuts made without it are re-cut now. */
+  | { type: "vn_sprite_cutout_ready" }
   | { type: "vn_get_system_one_key_status" }
   | { type: "vn_set_system_one_key"; key: string }
   | { type: "vn_clear_system_one_key" }
@@ -96,7 +98,8 @@ export type FrontendRequest =
   /** Sprite mode: library actions from settings or the stage. */
   | {
       type: "vn_sprite_action";
-      action: "prepare_chat" | "regenerate" | "recut" | "delete_set" | "regenerate_plate" | "delete_plate";
+      /** `retry_failed`: the set's failed images again (a re-cut where a render exists, else a new render). */
+      action: "prepare_chat" | "regenerate" | "recut" | "retry_failed" | "delete_set" | "regenerate_plate" | "delete_plate";
       chatId?: string;
       setKey?: string;
       expression?: string;
@@ -183,7 +186,8 @@ export type BackendResponse =
   | { type: "vn_panel_template"; requestId: string; chatId: string; template?: string; error?: string }
   | { type: "vn_state"; chatId: string; config: VisualNovelConfig; turn: TurnView | null }
   | { type: "vn_config"; config: VisualNovelConfig }
-  | { type: "vn_system_one_key_status"; saved: boolean }
+  /** `test` is set after a save: the one test call passed (System One turned on) or failed (`error` says why). */
+  | { type: "vn_system_one_key_status"; saved: boolean; test?: "passed" | "failed"; error?: string }
   | {
     type: "vn_connection_catalog";
     planner: ConnectionCatalogOption[];

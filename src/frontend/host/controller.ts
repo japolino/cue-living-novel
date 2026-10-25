@@ -1,10 +1,11 @@
 import type { SpindleFrontendContext } from "lumiverse-spindle-types";
-import type { VisualNovelConfig, VisualNovelEffectIntensity, VisualNovelPresentationMode, VisualNovelTextEffectMode } from "../../config.js";
+import { textEffectModeFor, type VisualNovelConfig, type VisualNovelEffectIntensity, type VisualNovelPresentationMode, type VisualNovelTextEffectMode } from "../../config.js";
 import { REFERENCE_IMAGE_MAX_BYTES, REFERENCE_IMAGE_MIMES } from "../../protocol.js";
 import type { AssetView, BackendResponse, ConnectionCatalogOption, FrontendRequest, TurnView } from "../../protocol.js";
 import { AudioEngine, VnStage, isAmbientEffect, isStageEffect } from "../stage/index.js";
 import type { AmbientEffect, StageEffect } from "../store/index.js";
 import { VisualNovelSettingsPanel } from "../settings/panel.js";
+import { cutoutDownloadNote } from "../settings/model.js";
 import { DEFAULT_SPRITE_FACE_MODEL_URL, DEFAULT_SPRITE_MODEL_URL, spriteModelF16Url } from "../../shared/sprites.js";
 import {
   clearCutoutModel,
@@ -13,6 +14,7 @@ import {
   getCutoutModelState,
   getFaceModelState,
   getStudioCutoutSupport,
+  onCutoutModelArrived,
   onCutoutModelState,
   onFaceModelState,
   prepareCutoutModel,
@@ -37,7 +39,6 @@ import {
 import { SpeechController, type SpeechCursor } from "../speech/controller.js";
 import { ChoirBridge } from "./choir-bridge.js";
 import { PackSound } from "./pack-sound.js";
-import { createSpeechTransport } from "../speech/transport.js";
 import { SpeechDock } from "../speech/ui.js";
 import { SpeechSettingsSection } from "../speech/settings-ui.js";
 import type { SpeechSettings } from "../../speech-config.js";
@@ -67,6 +68,25 @@ function base64FromBytes(bytes: Uint8Array): string {
  */
 export function choirPlaysSound(speech: SpeechSettings | undefined, choir: Pick<ChoirBridge, "isAvailable" | "canControlSound" | "soundEnabled">): boolean {
   return Boolean(speech?.enabled && speech.choirSound) && choir.isAvailable() && choir.canControlSound() && choir.soundEnabled();
+}
+
+/**
+ * The status line under the System One key after a save: the one test call
+ * passed (and the mode the backend left, normally On) or failed and why.
+ * Undefined keeps the panel's plain saved / not saved line.
+ */
+export function systemOneKeyMessage(
+  status: { saved: boolean; test?: "passed" | "failed"; error?: string },
+  mode: "off" | "compare" | "on" | undefined,
+): string | undefined {
+  if (status.test === "passed") return mode === "compare" ? "Key saved and tested. System One compares with the story reader." : "Key saved and tested. System One is on.";
+  if (status.test === "failed") {
+    const failed = `Key saved, but the test call failed: ${status.error ?? "no answer"}.`;
+    return mode === "on" || mode === "compare"
+      ? `${failed} System One stays on; until the key works, Cue uses the story reader.`
+      : `${failed} System One was not turned on.`;
+  }
+  return undefined;
 }
 
 /**
@@ -285,13 +305,11 @@ export function firstAmbient(view: TurnView, intensity: VisualNovelEffectIntensi
 /** Build the stage input without turning absent ambient data into a clear. */
 export function stageTurnInput(
   next: TurnView,
-  mode: VnTurnInput["mode"],
   preserveImage: boolean,
   intensity: VisualNovelEffectIntensity = "full",
   planHold: number = PROVISIONAL_PLAN_HOLD,
 ): VnTurnInput {
   return {
-    mode,
     paragraphs: next.paragraphs.map((text, index) => ({
       id: `${next.sourceFingerprint}:${index}`,
       text,
@@ -359,12 +377,13 @@ export function computeAssetProgress(turn: TurnView | null): { current: number; 
   const budgeted = turn.assets.filter((a) => a.source !== "cache");
   if (budgeted.length === 0) return null;
   const total = budgeted.length;
+  // A cancelled picture is not done: it resumes when the view reopens, and
+  // until then it is neither counted nor shown as a failure.
   const done = budgeted.filter(
     (a) =>
       a.status === "generated" ||
       a.status === "browser_ready" ||
-      a.status === "failed" ||
-      a.status === "cancelled",
+      a.status === "failed",
   ).length;
   const inFlight = budgeted.filter((a) => a.status === "generating" || a.status === "queued").length;
   if (inFlight > 0) {
@@ -384,7 +403,6 @@ export type VisualStageThemeTarget = Pick<
 > & {
   setTextSpeed?: (speed: number) => void;
   setAutoPlayDelay?: (delay: number) => void;
-  setSkipMode?: (mode: "read" | "all") => void;
   /** Dialogue text size multiplier (stage sets `--vn-text-scale`). */
   setTextScale?: (scale: number) => void;
   /** Lets the stage also gate its own heuristic effects (text-triggered shake). */
@@ -412,10 +430,9 @@ export function applyVisualConfigToStage(
   stage.setDisplayRegexRules(config.displayRegexRules);
   stage.setTextSpeed?.(config.textSpeed);
   stage.setAutoPlayDelay?.(config.autoPlayDelay);
-  stage.setSkipMode?.(config.skipMode);
   stage.setTextScale?.(config.textScale);
   stage.setEffectIntensity?.(config.effectIntensity);
-  stage.setTextEffects?.(config.textEffects);
+  stage.setTextEffects?.(textEffectModeFor(config.effectIntensity));
   stage.setPresentationMode?.(config.presentationMode);
 }
 
@@ -606,7 +623,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     if (s.kind === "loading" || s.kind === "playing" || s.kind === "paused") return true;
     // Speech waits for the plan to know who speaks: auto play waits with it, so no paragraph goes unspoken.
     const settings = configRef.current?.speech;
-    return Boolean(turn?.provisional && settings?.enabled && settings.autoplay && !settings.speakBeforePlan);
+    return Boolean(turn?.provisional && settings?.enabled && !settings.speakBeforePlan);
   };
 
   const syncSpeechCursor = (view: TurnView | null, paragraphIndex: number): void => {
@@ -723,7 +740,14 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
         messageId: turn.messageId,
       });
     },
+    onSpriteRetry: (setKey) => ctx.sendToBackend({ type: "vn_sprite_action", action: "retry_failed", setKey }),
   });
+  // The cut-out model downloads in the background on first use (the first
+  // sprites are cut with Basic meanwhile): the stage shows its progress, and
+  // its arrival has the backend re-cut those sprites with it.
+  stage.setSpriteNote(cutoutDownloadNote(getCutoutModelState()));
+  const unsubStageCutout = onCutoutModelState((state) => stage.setSpriteNote(cutoutDownloadNote(state)));
+  const unsubCutoutArrival = onCutoutModelArrived(() => ctx.sendToBackend({ type: "vn_sprite_cutout_ready" }));
 
   let panelCapture: { chatId: string; messageId: string; fingerprint: string | null; cards: Array<{ title: string; html: string }> } | null = null;
   // Speech (default-off TTS). Own player and lifecycle; never the SFX channel.
@@ -739,7 +763,6 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   choirBridge.onMusicChange((music) => speechDock.setMusicCredit(music?.credit ?? null));
   speech = new SpeechController({
     choirBridge,
-    transport: createSpeechTransport(),
     onStatus: (status) => {
       speechDock.setStatus(status);
       if (provisionalCursorKey && (status.kind === "loading" || status.kind === "playing")) provisionalSpokenKey = provisionalCursorKey;
@@ -772,8 +795,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
 
   const action = ctx.ui.registerInputBarAction({
     id: "visual-novel-preview-toggle",
-    label: "Open visual novel",
-    subtitle: "Open this chat in the full-screen visual novel view",
+    label: "Open Cue",
+    subtitle: "Open this chat as a full-screen visual novel",
     enabled: true
   });
   const headerLauncher = createVnHeaderLauncher(
@@ -782,15 +805,19 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   );
   const settingsHandle = ctx.ui.registerSettingsTab?.({
     id: "visual-novel-preview",
-    title: "Visual novel",
-    shortName: "VN",
-    description: "Visual-novel presentation, generation, and custom CSS settings",
-    keywords: ["visual novel", "cyoa", "images", "custom css"],
+    title: "Cue",
+    shortName: "Cue",
+    description: "Cue: reading, pictures, sound, voice and look of the visual-novel view",
+    keywords: ["cue", "visual novel", "cyoa", "images", "custom css"],
     position: "after-display"
   });
   const settingsPanel: (VisualNovelSettingsPanel & SettingsFeedbackTarget) | null = settingsHandle ? new VisualNovelSettingsPanel({
     mount: settingsHandle.root,
     onOpenPreview: () => { if (!active) toggleVisualNovel(); },
+    onOpenPanelTools: () => {
+      if (!active) toggleVisualNovel();
+      if (active) panels.openTools();
+    },
     onRefreshConnections: () => requestConnectionCatalog(),
     onSaveSystemOneKey: (key) => ctx.sendToBackend({ type: "vn_set_system_one_key", key }),
     onClearSystemOneKey: () => ctx.sendToBackend({ type: "vn_clear_system_one_key" }),
@@ -936,10 +963,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       .catch(() => {});
   }
   refreshCachedCutoutModel(DEFAULT_SPRITE_MODEL_URL);
-  // Speech settings render inside the panel's Voice section (own shadow root,
-  // own save path). Profile/voice listing happens only on explicit button
-  // presses inside it (metadata calls, no synthesis).
-  const speechTransport = createSpeechTransport();
+  // Read-aloud settings render inside the panel's Voice section (own shadow
+  // root, own save path), shown only while Choir is present.
   const speechSettings = settingsHandle ? new SpeechSettingsSection({
     mount: settingsPanel?.voiceMount() ?? settingsHandle.root,
     onSave: (speechPatch) => {
@@ -952,19 +977,20 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     },
     onOpenChoir: () => choirBridge.openDrawer(),
     isChoirAvailable: () => choirBridge.isAvailable(),
-    isNarratorMuted: () => choirBridge.isNarratorMuted(),
     onMuteNarratorChange: (muted) => choirBridge.setNarratorMuted(muted),
     canControlChoirSound: () => choirBridge.canControlSound(),
     onChoirSoundChange: (on) => choirBridge.setSoundEnabled(on),
-    listProfiles: () => speechTransport.listProfiles(new AbortController().signal),
-    listVoices: (connectionId) => speechTransport.listVoices(connectionId, new AbortController().signal),
-    getChatId: () => chatId(),
   }) : null;
   choirBridge.onAvailabilityChange((available) => {
     settingsPanel?.setVoiceAvailable(available);
     speechSettings?.refresh();
+    syncSpeechDock();
     syncSoundSource();
   });
+  /** The dock shows only while read aloud is on and Choir is there to voice it. */
+  function syncSpeechDock(): void {
+    speechDock.setEnabled(Boolean(configRef.current?.speech.enabled) && choirBridge.isAvailable());
+  }
 
   function chatId(): string {
     return ctx.getActiveChat().chatId ?? "";
@@ -1091,7 +1117,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     panelCapture = captureMessageId ? { chatId: chatId(), messageId: captureMessageId, fingerprint: turn?.sourceFingerprint ?? null, cards: captureSimTrackerCards(ctx.dom.findMessageElement(captureMessageId), document) } : null;
     registerOverrides();
     app.setVisible(true);
-    action.setLabel("Exit visual novel");
+    action.setLabel("Exit Cue");
     headerLauncher.setActive(true);
     const activeChatId = chatId();
     if (!turn || turn.chatId !== activeChatId) {
@@ -1120,7 +1146,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     audioEngine.stopAll();
     destroyOverrides();
     app.setVisible(false);
-    action.setLabel("Open visual novel");
+    action.setLabel("Open Cue");
     headerLauncher.setActive(false);
   }
 
@@ -1228,11 +1254,9 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       return;
     }
     retryResumePhase = null;
-    const requestedMode = configRef.current?.mode ?? "standard";
-    const mode = requestedMode === "cyoa" && next.choices.length > 0 ? "cyoa" : "standard";
     const intensity = configRef.current?.effectIntensity ?? "full";
     if (decision.kind === "upgrade") {
-      const input = stageTurnInput(next, mode, true, intensity);
+      const input = stageTurnInput(next, true, intensity);
       if (canUpgradeTurn(stage.getState(), input)) {
         const cursor = decision.paragraphIndex;
         // Speech first, so auto play that resumes with the plan waits on it. A
@@ -1253,7 +1277,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     panels.setTurn(next, 0);
     const preserveImage = shouldPreserveImage(previous, next);
     turnOpeningBgm = preserveImage ? packSound.currentMusic : null;
-    stage.loadTurn(stageTurnInput(next, mode, preserveImage, intensity));
+    stage.loadTurn(stageTurnInput(next, preserveImage, intensity));
     syncSpeechCursor(next, 0);
     void syncImageForParagraph(0);
     syncAudioForParagraph(next, 0);
@@ -1281,7 +1305,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       return;
     }
     if (type === "vn_system_one_key_status" && message.type === "vn_system_one_key_status") {
-      settingsPanel?.setSystemOneKeyStatus(message.saved);
+      settingsPanel?.setSystemOneKeyStatus(message.saved, systemOneKeyMessage(message, configRef.current?.systemOneMode));
       return;
     }
     if (type === "vn_sprite_library" && message.type === "vn_sprite_library") {
@@ -1301,7 +1325,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       audioEngine.setSfxVolume(configRef.current.sfxVolume);
       syncSoundSource();
       speech.setSettings(configRef.current.speech);
-      speechDock.setEnabled(configRef.current.speech.enabled);
+      syncSpeechDock();
       speechSettings?.setConfig(configRef.current.speech);
       settingsPanel?.setConfig(configRef.current);
       refreshCachedCutoutModel(configRef.current.spriteModelUrl);
@@ -1322,7 +1346,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
         speech.setCursor(null);
         panels.setTurn(null);
         stage.reset();
-        if (active) stage.setPhase("idle");
+        // An open chat with no reply yet: the reply box is there, so the story can start here.
+        if (active) stage.setPhase(chatId() ? "awaiting-input" : "idle");
       }
       return;
     }
@@ -1336,7 +1361,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       audioEngine.setSfxVolume(configRef.current.sfxVolume);
       syncSoundSource();
       speech.setSettings(configRef.current.speech);
-      speechDock.setEnabled(configRef.current.speech.enabled);
+      syncSpeechDock();
       speechSettings?.setConfig(configRef.current.speech);
       settingsPanel?.setConfig(configRef.current);
       refreshCachedCutoutModel(configRef.current.spriteModelUrl);
@@ -1447,8 +1472,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       if (!message.granted) {
         deactivate();
         reportStageError({
-          message: "Visual novel mode needs a permission that was turned off.",
-          detail: `Permission revoked: ${message.permission}. Re-enable it before reopening visual novel mode.`,
+          message: "Cue needs a permission that was turned off.",
+          detail: `Permission revoked: ${message.permission}. Re-enable it before reopening Cue.`,
           source: "permission",
           retryable: false,
         });
@@ -1529,6 +1554,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     speechDock.destroy();
     speechSettings?.destroy();
     unsubCutoutModel();
+    unsubStageCutout();
+    unsubCutoutArrival();
     unsubFaceModel();
     settingsPanel?.destroy();
     settingsHandle?.destroy();

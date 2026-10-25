@@ -1,27 +1,23 @@
 import type { SpeechSettings } from "../../speech-config.js";
 import { DEFAULT_SPEECH_SETTINGS } from "../../speech-config.js";
-import { DELIVERY_ADAPTER_VERSION, deliveryTagAllowedForModel, formatOutboundText } from "./delivery.js";
-import { resolveVoiceForParagraph } from "./voice-resolution.js";
 import { stripTextEffectTags } from "../../shared/text-effects.js";
-import { SpeechTransportError, type TtsTransport } from "./transport.js";
 import type { ChoirBridge } from "../host/choir-bridge.js";
 
 /**
- * Frontend speech player for the CURRENT assistant paragraph.
+ * Frontend read-aloud player for the CURRENT assistant paragraph, voiced by
+ * the Choir companion extension.
  *
- * Design rules (see .cache/tts/HYPOTHESES.md):
+ * Design rules:
  * - default-off: while disabled, inactive, hidden, or disposed, NO request is
  *   ever issued, no matter how many state updates arrive;
- * - one voice per whole paragraph (paragraph speaker metadata is name-level
- *   only; mixed narration/dialogue inside one paragraph is a documented limit);
- * - at most one in-flight synthesis request; no automatic retries; no prefetch;
+ * - with read aloud on, each new paragraph is read as it appears, once the
+ *   page has had a user gesture (browser autoplay policy) or after one Play;
+ * - one paragraph at a time; no automatic retries; no prefetch;
  * - every boundary (cursor change, chat change, deactivate, hidden page,
- *   settings change, disposal) bumps the epoch, aborts the in-flight request,
- *   and drops any late completion — a stale response never plays and is never
- *   cached;
- * - an unconfigured voice yields a truthful "unconfigured" status, never a
- *   silent first-profile fallback;
- * - a session-only LRU blob cache; every object URL is revoked exactly once.
+ *   settings change, disposal) bumps the epoch and aborts the paragraph in
+ *   flight, and a late status is dropped — a stale paragraph never plays;
+ * - without Choir, Play reports a truthful "unconfigured" status and nothing
+ *   is read.
  */
 
 export type SpeechCursor = {
@@ -42,34 +38,25 @@ export type SpeechStatus =
   | { kind: "loading"; speaker?: string }
   | { kind: "playing"; speaker?: string }
   | { kind: "paused"; speaker?: string }
-  | { kind: "blocked"; message: string }
   | { kind: "unconfigured"; message: string }
   | { kind: "error"; message: string };
 
-/** Narrow audio-element surface so tests can inject a fake. */
-export type SpeechAudioElement = {
-  src: string;
-  volume: number;
-  currentTime: number;
-  play(): Promise<void>;
-  pause(): void;
-  addEventListener(type: string, listener: () => void): void;
-  removeEventListener(type: string, listener: () => void): void;
-};
-
 export type SpeechControllerOptions = {
-  transport?: TtsTransport | undefined;
-  choirBridge?: ChoirBridge | undefined;
+  choirBridge?: Pick<ChoirBridge, "isAvailable" | "stop" | "playParagraph"> | undefined;
   onStatus?: ((status: SpeechStatus) => void) | undefined;
-  createAudio?: (() => SpeechAudioElement) | undefined;
-  createObjectUrl?: ((blob: Blob) => string) | undefined;
-  revokeObjectUrl?: ((url: string) => void) | undefined;
-  maxCacheItems?: number | undefined;
-  maxCacheBytes?: number | undefined;
+  /** Whether the page has had a user gesture yet; defaults to `navigator.userActivation`. */
+  hasUserActivation?: (() => boolean) | undefined;
 };
 
-const DEFAULT_MAX_CACHE_ITEMS = 16;
-const DEFAULT_MAX_CACHE_BYTES = 32 * 1024 * 1024;
+/** Shown when read aloud is on but Choir is not running in this page. */
+export const CHOIR_MISSING_MESSAGE = "Read aloud needs the Choir extension. Turn Choir on to hear this paragraph.";
+
+function pageHasUserActivation(): boolean {
+  const activation = typeof navigator !== "undefined"
+    ? (navigator as Navigator & { userActivation?: { hasBeenActive: boolean } }).userActivation
+    : undefined;
+  return activation ? activation.hasBeenActive : true;
+}
 
 function sameCursorIdentity(left: SpeechCursor, right: SpeechCursor): boolean {
   return left.chatId === right.chatId
@@ -82,46 +69,26 @@ function sameCursorIdentity(left: SpeechCursor, right: SpeechCursor): boolean {
 }
 
 export class SpeechController {
-  private readonly transport: TtsTransport | undefined;
-  private readonly choirBridge: ChoirBridge | undefined;
+  private readonly choirBridge: SpeechControllerOptions["choirBridge"];
   private readonly onStatus: (status: SpeechStatus) => void;
-  private readonly createAudio: () => SpeechAudioElement;
-  private readonly createObjectUrl: (blob: Blob) => string;
-  private readonly revokeObjectUrl: (url: string) => void;
-  private readonly maxCacheItems: number;
-  private readonly maxCacheBytes: number;
+  private readonly hasUserActivation: () => boolean;
 
   private settings: SpeechSettings = DEFAULT_SPEECH_SETTINGS;
   private cursor: SpeechCursor | null = null;
   private active = false;
   private visible = true;
   private disposed = false;
-  /** Any boundary bump invalidates in-flight work and late completions. */
+  /** Any boundary bump invalidates the paragraph in flight and its late statuses. */
   private epoch = 0;
   private inflight: AbortController | null = null;
-  /** Session LRU: cache key -> revocable object URL. Never stores failures. */
-  private readonly cache = new Map<string, { url: string; bytes: number }>();
-  private cacheBytes = 0;
-  private audio: SpeechAudioElement | null = null;
-  /** Cache key currently loaded into the audio element (for pause/resume). */
-  private loadedKey: string | null = null;
-  private playState: "stopped" | "playing" | "paused" = "stopped";
-  /** True while an audio.play() promise is unsettled; pause() during this window is remembered. */
-  private starting = false;
-  private pauseRequested = false;
-  /** Autoplay may only start after one successful user-gesture play. */
+  /** A manual Play counts as the user gesture the browser asks for. */
   private gestureUnlocked = false;
   private status: SpeechStatus = { kind: "off" };
 
   constructor(options: SpeechControllerOptions) {
-    this.transport = options.transport;
     this.choirBridge = options.choirBridge;
     this.onStatus = options.onStatus ?? (() => undefined);
-    this.createAudio = options.createAudio ?? (() => new Audio());
-    this.createObjectUrl = options.createObjectUrl ?? ((blob) => URL.createObjectURL(blob));
-    this.revokeObjectUrl = options.revokeObjectUrl ?? ((url) => URL.revokeObjectURL(url));
-    this.maxCacheItems = options.maxCacheItems ?? DEFAULT_MAX_CACHE_ITEMS;
-    this.maxCacheBytes = options.maxCacheBytes ?? DEFAULT_MAX_CACHE_BYTES;
+    this.hasUserActivation = options.hasUserActivation ?? pageHasUserActivation;
   }
 
   getStatus(): SpeechStatus {
@@ -132,50 +99,37 @@ export class SpeechController {
     if (this.disposed) return;
     const previous = this.settings;
     this.settings = next;
-    if (this.audio) this.audio.volume = next.volume;
-    // Playback switches, not voices: when to speak, how loud, whose sound.
-    const playbackOnly = { volume: 0, autoplay: false, choirSound: false, speakBeforePlan: false };
-    const voicesChanged = JSON.stringify({ ...previous, ...playbackOnly }) !== JSON.stringify({ ...next, ...playbackOnly });
-    if (voicesChanged) {
-      // A profile/voice/delivery change invalidates everything synthesized so far.
+    // Sound from Choir changes what Choir plays around the voice, not the voice.
+    if (previous.enabled !== next.enabled || previous.muteNarrator !== next.muteNarrator) {
       this.stop("settings-changed");
-      this.clearCache();
-      this.publishBaseline();
     }
   }
 
   setActive(active: boolean): void {
     if (this.disposed || this.active === active) return;
     this.active = active;
-    if (!active) {
-      this.stop("deactivated");
-      this.clearCache();
-    }
+    if (!active) this.stop("deactivated");
     this.publishBaseline();
   }
 
   setVisible(visible: boolean): void {
     if (this.disposed || this.visible === visible) return;
     this.visible = visible;
-    if (!visible) {
-      this.abortInflight("hidden");
-      if (this.playState === "playing") this.pause();
-    }
+    if (!visible && this.inflight) this.pause();
   }
 
-  /** Chat switch/fork: hard boundary — cursor, playback, and cache all reset. */
+  /** Chat switch/fork: hard boundary — cursor and playback reset. */
   onChatChanged(): void {
     if (this.disposed) return;
     this.cursor = null;
     this.stop("chat-changed");
-    this.clearCache();
-    this.publishBaseline();
   }
 
   /**
    * Point at the current assistant paragraph. An IDENTICAL cursor (same chat,
    * message, fingerprint, paragraph, text) is a no-op so same-turn rebroadcasts
-   * and image/asset updates never replay speech.
+   * and image/asset updates never replay speech. A new paragraph is read at
+   * once while read aloud is on.
    */
   setCursor(cursor: SpeechCursor | null): void {
     if (this.disposed) return;
@@ -183,267 +137,90 @@ export class SpeechController {
     this.cursor = cursor;
     // Choir hands off between paragraphs itself (the aborted one stops its own
     // speech), so its ambience and music beds keep running across paragraphs.
-    this.stopOwnPlayback("cursor-changed");
+    this.abortInflight("cursor-changed");
     this.publishBaseline();
-    if (cursor && this.settings.autoplay && this.gestureUnlocked && this.eligible()) {
-      void this.playCurrent({ auto: true });
+    if (cursor && this.eligible() && this.choirBridge?.isAvailable() && (this.gestureUnlocked || this.hasUserActivation())) {
+      void this.playCurrent();
     }
   }
 
   pause(): void {
-    if (this.disposed) return;
-    if (this.choirBridge?.isAvailable()) {
-      this.choirBridge.stop();
-      // Drop the paragraph in flight so its late status cannot undo the pause.
-      this.abortInflight("paused");
-      this.playState = "paused";
-      this.publish({ kind: "paused", ...this.speakerLabel() });
-      return;
-    }
-    if (this.starting) {
-      // Playback was dispatched but audio.play() has not settled yet: remember
-      // the pause so the post-await path settles to paused instead of playing.
-      this.pauseRequested = true;
-      this.audio?.pause();
-      this.playState = "paused";
-      this.publish({ kind: "paused", ...this.speakerLabel() });
-      return;
-    }
-    if (this.playState !== "playing") return;
-    this.audio?.pause();
-    this.playState = "paused";
+    if (this.disposed || !this.inflight) return;
+    this.choirBridge?.stop();
+    // Drop the paragraph in flight so its late status cannot undo the pause.
+    this.abortInflight("paused");
     this.publish({ kind: "paused", ...this.speakerLabel() });
   }
 
   stop(reason: string): void {
     if (this.disposed) return;
-    if (this.choirBridge?.isAvailable()) {
-      this.choirBridge.stop();
-    }
-    this.stopOwnPlayback(reason);
-  }
-
-  /** Stops Cue's own player and aborts the in-flight request; Choir keeps playing. */
-  private stopOwnPlayback(reason: string): void {
-    this.pauseRequested = false;
-    this.starting = false;
+    if (this.inflight) this.choirBridge?.stop();
     this.abortInflight(reason);
-    if (this.audio && this.playState !== "stopped") {
-      this.audio.pause();
-      try { this.audio.currentTime = 0; } catch { /* not seekable yet */ }
-    }
-    this.playState = "stopped";
-    this.loadedKey = null;
     this.publishBaseline();
   }
 
   /**
-   * Manual Play/Resume for the current paragraph. This is the only entry point
-   * that can start a synthesis request, and only when every eligibility gate
-   * holds at dispatch time AND when the response arrives.
+   * Play (or play again) the current paragraph through Choir. Choir cannot
+   * resume mid-paragraph, so Play after Pause starts the paragraph over.
    */
-  async playCurrent(options: { auto?: boolean } = {}): Promise<void> {
+  async playCurrent(): Promise<void> {
     if (this.disposed || !this.settings.enabled) return;
     if (!this.eligible()) {
       this.publishBaseline();
       return;
     }
+    const bridge = this.choirBridge;
+    if (!bridge?.isAvailable()) {
+      this.publish({ kind: "unconfigured", message: CHOIR_MISSING_MESSAGE });
+      return;
+    }
     const cursor = this.cursor!;
-
-    if (this.choirBridge && this.choirBridge.isAvailable()) {
-      this.gestureUnlocked = true;
-      this.abortInflight("superseded");
-      const myEpoch = ++this.epoch;
-      const abort = new AbortController();
-      this.inflight = abort;
-      this.publish({ kind: "loading", ...this.speakerLabel() });
-
-      const cleanText = stripTextEffectTags(cursor.text);
-      if (!cleanText.trim()) {
-        this.publishBaseline();
-        return;
-      }
-
-      try {
-        await this.choirBridge.playParagraph({
-          text: cleanText,
-          speaker: this.speakerLabel().speaker,
-          nextText: cursor.nextText ? stripTextEffectTags(cursor.nextText) : undefined,
-          chatId: cursor.chatId,
-          messageId: cursor.messageId,
-          paragraphIndex: cursor.paragraphIndex,
-          signal: abort.signal,
-          onStatus: (st) => {
-            if (this.disposed || myEpoch !== this.epoch) return;
-            const spk = st.speaker ?? this.speakerLabel().speaker;
-            if (st.kind === "playing") {
-              this.playState = "playing";
-              this.publish(spk !== undefined ? { kind: "playing", speaker: spk } : { kind: "playing" });
-            } else if (st.kind === "loading") {
-              this.publish(spk !== undefined ? { kind: "loading", speaker: spk } : { kind: "loading" });
-            } else if (st.kind === "idle") {
-              this.playState = "stopped";
-              this.publish({ kind: "idle" });
-            }
-          },
-        });
-        if (this.disposed || myEpoch !== this.epoch) return;
-        this.playState = "stopped";
-        this.publish({ kind: "idle" });
-      } catch (err) {
-        if (this.disposed || myEpoch !== this.epoch) return;
-        if (abort.signal.aborted) {
-          this.publishBaseline();
-          return;
-        }
-        this.playState = "stopped";
-        this.publish({ kind: "error", message: err instanceof Error ? err.message : String(err) });
-      } finally {
-        if (this.inflight === abort) this.inflight = null;
-      }
-      return;
-    }
-
-    if (!this.transport) {
-      this.publish({
-        kind: "unconfigured",
-        message: "Choir companion extension is not active.",
-      });
-      return;
-    }
-
-    const resolved = resolveVoiceForParagraph(this.settings, {
-      chatId: cursor.chatId,
-      paragraphSpeaker: cursor.paragraphSpeaker,
-      turnSpeaker: cursor.turnSpeaker,
-    });
-    if (!resolved.ref) {
-      const who = resolved.role === "narrator" ? "the narrator" : `“${resolved.speakerName}”`;
-      this.publish({
-        kind: "unconfigured",
-        message: `No voice is set for ${who}. Choose one under Settings → Visual novel speech.`,
-      });
-      return;
-    }
-    // Resume without new requests when the same audio is merely paused. Every
-    // boundary (cursor/settings/chat/close) clears the paused state, so a
-    // paused player always holds audio for the current cursor and settings.
-    // Profile-revision checking happens on each FRESH Play dispatch below.
-    if (this.playState === "paused" && this.loadedKey !== null && this.audio) {
-      await this.tryPlay(this.audio, this.loadedKey, options.auto === true, this.epoch);
-      return;
-    }
-
+    this.gestureUnlocked = true;
     this.abortInflight("superseded");
-    const myEpoch = ++this.epoch;
+    const myEpoch = this.epoch;
     const abort = new AbortController();
     this.inflight = abort;
     this.publish({ kind: "loading", ...this.speakerLabel() });
 
-    // Refresh the profile revision first (host DB read, never a provider call):
-    // the cache key includes updated_at + model + effective voice + default-
-    // parameter fingerprint, so a host-side profile edit can never silently
-    // replay audio synthesized under the previous revision.
-    let snapshot;
     try {
-      snapshot = await this.transport.getProfile(resolved.ref.connectionId, abort.signal);
-    } catch (error) {
-      if (this.inflight === abort) this.inflight = null;
+      await bridge.playParagraph({
+        text: stripTextEffectTags(cursor.text),
+        speaker: this.speakerLabel().speaker,
+        nextText: cursor.nextText ? stripTextEffectTags(cursor.nextText) : undefined,
+        chatId: cursor.chatId,
+        messageId: cursor.messageId,
+        paragraphIndex: cursor.paragraphIndex,
+        signal: abort.signal,
+        onStatus: (st) => {
+          if (this.disposed || myEpoch !== this.epoch) return;
+          const speaker = st.speaker ?? this.speakerLabel().speaker;
+          if (st.kind === "playing") {
+            this.publish(speaker !== undefined ? { kind: "playing", speaker } : { kind: "playing" });
+          } else if (st.kind === "loading") {
+            this.publish(speaker !== undefined ? { kind: "loading", speaker } : { kind: "loading" });
+          } else if (st.kind === "idle") {
+            this.publish(speaker !== undefined ? { kind: "idle", speaker } : { kind: "idle" });
+          }
+        },
+      });
       if (this.disposed || myEpoch !== this.epoch) return;
-      if (error instanceof SpeechTransportError && error.kind === "timeout") {
-        this.publish({ kind: "error", message: error.message });
-        return;
-      }
-      if (error instanceof SpeechTransportError && error.kind === "aborted") {
+      this.inflight = null;
+      this.publishBaseline();
+    } catch (err) {
+      if (this.disposed || myEpoch !== this.epoch) return;
+      this.inflight = null;
+      if (abort.signal.aborted) {
         this.publishBaseline();
         return;
       }
-      // Without current revision metadata we refuse to guess: no synthesis.
-      this.publish({ kind: "error", message: error instanceof Error ? error.message : String(error) });
-      return;
+      this.publish({ kind: "error", message: err instanceof Error ? err.message : String(err) });
     }
-    if (this.disposed || myEpoch !== this.epoch) return;
-
-    // Tags are injected only for a Gemini-family model on the selected profile,
-    // or through the clearly-labeled all-providers compatibility opt-in.
-    const tagAllowed = deliveryTagAllowedForModel(
-      this.settings.deliveryMode,
-      snapshot.model,
-      this.settings.deliveryAllProviders,
-    );
-    // Text effect tags (<shake>, <whisper>, ...) are display markup: never read them aloud.
-    const spoken = stripTextEffectTags(cursor.text);
-    const outbound = tagAllowed
-      ? formatOutboundText(spoken, this.settings.deliveryMode, this.settings.deliveryTag)
-      : spoken;
-    const effectiveVoice = resolved.ref.voice || snapshot.voice;
-    const key = [
-      "v" + DELIVERY_ADAPTER_VERSION,
-      resolved.ref.connectionId,
-      snapshot.updatedAt,
-      snapshot.model,
-      effectiveVoice,
-      resolved.ref.parameters?.speed ?? "",
-      snapshot.parametersFingerprint,
-      outbound,
-    ].join("\u0000");
-
-    const cached = this.cache.get(key);
-    if (cached) {
-      if (this.inflight === abort) this.inflight = null;
-      // LRU touch.
-      this.cache.delete(key);
-      this.cache.set(key, cached);
-      await this.playUrl(cached.url, key, myEpoch, options.auto === true);
-      return;
-    }
-
-    let blob: Blob;
-    try {
-      blob = await this.transport.synthesize({ ref: resolved.ref, text: outbound }, abort.signal);
-    } catch (error) {
-      if (this.inflight === abort) this.inflight = null;
-      if (this.disposed || myEpoch !== this.epoch) return; // superseded: stay quiet
-      if (error instanceof SpeechTransportError && error.kind === "timeout") {
-        this.publish({ kind: "error", message: error.message });
-        return;
-      }
-      if (error instanceof SpeechTransportError && error.kind === "aborted") {
-        this.publishBaseline();
-        return;
-      }
-      this.publish({ kind: "error", message: error instanceof Error ? error.message : String(error) });
-      return;
-    }
-    if (this.inflight === abort) this.inflight = null;
-    // A response that lands after any boundary is dropped: never played, never cached.
-    if (this.disposed || myEpoch !== this.epoch) return;
-    if (blob.size === 0) {
-      this.publish({ kind: "error", message: "The TTS endpoint returned empty audio." });
-      return;
-    }
-    const url = this.createObjectUrl(blob);
-    this.cache.set(key, { url, bytes: blob.size });
-    this.cacheBytes += blob.size;
-    // Protect the entry being played: eviction must take older entries first
-    // and never revoke this URL before the element loads it.
-    this.evictOverflow(key);
-    await this.playUrl(url, key, myEpoch, options.auto === true);
   }
 
   dispose(): void {
     if (this.disposed) return;
-    this.pauseRequested = false;
-    this.starting = false;
+    if (this.inflight) this.choirBridge?.stop();
     this.abortInflight("disposed");
-    if (this.audio) {
-      this.audio.pause();
-      this.audio.removeEventListener("ended", this.handleEnded);
-      this.audio.src = "";
-    }
-    this.playState = "stopped";
-    this.loadedKey = null;
-    this.clearCache();
     this.disposed = true;
   }
 
@@ -483,123 +260,5 @@ export class SpeechController {
       this.inflight = null;
       controller.abort(reason);
     }
-  }
-
-  private ensureAudio(): SpeechAudioElement {
-    if (!this.audio) {
-      this.audio = this.createAudio();
-      this.audio.addEventListener("ended", this.handleEnded);
-    }
-    this.audio.volume = this.settings.volume;
-    return this.audio;
-  }
-
-  private readonly handleEnded = (): void => {
-    if (this.disposed) return;
-    this.playState = "stopped";
-    this.publishBaseline();
-  };
-
-  private async playUrl(url: string, key: string, myEpoch: number, auto: boolean): Promise<void> {
-    // A boundary that lands before the element is touched must leave it alone:
-    // never point shared audio at a stale URL.
-    if (myEpoch !== this.epoch || this.disposed) return;
-    const audio = this.ensureAudio();
-    audio.src = url;
-    try { audio.currentTime = 0; } catch { /* not seekable yet */ }
-    if (myEpoch !== this.epoch || this.disposed) return;
-    this.loadedKey = key;
-    await this.tryPlay(audio, key, auto, myEpoch);
-  }
-
-  private async tryPlay(audio: SpeechAudioElement, key: string, auto: boolean, myEpoch: number): Promise<void> {
-    audio.volume = this.settings.volume;
-    this.starting = true;
-    try {
-      await audio.play();
-    } catch (error) {
-      this.starting = false;
-      // A stop/dispose that lands while play() is pending already published
-      // its own state; a late rejection must not overwrite it or resurrect.
-      if (this.disposed || myEpoch !== this.epoch) return;
-      this.pauseRequested = false;
-      this.playState = "paused";
-      this.loadedKey = key;
-      // Browser autoplay policy rejection is expected for auto starts; a manual
-      // gesture Play from the dock is the recovery path. Never retried silently.
-      this.publish({
-        kind: "blocked",
-        message: auto
-          ? "The browser blocked automatic sound. Press Play once to allow speech."
-          : `Playback was blocked: ${error instanceof Error ? error.message : String(error)}`,
-      });
-      return;
-    }
-    this.starting = false;
-    // Late success after stop/dispose: pause the element again and stay quiet.
-    if (this.disposed || myEpoch !== this.epoch) {
-      try { audio.pause(); } catch { /* already torn down */ }
-      return;
-    }
-    if (this.pauseRequested) {
-      this.pauseRequested = false;
-      try { audio.pause(); } catch { /* not pausable yet */ }
-      this.playState = "paused";
-      this.loadedKey = key;
-      this.publish({ kind: "paused", ...this.speakerLabel() });
-      return;
-    }
-    if (!auto) this.gestureUnlocked = true;
-    this.playState = "playing";
-    this.publish({ kind: "playing", ...this.speakerLabel() });
-  }
-
-  /**
-   * Evict oldest entries while over either cap. `protectKey` (the entry being
-   * played, if any) is evicted last: older entries go first, and a lone
-   * oversized entry is kept over the byte cap so its URL stays valid for the
-   * element. Everything removed here is revoked exactly once.
-   */
-  private evictOverflow(protectKey?: string): void {
-    while (this.cache.size > this.maxCacheItems || this.cacheBytes > this.maxCacheBytes) {
-      const oldestEvictable = (): string | undefined => {
-        let fallback: string | undefined;
-        for (const candidate of this.cache.keys()) {
-          if (candidate === this.loadedKey || candidate === protectKey) {
-            fallback ??= candidate;
-            continue;
-          }
-          return candidate;
-        }
-        return fallback;
-      };
-      const victim = oldestEvictable();
-      if (victim === undefined) break;
-      const entry = this.cache.get(victim)!;
-      if (victim === this.loadedKey || victim === protectKey) {
-        // A URL the element holds (or is about to load) cannot be revoked yet.
-        // Keep a lone entry cached over the cap; otherwise drop tracking and
-        // revoke later at clearCache/dispose, after the element moved on.
-        if (this.cache.size === 1) break;
-        this.cache.delete(victim);
-        this.cacheBytes -= entry.bytes;
-        this.pendingRevoke.push(entry.url);
-        continue;
-      }
-      this.cache.delete(victim);
-      this.cacheBytes -= entry.bytes;
-      this.revokeObjectUrl(entry.url);
-    }
-  }
-
-  private pendingRevoke: string[] = [];
-
-  private clearCache(): void {
-    for (const entry of this.cache.values()) this.revokeObjectUrl(entry.url);
-    this.cache.clear();
-    this.cacheBytes = 0;
-    for (const url of this.pendingRevoke.splice(0)) this.revokeObjectUrl(url);
-    if (this.audio) this.audio.src = "";
-    this.loadedKey = null;
   }
 }

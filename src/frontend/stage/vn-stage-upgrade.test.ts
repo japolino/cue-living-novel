@@ -10,13 +10,11 @@ import type { StageEffect, VnTurnInput } from "../store";
 
 const texts = ["The door creaks open.", "Mira lifts the lantern.", "Wind howls through the hall.", "A shape moves."];
 const provisional = (planHold = Number.POSITIVE_INFINITY): VnTurnInput => ({
-  mode: "standard",
   paragraphs: texts.map((text, index) => ({ id: `fp:${index}`, text, speaker: "" })),
   preserveImage: true,
   planHold,
 });
 const planned = (effects: Partial<Record<number, StageEffect>> = {}): VnTurnInput => ({
-  mode: "standard",
   paragraphs: texts.map((text, index) => ({
     id: `fp:${index}`,
     text,
@@ -171,7 +169,6 @@ describe("upgradeTurn", () => {
 
   test("skip held by the plan stays on and carries on once it lands", async () => {
     const s = create();
-    s.setSkipMode("all");
     s.loadTurn(provisional(1));
     s.toggleSkip(true);
     await wait(250);

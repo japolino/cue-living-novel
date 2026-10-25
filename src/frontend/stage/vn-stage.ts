@@ -137,6 +137,8 @@ export interface VnStageCallbacks {
   onExit?: () => void;
   onReroll?: () => void | Promise<void>;
   onSwipe?: () => void | Promise<void>;
+  /** Sprite mode: Try again on "Could not prepare <name>" (the set's failed images again). */
+  onSpriteRetry?: (setKey: string) => void;
 }
 
 export interface VnStageOptions extends VnStageCallbacks {
@@ -150,7 +152,6 @@ export interface VnStageOptions extends VnStageCallbacks {
   themePreset?: VisualNovelThemePreset;
   textSpeed?: number;
   autoPlayDelay?: number;
-  skipMode?: "read" | "all";
   /** Optional predicate indicating an external hold on auto-play advance (e.g. speech loading/playing). */
   isAutoAdvanceHeld?: () => boolean;
 }
@@ -161,8 +162,17 @@ export interface VnSceneImageRequest {
   requestId?: string;
 }
 
+/** The empty stage before the host knows of a chat to write in. */
+/**
+ * After Your turn focuses the reply box, a plain Enter this soon is the
+ * reader's last advance key, not a send (a kept draft would go out half
+ * written). Typing in the box ends it; Ctrl/Cmd+Enter always sends.
+ */
+const REPLY_ENTER_GRACE_MS = 500;
+const EMPTY_TEXT = "There is no reply to show yet. Go back to chat, send the first message, then open Cue again.";
+
 const THEME_MARKUP = `
-  <main data-vn-root data-vn-mode="standard" data-vn-phase="idle" tabindex="0" aria-label="Visual novel">
+  <main data-vn-root data-vn-mode="standard" data-vn-phase="idle" tabindex="0" aria-label="Cue">
     <div data-vn-scene aria-hidden="true">
       <img data-vn-scene-image data-vn-layer="active" data-vn-empty="true" alt="" />
       <img data-vn-scene-image data-vn-layer="incoming" data-vn-empty="true" alt="" />
@@ -180,7 +190,7 @@ const THEME_MARKUP = `
     <div data-vn-empty-state>
       <div data-vn-empty-card>
         <span data-vn-empty-icon aria-hidden="true"><svg viewBox="0 0 16 16" width="14" height="14" focusable="false" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4.2C6.6 3.2 4.6 2.8 2.5 3v9.4c2.1-.2 4.1.2 5.5 1.2 1.4-1 3.4-1.4 5.5-1.2V3c-2.1-.2-4.1.2-5.5 1.2z" /><path d="M8 4.2v9.4" /></svg></span>
-        <p data-vn-empty-text>There is no reply to show yet. Go back to chat, send the first message, then open Visual novel again.</p>
+        <p data-vn-empty-text>${EMPTY_TEXT}</p>
       </div>
     </div>
 
@@ -202,7 +212,7 @@ const THEME_MARKUP = `
             </span>
             <span data-vn-control-icon aria-hidden="true"><svg viewBox="0 0 16 16" width="14" height="14" focusable="false" fill="currentColor" stroke="none" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3.2v9.6L12.6 8z" /></svg></span><span data-vn-control-label>Auto</span>
           </button>
-          <button data-vn-control="skip" type="button" aria-label="Skip" aria-pressed="false" aria-describedby="vn-skip-description" aria-keyshortcuts="S" title="Skip (S)">
+          <button data-vn-control="skip" type="button" aria-label="Skip" aria-pressed="false" aria-describedby="vn-skip-description" aria-keyshortcuts="S" title="Skip to the end of the reply (S)">
             <span data-vn-control-icon aria-hidden="true"><svg viewBox="0 0 16 16" width="14" height="14" focusable="false" fill="currentColor" stroke="none" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3.5v9L7.6 8z" /><path d="M8.2 3.5v9L13.8 8z" /></svg></span><span data-vn-control-label>Skip</span>
           </button>
           <span id="vn-skip-description" data-vn-skip-description hidden></span>
@@ -229,9 +239,9 @@ const THEME_MARKUP = `
         <p data-vn-interaction-hint></p>
       </div>
       <div data-vn-game-choices hidden aria-label="Game moves"></div>
-      <ol data-vn-choice-list hidden aria-label="Choose a reply"></ol>
+      <ol data-vn-choice-list hidden aria-label="Suggested replies"></ol>
       <form data-vn-input-form hidden>
-        <textarea data-vn-input aria-label="Your reply"></textarea>
+        <textarea data-vn-input rows="1" aria-label="Your reply"></textarea>
         <button data-vn-submit type="submit"><span data-vn-submit-label>Send</span><span data-vn-submit-icon aria-hidden="true"><svg viewBox="0 0 16 16" width="16" height="16" focusable="false" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 8h10" /><path d="M8.5 4l4 4-4 4" /></svg></span></button>
       </form>
     </section>
@@ -270,6 +280,24 @@ const queryRequired = <T extends Element>(
 const isInteractiveTarget = (target: EventTarget | null): boolean =>
   target instanceof Element &&
   Boolean(target.closest("button, textarea, input, select, option, a, [role='button']"));
+
+/** Where typed keys are text: reading shortcuts never fire there. */
+const isTextEntryTarget = (target: EventTarget | null): boolean =>
+  target instanceof Element &&
+  Boolean(target.closest("textarea, input, select, option, [contenteditable]:not([contenteditable='false'])"));
+
+/**
+ * A touch-only device (no hover, coarse pointer): its on-screen keyboard's
+ * Enter adds a line and the Send button sends, and Your turn does not focus
+ * the reply box (that would open the keyboard over the stage).
+ */
+const isTouchOnly = (): boolean => {
+  try {
+    return typeof matchMedia === "function" && matchMedia("(hover: none) and (pointer: coarse)").matches;
+  } catch {
+    return false;
+  }
+};
 
 const phaseLoadingLabel = (phase: VnPhase): string | null => {
   switch (phase) {
@@ -340,10 +368,7 @@ const restatesTitle = (message: string, title: string): boolean => {
   return normalize(message) === normalize(title);
 };
 
-const skipDescription = (mode: "read" | "all"): string =>
-  mode === "all"
-    ? "Skips all text until your next reply."
-    : "Skips text you have already read and stops at new text.";
+const SKIP_DESCRIPTION = "Skips to the end of the reply and stops at Your turn.";
 
 function createBadgeIconSvg(icon: "spinner" | "image" | "check" | "alert" | "reroll"): SVGElement {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -482,10 +507,11 @@ export class VnStage {
   private readonly createImage: VnImageFactory | undefined;
   private imageRequestSequence = 0;
   private destroyed = false;
+  /** When Your turn last focused the reply box (see REPLY_ENTER_GRACE_MS). */
+  private replyFocusedAt = Number.NEGATIVE_INFINITY;
   private customRegexRules: CustomRegexRule[] = [];
   private textSpeed = 20;
   private autoPlayDelay = 2000;
-  private skipMode: "read" | "all" = "read";
   private readonly isAutoAdvanceHeld: (() => boolean) | undefined;
   private isAutoPlay = false;
   private isSkipping = false;
@@ -512,9 +538,10 @@ export class VnStage {
   private errorDetails: VnStageErrorDetails | null = null;
   /** Host-reported image failure that must not stop reading. */
   private hostImageError: VnStageErrorDetails | null = null;
-  private lastSkipStop: "unread" | null = null;
   /** Sprite mode (config `presentationMode`); "scene" keeps the classic stage untouched. */
   private presentationMode: VisualNovelPresentationMode = "scene";
+  /** Sprite mode: a status line of the stage's own (the cut-out model download), or null. */
+  private spriteNote: string | null = null;
   private readonly spriteLayer: SpriteLayer;
   /**
    * Height (px) from the stage bottom to the top of the dialogue chrome
@@ -650,8 +677,7 @@ export class VnStage {
 
     if (typeof options.textSpeed === "number") this.setTextSpeed(options.textSpeed);
     if (typeof options.autoPlayDelay === "number") this.setAutoPlayDelay(options.autoPlayDelay);
-    if (options.skipMode) this.setSkipMode(options.skipMode);
-    this.skipDescriptionEl.textContent = skipDescription(this.skipMode);
+    this.skipDescriptionEl.textContent = SKIP_DESCRIPTION;
 
     this.bindEvents();
     this.updateControlButtons();
@@ -685,12 +711,6 @@ export class VnStage {
 
   setAutoPlayDelay(delay: number): void {
     this.autoPlayDelay = Math.max(500, Math.min(10000, Math.round(delay)));
-  }
-
-  setSkipMode(mode: "read" | "all"): void {
-    this.skipMode = mode === "all" ? "all" : "read";
-    this.skipDescriptionEl.textContent = skipDescription(this.skipMode);
-    this.skipButton.title = this.skipMode === "all" ? "Skip all text (S)" : "Skip read text (S)";
   }
 
   /** Reader text size multiplier (config `textScale`). Clamped to the config range. */
@@ -742,7 +762,6 @@ export class VnStage {
 
   toggleAutoPlay(force?: boolean): void {
     if (this.destroyed) return;
-    this.lastSkipStop = null;
     this.isAutoPlay = force !== undefined ? force : !this.isAutoPlay;
     if (this.isAutoPlay) {
       this.isSkipping = false;
@@ -759,7 +778,6 @@ export class VnStage {
 
   toggleSkip(force?: boolean): void {
     if (this.destroyed) return;
-    this.lastSkipStop = null;
     this.isSkipping = force !== undefined ? force : !this.isSkipping;
     if (this.isSkipping) {
       this.isAutoPlay = false;
@@ -836,11 +854,8 @@ export class VnStage {
       text = "Auto play on";
       kind = "auto";
     } else if (this.isSkipping) {
-      text = this.skipMode === "all" ? "Skipping all text" : "Skipping text you have read";
+      text = "Skipping to the end of the reply";
       kind = "skip";
-    } else if (this.lastSkipStop === "unread") {
-      text = "Skip stopped: new text ahead";
-      kind = "skip-stopped";
     }
     if (this.readingState.textContent !== text) this.readingState.textContent = text;
     if (kind) this.readingState.dataset.vnPlayback = kind;
@@ -897,6 +912,14 @@ export class VnStage {
 
   getPresentationMode(): VisualNovelPresentationMode {
     return this.presentationMode;
+  }
+
+  /** Sprite mode: show a status line (null hides it), e.g. the cut-out model's download progress. */
+  setSpriteNote(note: string | null): void {
+    const next = note?.trim() || null;
+    if (next === this.spriteNote) return;
+    this.spriteNote = next;
+    this.renderStatus();
   }
 
   /**
@@ -1218,7 +1241,7 @@ export class VnStage {
     this.gameChoices = [...choices];
     this.gameBusy = busy;
     const view = selectVnStageView(this.state);
-    this.renderInteraction(view.showChoices, view.showStandardInput, view.isBusy);
+    this.renderInteraction(view.showChoices, view.showComposer, view.isBusy);
   }
 
   reset(): void {
@@ -1233,7 +1256,6 @@ export class VnStage {
     this.openingShownAt = null;
     this.errorDetails = null;
     this.hostImageError = null;
-    this.lastSkipStop = null;
     // History and the read set belong to the chat being left.
     this.backlogEntries.length = 0;
     this.readParagraphIds.clear();
@@ -1252,7 +1274,6 @@ export class VnStage {
     this.ambientOverride = undefined;
     this.errorDetails = null;
     this.hostImageError = null;
-    this.lastSkipStop = null;
     // Sprite staging belongs to the turn: set it before the first paragraph renders.
     this.spriteLayer.setTurn(turn.sprites ?? null);
     this.forgetChangedParagraphs(turn.paragraphs);
@@ -1978,9 +1999,11 @@ export class VnStage {
       }
     });
 
+    // Scrolling up over the dialogue box opens History; elsewhere (suggested
+    // replies, panels, the reply box) the wheel scrolls as usual.
     this.root.addEventListener("wheel", (event) => {
       if (this.isBacklogOpen) return;
-      if (event.deltaY < -30) {
+      if (event.deltaY < -30 && event.target instanceof Element && event.target.closest("[data-vn-dialogue]")) {
         this.openBacklog();
       }
     }, { passive: true });
@@ -1999,7 +2022,17 @@ export class VnStage {
         }
         return;
       }
-      if (isInteractiveTarget(event.target)) return;
+      // Shortcuts work from buttons too (a focused suggestion, a toolbar
+      // control), never while typing; Enter and Space still press a button.
+      if (isTextEntryTarget(event.target)) return;
+      if (/^[1-9]$/.test(event.key)) {
+        const choice = selectVnStageView(this.state).showChoices ? this.state.choices[Number(event.key) - 1] : undefined;
+        if (choice && !choice.disabled) {
+          event.preventDefault();
+          void this.submitChoice(choice);
+        }
+        return;
+      }
       if (event.key === "ArrowLeft") {
         event.preventDefault();
         this.previous();
@@ -2021,6 +2054,7 @@ export class VnStage {
         return;
       }
       if (event.key !== "Enter" && event.key !== " " && event.key !== "ArrowRight") return;
+      if (event.key !== "ArrowRight" && isInteractiveTarget(event.target)) return;
 
       event.preventDefault();
       this.advance();
@@ -2047,12 +2081,28 @@ export class VnStage {
     });
 
     this.input.addEventListener("input", () => {
+      this.replyFocusedAt = Number.NEGATIVE_INFINITY;
       this.dispatch({ type: "set-draft", draft: this.input.value });
     });
 
+    // Enter sends and Shift+Enter adds a line; Ctrl/Cmd+Enter always sends. On a
+    // touch-only device Enter adds a line and the Send button sends.
     this.input.addEventListener("keydown", (event) => {
-      if (event.key !== "Enter" || (!event.ctrlKey && !event.metaKey)) return;
+      // Escape leaves the reply box (the draft stays) so the reading keys work.
+      if (event.key === "Escape" && !event.isComposing) {
+        event.preventDefault();
+        this.root.focus({ preventScroll: true });
+        return;
+      }
+      // keyCode 229: an IME is still composing (Safari reports isComposing false on its confirm).
+      if (event.key !== "Enter" || event.isComposing || event.keyCode === 229) return;
+      const forced = event.ctrlKey || event.metaKey;
+      const send = forced || (!event.shiftKey && !event.altKey && !isTouchOnly());
+      if (!send) return;
       event.preventDefault();
+      // A held Enter repeats; only the press sends.
+      if (event.repeat) return;
+      if (!forced && performance.now() - this.replyFocusedAt < REPLY_ENTER_GRACE_MS) return;
       this.inputForm.requestSubmit();
     });
 
@@ -2073,7 +2123,6 @@ export class VnStage {
     if (this.destroyed || this.isBacklogOpen || !selectVnStageView(this.state).canGoBack) return;
     this.isSkipping = false;
     this.isAutoPlay = false;
-    this.lastSkipStop = null;
     this.clearAllTimers();
     this.isTyping = false;
     this.activeTextNodes = [];
@@ -2092,10 +2141,6 @@ export class VnStage {
 
   private advance(): void {
     if (this.isBacklogOpen) return;
-    if (this.lastSkipStop !== null) {
-      this.lastSkipStop = null;
-      this.renderReadingState();
-    }
     if (this.isTyping) {
       this.completeTypewriter();
       return;
@@ -2112,9 +2157,9 @@ export class VnStage {
     const stillReading = this.state.phase === "revealing" || this.state.phase === "error";
     if (!stillReading && (this.isSkipping || this.isAutoPlay)) {
       // Reading handed over to the reader (Your turn) or to the host: playback
-      // stops here and never submits on its own.
+      // pauses here and never submits on its own. Skip ends with the reply;
+      // Auto stays on and goes on with the next reply.
       this.isSkipping = false;
-      this.isAutoPlay = false;
       this.clearAutoPlayTimer();
       this.clearSkipTimer();
       this.updateControlButtons();
@@ -2151,7 +2196,7 @@ export class VnStage {
 
   private async submitDraft(): Promise<void> {
     const text = this.state.draft.trim();
-    if (!selectVnStageView(this.state).showStandardInput || !text || !this.callbacks.onSubmit) {
+    if (!selectVnStageView(this.state).showComposer || !text || !this.callbacks.onSubmit) {
       return;
     }
     this.dispatch({ type: "submit-started" });
@@ -2165,11 +2210,12 @@ export class VnStage {
 
   private render(previousPhase: VnPhase | null): void {
     const view = selectVnStageView(this.state);
-    this.root.dataset.vnMode = this.state.mode;
     this.root.dataset.vnPhase = this.state.phase;
     // A provisional turn on stage: the text is here, its visual plan is not yet.
     if (this.state.planHold !== null) this.root.dataset.vnPlanPending = "";
     else delete this.root.dataset.vnPlanPending;
+    // Kept for custom CSS written for the retired reply modes: "cyoa" while the turn offers suggested replies.
+    this.root.dataset.vnMode = this.state.choices.length > 0 ? "cyoa" : "standard";
     this.root.dataset.vnImageStatus = this.state.pendingImage
       ? "loading"
       : this.state.imageError
@@ -2189,6 +2235,7 @@ export class VnStage {
     this.applyAmbient(this.ambientOverride !== undefined ? this.ambientOverride : this.state.ambient);
 
     this.narrative.hidden = view.paragraph === null;
+    // An empty chat at Your turn shows the reply box instead; its hint asks for the first message.
     this.emptyState.hidden = view.paragraph !== null || this.state.phase !== "idle";
     this.renderDialogueContent();
     this.dialogueText.dataset.vnParagraphId = view.paragraph?.id ?? "";
@@ -2206,16 +2253,15 @@ export class VnStage {
     this.syncSprites();
 
     this.renderStatus();
-    this.renderInteraction(view.showChoices, view.showStandardInput, view.isBusy);
+    this.renderInteraction(view.showChoices, view.showComposer, view.isBusy);
 
-    if (previousPhase !== "awaiting-input" && this.state.phase === "awaiting-input") {
+    // Your turn: the reply box takes focus so the reader can type at once
+    // (not on touch-only devices, where it would open the keyboard).
+    if (previousPhase !== "awaiting-input" && this.state.phase === "awaiting-input" && !isTouchOnly()) {
       queueMicrotask(() => {
-        if (this.destroyed) return;
-        if (this.state.mode === "cyoa") {
-          this.choiceList.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
-        } else {
-          this.input.focus({ preventScroll: true });
-        }
+        if (this.destroyed || this.state.phase !== "awaiting-input") return;
+        this.input.focus({ preventScroll: true });
+        this.replyFocusedAt = performance.now();
       });
     }
   }
@@ -2380,16 +2426,6 @@ export class VnStage {
       this.isSkipping = false;
       this.updateControlButtons();
       return;
-    }
-    if (this.skipMode === "read") {
-      const nextIdx = this.state.currentParagraphIndex + 1;
-      const nextPara = this.state.paragraphs[nextIdx];
-      if (nextPara && !this.readParagraphIds.has(nextPara.id)) {
-        this.isSkipping = false;
-        this.lastSkipStop = "unread";
-        this.updateControlButtons();
-        return;
-      }
     }
     this.skipTimer = setTimeout(() => {
       if (this.destroyed || !this.isSkipping) return;
@@ -2558,6 +2594,8 @@ export class VnStage {
       icon?: "spinner" | "image" | "check" | "alert" | "reroll";
       interactive?: boolean;
       action?: () => void;
+      /** Tells badges of one kind apart when reconciling (an interactive badge's action belongs to it). */
+      key?: string;
       /** Error-card extras. Presence forces a full rebuild instead of a text reconcile. */
       title?: string;
       detail?: string;
@@ -2606,11 +2644,19 @@ export class VnStage {
       badges.push({ kind: "warning", label: "This reply had no story text to show.", icon: "alert" });
     }
 
+    if (this.presentationMode === "sprites" && this.spriteNote) {
+      badges.push({ kind: "image", label: this.spriteNote, icon: "spinner" });
+    }
+
     if (this.presentationMode === "sprites" && selectVnStageView(this.state).paragraph) {
+      const retry = this.callbacks.onSpriteRetry;
       for (const badge of this.spriteLayer.badges()) {
-        badges.push(badge.kind === "warning"
-          ? { kind: "warning", label: badge.label, icon: "alert" }
-          : { kind: "image", label: badge.label, icon: "spinner" });
+        const setKey = badge.setKey;
+        badges.push(badge.kind !== "warning"
+          ? { kind: "image", label: badge.label, icon: "spinner" }
+          : retry && setKey
+            ? { kind: "warning", label: `${badge.label} \u00b7 Try again`, icon: "alert", interactive: true, key: setKey, action: () => retry(setKey) }
+            : { kind: "warning", label: badge.label, icon: "alert" });
       }
     }
 
@@ -2688,7 +2734,7 @@ export class VnStage {
         const b = badges[i]!;
         if (b.kind === "error") return el.dataset.vnBadgeSignature === errorSignature(b);
         const hasInteractiveMatch = Boolean(b.interactive) === (el.tagName.toLowerCase() === "button");
-        const hasKindMatch = el.dataset.vnBadgeKind === b.kind;
+        const hasKindMatch = el.dataset.vnBadgeKind === b.kind && (el.dataset.vnBadgeKey ?? "") === (b.key ?? "");
         const iconEl = el.querySelector("[data-vn-badge-icon]");
         const hasIconMatch = (iconEl?.getAttribute("data-vn-badge-icon") ?? undefined) === b.icon;
         return hasInteractiveMatch && hasKindMatch && hasIconMatch;
@@ -2704,7 +2750,7 @@ export class VnStage {
     }
 
     this.statusStack.replaceChildren(
-      ...badges.map(({ kind, label, icon, interactive, action, title, detail, actions }) => {
+      ...badges.map(({ kind, label, icon, interactive, action, key, title, detail, actions }) => {
         const badge = document.createElement(interactive ? "button" : "span");
         if (interactive) {
           (badge as HTMLButtonElement).type = "button";
@@ -2718,6 +2764,7 @@ export class VnStage {
         }
         badge.setAttribute("data-vn-badge", "");
         badge.dataset.vnBadgeKind = kind;
+        if (key) badge.dataset.vnBadgeKey = key;
         if (icon) {
           badge.appendChild(createBadgeIconSvg(icon));
         }
@@ -2826,33 +2873,51 @@ export class VnStage {
     );
   }
 
+  /**
+   * Your turn, the same for every reader: game moves and suggested replies
+   * (when there are any) above the reply box, which is always there.
+   */
   private renderInteraction(
     showChoices: boolean,
-    showStandardInput: boolean,
+    showComposer: boolean,
     isBusy: boolean,
   ): void {
-    const showGame = (showChoices || showStandardInput) && this.gameChoices.length > 0;
-    this.interaction.hidden = !showChoices && !showStandardInput;
+    const showGame = showComposer && this.gameChoices.length > 0;
+    this.interaction.hidden = !showComposer;
     this.choiceList.hidden = !showChoices;
     this.gameChoiceList.hidden = !showGame;
     this.renderGameChoices(showGame, isBusy || this.gameBusy);
-    this.inputForm.hidden = !showStandardInput;
-    const hint = showChoices
-      ? showGame ? "Pick a move or choose a reply." : "Choose a reply."
-      : showStandardInput
-        ? showGame ? "Pick a move, or write your own reply. Ctrl+Enter sends it." : "Write your reply. Ctrl+Enter sends it."
-        : "";
+    this.inputForm.hidden = !showComposer;
+    const picks = [showGame ? "a move" : "", showChoices ? "a suggestion" : ""].filter(Boolean).join(" or ");
+    // Nothing to read yet (an empty chat): the reply box starts the story.
+    const firstMessage = this.state.paragraphs.length === 0;
+    const lead = picks
+      ? `Pick ${picks}, or write your own reply.`
+      : firstMessage ? "No reply yet. Write the first message to start the story." : "Write your reply.";
+    const hint = !showComposer ? "" : isTouchOnly() ? lead : `${lead} Enter sends, Shift+Enter adds a line.`;
     if (this.interactionHint.textContent !== hint) this.interactionHint.textContent = hint;
 
     if (showChoices) {
       this.choiceList.replaceChildren(
-        ...this.state.choices.map((choice) => {
+        ...this.state.choices.map((choice, index) => {
           const item = document.createElement("li");
           const button = document.createElement("button");
           button.type = "button";
           button.setAttribute("data-vn-choice", "");
           button.dataset.vnChoiceId = choice.id;
-          button.textContent = choice.label;
+          // Keys 1-9 pick a suggestion while the reply box is not focused.
+          if (index < 9) {
+            button.setAttribute("aria-keyshortcuts", String(index + 1));
+            const key = document.createElement("kbd");
+            key.setAttribute("data-vn-choice-key", "");
+            key.setAttribute("aria-hidden", "true");
+            key.textContent = String(index + 1);
+            button.append(key);
+          }
+          const label = document.createElement("span");
+          label.setAttribute("data-vn-choice-label", "");
+          label.textContent = choice.label;
+          button.append(label);
           button.disabled = Boolean(choice.disabled) || isBusy;
           item.append(button);
           return item;

@@ -76,7 +76,7 @@ describe("stage chrome markup", () => {
     expect(empty.querySelector("[data-vn-empty-card]")).not.toBeNull();
     expect(empty.querySelector("[data-vn-empty-icon]")!.getAttribute("aria-hidden")).toBe("true");
     expect(empty.querySelector("[data-vn-empty-text]")!.textContent).toBe(
-      "There is no reply to show yet. Go back to chat, send the first message, then open Visual novel again.",
+      "There is no reply to show yet. Go back to chat, send the first message, then open Cue again.",
     );
   });
 

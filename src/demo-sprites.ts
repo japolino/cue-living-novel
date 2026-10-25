@@ -15,13 +15,14 @@ import {
  * Sprite-mode preview: `?sprites` on the standalone demo. A short scripted
  * scene with the fixture sprites and plates from scripts/fixtures/sprites/
  * (copied to demo/fixtures/sprites/ by `bun run build:demo`).
- * Also takes `&preset=<theme preset id>` and `&mode=standard|cyoa`.
+ * Also takes `&preset=<theme preset id>` and `&suggestions=off`.
  */
 const mount = document.querySelector<HTMLElement>("#preview");
 if (!mount) throw new Error("Preview mount is missing.");
 
 const query = new URLSearchParams(location.search);
-const mode = query.get("mode") === "standard" ? "standard" : "cyoa";
+/** `?suggestions=off` shows Your turn without suggested replies. */
+const suggestions = query.get("suggestions") !== "off";
 const requestedPreset = query.get("preset");
 const themePreset = isThemePresetId(requestedPreset) ? requestedPreset : "lumiverse";
 
@@ -188,13 +189,12 @@ let turnCounter = 0;
 function loadScene(): void {
   turnCounter += 1;
   stage.loadTurn({
-    mode,
     paragraphs: BEATS.map((beat, index) => ({
       id: `sprites-${turnCounter}-${index}`,
       text: beat.text,
       ...(beat.speaker ? { speaker: beat.speaker } : {}),
     })),
-    choices: [
+    choices: !suggestions ? [] : [
       { id: "tomorrow", label: "\"Same time tomorrow.\"", value: "Same time tomorrow." },
       { id: "walk", label: "Walk Aoi to the platform", value: "Let me walk you to the platform." },
       { id: "ren", label: "Run after Ren", value: "Wait up, Ren!" },

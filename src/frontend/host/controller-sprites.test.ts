@@ -47,8 +47,8 @@ describe("sprite mode host wiring", () => {
   });
 
   test("stageTurnInput carries turn.sprites only when present", () => {
-    expect(stageTurnInput(view({ sprites }), "standard", false).sprites).toBe(sprites);
-    expect(Object.hasOwn(stageTurnInput(view(), "standard", false), "sprites")).toBe(false);
+    expect(stageTurnInput(view({ sprites }), false).sprites).toBe(sprites);
+    expect(Object.hasOwn(stageTurnInput(view(), false), "sprites")).toBe(false);
   });
 
   test("the stage owns the background only in sprite mode for a turn with sprites", () => {

@@ -37,6 +37,7 @@ export class PanelDock {
   private list = document.createElement("div");
   private ruleList = document.createElement("div");
   private notice = document.createElement("p");
+  private advanced = document.createElement("details");
   private pins: Pin[] = [];
   private rules: PanelRule[] = [];
   private candidates: PanelArtifact[] = [];
@@ -71,7 +72,7 @@ export class PanelDock {
     const refresh = this.button("Refresh live sources", () => this.requestBridge());
     const close = this.button("Close", () => this.toggle(false));
     const actions = document.createElement("div"); actions.className = "row"; actions.append(reset, clear, close);
-    const advanced = document.createElement("details"); advanced.setAttribute("data-panel-advanced", "");
+    const advanced = this.advanced; advanced.setAttribute("data-panel-advanced", "");
     const advancedTitle = document.createElement("summary"); advancedTitle.textContent = "Advanced tools";
     const advancedHelp = document.createElement("p"); advancedHelp.textContent = "Optional tools for other extensions and custom status formats. You don't need these to pin a card listed above.";
     const trackerHelp = document.createElement("p"); trackerHelp.textContent = "Already use SimTracker? Let its card appear in normal chat, then capture a copy here. Live updates need the companion adapter; capture alone saves a snapshot.";
@@ -85,12 +86,31 @@ export class PanelDock {
     this.root.addEventListener("keydown", (event) => { if ((event as KeyboardEvent).key === "Escape") { this.toggle(false); this.launcher.focus(); } });
     this.observer = new ResizeObserver(() => this.layout()); this.observer.observe(mount);
     window.addEventListener("vn-panel-export-v1", this.receiveBridge);
+    this.syncLauncher();
   }
 
   private button(text: string, action: () => void): HTMLButtonElement {
     const button = document.createElement("button"); button.type = "button"; button.textContent = text; button.onclick = action; return button;
   }
-  private toggle(open: boolean): void { this.drawer.hidden = !open; this.launcher.setAttribute("aria-expanded", String(open)); }
+  private toggle(open: boolean): void { this.drawer.hidden = !open; this.launcher.setAttribute("aria-expanded", String(open)); this.syncLauncher(); }
+  private visibleCards(): PanelArtifact[] { return this.candidates.filter((card) => card.paragraphIndex <= this.cursor); }
+  /**
+   * No card to pin so far in this reply, nothing pinned, no rule in this chat
+   * and no SimTracker card to capture: no Panels button (most replies carry
+   * no card). Settings → Advanced → Open Panels tools opens the drawer anyway.
+   */
+  private syncLauncher(): void {
+    this.launcher.hidden = this.drawer.hidden && !this.visibleCards().length && !this.pins.length && !this.rules.length && !this.canCapture();
+  }
+  private canCapture(): boolean {
+    try { return (this.onCapture?.().length ?? 0) > 0; } catch { return false; }
+  }
+  /** Open the drawer on Advanced tools (capture, pasted HTML, rules), with or without a card. */
+  openTools(): void {
+    this.toggle(true);
+    this.advanced.open = true;
+    this.advanced.querySelector("summary")?.focus();
+  }
   private error(error: unknown): void { this.notice.textContent = error instanceof Error ? error.message : String(error); }
   private storageKey(): string { return `vn-panels-v1:${this.chat}`; }
   private save(): void {
@@ -132,7 +152,7 @@ export class PanelDock {
   }
   setCursor(cursor: number): void { this.cursor = cursor; this.refresh(); }
   private refresh(): void {
-    const visible = this.candidates.filter((card) => card.paragraphIndex <= this.cursor);
+    const visible = this.visibleCards();
     for (const pin of this.pins) {
       if (!pin.follow || !this.turn) continue;
       const latest = visible.filter((card) => card.followKey === pin.follow).at(-1);
@@ -203,6 +223,7 @@ export class PanelDock {
       this.drag(handle, pin, false); this.drag(resize, pin, true);
     }
     this.layout();
+    this.syncLauncher();
   }
   private rebuild(pin: Pin): void { this.nodes.get(pin.key)?.remove(); this.nodes.delete(pin.key); this.renderPins(); }
   private layout(): void {

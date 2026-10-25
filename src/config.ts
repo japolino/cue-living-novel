@@ -1,8 +1,6 @@
 import { DEFAULT_SPEECH_SETTINGS, normalizeSpeechSettings, type SpeechSettings } from "./speech-config.js";
 import { DEFAULT_SPRITE_EXPRESSION_COUNT, DEFAULT_SPRITE_MODEL_URL, SPRITE_EXPRESSION_COUNTS, normalizeSpriteExpressionCount, type SpriteExpressionCount } from "./shared/sprites.js";
 
-export type VisualNovelMode = "standard" | "cyoa";
-
 export const SCENE_IMAGE_FITS = ["cover", "contain", "fill", "none", "scale-down"] as const;
 export type VisualNovelSceneImageFit = (typeof SCENE_IMAGE_FITS)[number];
 
@@ -68,6 +66,15 @@ export const KEY_ILLUSTRATION_CAP: Readonly<Record<VisualNovelKeyIllustrations, 
 export type VisualNovelTextEffectMode = (typeof TEXT_EFFECT_MODES)[number];
 
 /**
+ * The Motion setting (`effectIntensity`) decides the text effects too: tagged
+ * words move with "full" and "gentle" (smaller and slower), and keep their
+ * style without moving with "off".
+ */
+export function textEffectModeFor(intensity: VisualNovelEffectIntensity): VisualNovelTextEffectMode {
+  return intensity === "off" ? "static" : "animated";
+}
+
+/**
  * Where a character's reference anchor image comes from.
  * - "captured": the first render of the character in the chat (the default, unchanged behaviour);
  * - "card": one fixed sprite per character resolved from the card's assets. Characters the card
@@ -112,7 +119,6 @@ export type VisualNovelConfig = {
   themePreset: VisualNovelThemePreset;
   enabled: boolean;
   autoEnter: boolean;
-  mode: VisualNovelMode;
   sceneImageFit: VisualNovelSceneImageFit;
   debugLogging: boolean;
   generateImages: boolean;
@@ -120,6 +126,7 @@ export type VisualNovelConfig = {
   referenceAnchoring: boolean;
   /** Where the reference anchor image comes from ("captured" render or "card" sprite). */
   referenceSource: VisualNovelReferenceSource;
+  /** Suggested replies at Your turn when the reply has no choices of its own (above the reply box). */
   generateChoices: boolean;
   parserConnectionId: string | null;
   systemOneMode: "off" | "compare" | "on";
@@ -154,11 +161,11 @@ export type VisualNovelConfig = {
   useNativeCardImages: boolean;
   textSpeed: number;
   autoPlayDelay: number;
-  skipMode: "read" | "all";
-  /** Presentation strength of one-shot stage effects. Default "full" keeps existing playback. */
+  /**
+   * Motion: how strongly stage effects play, and whether tagged dialogue
+   * words (<shake>, <rainbow>, ...) move (see textEffectModeFor). Default "full".
+   */
   effectIntensity: VisualNovelEffectIntensity;
-  /** Inline dialogue text effects (<shake>, <rainbow>, ...). Default "animated". */
-  textEffects: VisualNovelTextEffectMode;
   /** Full scene pictures (default) or sprite mode. */
   presentationMode: VisualNovelPresentationMode;
   /** Sprite cut-out quality. */
@@ -186,7 +193,6 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   themePreset: "lumiverse",
   enabled: true,
   autoEnter: false,
-  mode: "standard",
   sceneImageFit: "cover",
   debugLogging: false,
   generateImages: true,
@@ -223,9 +229,7 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   useNativeCardImages: false,
   textSpeed: 20,
   autoPlayDelay: 2000,
-  skipMode: "read",
   effectIntensity: "full",
-  textEffects: "animated",
   presentationMode: "scene",
   spriteCutout: "best",
   keyIllustrations: "off",
@@ -308,12 +312,6 @@ function effectIntensity(value: unknown): VisualNovelEffectIntensity {
     : DEFAULT_CONFIG.effectIntensity;
 }
 
-function textEffectMode(value: unknown): VisualNovelTextEffectMode {
-  return typeof value === "string" && (TEXT_EFFECT_MODES as readonly string[]).includes(value)
-    ? value as VisualNovelTextEffectMode
-    : DEFAULT_CONFIG.textEffects;
-}
-
 function presentationMode(value: unknown): VisualNovelPresentationMode {
   return typeof value === "string" && (PRESENTATION_MODES as readonly string[]).includes(value)
     ? value as VisualNovelPresentationMode
@@ -380,8 +378,26 @@ function retiredLegacySuffix(value: string): string {
   return value.trim() === LEGACY_DEFAULT_PROMPT_SUFFIX ? "" : value;
 }
 
+/**
+ * Settings that merged into others. Each applies only while its retired key
+ * is still stored; the next save writes the merged value without it, so each
+ * happens once.
+ * - `textEffects` "static" (tagged words kept still) or "off" (plain text,
+ *   no longer offered) became Motion: such a config loads with Motion Still,
+ *   so text that did not move still does not (scene effects stop too).
+ * - `mode`: Suggest replies did nothing outside "cyoa". They cost
+ *   story-reader tokens on every reply, so a config saved with another mode
+ *   (the old default "standard") loads with them off.
+ */
+function migrateRetired(input: Record<string, unknown>): Record<string, unknown> {
+  const next = { ...input };
+  if (input.textEffects === "static" || input.textEffects === "off") next.effectIntensity = "off";
+  if ("mode" in input && input.mode !== "cyoa") next.generateChoices = false;
+  return next;
+}
+
 export function normalizeConfig(value: unknown): VisualNovelConfig {
-  const input = record(value);
+  const input = migrateRetired(record(value));
   const themePreset = (THEME_PRESET_IDS as readonly string[]).includes(input.themePreset as string)
     ? input.themePreset as VisualNovelThemePreset
     : "lumiverse";
@@ -389,7 +405,6 @@ export function normalizeConfig(value: unknown): VisualNovelConfig {
     themePreset,
     enabled: bool(input.enabled, DEFAULT_CONFIG.enabled),
     autoEnter: bool(input.autoEnter, DEFAULT_CONFIG.autoEnter),
-    mode: input.mode === "cyoa" ? "cyoa" : "standard",
     sceneImageFit: sceneImageFit(input.sceneImageFit),
     debugLogging: bool(input.debugLogging, DEFAULT_CONFIG.debugLogging),
     generateImages: bool(input.generateImages, DEFAULT_CONFIG.generateImages),
@@ -426,9 +441,7 @@ export function normalizeConfig(value: unknown): VisualNovelConfig {
     useNativeCardImages: bool(input.useNativeCardImages, DEFAULT_CONFIG.useNativeCardImages),
     textSpeed: integer(input.textSpeed, 0, 100, DEFAULT_CONFIG.textSpeed),
     autoPlayDelay: integer(input.autoPlayDelay, 500, 10000, DEFAULT_CONFIG.autoPlayDelay),
-    skipMode: input.skipMode === "all" ? "all" : "read",
     effectIntensity: effectIntensity(input.effectIntensity),
-    textEffects: textEffectMode(input.textEffects),
     presentationMode: presentationMode(input.presentationMode),
     spriteCutout: spriteCutout(input.spriteCutout),
     keyIllustrations: keyIllustrations(input.keyIllustrations),

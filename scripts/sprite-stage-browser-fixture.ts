@@ -111,11 +111,14 @@ const mount = document.createElement("div");
 Object.assign(mount.style, { position: "fixed", inset: "0", background: "#08090d" });
 document.body.append(mount);
 
+/** Sets the stage's Try again asked for (onSpriteRetry). */
+const retried: string[] = [];
 const stage = new VnStage({
   mount,
   textSpeed: Number(q.get("speed") ?? 0),
   themePreset: (q.get("preset") as never) ?? "lumiverse",
   onReroll: () => {}, onSubmit: async () => {}, onChoice: async () => {}, onExit: () => {},
+  onSpriteRetry: (setKey) => { retried.push(setKey); },
 });
 stage.setEffectIntensity((q.get("intensity") as never) ?? "full");
 stage.setPresentationMode((q.get("mode") as never) ?? "sprites");
@@ -145,7 +148,6 @@ function load(paragraphs: FixtureParagraph[], options: { sets?: Partial<SpriteTu
   current = view;
   turnCounter += 1;
   stage.loadTurn({
-    mode: "standard",
     preserveImage: true,
     paragraphs: paragraphs.map((p, index) => ({
       id: `fixture-${turnCounter}:${index}`,
@@ -180,6 +182,13 @@ Object.assign(window, {
     go,
     illustrate,
     spriteImage,
+    retried,
+    /** Every image of a set failed (the stage offers Try again). */
+    failedSet: (key: string, name: string): SpriteSetView => {
+      const set = makeSet(key, name, {});
+      for (const id of Object.keys(set.expressions)) set.expressions[id] = { expression: id, status: "failed", error: "boom" };
+      return { ...set, readyCount: 0 };
+    },
     view: () => current,
     effect: (name: string) => stage.triggerEffect(name as never),
     ambient: (name: string | null) => stage.applyAmbient(name as never),

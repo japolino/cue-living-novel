@@ -237,6 +237,8 @@ export class SpriteService {
   /** Relay misses per set (raw image id + until): later expressions do not wait for the same timeout again. */
   private readonly referenceMisses = new Map<string, { imageId: string; until: number }>();
   private readonly cutTasks = new Set<Promise<void>>();
+  /** When a page last told that a cut-out model arrived, per user (see onCutSettled). */
+  private readonly cutoutArrivedAt = new Map<string, number>();
   /** When each fresh idle render (by raw image id) started waiting for its duplicate check. */
   private readonly idleCheckSince = new Map<string, number>();
   /**
@@ -259,8 +261,8 @@ export class SpriteService {
     });
     this.bridge = new SpriteCutBridge({
       send: (message, userId) => this.spindle.sendToFrontend(message, userId),
-      onSettled: (userId, target, outcome) => {
-        const task = this.onCutSettled(userId, target, outcome).catch((error) => {
+      onSettled: (userId, target, outcome, _requestId, sentAt) => {
+        const task = this.onCutSettled(userId, target, outcome, sentAt).catch((error) => {
           this.spindle.log.warn(`Sprite cut-out handling failed: ${errorText(error)}`);
         });
         this.cutTasks.add(task);
@@ -541,20 +543,7 @@ export class SpriteService {
     await this.library.update(userId, (library, now) => {
       for (const member of staging.cast) {
         const set = resolveSpriteSet(library, member, styleKey).set;
-        if (!set) continue;
-        for (const image of Object.values(set.images)) {
-          if (image.status !== "failed") continue;
-          // A smaller set does not make expressions outside it (its nearest one stands in).
-          if (size !== 12 && !active.includes(image.expression)) continue;
-          const next = image.rawImageId ? "cutting" : "queued";
-          const previousCut = image.cutImageId;
-          this.resetImage(image, next, now);
-          // A re-cut replaces (and then deletes) the previous cut-out, if any.
-          if (next === "cutting") image.cutImageId = previousCut;
-          state.wanted.set(spriteWorkKey(set.setKey, image.expression), "visible");
-          changedImages.push([set.setKey, image]);
-          count += 1;
-        }
+        if (set) count += this.requeueFailedImages(state, set, active, size, now, changedImages);
       }
       for (const plateKey of stagingPlateKeys(staging)) {
         const plate = library.plates[plateKey];
@@ -570,6 +559,41 @@ export class SpriteService {
     for (const [setKey, image] of changedImages) this.broadcastImage(userId, setKey, image);
     for (const plate of changedPlates) this.broadcastPlate(userId, plate);
     await this.ensureForStaging(userId, staging, config);
+    return count;
+  }
+
+  /** Re-queue one set's failed images (the stage's Try again on "Could not prepare <name>"). */
+  async retryFailedSet(userId: string | undefined, setKey: string, config: VisualNovelConfig): Promise<number> {
+    const state = this.state(userId);
+    const size = normalizeSpriteExpressionCount(config.spriteExpressionCount);
+    const active: readonly string[] = spriteExpressionSet(size);
+    const changedImages: Array<[string, StoredSpriteImage]> = [];
+    const count = await this.library.update(userId, (library, now) => {
+      const set = library.sets[setKey];
+      if (!set) throw new Error("This sprite set is no longer in the library.");
+      return this.requeueFailedImages(state, set, active, size, now, changedImages);
+    });
+    for (const [key, image] of changedImages) this.broadcastImage(userId, key, image);
+    await this.pump(userId);
+    return count;
+  }
+
+  /** Failed images of a set go again: a re-cut where the render exists, else a new render (turn priority). */
+  private requeueFailedImages(state: UserState, set: StoredSpriteSet, active: readonly string[], size: number, now: string, changed: Array<[string, StoredSpriteImage]>): number {
+    let count = 0;
+    for (const image of Object.values(set.images)) {
+      if (image.status !== "failed") continue;
+      // A smaller set does not make expressions outside it (its nearest one stands in).
+      if (size !== 12 && !active.includes(image.expression)) continue;
+      const next = image.rawImageId ? "cutting" : "queued";
+      const previousCut = image.cutImageId;
+      this.resetImage(image, next, now);
+      // A re-cut replaces (and then deletes) the previous cut-out, if any.
+      if (next === "cutting") image.cutImageId = previousCut;
+      state.wanted.set(spriteWorkKey(set.setKey, image.expression), "visible");
+      changed.push([set.setKey, image]);
+      count += 1;
+    }
     return count;
   }
 
@@ -639,6 +663,18 @@ export class SpriteService {
       }
       return count;
     });
+  }
+
+  /**
+   * The browser finished downloading a cut-out model (Best on first use, or
+   * the Studio model): the cuts made without it are re-cut now instead of on
+   * the next view open.
+   */
+  async onCutoutModelArrived(userId: string | undefined): Promise<number> {
+    this.cutoutArrivedAt.set(userKey(userId), Date.now());
+    const queued = await this.queueCutUpgrades(userId);
+    if (queued > 0) await this.pump(userId);
+    return queued;
   }
 
   /** `vn_get_state`: a reloaded frontend lost its cut and inset requests; re-send stale ones. */
@@ -1593,7 +1629,7 @@ export class SpriteService {
     this.insetBridge.accept(userId, message);
   }
 
-  private async onCutSettled(userId: string | undefined, target: SpriteCutTarget, outcome: SpriteCutOutcome): Promise<void> {
+  private async onCutSettled(userId: string | undefined, target: SpriteCutTarget, outcome: SpriteCutOutcome, sentAt?: number): Promise<void> {
     if (outcome.ok && target.crop && !sameRect(outcome.meta.crop, target.crop)) {
       // A page from before the inset cut the whole canvas (reference and render): never keep that.
       outcome = { ok: false, error: "This page did not crop the NovelAI V5 inset render. Reload the page, then use Re-cut." };
@@ -1609,6 +1645,14 @@ export class SpriteService {
     // The render's first cut-out (any later one is a Re-cut or a Retry).
     const fresh = this.freshRenders.get(target.imageId);
     if (outcome.ok) this.freshRenders.delete(target.imageId);
+    // Basic only because the cut-out model was still downloading: this
+    // sprite's re-cut waits for the model's arrival. A cut sent before the
+    // arrival was told (it was still out) is re-cut at once; one sent after
+    // it waits for the next arrival (a reloaded page downloads again), so
+    // this never loops.
+    const modelPending = outcome.ok && outcome.meta.modelPending === true;
+    const arrivedAt = this.cutoutArrivedAt.get(userKey(userId));
+    const recutNow = modelPending && sentAt !== undefined && arrivedAt !== undefined && arrivedAt >= sentAt;
     if (first.status === "ready") {
       // A silent upgrade re-cut, tried only once: it replaces a basic cut with
       // a model's, or a provisional Best cut with the Studio model's; anything
@@ -1618,7 +1662,7 @@ export class SpriteService {
         await this.library.update(userId, (_library, now) => {
           const image = current();
           if (!image) return;
-          image.upgrade = "done";
+          image.upgrade = modelPending ? (recutNow ? "pending" : null) : "done";
           image.updatedAt = now;
         });
         void this.pump(userId);
@@ -1707,7 +1751,7 @@ export class SpriteService {
       else delete image.face;
       // A basic cut while "best" is selected gets one silent upgrade later; a
       // provisional Best one (also an upgrade of a basic cut) one Studio try.
-      image.upgrade = image.upgrade === "pending" && !outcome.meta.provisional ? "done" : null;
+      image.upgrade = recutNow ? "pending" : image.upgrade === "pending" && !outcome.meta.provisional ? "done" : null;
       image.error = null;
       image.cutAttempts = 0;
       image.updatedAt = now;
@@ -1846,6 +1890,10 @@ export class SpriteService {
         const cast = context.castForChat ? await context.castForChat(request.chatId) : [];
         if (cast.length === 0) throw new Error("No characters with a known appearance in this chat yet.");
         await this.prepareCast(userId, cast, context.config);
+        return;
+      }
+      case "retry_failed": {
+        await this.retryFailedSet(userId, typeof request.setKey === "string" ? request.setKey : "", context.config);
         return;
       }
       case "regenerate":

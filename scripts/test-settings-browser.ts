@@ -51,7 +51,7 @@ try {
   assert.equal(await tab("Reading").getAttribute("aria-selected"), "true");
   assert.equal(await settings.getByRole("tabpanel").count(), 1, "exactly one section is shown");
   assert.equal(await settings.locator('[data-pane="reading"]').isVisible(), true);
-  assert.equal(await settings.locator('[name="mode"]').isVisible(), true, "everyday reading controls show first");
+  assert.equal(await settings.locator('[name="generateChoices"]').isVisible(), true, "everyday reading controls show first");
 
   // First use: the guide is visible, uses listed connections, and saves choices immediately.
   const setup = settings.locator("[data-setup]");
@@ -91,9 +91,11 @@ try {
   assert.deepEqual(await lastPatch(page), { textScale: 1.2 });
   await settings.locator('input[name="effectIntensity"][value="gentle"]').check();
   assert.deepEqual(await lastPatch(page), { effectIntensity: "gentle" });
-  await settings.locator('input[name="textEffects"][value="static"]').check();
-  assert.deepEqual(await lastPatch(page), { textEffects: "static" }, "text effects mode is an everyday patch");
-  assert.equal(await settings.locator("[data-text-fx-list]").getAttribute("data-vn-text-effects"), "static", "previews follow the text effects mode");
+  assert.equal(await settings.locator("[data-text-fx-list]").getAttribute("data-vn-text-effects"), "animated", "Gentle motion keeps tagged words moving");
+  assert.equal(await settings.locator('input[name="textEffects"]').count(), 0, "no text effects setting of its own");
+  await settings.locator('input[name="effectIntensity"][value="off"]').check();
+  assert.deepEqual(await lastPatch(page), { effectIntensity: "off" }, "Motion is an everyday patch");
+  assert.equal(await settings.locator("[data-text-fx-list]").getAttribute("data-vn-text-effects"), "static", "Still motion: previews keep their style without moving");
   assert.equal((await fixture(page)).patches.length, patchesBefore + 6, "one patch per everyday change");
 
   // Text effects reference: every catalogue entry, a copy button each, and the chat-model guide.
@@ -153,21 +155,25 @@ try {
   assert.equal(await presentation.isVisible(), true, "presentation mode shows while pictures are generated");
   assert.equal(await settings.locator('input[name="presentationMode"][value="scene"]').isChecked(), true, "scene pictures is the default");
   assert.equal(await settings.locator("[data-sprites-only]").isVisible(), false, "sprite controls hide in scene mode");
-  // Image size also sets the scene picture size, so it shows in scene mode too.
+  // Image size (scenes too) and the sprite set size are in Advanced; the set size only for sprites.
   const sizeGroup = settings.locator('[data-group-id="sprite-size"]');
+  const countGroup = settings.locator('[data-group-id="sprite-expressions"]');
+  assert.equal(await settings.locator('[data-pane="pictures"] [name="spriteImageSize"], [data-pane="pictures"] [name="spriteExpressionCount"]').count(), 0, "no picture size controls in Pictures");
+  await openTab("Advanced");
   assert.equal(await sizeGroup.isVisible(), true, "image size shows in scene mode");
   assert.match(await sizeGroup.innerText(), /Scenes and backgrounds 912×624/);
+  assert.equal(await countGroup.isVisible(), false, "no set size in scene mode");
   await settings.locator('input[name="spriteImageSize"][value="upscaled"]').check();
   assert.deepEqual(await lastPatch(page), { spriteImageSize: "upscaled" }, "image size saves at once in scene mode");
   await settings.locator('input[name="spriteImageSize"][value="standard"]').check();
   assert.deepEqual(await lastPatch(page), { spriteImageSize: "standard" });
+  await openTab("Pictures");
   const budgetGroup = settings.locator('[data-group][data-scene-only]').first();
   assert.equal(await budgetGroup.getAttribute("data-inactive"), null);
   const requestsBefore = (await spriteFixture(page)).libraryRequests;
   await settings.locator('input[name="presentationMode"][value="sprites"]').check();
   assert.deepEqual(await lastPatch(page), { presentationMode: "sprites" }, "presentation mode is an everyday patch");
   assert.equal(await settings.locator("[data-sprites-only]").isVisible(), true, "sprite controls appear with sprites");
-  assert.equal(await sizeGroup.isVisible(), true, "image size stays in sprite mode");
   assert.equal(await budgetGroup.getAttribute("data-inactive"), "", "pictures per reply reads as not applying");
   assert.equal(await budgetGroup.locator("[data-scene-note]").isVisible(), true);
   assert.equal(await settings.locator('input[name="budgetPreset"][value="custom"]').isChecked(), true, "the budget keeps its value in sprite mode");
@@ -185,16 +191,18 @@ try {
   assert.equal(await library.locator("details[data-sprite-set][open]").count(), 0, "many sets start collapsed");
   assert.equal(await library.locator("[data-expression]").count(), 0, "expression tiles are built only when a set opens");
   assert.equal(await library.locator("img:not([loading=lazy])").count(), 0, "every thumbnail loads lazily");
-  // Expressions per character: 4 by default, next to Image size; lists and counts follow the size.
-  const countGroup = settings.locator('[data-group-id="sprite-expressions"]');
-  assert.equal(await countGroup.isVisible(), true, "the set size shows in sprite mode");
-  assert.match(await countGroup.innerText(), /Expressions per character[\s\S]*4 \(fastest\)[\s\S]*8[\s\S]*12 \(all\)/);
-  assert.equal(await settings.locator('input[name="spriteExpressionCount"][value="4"]').isChecked(), true, "4 is the default");
+  // Expressions per character: 4 by default, in Advanced next to Image size; the library's lists and counts follow it.
   assert.match(await library.locator("[data-sets-note]").innerText(), /^4 expressions each/);
   assert.match(await library.locator('details[data-sprite-set="set_ren"] summary').innerText(), /2\/4 ready/, "progress of the 4 set");
   assert.match(await library.locator('details[data-sprite-set="set_elise"] summary').innerText(), /0\/4 ready/);
+  await openTab("Advanced");
+  assert.equal(await sizeGroup.isVisible(), true, "image size stays in sprite mode");
+  assert.equal(await countGroup.isVisible(), true, "the set size shows in sprite mode");
+  assert.match(await countGroup.innerText(), /Expressions per character[\s\S]*4 \(fastest\)[\s\S]*8[\s\S]*12 \(all\)/);
+  assert.equal(await settings.locator('input[name="spriteExpressionCount"][value="4"]').isChecked(), true, "4 is the default");
   await settings.locator('input[name="spriteExpressionCount"][value="12"]').check();
-  assert.deepEqual(await lastPatch(page), { spriteExpressionCount: 12 }, "the set size is an everyday patch");
+  assert.deepEqual(await lastPatch(page), { spriteExpressionCount: 12 }, "the set size saves at once");
+  await openTab("Pictures");
   assert.match(await library.locator("[data-sets-note]").innerText(), /^12 expressions each/);
   const mira = library.locator('details[data-sprite-set="set_mira"]');
   assert.match(await mira.locator("summary").innerText(), /Mira[\s\S]*navy sailor uniform[\s\S]*8\/12 ready[\s\S]*3 in progress[\s\S]*1 failed/);
@@ -320,27 +328,55 @@ try {
   assert.match(await settings.locator("[data-search-results]").innerText(), /Sprite library/);
   await spriteSearch.press("Escape");
 
-  // Advanced: the model URL is a draft until Apply, and must be https.
+  // Advanced: the model URL saves when the field is left, only when it is https, with Undo.
   await openTab("Advanced");
+  const defaultModelUrl = "https://huggingface.co/skytnt/anime-seg/resolve/main/isnetis.onnx";
   const modelUrl = settings.locator('[name="spriteModelUrl"]');
-  assert.equal(await modelUrl.inputValue(), "https://huggingface.co/skytnt/anime-seg/resolve/main/isnetis.onnx");
+  assert.equal(await modelUrl.inputValue(), defaultModelUrl);
   const urlPatches = (await fixture(page)).patches.length;
   await modelUrl.fill("http://example.com/isnetis.onnx");
-  assert.equal(await settings.locator("[data-draft-bar]").isVisible(), true, "the model URL waits for Apply");
-  assert.equal((await fixture(page)).patches.length, urlPatches);
-  await openTab("Pictures");
-  await settings.locator("[data-apply-bar]").click();
+  assert.equal((await fixture(page)).patches.length, urlPatches, "typing saves nothing yet");
+  await modelUrl.press("Tab");
   assert.match(await settings.locator("[data-status]").innerText(), /https/);
-  assert.equal(await tab("Advanced").getAttribute("aria-selected"), "true", "an invalid URL is revealed in Advanced");
+  assert.equal(await modelUrl.getAttribute("aria-invalid"), "true", "the invalid URL is marked");
+  assert.equal(await tab("Advanced").locator("[data-tab-badge]").innerText(), "1", "the nav counts fields not saved");
   assert.equal((await fixture(page)).patches.length, urlPatches, "nothing is sent for an invalid URL");
+  assert.equal(await modelUrl.inputValue(), "http://example.com/isnetis.onnx", "the text stays for fixing");
   await modelUrl.fill("https://models.example.com/isnetis_int8.onnx");
-  await settings.locator("[data-apply-bar]").click();
-  assert.equal((await lastPatch(page))?.spriteModelUrl, "https://models.example.com/isnetis_int8.onnx");
-  assert.equal("presentationMode" in (await lastPatch(page))!, false, "Apply never carries everyday sprite keys");
-  assert.equal(await settings.locator("[data-draft-bar]").isVisible(), false);
+  await modelUrl.press("Tab");
+  assert.deepEqual(await lastPatch(page), { spriteModelUrl: "https://models.example.com/isnetis_int8.onnx" }, "a valid URL saves on its own");
+  assert.equal(await modelUrl.getAttribute("aria-invalid"), null);
+  assert.equal(await tab("Advanced").locator("[data-tab-badge]").isVisible(), false);
+  assert.equal(await settings.locator("[data-undo-toast]").isVisible(), true, "Undo is offered after the save");
+  assert.match(await settings.locator("[data-undo-text]").innerText(), /Sprite cut-out model URL saved/);
+  await settings.locator("[data-undo]").click();
+  assert.deepEqual(await lastPatch(page), { spriteModelUrl: defaultModelUrl }, "Undo saves the previous value");
+  assert.equal(await modelUrl.inputValue(), defaultModelUrl, "Undo puts the field back");
+  assert.equal(await settings.locator("[data-undo-toast]").isVisible(), false);
+  // Enter in a single-line Advanced field commits it, as the field's help says.
+  await modelUrl.fill("https://models.example.com/enter.onnx");
+  await modelUrl.press("Enter");
+  assert.deepEqual(await lastPatch(page), { spriteModelUrl: "https://models.example.com/enter.onnx" }, "Enter saves the field");
+  // Undo belongs to the section it was offered in: another tab drops it.
+  assert.equal(await settings.locator("[data-undo-toast]").isVisible(), true);
+  await openTab("Look");
+  assert.equal(await settings.locator("[data-undo-toast]").isVisible(), false, "switching sections drops the Undo");
+  await openTab("Advanced");
+  // A setting saved again after the change is not put back by its Undo.
+  await modelUrl.fill("https://models.example.com/first.onnx");
+  await modelUrl.press("Tab");
+  await page.evaluate(() => { const f = (window as any).settingsFixture; f.panel.setConfig({ ...f.config, spriteModelUrl: "https://models.example.com/elsewhere.onnx" }); });
+  const beforeStaleUndo = (await fixture(page)).patches.length;
+  await settings.locator("[data-undo]").click();
+  assert.equal((await fixture(page)).patches.length, beforeStaleUndo, "a stale Undo writes nothing");
+  assert.match(await settings.locator("[data-status]").innerText(), /changed after/);
+  await modelUrl.fill(defaultModelUrl);
+  await modelUrl.press("Tab");
+  await modelUrl.fill("https://models.example.com/isnetis_int8.onnx");
+  await modelUrl.press("Tab");
   await modelUrl.fill("");
-  await settings.locator("[data-apply-bar]").click();
-  assert.equal((await lastPatch(page))?.spriteModelUrl, "https://huggingface.co/skytnt/anime-seg/resolve/main/isnetis.onnx", "empty restores the default");
+  await modelUrl.press("Tab");
+  assert.equal((await lastPatch(page))?.spriteModelUrl, defaultModelUrl, "empty restores the default");
 
   // Back to scene pictures: everything scene-only applies again, unchanged.
   await openTab("Pictures");
@@ -360,66 +396,77 @@ try {
   await page.evaluate(() => (window as any).settingsFixture.panel.setAudioStatus("Scanned 0 BGM, 0 SFX."));
   assert.equal(await settings.locator("[data-sound-empty]").isVisible(), true, "text-only host reports still drive the empty state");
 
-  // Advanced: hidden by default, drafts survive host updates and tab switches, Apply sends them, invalid JSON is revealed.
+  // Advanced: hidden by default; each field saves on its own when committed, with Undo;
+  // a field being typed survives host updates; invalid JSON stays, marked and unsaved.
   for (const name of ["parserParameters", "imageParameters", "customCss", "ignoredTags", "debugLogging", "imageModel"]) {
     assert.equal(await settings.locator(`[name="${name}"]`).isVisible(), false, name + " should be advanced");
   }
-  assert.equal(await settings.locator("[data-draft-bar]").isVisible(), false, "no unapplied-changes bar without drafts");
+  assert.equal(await settings.locator("[data-apply-bar], [data-draft-bar], [data-discard]").count(), 0, "no Apply or Discard anywhere");
   await openTab("Connections");
   assert.equal(await settings.locator('[data-pane="connections"] [data-readiness]').count(), 1, "one readiness widget in Connections");
+  // System One: Connections has the key and an on/off switch; Compare, the URL and the model are in Advanced.
+  assert.equal(await settings.locator('[data-pane="connections"] [name="systemOneMode"], [data-pane="connections"] [name="systemOneApiUrl"], [data-pane="connections"] [name="systemOneModel"]').count(), 0);
+  const systemOneOn = settings.locator('[name="systemOneOn"]');
+  assert.equal(await systemOneOn.isChecked(), false, "off by default");
+  await systemOneOn.check();
+  assert.deepEqual(await lastPatch(page), { systemOneMode: "on" }, "the switch turns it on");
+  await systemOneOn.uncheck();
+  assert.deepEqual(await lastPatch(page), { systemOneMode: "off" }, "and off");
+  await openTab("Advanced");
   await settings.locator('[name="systemOneMode"]').selectOption("compare");
-  await settings.locator('[name="systemOneModel"]').fill("jev-latest");
+  assert.deepEqual(await lastPatch(page), { systemOneMode: "compare" }, "Compare saves at once");
+  await settings.locator('[name="systemOneModel"]').fill("jev-2");
+  await settings.locator('[name="systemOneModel"]').press("Tab");
+  assert.deepEqual(await lastPatch(page), { systemOneModel: "jev-2" }, "the model saves when the field is left");
+  await openTab("Connections");
+  assert.equal(await systemOneOn.isChecked(), true, "comparing counts as on in Connections");
   await settings.locator('[name="systemOneApiKey"]').fill("test-key-123");
   await settings.locator('[data-save-system-one-key]').click();
   assert.deepEqual((await fixture(page)).savedSystemOneKeys, ["test-key-123"]);
   assert.equal(await settings.locator('[name="systemOneApiKey"]').inputValue(), "");
-  assert.equal(await tab("Connections").locator("[data-tab-badge]").innerText(), "1", "the nav counts unapplied changes per section");
+  assert.equal((await fixture(page)).patches.some((patch) => "systemOneApiKey" in patch), false, "the key is never part of settings");
+  // The host tests the key and turns System One on; the panel follows and says so.
+  await page.evaluate(() => {
+    const f = (window as any).settingsFixture;
+    f.config = { ...f.config, systemOneMode: "on" };
+    f.panel.setConfig(f.config);
+    f.panel.setSystemOneKeyStatus(true, "Key saved and tested. System One is on.");
+  });
+  assert.equal(await settings.locator('[name="systemOneMode"]').inputValue(), "on", "the mode follows the host");
+  assert.equal(await systemOneOn.isChecked(), true, "the switch follows the host");
+  assert.match(await settings.locator("[data-system-one-key-status]").innerText(), /tested\. System One is on/);
   await tab("Advanced").focus(); await page.keyboard.press("Enter");
-  await settings.locator('[name="imageParameters"]').fill('{"steps":32}');
-  assert.match(await settings.locator("[data-status]").innerText(), /not applied/);
-  assert.equal(await settings.locator("[data-draft-bar]").isVisible(), true, "the bar appears with unapplied changes");
-  assert.match(await settings.locator("[data-draft-count]").innerText(), /^2 changes not applied/);
-  assert.equal(await settings.locator('[name="imageParameters"]').locator("xpath=..").getAttribute("data-dirty"), "", "changed fields are marked");
-  await openTab("Reading");
-  await settings.locator('input[name="textSpeedStep"][value="10"]').check();
-  assert.deepEqual(await lastPatch(page), { textSpeed: 10 });
-  assert.equal(await settings.locator("[data-draft-bar]").isVisible(), true, "the bar follows the user to other sections");
-  await openTab("Advanced");
-  assert.equal(await settings.locator('[name="imageParameters"]').inputValue(), '{"steps":32}', "everyday save and a tab switch must not wipe an advanced draft");
+  const params = settings.locator('[name="imageParameters"]');
+  const beforeTyping = (await fixture(page)).patches.length;
+  await params.fill('{"steps":32}');
+  assert.equal((await fixture(page)).patches.length, beforeTyping, "typing saves nothing until the field is committed");
   await page.evaluate(() => { const f = (window as any).settingsFixture; f.panel.setConfig({ ...f.config, customCss: "/* host */" }); });
-  assert.equal(await settings.locator('[name="imageParameters"]').inputValue(), '{"steps":32}', "host echo keeps the draft");
+  assert.equal(await params.inputValue(), '{"steps":32}', "a host echo keeps the field being typed");
   assert.equal(await settings.locator('[name="customCss"]').inputValue(), "/* host */", "host echo updates untouched advanced fields");
-  await settings.locator("[data-apply]").click();
-  const applied = await lastPatch(page);
-  assert.deepEqual(applied?.imageParameters, { steps: 32 });
-  assert.equal(applied?.systemOneMode, "compare");
-  assert.equal(applied?.systemOneModel, "jev-latest");
-  assert.equal("systemOneApiKey" in applied!, false);
-  assert.equal(applied?.customCss, "/* host */", "apply carries current values, not stale ones");
-  assert.equal(applied?.ignoredTags, "status, inventory", "hidden untouched values are preserved");
-  assert.equal("themePreset" in applied!, false, "apply never touches everyday keys");
-  assert.equal(await settings.locator("[data-status]").innerText(), "Advanced settings applied.");
-  assert.equal(await settings.locator("[data-draft-bar]").isVisible(), false, "the bar leaves once applied");
-  // Discard restores the last host values and sends nothing.
-  const beforeDiscard = (await fixture(page)).patches.length;
-  await settings.locator('[name="customCss"]').fill("/* draft */");
-  await settings.locator('[name="debugLogging"]').check();
-  assert.match(await settings.locator("[data-draft-count]").innerText(), /^2 changes/);
-  await settings.locator("[data-discard]").click();
-  assert.equal(await settings.locator('[name="customCss"]').inputValue(), "/* host */", "Discard restores text fields");
-  assert.equal(await settings.locator('[name="debugLogging"]').isChecked(), false, "Discard restores checkboxes");
-  assert.equal(await settings.locator("[data-draft-bar]").isVisible(), false);
-  assert.equal((await fixture(page)).patches.length, beforeDiscard, "Discard sends nothing");
-  // Invalid JSON: Apply from another section opens the field that failed.
-  await settings.locator('[name="imageParameters"]').fill("invalid JSON");
-  await openTab("Look");
-  await settings.locator("[data-apply-bar]").click();
-  assert.equal(await settings.locator('[name="imageParameters"]').isVisible(), true, "invalid hidden fields must be revealed");
-  assert.equal(await tab("Advanced").getAttribute("aria-selected"), "true");
-  assert.match(await settings.locator("[data-status]").innerText(), /Image parameters/);
-  await settings.locator('[name="imageParameters"]').fill('{"steps":32}');
   await page.keyboard.press("Control+s");
-  assert.equal(await settings.locator("[data-status]").innerText(), "Advanced settings applied.");
+  assert.deepEqual(await lastPatch(page), { imageParameters: { steps: 32 } }, "Ctrl+S saves the field being typed, alone");
+  assert.match(await settings.locator("[data-undo-text]").innerText(), /Image parameters \(JSON\) saved/);
+  // A checkbox saves at once; Undo turns it back.
+  await settings.locator('[name="debugLogging"]').check();
+  assert.deepEqual(await lastPatch(page), { debugLogging: true }, "a checkbox saves at once");
+  await settings.locator("[data-undo]").click();
+  assert.deepEqual(await lastPatch(page), { debugLogging: false }, "Undo turns it back");
+  assert.equal(await settings.locator('[name="debugLogging"]').isChecked(), false);
+  // Invalid JSON is kept and marked, never sent; fixing it saves.
+  const beforeInvalid = (await fixture(page)).patches.length;
+  await params.fill("invalid JSON");
+  await params.press("Tab");
+  assert.equal((await fixture(page)).patches.length, beforeInvalid, "invalid JSON is not saved");
+  assert.match(await settings.locator("[data-status]").innerText(), /Image parameters/);
+  assert.equal(await params.inputValue(), "invalid JSON", "the text stays for fixing");
+  assert.equal(await params.locator("xpath=..").getAttribute("data-dirty"), "", "the field is marked");
+  assert.equal(await tab("Advanced").locator("[data-tab-badge]").innerText(), "1");
+  await page.evaluate(() => { const f = (window as any).settingsFixture; f.panel.setConfig(f.config); });
+  assert.equal(await params.inputValue(), "invalid JSON", "a host echo keeps the text being fixed");
+  await params.fill('{"steps":40}');
+  await page.keyboard.press("Control+s");
+  assert.deepEqual(await lastPatch(page), { imageParameters: { steps: 40 } });
+  assert.equal(await tab("Advanced").locator("[data-tab-badge]").isVisible(), false, "the badge leaves once fixed");
 
   // Reset keeps presets and the music folder, and needs confirmation.
   await page.evaluate(() => { const f = (window as any).settingsFixture; f.config = { ...f.config, promptPresets: [{ id: "p1", name: "Soft", positive: "soft", negative: "" }], audioDirectory: "packs" }; f.panel.setConfig(f.config); });
@@ -453,6 +500,10 @@ try {
   // Open preview is wired everywhere.
   await settings.locator("[data-topbar] [data-open-preview]").click();
   assert.equal((await fixture(page)).previews, 1);
+  // Panels tools are reachable from Advanced even when the stage shows no Panels button.
+  await tab("Advanced").click();
+  await settings.getByRole("button", { name: "Open Panels tools" }).click();
+  assert.equal(await page.evaluate(() => (window as any).settingsFixture.panelTools), 1);
 
   await page.screenshot({ path: ".cache/ux-redesign/settings-desktop.png" });
   assert.match(await settings.locator('select[name="imageConnectionId"] option[data-missing]').innerText(), /no longer exists \(gone\)/);
@@ -489,7 +540,7 @@ try {
   await results.filter({ hasText: "Theme CSS" }).click();
   assert.equal(await settings.locator('[name="customCss"]').isVisible(), true, "results open Advanced settings too");
   await search.fill("narrator");
-  assert.match(await results.first().innerText(), /Narrator voice/);
+  assert.match(await results.first().innerText(), /Mute narrator/);
   await search.press("ArrowDown");
   await page.keyboard.press("Enter");
   assert.equal(await tab("Voice").getAttribute("aria-selected"), "true", "voice settings are searchable");
@@ -502,7 +553,11 @@ try {
   await openTab("Voice");
   assert.equal(await settings.locator('[data-pane="voice"] .vn-speech-settings').count(), 1, "speech settings mount inside Voice");
   assert.equal(await settings.locator("[data-voice-empty]").isVisible(), false);
-  assert.equal(await page.locator(".vn-speech-settings").getByRole("button", { name: "Load profiles" }).isVisible(), true);
+  const speechCard = page.locator(".vn-speech-settings");
+  assert.equal(await speechCard.getByText("Read each paragraph aloud").isVisible(), true, "read aloud is voiced by Choir");
+  await speechCard.getByRole("button", { name: "Open Choir voice setup" }).click();
+  assert.equal(await page.evaluate(() => (window as any).settingsFixture.choirOpens), 1, "voices are cast in Choir");
+  assert.equal(await speechCard.getByText("Load profiles").count(), 0, "no Lumiverse TTS-profile pickers");
 
   // The last open section is remembered across a remount (same storage).
   await openTab("Connections");
@@ -542,12 +597,13 @@ try {
   assert.ok(tabBox && tabBox.height >= 44, "tabs are large targets");
   await page.screenshot({ path: ".cache/ux-redesign/settings-mobile.png" });
   await openTab("Advanced");
-  await settings.locator('[name="customCss"]').fill("/* mobile draft */");
-  await openTab("Sound");
-  const lastControl = await settings.locator('input[name="sfxVolume"]').evaluate((element) => { element.scrollIntoView({ block: "end" }); return element.getBoundingClientRect().bottom; });
-  const draftBar = await settings.locator("[data-draft-bar]").boundingBox();
-  assert.ok(draftBar && lastControl <= draftBar.y + 1, `controls scrolled into view sit above the unapplied-changes bar (${lastControl} vs ${draftBar?.y})`);
-  await settings.locator("[data-discard]").click();
+  await settings.locator('[name="customCss"]').fill("/* mobile */");
+  await page.keyboard.press("Control+s");
+  // Undo stays with its section: the section's last control scrolls clear of the toast.
+  const lastControl = await settings.locator("[data-show-setup]").evaluate((element) => { element.scrollIntoView({ block: "end" }); return element.getBoundingClientRect().bottom; });
+  const undoToast = await settings.locator("[data-undo-toast]").boundingBox();
+  assert.ok(undoToast && lastControl <= undoToast.y + 1, `controls scrolled into view sit above the Undo toast (${lastControl} vs ${undoToast?.y})`);
+  await settings.locator("[data-undo]").click();
   await page.setViewportSize({ width: 1000, height: 900 });
   await page.waitForTimeout(100);
   assert.equal(await settings.locator("[data-tablist]").getAttribute("aria-orientation"), "vertical", "wide containers use a vertical rail");
@@ -609,9 +665,7 @@ try {
   assert.equal(await quality.isVisible(), true);
   await quality.uncheck();
   await settings.locator('[name="novelAiUseDefaultNegative"]').uncheck();
-  await page.keyboard.press("Control+s");
-  assert.equal((await lastPatch(page))?.novelAiQualityTags, false);
-  assert.equal((await lastPatch(page))?.novelAiUseDefaultNegative, false);
+  assert.deepEqual((await fixture(page)).patches.slice(-2), [{ novelAiQualityTags: false }, { novelAiUseDefaultNegative: false }], "each checkbox saves on its own");
   await page.screenshot({ path: ".cache/ux-redesign/settings-nai-controls.png" });
   await page.evaluate(() => {
     const f = (window as any).settingsFixture;

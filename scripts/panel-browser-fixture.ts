@@ -16,7 +16,7 @@ if (new URL(location.href).searchParams.has("settings")) {
 } else if (new URL(location.href).searchParams.has("navigation")) {
   const previous: number[] = [];
   const stage = new VnStage({ mount, textSpeed: 0, onPrevious: (index) => previous.push(index) });
-  const turn = { mode: "standard" as const, paragraphs: [0, 1, 2].map((i) => ({ id: `nav-${i}`, text: `Paragraph ${i}`, speaker: `Speaker ${i}` })), choices: [] };
+  const turn = { paragraphs: [0, 1, 2].map((i) => ({ id: `nav-${i}`, text: `Paragraph ${i}`, speaker: `Speaker ${i}` })), choices: [] };
   stage.loadTurn(turn);
   Object.assign(window, { navigationFixture: { stage, turn, previous } });
 } else {

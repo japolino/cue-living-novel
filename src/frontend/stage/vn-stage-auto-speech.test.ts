@@ -17,7 +17,6 @@ describe("VnStage auto-advance hold coordination", () => {
       });
 
       stage.loadTurn({
-        mode: "standard",
         paragraphs: [
           { id: "p-0", text: "Paragraph 0" },
           { id: "p-1", text: "Paragraph 1" },
@@ -55,7 +54,6 @@ describe("VnStage auto-advance hold coordination", () => {
       });
 
       stage.loadTurn({
-        mode: "standard",
         paragraphs: [
           { id: "p-0", text: "Paragraph 0" },
           { id: "p-1", text: "Paragraph 1" },
@@ -90,7 +88,6 @@ describe("VnStage auto-advance hold coordination", () => {
       });
 
       stage.loadTurn({
-        mode: "standard",
         paragraphs: [
           { id: "p-0", text: "Paragraph 0" },
           { id: "p-1", text: "Paragraph 1" },

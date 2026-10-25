@@ -692,6 +692,8 @@ export type SpriteCutMeta = {
   studio?: true;
   /** "studio" quality, cut with Best while the Studio model was not ready yet: one Studio re-cut later. */
   provisional?: true;
+  /** A "basic" cut made only because the cut-out model was still downloading: its re-cut waits for the arrival. */
+  modelPending?: true;
   /**
    * Duplicate check of the browser cut-out: two figures side by side. Absent
    * from older frontends (unknown).

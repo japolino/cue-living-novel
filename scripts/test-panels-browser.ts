@@ -13,13 +13,34 @@ try {
   const requests: string[] = [];
   page.on("request", (request) => { if (request.url().startsWith("https:")) requests.push(request.url()); });
   await page.goto(`http://127.0.0.1:${server.port}`);
-  await page.getByRole("button", { name: "Panels", exact: true }).click();
-  assert.equal(await page.getByRole("button", { name: "Pin this card", exact: true }).count(), 0);
+  // No card reached yet, nothing pinned, no rule: no Panels button.
+  assert.equal(await page.locator(".launcher").isVisible(), false, "no Panels button while there is nothing to pin");
+  await page.evaluate(() => (window as any).fixture.dock.setCursor(1));
+  await page.getByRole("button", { name: /^Panels/ }).click();
+  assert.ok(await page.getByRole("button", { name: "Pin this card", exact: true }).count() > 0, "the reached card can be pinned");
   assert.equal(await page.getByRole("button", { name: "Capture SimTracker snapshot" }).isVisible(), false);
   await page.getByText("Advanced tools", { exact: true }).click();
   assert.equal(await page.getByRole("button", { name: "Capture SimTracker snapshot" }).isVisible(), true);
   await page.getByText("Advanced tools", { exact: true }).click();
+  // Rewinding with the drawer open keeps it (and its button) until it is closed.
+  await page.evaluate(() => (window as any).fixture.dock.setCursor(0));
+  assert.equal(await page.locator(".launcher").isVisible(), true, "the open drawer keeps its button");
+  assert.match(await page.locator(".drawer").innerText(), /No cards to pin yet/);
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+  assert.equal(await page.locator(".launcher").isVisible(), false, "closed with nothing to pin: the button goes");
+  // A SimTracker card in the chat can be captured: the button shows for it.
+  await page.evaluate(() => { const { dock } = (window as any).fixture; dock.onCapture = () => [{ title: "SimTracker", html: "<div>HP 3</div>" }]; dock.setCursor(0); });
+  assert.equal(await page.locator(".launcher").isVisible(), true, "a capturable SimTracker card shows the button");
+  await page.evaluate(() => { const { dock } = (window as any).fixture; dock.onCapture = undefined; dock.setCursor(0); });
+  assert.equal(await page.locator(".launcher").isVisible(), false);
+  // Settings' Open Panels tools: the drawer opens on Advanced tools (capture, paste, rules) with no card at all.
+  await page.evaluate(() => (window as any).fixture.dock.openTools());
+  assert.equal(await page.getByRole("button", { name: "Capture SimTracker snapshot" }).isVisible(), true, "the tools open without a card");
+  assert.equal(await page.locator("details[data-panel-advanced]").evaluate((node) => (node as HTMLDetailsElement).open), true);
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+  assert.equal(await page.locator(".launcher").isVisible(), false);
   await page.evaluate(() => (window as any).fixture.dock.setCursor(1));
+  await page.getByRole("button", { name: /^Panels/ }).click();
   await mkdir(".cache", { recursive: true });
   await page.screenshot({ path: ".cache/panels-basic-desktop.png" });
   await page.setViewportSize({ width: 360, height: 640 });
@@ -80,7 +101,7 @@ try {
   // Settings smoke check only: the full settings flow lives in scripts/test-settings-browser.ts.
   await page.goto(`http://127.0.0.1:${server.port}/?settings`);
   const settings = page.locator("[data-vn-settings]");
-  assert.equal(await settings.locator('[name="mode"]').isVisible(), true);
+  assert.equal(await settings.locator('[name="generateChoices"]').isVisible(), true);
   for (const name of ["parserParameters", "imageParameters", "customCss", "ignoredTags", "debugLogging", "imageModel"]) {
     assert.equal(await settings.locator(`[name="${name}"]`).isVisible(), false, name + " should be advanced");
   }
@@ -105,7 +126,7 @@ try {
   assert.equal(await page.locator("[data-vn-speaker]").textContent(), "Speaker 1");
   await skip.click();
   await page.waitForFunction(() => (window as any).navigationFixture.stage.getState().phase === "awaiting-input");
-  assert.equal(await position(), 2, "read-only skip works after going back");
+  assert.equal(await position(), 2, "Skip runs to the end of the reply after going back");
   const draft = page.locator("[data-vn-input]");
   await draft.fill("Keep my draft");
   await draft.press("ArrowLeft");
@@ -126,5 +147,5 @@ try {
   const speakerBounds = await page.locator("[data-vn-speaker]").boundingBox();
   assert.ok(controlsBounds && speakerBounds && controlsBounds.y + controlsBounds.height <= speakerBounds.y, "mobile controls do not cover the nameplate");
   await page.screenshot({ path: ".cache/navigation-mobile.png" });
-  console.log("Browser checks passed: backward navigation, read-only skip, playback pause; basic/advanced disclosure, hidden-value preservation, validation recovery, mobile settings; reveal timing, CSS checkbox, script and network isolation, keyboard movement, mobile bounds, swipe/chat isolation, worker timeout.");
+  console.log("Browser checks passed: backward navigation, skip to the end, playback pause; basic/advanced disclosure, hidden-value preservation, validation recovery, mobile settings; reveal timing, CSS checkbox, script and network isolation, keyboard movement, mobile bounds, swipe/chat isolation, worker timeout.");
 } finally { await browser?.close(); server.stop(); }

@@ -14,6 +14,10 @@ export class FakeEvent {
   altKey = false;
   ctrlKey = false;
   metaKey = false;
+  shiftKey = false;
+  isComposing = false;
+  repeat = false;
+  keyCode = 0;
   deltaY = 0;
   constructor(public type: string, init: Partial<FakeEvent> = {}) {
     Object.assign(this, init);

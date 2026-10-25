@@ -220,7 +220,7 @@ describe("VnStage sprite-mode depth layers", () => {
       plates: { p: { plateKey: "p", location: "x", timeOfDay: null, weather: null, status: "ready", url: "/plates/p.png" } },
     };
     stage.setPresentationMode("sprites");
-    stage.loadTurn({ mode: "standard", paragraphs: [{ id: "a", text: "Hi." }], sprites: view });
+    stage.loadTurn({ paragraphs: [{ id: "a", text: "Hi." }], sprites: view });
     await wait(10);
     expect(scene().dataset.vnLightSide).toBeUndefined();
   });

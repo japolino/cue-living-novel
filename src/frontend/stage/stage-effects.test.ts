@@ -442,7 +442,6 @@ describe("VnStage visual effects & transitions", () => {
     const flash = stage.getFlashOverlay() as unknown as MockNode;
 
     const turn: VnTurnInput = {
-      mode: "standard",
       paragraphs: [
         {
           id: "p1",
@@ -461,7 +460,6 @@ describe("VnStage visual effects & transitions", () => {
     const root = (stage as any).root as unknown as MockNode;
 
     const turn: VnTurnInput = {
-      mode: "standard",
       paragraphs: [
         {
           id: "p1",
@@ -477,7 +475,6 @@ describe("VnStage visual effects & transitions", () => {
     test("renderDialogueContent does not restart rendering when state or progress updates occur", () => {
     const stage = new VnStage({ mount });
     const turn: VnTurnInput = {
-      mode: "standard",
       paragraphs: [{ id: "p1", text: "Hello world paragraph." }],
     };
     stage.loadTurn(turn);
@@ -498,7 +495,6 @@ describe("VnStage visual effects & transitions", () => {
   test("continue button pops out with data-vn-ready='true' only after text is finished typing", () => {
     const stage = new VnStage({ mount });
     const turn: VnTurnInput = {
-      mode: "standard",
       paragraphs: [{ id: "p1", text: "Hello world paragraph." }],
     };
     stage.loadTurn(turn);
@@ -663,18 +659,18 @@ describe("extended stage effects & ambient overlays", () => {
     const scene = (stage as any).scene as unknown as MockNode;
     const overlay = stage.getAmbientOverlay() as unknown as MockNode;
 
-    stage.loadTurn({ mode: "standard", paragraphs: [{ id: "p-rain", text: "Rain hammers the roof." }], choices: [], ambient: "rain" } as VnTurnInput);
+    stage.loadTurn({ paragraphs: [{ id: "p-rain", text: "Rain hammers the roof." }], choices: [], ambient: "rain" } as VnTurnInput);
     expect(stage.getCurrentAmbient()).toBe("rain");
     expect(scene.dataset.vnSceneAmbient).toBe("rain");
     expect(overlay.dataset.vnAmbient).toBe("rain");
     expect(overlay.innerHTML).toContain("vn-rain-bg");
 
     // Ambient survives loading a turn that does not mention ambient.
-    stage.loadTurn({ mode: "standard", paragraphs: [{ id: "p0", text: "Hello." }], choices: [] } as VnTurnInput);
+    stage.loadTurn({ paragraphs: [{ id: "p0", text: "Hello." }], choices: [] } as VnTurnInput);
     expect(stage.getCurrentAmbient()).toBe("rain");
 
     // A turn with ambient: null explicitly clears it.
-    stage.loadTurn({ mode: "standard", paragraphs: [{ id: "p1", text: "Later." }], choices: [], ambient: null } as VnTurnInput);
+    stage.loadTurn({ paragraphs: [{ id: "p1", text: "Later." }], choices: [], ambient: null } as VnTurnInput);
     expect(stage.getCurrentAmbient()).toBe(null);
     expect(overlay.innerHTML).toBe("");
     expect(scene.dataset.vnSceneAmbient).toBeUndefined();
@@ -704,14 +700,14 @@ describe("extended stage effects & ambient overlays", () => {
   test("host stage input preserves omitted ambient data and forwards explicit clears", () => {
     const stage = new VnStage({ mount, textSpeed: 0 });
     try {
-      stage.loadTurn(stageTurnInput(hostView({ ambients: ["rain", "rain", "rain"] }), "standard", true));
+      stage.loadTurn(stageTurnInput(hostView({ ambients: ["rain", "rain", "rain"] }), true));
       expect(stage.getCurrentAmbient()).toBe("rain");
-      const omitted = stageTurnInput(hostView({ sourceFingerprint: "next" }), "standard", true);
+      const omitted = stageTurnInput(hostView({ sourceFingerprint: "next" }), true);
       expect(Object.hasOwn(omitted, "ambient")).toBe(false);
       expect(Object.hasOwn(omitted.paragraphs[0]!, "ambient")).toBe(false);
       stage.loadTurn(omitted);
       expect(stage.getCurrentAmbient()).toBe("rain");
-      const cleared = stageTurnInput(hostView({ sourceFingerprint: "clear", ambients: [null, null, null] }), "standard", true);
+      const cleared = stageTurnInput(hostView({ sourceFingerprint: "clear", ambients: [null, null, null] }), true);
       expect(cleared.ambient).toBeNull();
       stage.loadTurn(cleared);
       expect(stage.getCurrentAmbient()).toBeNull();
@@ -722,7 +718,7 @@ describe("extended stage effects & ambient overlays", () => {
   test("host paragraph ambient clears on advance, restores on rewind, and clears again", () => {
     const stage = new VnStage({ mount, textSpeed: 0 });
     try {
-      stage.loadTurn(stageTurnInput(hostView({ ambients: ["rain", null, "snow"], effects: [null, "flash_white", null] }), "standard", true));
+      stage.loadTurn(stageTurnInput(hostView({ ambients: ["rain", null, "snow"], effects: [null, "flash_white", null] }), true));
       expect(stage.getCurrentAmbient()).toBe("rain");
       (stage as any).advance();
       expect(stage.getCurrentAmbient()).toBeNull();
@@ -740,7 +736,7 @@ describe("extended stage effects & ambient overlays", () => {
   test("paragraph ambient null overrides cue ambient while omission falls back to cue", () => {
     const stage = new VnStage({ mount, textSpeed: 0 });
     try {
-      stage.loadTurn({ mode: "standard", ambient: "rain", paragraphs: [
+      stage.loadTurn({ ambient: "rain", paragraphs: [
         { id: "clear", text: "Inside.", ambient: null, cue: { ambient: "snow" } },
         { id: "cue", text: "Outside.", cue: { ambient: "fog" } },
         { id: "keep", text: "Still outside." }

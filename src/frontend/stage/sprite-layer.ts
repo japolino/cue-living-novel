@@ -314,6 +314,8 @@ export type SpriteStatusBadge = {
   kind: "image" | "warning";
   label: string;
   characterKey: string;
+  /** Warnings: the failed set (the stage offers Try again for it). */
+  setKey?: string;
 };
 
 const castName = (view: SpriteTurnView, key: string): string =>
@@ -337,7 +339,7 @@ export function spriteStatusBadges(view: SpriteTurnView | null, index: number): 
     const { ready, total } = spriteSetReadyCount(set?.expressions ?? {}, view.expressionCount ?? 12);
     const allFailed = images.length > 0 && images.every((image) => image.status === "failed");
     badges.push(allFailed
-      ? { kind: "warning", label: `Could not prepare ${name}`, characterKey: actor.characterKey }
+      ? { kind: "warning", label: `Could not prepare ${name}`, characterKey: actor.characterKey, ...(set ? { setKey: set.setKey } : {}) }
       : { kind: "image", label: `Preparing ${name} ${ready}/${total}`, characterKey: actor.characterKey });
   }
   return badges;

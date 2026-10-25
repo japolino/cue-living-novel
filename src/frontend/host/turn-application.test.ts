@@ -16,8 +16,11 @@ const planned = (overrides: Partial<TurnView> = {}) => base({ paragraphSpeakers:
 let host: HostHarness | null = null;
 afterEach(() => { host?.destroy(); host = null; });
 
-async function open(speech?: Partial<SpeechSettings>): Promise<HostHarness> {
-  host = bootHost(speech ? { config: { speech: { ...DEFAULT_SPEECH_SETTINGS, enabled: true, ...speech } } } : {});
+async function open(speech?: Partial<SpeechSettings>, choir?: { activated?: boolean }): Promise<HostHarness> {
+  host = bootHost({
+    ...(speech ? { config: { speech: { ...DEFAULT_SPEECH_SETTINGS, enabled: true, ...speech } } } : {}),
+    ...(choir ? { choir } : {}),
+  });
   host.state(null);
   host.toggle();
   host.state(null);
@@ -80,22 +83,36 @@ describe("applyTurn", () => {
   });
 
   test("Read before the scene is ready: a paragraph never read aloud takes the plan's speaker", async () => {
-    const h = await open({ speakBeforePlan: true, narrator: { connectionId: "tts", voice: "narrator" } });
+    // No page gesture yet: nothing is read before the plan lands.
+    const h = await open({ speakBeforePlan: true }, { activated: false });
     h.receive({ type: "vn_turn_text", turn: text() });
     expect(h.speech()).toContain("Narrator");
-    // Auto play is off: nobody pressed Play before the plan landed.
     h.receive({ type: "vn_turn", turn: planned() });
     expect(h.speech()).toContain("Mira");
+    expect(h.choirRequests.length).toBe(0);
   });
 
   test("Read before the scene is ready: a paragraph already being read is not started again", async () => {
-    const h = await open({ speakBeforePlan: true, narrator: { connectionId: "tts", voice: "narrator" } });
+    const h = await open({ speakBeforePlan: true }, {});
     h.receive({ type: "vn_turn_text", turn: text() });
-    h.play();
+    await flush();
+    expect(h.choirRequests.map((request) => request.text)).toEqual([texts[0]!]);
     const reading = h.speech();
     expect(reading).toBe("Fetching audio…");
     h.receive({ type: "vn_turn", turn: planned() });
+    await flush();
     expect(h.speech()).toBe(reading);
+    expect(h.choirRequests.length).toBe(1);
+  });
+
+  test("without Read before the scene is ready, read aloud waits for the plan's speaker", async () => {
+    const h = await open({}, {});
+    h.receive({ type: "vn_turn_text", turn: text() });
+    await flush();
+    expect(h.choirRequests.length).toBe(0);
+    h.receive({ type: "vn_turn", turn: planned() });
+    await flush();
+    expect(h.choirRequests.map((request) => [request.text, request.speaker])).toEqual([[texts[0]!, "Mira"]]);
   });
 
   test("going back during the text before the plan keeps the scene image", async () => {

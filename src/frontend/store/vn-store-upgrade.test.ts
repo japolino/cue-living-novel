@@ -8,12 +8,10 @@ import { canUpgradeTurn, createInitialVnStageState, reduceVnStage, selectVnStage
 
 const texts = ["The door creaks.", "\"Who's there?\" Mira asks.", "Silence.", "A lantern flickers."];
 const provisional = (planHold = Number.POSITIVE_INFINITY): VnTurnInput => ({
-  mode: "standard",
   paragraphs: texts.map((text, index) => ({ id: `fp:${index}`, text, speaker: index === 1 ? "Mira" : "" })),
   planHold,
 });
 const planned = (): VnTurnInput => ({
-  mode: "cyoa",
   paragraphs: texts.map((text, index) => ({ id: `fp:${index}`, text, speaker: index === 0 ? "" : "Mira", ...(index === 2 ? { effect: "shake" as const } : {}) })),
   choices: [{ id: "c1", label: "Open it", value: "Open it" }],
   ambient: "rain",
@@ -57,14 +55,13 @@ describe("provisional turn hold", () => {
 });
 
 describe("upgrade-turn reducer", () => {
-  test("keeps the reader's place and takes speakers, effects, ambient, choices and mode from the plan", () => {
+  test("keeps the reader's place and takes speakers, effects, ambient and choices from the plan", () => {
     const before = run(loaded(), { type: "advance" }, { type: "advance" }, { type: "previous" });
     expect(before).toMatchObject({ currentParagraphIndex: 1, highestRevealedIndex: 2 });
     const after = reduceVnStage(before, { type: "upgrade-turn", turn: planned() });
     expect(after.currentParagraphIndex).toBe(1);
     expect(after.highestRevealedIndex).toBe(2);
     expect(after.phase).toBe("revealing");
-    expect(after.mode).toBe("cyoa");
     expect(after.choices.map((choice) => choice.id)).toEqual(["c1"]);
     expect(after.ambient).toBe("rain");
     expect(after.paragraphs.map((paragraph) => paragraph.speaker)).toEqual(["", "Mira", "Mira", "Mira"]);

@@ -55,7 +55,7 @@ Lumiverse staging host
 | `src/frontend/host` | staging API feature detection, activation, overrides, chat switching, frontend/backend routing |
 | `src/frontend/stage` | framework-free full-screen VN renderer, accessibility, keyboard input, image swaps |
 | `src/frontend/store` | deterministic paragraph, acknowledgement, choice, and input gating |
-| `src/frontend/settings` | Lumiverse settings surface: tabbed sections (Reading, Look, Pictures, Sound, Voice, Connections, Advanced), setting search, auto-save for everyday controls, explicit Apply/Discard for advanced drafts |
+| `src/frontend/settings` | Lumiverse settings surface: tabbed sections (Reading, Look, Pictures, Sound, Voice, Connections, Advanced), setting search, auto-save for every control (Advanced text fields on commit, only when valid, with an Undo toast) |
 | `src/frontend/sprites` | sprite mode cut-out (ISNet-anime via lazily loaded onnxruntime-web, flood-fill kernel), the cut request service (with the inset crop), and the NovelAI V5 inset canvas service |
 | `src/backend/runtime/sprites` | sprite mode library, prompts, generation jobs, cut bridge, NovelAI V5 inset request and bridge, views |
 | `src/shared/novelai-inset.ts` | NovelAI V5 reference inset geometry (canvas, reference box, repaint box, 8-px mask rule) |
@@ -133,7 +133,7 @@ queued planning cancelled, scene-cache admission released — and persists
 stuck. That stamp is keyed to the aborted turn and skipped only when a new
 owner (retry, reply, reuse) has claimed the chat's turn meanwhile; a view that
 merely reopened still gets the stamp, plus `vn_asset` updates, because the
-aborted batch never resumes on its own. Cancelling a plan aborts its sidecar
+aborted batch itself never resumes: the reopened view starts a new one. Cancelling a plan aborts its sidecar
 request (`spindle.generate.raw` gets the operation's signal, and the call
 rejects locally even when the host keeps it running; a System One request or
 a non-story line check it waits on is let go the same way), with no retry and no fallback plan, so the
@@ -157,8 +157,33 @@ open chat, whose work is aborted. Late results are rejected by the ownership
 guards. Reopening goes through `vn_get_state`: a missing or stale stored
 record (a newer reply arrived while closed, detected by message id/fingerprint)
 plans the latest reply once, and `vn_state` then carries `turn: null` so the
-stale turn is never rendered first. Cancelled jobs stay cancelled; they are never
-resumed on their own — the reader reruns them by hand with `vn_retry_turn`.
+stale turn is never rendered first. When the stored turn is current, the
+reopened view resumes its stopped pictures: `cancelled` jobs, and
+`queued`/`generating` jobs nobody runs (a `GENERATION_STARTED` abort does not
+persist its stamp), go back to `queued` before `vn_state` is sent and a new
+batch starts. It resumes only when images are on, the turn is `ready`, no
+reply is being generated, no owner (retry, reply, reuse) holds the chat's turn
+and no batch is running for it; `failed` jobs are never resumed — the reader
+reruns them with Try again (`vn_retry_turn`). The stage counts a stopped
+picture as neither done nor in flight. An aborted batch runs on until its
+provider request returns (`imageGen.generate` takes no signal; the late result
+is thrown away), so every batch and every close cleanup is tracked per chat
+(`assetSettles`). A view that reopens while they are out gets the stopped
+pictures as `queued` in `vn_state` (not saved) and resumes them only once they
+settled (`resumeAfterSettle`, same turn, view still open): one request per
+picture at a time, which a one-at-a-time provider such as NovelAI needs, and
+no late `cancelled` save over the resumed record. Only the chat's current,
+unaborted batch (`assetControllers` identity) that also owns the turn may save
+or send, which also keeps a batch replaced by Retry from writing over it. The
+resume claims the turn before saving and gives the claim back if the save
+fails. `vn_cancel` aborts like a close, cleanup included.
+
+A scene picture that fails for a passing reason (a timeout, a dropped
+connection, a busy provider: HTTP 408, 425, 429, 5xx, including NovelAI's
+concurrent-generation lock) is asked for once more after 3 s before the job is
+marked `failed` (`src/backend/runtime/image-retry.ts`). A refusal, a bad
+request, missing credits or an auth error is reported at once, and a cancelled
+batch never retries.
 
 The text before the plan (`vn_turn_text`, see below) follows the same
 gates. Only a plan that runs for an open view sends it; it is never persisted,
@@ -219,13 +244,13 @@ The frontend loads a provisional turn like a turn although its status is `planni
 
 How far the reader can get ahead of the plan is `planHold` (`PROVISIONAL_PLAN_HOLD` in `src/frontend/host/controller.ts`; Infinity, so they read on). At the hold the stage shows **Preparing the scene…**, sets `data-vn-plan-pending` and disables Continue; auto play and skip wait there (Skip stays on) and carry on after the upgrade. The final paragraph's acknowledgement always waits for the plan, which brings the choices.
 
-Speech waits for the plan by default: a provisional turn has no speech cursor, and with speech auto play on, auto play waits too, so no paragraph goes unspoken. With `speakBeforePlan` (Speech settings, "Read before the scene is ready", off by default) provisional paragraphs are read with their settled speaker's voice, the narrator's otherwise. The upgrade does not read the paragraph on screen again once its speech has started (loading or playing); a paragraph never started (auto play off, the narrator muted) takes the plan's speaker for the next Play.
+Speech waits for the plan by default: a provisional turn has no speech cursor, and with read aloud on, auto play waits too, so no paragraph goes unspoken. With `speakBeforePlan` (Read aloud settings, "Read before the scene is ready", off by default) provisional paragraphs are read through Choir with their settled speaker's voice, the narrator's otherwise. The upgrade does not read the paragraph on screen again once its speech has started (loading or playing); a paragraph never started (no page gesture yet, the narrator muted) takes the plan's speaker for the next Play.
 
 ## Reveal and input state
 
-The current paragraph is readable before any response control appears. Each click or supported key advances one paragraph. The final paragraph needs its own acknowledgement. Only then does the stage reveal either generated/authored choices or the typed composer. While the text waits for its plan, that acknowledgement waits for the plan too (see Text before the plan).
+The current paragraph is readable before any response control appears. Each click or supported key advances one paragraph. Skip advances to the end of the reply and stops at Your turn; Auto pauses there and resumes with the next turn the host loads, and neither ever submits. Reading keys are handled on the stage root for any target except text entry (a focused button keeps Enter and Space for itself); 1–9 pick a suggested reply; a wheel-up opens History only over the dialogue box. The final paragraph needs its own acknowledgement. While the text waits for its plan, that acknowledgement waits for the plan too (see Text before the plan). Only then does the stage reveal Your turn: the reply box, always, with the authored or suggested choices above it when the turn has any (Reading → Suggest replies, `generateChoices`, asks the story reader for 2–4 when the reply has none; a turn System One continues without the story reader brings none).
 
-Choices are presentation metadata. Selecting one submits its configured value as a normal user message. Standard input does the same with typed text. Both routes attach a unique request ID. If Lumiverse writes the user message but fails while starting generation, the backend checks chat history before reporting the failure and never retries the same request blindly.
+Choices are presentation metadata. Selecting one submits its configured value as a normal user message. The reply box does the same with typed text. Both routes attach a unique request ID. If Lumiverse writes the user message but fails while starting generation, the backend checks chat history before reporting the failure and never retries the same request blindly.
 
 ## Scene image fit
 
@@ -240,6 +265,8 @@ Inside the nested theme shadow root the style layers are appended in a fixed cas
 1. `base` — the platform `VN_BASE_CSS` (stable `data-vn-*` selectors, the scene-image fit mapping, and default `--vn-*` values).
 2. `preset` — exactly one scoped block from `THEME_PRESET_CSS`, selected by `data-vn-preset="<id>"`. The preset *style element* lives in `themeRoot`, after base and before user CSS, and never in the outer safety root.
 3. `user` — the sanitized custom-CSS layer. It is always last, so a user rule of equal specificity wins over a preset rule.
+
+The root keeps `data-vn-mode` for custom CSS written for the retired reply modes: `cyoa` while the turn offers suggested replies, else `standard`.
 
 The `Lumiverse` preset maps the VN custom properties onto the real host tokens the Lumiverse page exposes — `--lumiverse-text`, `--lumiverse-text-muted`, `--lumiverse-primary` (accent), `--lumiverse-card-bg` (card), `--lumiverse-border`, `--lumiverse-font-family`, and `--lumiverse-*` key-control tokens (`primary-contrast`, `fill-medium`, `bg-elevated`) — each with a hard fallback so a host that does not export a token still renders the original default look.
 
@@ -309,7 +336,7 @@ Stage visuals are layered procedurally (CSS + inline SVG only; no network assets
 
 - **Ambient effects** (scene scope): `rain`, `heavy_rain`, `snow`, `sakura`, `fog`, `fireflies`, `embers`, `vignette_dark`, `sepia_flashback`, `desaturate`, `dream_haze`, `danger_pulse`. The planner proposes one per scene (`PlannerSceneSchema.ambient`); omitted ambient values inherit on a continuing scene while its weather stays unchanged; changed weather derives a new weather overlay (or clears it). Explicit `null` always clears. Accepted scene boundaries resolve their own ambient, independently of image cues. Weather effects animate real particle fields (multi-depth falling rain/snow, fluttering petals, drifting firefly glow, rising embers); `heavy_rain` adds a wet-lens pass (subtle blur plus refraction droplets). Grade effects (vignette, sepia, desaturate, haze, danger pulse) apply only to the scene image or a dedicated overlay — never to the dialogue box.
 - **One-shot cue effects** (paragraph scope): `shake`, `shake_hard`, `rumble`, `zoom_in`, `zoom_out`, `zoom_punch`, `tilt`, `heartbeat`, `flash_white`, `flash_red`, `lightning`, `speed_lines`, `blur_pulse`, `fade_to_black`, `fade_from_black`, `fade_to_white`, `sparkle_burst`, `hearts_burst`, `confetti`. The planner selects sparse, story-grounded beats, not a per-turn quota. `TurnPlan.effectCues` stores paragraph effects independently of the image limit; legacy records fall back to `visualCues[].effect`. An explicit empty `effectCues` list suppresses that fallback. Each effect runs once and self-clears.
-- **Inline text effects** (word scope, authored in the text): `<shake>`, `<tremble>`, `<wave>`, `<bounce>`, `<rainbow>`, `<glow>`, `<pulse>`, `<glitch>`, `<whisper>`, `<shout>`, `<fade>` — the closed catalogue in `src/shared/text-effects.ts` (ids, labels, examples, author guide, `stripTextEffectTags`). Paragraph text keeps the tags through intake, `prepareNarrative`, and `TurnView`; the planner (paragraph prompt, System One input, recent context, fallback prompt delta, pose matching) and the speech controller strip them. On the stage, `formatDialogueText` (`src/frontend/stage/rich-text.ts`) escapes first, then pairs catalogue tags with a stack into `<span data-vn-text-fx="id">` (unpaired tags are dropped, so output is always balanced). `applyTextEffects` (`src/frontend/stage/text-effects.ts`) then splits per-letter effects into nowrap `[data-vn-text-fx-word]` spans of grapheme `[data-vn-text-fx-ch]` letters with `--vn-ch`, glues touching word fragments (`[data-vn-text-fx-glue]`) so quotes never wrap away, is idempotent and capped, and runs before the typewriter collects text nodes (each letter is one text node and is revealed in one tick) and on History entries (forced `data-vn-text-effects="static"`, or `off`). `VN_TEXT_EFFECTS_CSS` (`src/frontend/theme/text-effects-css.ts`) gives letters four animation slots (move, tint, flicker, enter) chosen by inherited custom properties, so nested effects compose; the nearest `data-vn-text-effects` ancestor gates them (animated / static / off), reduced motion behaves as static, and the rules never reference `[data-vn-root]`, so the settings reference card reuses them unchanged.
+- **Inline text effects** (word scope, authored in the text): `<shake>`, `<tremble>`, `<wave>`, `<bounce>`, `<rainbow>`, `<glow>`, `<pulse>`, `<glitch>`, `<whisper>`, `<shout>`, `<fade>` — the closed catalogue in `src/shared/text-effects.ts` (ids, labels, examples, author guide, `stripTextEffectTags`). Paragraph text keeps the tags through intake, `prepareNarrative`, and `TurnView`; the planner (paragraph prompt, System One input, recent context, fallback prompt delta, pose matching) and the speech controller strip them. On the stage, `formatDialogueText` (`src/frontend/stage/rich-text.ts`) escapes first, then pairs catalogue tags with a stack into `<span data-vn-text-fx="id">` (unpaired tags are dropped, so output is always balanced). `applyTextEffects` (`src/frontend/stage/text-effects.ts`) then splits per-letter effects into nowrap `[data-vn-text-fx-word]` spans of grapheme `[data-vn-text-fx-ch]` letters with `--vn-ch`, glues touching word fragments (`[data-vn-text-fx-glue]`) so quotes never wrap away, is idempotent and capped, and runs before the typewriter collects text nodes (each letter is one text node and is revealed in one tick) and on History entries (forced `data-vn-text-effects="static"`, or `off`). `VN_TEXT_EFFECTS_CSS` (`src/frontend/theme/text-effects-css.ts`) gives letters four animation slots (move, tint, flicker, enter) chosen by inherited custom properties, so nested effects compose; the nearest `data-vn-text-effects` ancestor gates them (animated / static / off; the host sets the stage from **Motion**, `textEffectModeFor(effectIntensity)` in `src/config.ts`: Still is static, Full and Gentle animated), reduced motion behaves as static, and the rules never reference `[data-vn-root]`, so the settings reference card reuses them unchanged.
 
 Pipeline: the planner normalizer accepts supported aliases and wrapped values, then validates against the closed catalogues in `src/shared/contracts.ts`; unknown values never reach the renderer. Ambient resolution distinguishes omission from explicit `null`, derives weather overlays from rain/storm/snow/fog when applicable, and preserves a continuing scene's ambient when omitted. Misplaced cue ambients route to their containing proposed scene; scene effects route to its start paragraph. Cross-catalogue values route by their supported id, with the named catalogue taking priority for ambiguous aliases. Unsupported values emit debug-gated planner trace lines. `TurnView` exposes per-paragraph `effects` and `ambients` arrays. Effects are omitted when empty; ambient arrays are omitted only when every scene lacks ambient data, so an all-null array explicitly clears a prior overlay. Scene `startParagraph` boundaries drive ambient changes even when no image cue exists. The host preserves ambient when data is absent and forwards explicit clears. The `[VN] planned` trace lists paragraph effects and scene-start ambient values (including `null` and omitted values). The stage renders ambient markup inside the scene container (`data-vn-scene-ambient` drives scene-image filters; a sibling overlay carries particle/grade layers) and one-shot bursts in a dedicated fx overlay above the scene but below the dialogue box. Particle placement uses a seeded avalanche hash with stratified horizontal slots so fields cover the full width deterministically; all animation respects `prefers-reduced-motion` (static grade only, no motion).
 
@@ -322,7 +349,7 @@ Pipeline: the planner normalizer accepts supported aliases and wrapped values, t
 ```text
 queued -> generating -> generated -> browser_ready
                     \-> failed
-queued/generating   \-> cancelled
+queued/generating   \-> cancelled -> queued   (view reopened)
 ```
 
 `generated` means the provider returned a persisted image ID and URL. `browser_ready` means the active browser decoded that image successfully. Those are intentionally separate states.
@@ -453,7 +480,7 @@ swaps from progress and retry wording. See README "Scene image reuse".
 
 Audio is optional and user-supplied. The settings panel imports audio files from any folder in chunks that fit the host's 4 MB message limit; `audio-catalog.ts` scans the stored library, classifies each file as BGM or SFX from its path keywords, and derives searchable tags from file and folder names. When a library is present, the planner is asked for optional per-cue `bgm` and `sfx` names, which the frontend `audio-engine` resolves against the catalog and plays with looped music and one-shot effects. Chats without an audio library skip all of this: the planner is not asked for audio cues.
 
-The Choir companion can replace the pack. Cue's speech already plays each paragraph through Choir (`src/frontend/host/choir-bridge.ts`, `window.__CHOIR_API__.playParagraph`), and Choir adds Freesound sound effects, ambience beds and incompetech music to that call. "Sound from Choir" (`speech.choirSound`) calls Choir's optional `setSoundEnabled`. While it is on, speech is on and Choir reports sound on in the chat (`getConfig`: music, or effects/ambience with a Freesound key), `PackSound` keeps the pack quiet but still tracks its music, so switching back resumes the track in effect. The check runs again before every paragraph's cue, because Choir's switches can change inside Choir or with the chat. A chat switch stops the pack and forgets its music. The speech dock shows Choir's music credit from `getMusic()` and the `choir-music-v1` event. Both methods are feature-detected, so an older Choir hides the setting. A cursor change only aborts Cue's in-flight paragraph and does not call Choir's `stop()`: the next `playParagraph` hands over itself and keeps the ambience and music running. Explicit Stop, pause, chat change, closing the view, a hidden page and speech settings changes still call `stop()`.
+The Choir companion can replace the pack. Cue's read aloud already plays each paragraph through Choir (`src/frontend/host/choir-bridge.ts`, `window.__CHOIR_API__.playParagraph`), and Choir adds Freesound sound effects, ambience beds and incompetech music to that call. "Sound from Choir" (`speech.choirSound`, on by default) calls Choir's optional `setSoundEnabled` when switched. While it is on, read aloud is on and Choir reports sound on in the chat (`getConfig`: music, or effects/ambience with a Freesound key), `PackSound` keeps the pack quiet but still tracks its music, so switching back resumes the track in effect. The check runs again before every paragraph's cue, because Choir's switches can change inside Choir or with the chat. A chat switch stops the pack and forgets its music. The speech dock shows Choir's music credit from `getMusic()` and the `choir-music-v1` event. Both methods are feature-detected, so an older Choir hides the setting. A cursor change only aborts Cue's in-flight paragraph and does not call Choir's `stop()`: the next `playParagraph` hands over itself and keeps the ambience and music running. Explicit Stop, pause, chat change, closing the view, a hidden page and turning read aloud or Mute narrator on or off still call `stop()` for the paragraph in flight.
 
 ## Staging host contract
 

@@ -332,3 +332,64 @@ describe("Finding #2: repeated expressions generate all cues without lingering q
     expect(finalJobs.some((j) => j.status === "queued")).toBe(false);
   });
 });
+
+describe("one silent retry for a passing image failure", () => {
+  const onePicture = (): TurnPlan => TurnPlanSchema.parse({
+    schemaVersion: 1,
+    key,
+    paragraphs: [{ index: 0, sourceIndex: 0, text: "A smile." }],
+    scenes: [scene],
+    visualCues: [{ ...cue("smile"), cueId: "cue-0", paragraphIndex: 0, character: "Mira", assetJobId: "job-0" }],
+    choices: [],
+    initialContinuity: { revision: 0, characters: {}, facts: {} },
+    continuityDeltas: [],
+    terminalContinuity: { revision: 0, characters: {}, facts: {} },
+    planningStatus: "planned",
+    createdAt: now
+  });
+  const spindleFailing = (failures: Error[]) => {
+    const calls: unknown[] = [];
+    const warnings: string[] = [];
+    const spindle = {
+      userStorage: { getJson: async () => null, setJson: async () => {} },
+      imageGen: {
+        getConnection: async () => ({ provider: "comfyui" }),
+        listConnections: async () => [{ provider: "comfyui", is_default: true }],
+        generate: async (input: unknown) => {
+          calls.push(input);
+          const failure = failures.shift();
+          if (failure) throw failure;
+          return { imageId: "img-1", imageUrl: "/api/v1/images/img-1" };
+        }
+      },
+      log: { info: () => {}, warn: (line: string) => { warnings.push(line); }, error: () => {} }
+    } as any;
+    return { spindle, calls, warnings };
+  };
+
+  test("a busy provider is asked once more and the picture is made", async () => {
+    const p = onePicture();
+    const { spindle, calls, warnings } = spindleFailing([new Error("ComfyUI image generate failed (503): Service Unavailable")]);
+    const jobs = await generateAssets(spindle, p, createAssetJobs(p, DEFAULT_CONFIG), DEFAULT_CONFIG, new AbortController().signal, () => {}, undefined, { retryDelayMs: 1 });
+    expect(calls).toHaveLength(2);
+    expect(jobs[0]!.status).toBe("generated");
+    expect(warnings.some((line) => line.includes("trying once more"))).toBe(true);
+  });
+
+  test("a second passing failure fails the picture: only one retry", async () => {
+    const p = onePicture();
+    const { spindle, calls } = spindleFailing([new Error("fetch failed"), new Error("fetch failed")]);
+    const jobs = await generateAssets(spindle, p, createAssetJobs(p, DEFAULT_CONFIG), DEFAULT_CONFIG, new AbortController().signal, () => {}, undefined, { retryDelayMs: 1 });
+    expect(calls).toHaveLength(2);
+    expect(jobs[0]!.status).toBe("failed");
+  });
+
+  test("a refusal or missing credits fails at once, without a second paid request", async () => {
+    const p = onePicture();
+    const { spindle, calls } = spindleFailing([new Error("NovelAI image generate failed (402): Not enough Anlas")]);
+    const jobs = await generateAssets(spindle, p, createAssetJobs(p, DEFAULT_CONFIG), DEFAULT_CONFIG, new AbortController().signal, () => {}, undefined, { retryDelayMs: 1 });
+    expect(calls).toHaveLength(1);
+    expect(jobs[0]!.status).toBe("failed");
+    expect(jobs[0]!.error).toContain("Anlas");
+  });
+});
