@@ -43,11 +43,12 @@ const settle = (ms = 30) => new Promise<void>((resolve) => setTimeout(resolve, m
 
 type Parked = { release: () => void; signal?: AbortSignal };
 
-function fixture(config: Record<string, unknown> = {}) {
+function fixture(config: Record<string, unknown> = {}, options: { failText?: boolean } = {}) {
   const handlers = new Map<string, Array<(...args: unknown[]) => void>>();
   let frontend!: (payload: unknown, userId: string) => void;
   const data = new Map<string, unknown>();
   const sent: Array<Record<string, unknown>> = [];
+  const warnings: string[] = [];
   const messages: Array<Record<string, unknown>> = [];
   // Planner calls and line checks both park until the test releases them.
   const planner: Parked[] = [];
@@ -73,8 +74,11 @@ function fixture(config: Record<string, unknown> = {}) {
         planner.push({ ...signal, release: () => resolve({ content: JSON.stringify(plannerPayload()) }) });
       }),
     },
-    sendToFrontend: (message: Record<string, unknown>) => { sent.push(message); },
-    log: { warn() {}, error() {}, info() {} },
+    sendToFrontend: (message: Record<string, unknown>) => {
+      if (options.failText && message.type === "vn_turn_text") throw new Error("frontend channel closed");
+      sent.push(message);
+    },
+    log: { warn(text: string) { warnings.push(text); }, error() {}, info() {} },
   } as unknown as SpindleAPI;
   const fire = (event: string, ...args: unknown[]) => { for (const handler of handlers.get(event) ?? []) handler(...args); };
   registerVisualNovelBackend(spindle);
@@ -83,7 +87,7 @@ function fixture(config: Record<string, unknown> = {}) {
     swipe_dates: [1], extra: {}, parent_message_id: null, branch_id: null, created_at: 1, index_in_chat: 1, send_date: 1,
   });
   return {
-    fire, sent, planner, checks, messages, data,
+    fire, sent, warnings, planner, checks, messages, data,
     request: (payload: unknown, userId: string) => frontend(payload, userId),
     reply: (chatId: string, userId: string, content = REPLY) => {
       messages.splice(0, messages.length, message(chatId, content));
@@ -149,6 +153,17 @@ describe("provisional turn (text before the plan)", () => {
     expect(turns).toHaveLength(1);
     expect(turns.every((turn) => !turn.provisional && turn.status === "ready")).toBe(true);
     expect(f.sent.filter((m) => m.type === "vn_turn_text")).toHaveLength(2);
+  });
+
+  test("a text that cannot be sent is logged; the plan still lands", async () => {
+    const f = fixture({ skipNonStory: false }, { failText: true });
+    const chat = "pt-send-fails";
+    f.request({ type: "vn_view", chatId: chat, open: true }, "user-pt7");
+    f.reply(chat, "user-pt7");
+    await waitFor(() => f.planner.length === 1);
+    await waitFor(() => f.warnings.some((text) => text.includes("Turn text before the plan could not be sent")));
+    f.planner[0]!.release();
+    await waitFor(() => f.planned().length === 1);
   });
 
   test("without Skip non-story blocks the text goes out at once, every line kept", async () => {

@@ -1243,6 +1243,9 @@ async function processAssistantMessage(
         provisionalTurns.set(provisionalKey, { operationId: operation.id, view });
         spindle.sendToFrontend({ type: "vn_turn_text", turn: view }, userId);
         dbg(spindle, userId, `provisional turn sent chat=${chatId} message=${message.id} after ${Date.now() - planningStartedAt}ms paragraphs=${view.paragraphs.length} speakers=[${view.paragraphSpeakers?.map((name, index) => name ? `p${index}:${name}` : "").filter(Boolean).join(", ") ?? ""}]`);
+      }).catch((error: unknown) => {
+        // The text is a head start; the plan still brings the turn.
+        spindle.log.warn(`Turn text before the plan could not be sent: ${errorText(error)}`);
       });
     };
     const result = await planTurn(spindle, {
