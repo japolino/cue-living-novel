@@ -206,6 +206,11 @@ export const VN_WAITING_CSS = `
   animation: vn-scene-fade-in 360ms ease-out both;
 }
 
+/* Errors and picture progress stay on top (and clickable) while it shows. */
+[data-vn-root]:has([data-vn-waiting]:not([hidden])) [data-vn-status-stack] {
+  z-index: 13;
+}
+
 [data-vn-waiting][data-vn-waiting-closing] {
   animation: vn-scene-fade-out 320ms ease-in both;
   pointer-events: none;

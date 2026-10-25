@@ -172,6 +172,9 @@ describe("scene flow on the stage", () => {
     expect(screen.dataset.vnRecap).toBe("film");
     expect(must(s, "[data-vn-waiting-sent-text]").textContent).toBe("Let's go for a walk.");
     expect(must(s, "[data-vn-waiting-status]").textContent).toBe("Mira is writing the next scene…");
+    // Its status line replaces the waiting badge; other badges (picture progress, errors) stay.
+    s.setAssetProgress({ current: 1, total: 2 });
+    expect(root(s).querySelectorAll("[data-vn-badge]").map((badge) => badge.textContent.trim())).toEqual(["Creating image 1 of 2"]);
     // The film has the reply and the reader's line.
     expect(root(s).querySelectorAll("[data-vn-film-track] > [data-vn-film-card]").map((card) => card.dataset.vnFilmKind)).toEqual([
       "character", "narration", "character", "reader",

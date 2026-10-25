@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { FakeDocument, FakeEvent, FakeNode, installFakeDocument } from "./stage-test-dom";
-import { VnStage, type VnStageOptions } from "./vn-stage";
+import { DEFAULT_READING_FLOW, VnStage, type VnStageOptions } from "./vn-stage";
 import type { VnTurnInput } from "../store";
 
 /**
@@ -433,6 +433,8 @@ describe("reading UX", () => {
 
   test("waiting states use plain words and real counts, never percentages", () => {
     const s = create();
+    // The status line alone (the waiting screen off).
+    s.setReadingFlow({ ...DEFAULT_READING_FLOW, waitingBackdrop: "off" });
     s.loadTurn({ paragraphs: paragraphs(1) });
     s.setPhase("waiting-for-response");
     expect(badgeTexts(s)).toEqual(["Waiting for the reply\u2026"]);

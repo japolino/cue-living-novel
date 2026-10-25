@@ -3042,7 +3042,8 @@ export class VnStage {
     };
 
     const badges: BadgeSpec[] = [];
-    const phaseLabel = phaseLoadingLabel(this.state.phase);
+    // The waiting screen says it in its own status line.
+    const phaseLabel = this.waitingScreenWanted() ? null : phaseLoadingLabel(this.state.phase);
     if (phaseLabel) {
       badges.push({ kind: "loading", label: phaseLabel, icon: "spinner" });
     } else if (selectVnStageView(this.state).waitingForPlan) {
@@ -3515,6 +3516,14 @@ export class VnStage {
     });
   }
 
+  /** The next reply is being written, there is a reply to recall, and the waiting screen is on. */
+  private waitingScreenWanted(): boolean {
+    const phase = this.state.phase;
+    return (phase === "waiting-for-response" || phase === "planning")
+      && this.state.paragraphs.length > 0
+      && this.flow.waitingBackdrop !== "off";
+  }
+
   private waitingStatus(): string {
     if (this.state.phase === "planning") return "Setting the next scene\u2026";
     return `${this.writer || "The story"} is writing the next scene\u2026`;
@@ -3526,12 +3535,12 @@ export class VnStage {
     if (this.cardOpen()) {
       this.openingCard.markReady(this.state.planHold === null && this.state.pendingImage === null);
     }
-    const waiting = (phase === "waiting-for-response" || phase === "planning") && this.state.paragraphs.length > 0;
+    const backdrop = this.flow.waitingBackdrop;
     if (!this.waitingPreview()) {
-      if (waiting && this.flow.waitingBackdrop !== "off") {
+      if (this.waitingScreenWanted() && backdrop !== "off") {
         if (this.waitingOpen()) this.waitingScreen.setStatus(this.waitingStatus());
         else this.waitingScreen.show(this.waitingRecap(), {
-          backdrop: this.flow.waitingBackdrop,
+          backdrop,
           recap: this.flow.waitingRecap,
           preview: false,
           motion: this.sceneMotion(),

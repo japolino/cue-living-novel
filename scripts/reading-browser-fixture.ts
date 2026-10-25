@@ -1,4 +1,4 @@
-import { VnStage } from "../src/frontend/stage/vn-stage.js";
+import { DEFAULT_READING_FLOW, VnStage } from "../src/frontend/stage/vn-stage.js";
 import type { VnTurnInput } from "../src/frontend/store/index.js";
 import { PanelDock } from "../src/frontend/stage/panel-dock.js";
 
@@ -38,6 +38,8 @@ const turn: VnTurnInput = {
     { id: "ask", label: "Ask what she wants", value: "ask" },
   ] : [],
 };
+// The classic status line while waiting (the waiting screen has its own check: test-scene-flow-browser.ts).
+stage.setReadingFlow({ ...DEFAULT_READING_FLOW, waitingBackdrop: "off" });
 stage.loadTurn(turn);
 // The host mounts the pinned-panel dock (with its "Panels" launcher) on the stage, as in src/frontend/host/controller.ts.
 // The launcher shows only when there is a card to pin: give the reply one.

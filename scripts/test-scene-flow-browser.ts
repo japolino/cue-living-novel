@@ -176,6 +176,18 @@ async function waitingScreens(page: Page, size: { width: number; height: number 
   }
 }
 
+/** A picture error while waiting shows above the waiting screen, and its details open. */
+async function errorOnTop(page: Page, tag: string): Promise<void> {
+  assert.equal(await page.getByText("Waiting for the reply…", { exact: true }).count(), 0, `${tag}: no second waiting badge under the screen's own status`);
+  await page.evaluate(() => (window as any).fx.stage.setError({ source: "image", message: "This scene image could not be made.", detail: "HTTP 502 upstream timeout", retryable: true }));
+  const card = page.getByRole("alert");
+  await card.getByText("Technical details", { exact: true }).click();
+  assert.equal(await card.locator("pre").textContent(), "HTTP 502 upstream timeout", `${tag}: the error's details open over the waiting screen`);
+  assert.equal(await page.locator("[data-vn-waiting]").isVisible(), true, `${tag}: the waiting screen stays`);
+  await page.screenshot({ path: `${OUT}/waiting-error-${tag}.png` });
+  await page.evaluate(() => (window as any).fx.stage.setError(null));
+}
+
 /** A tap on a line-up figure: the bubble shows their next line and the picture changes to it. */
 async function lineupTap(page: Page, tag: string): Promise<void> {
   await page.evaluate(() => (window as any).fx.flow({ waitingBackdrop: "card", waitingRecap: "lineup" }));
@@ -204,6 +216,7 @@ try {
   await replyBox(desktop, "desktop");
   await waitingScreens(desktop, desktopSize, "desktop", RECAPS);
   await lineupTap(desktop, "desktop");
+  await errorOnTop(desktop, "desktop");
   // A new reply: the waiting screen goes and the next card opens.
   await desktop.evaluate(() => (window as any).fx.load());
   await desktop.locator("[data-vn-opening]").waitFor();
