@@ -1,5 +1,5 @@
 import type { SpindleAPI } from "lumiverse-spindle-types";
-import { normalizeConfig, type VisualNovelConfig } from "../../config.js";
+import { normalizeCharacterOverride, normalizeConfig, type CharacterConfigOverride, type VisualNovelConfig } from "../../config.js";
 import { AssetJobSchema, SceneStateSchema, TurnPlanSchema, type AssetJob, type SceneState, type TurnPlan } from "../../shared/contracts.js";
 import {
   normalizeSingleCharacter
@@ -600,6 +600,118 @@ export async function changeConfig(
       ...(userOptions(userId) ?? {})
     });
     result = { config: next, changed: true };
+  });
+  return result!;
+}
+
+/* ------------------------------------------------------------------ *
+ * Settings saved per character (see CHARACTER_SCOPED_KEYS).
+ * ------------------------------------------------------------------ */
+
+/**
+ * One file per user holds every character's own settings, keyed by the
+ * character card's id:
+ * `{ schemaVersion: 1, characters: { "<id>": { name, overrides, updatedAt } } }`.
+ * One file means one read tells whether any character has settings of its
+ * own, so a user with none never pays a chat lookup for them.
+ */
+export const CHARACTER_CONFIG_PATH = "config-characters.json";
+export const CHARACTER_CONFIG_SCHEMA_VERSION = 1 as const;
+
+export type StoredCharacterConfig = {
+  /** The card's name when last saved (readability only; Settings shows the card's current name). */
+  name: string;
+  overrides: CharacterConfigOverride;
+  updatedAt: string;
+};
+
+export type StoredCharacterConfigs = {
+  schemaVersion: typeof CHARACTER_CONFIG_SCHEMA_VERSION;
+  characters: Record<string, StoredCharacterConfig>;
+};
+
+const RESERVED_IDS = new Set(["__proto__", "constructor", "prototype"]);
+
+/** A card id usable as a map key: a non-empty string of at most 200 characters. */
+export function usableCharacterId(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0 && value.length <= 200 && !RESERVED_IDS.has(value);
+}
+
+/** Entries with a usable id and at least one valid own value. */
+function normalizeCharacterConfigs(raw: unknown): Record<string, StoredCharacterConfig> {
+  const source = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>).characters : null;
+  if (!source || typeof source !== "object" || Array.isArray(source)) return {};
+  const characters: Record<string, StoredCharacterConfig> = {};
+  for (const [id, value] of Object.entries(source as Record<string, unknown>)) {
+    if (!usableCharacterId(id) || !value || typeof value !== "object" || Array.isArray(value)) continue;
+    const entry = value as Record<string, unknown>;
+    const overrides = normalizeCharacterOverride(entry.overrides);
+    if (Object.keys(overrides).length === 0) continue;
+    characters[id] = {
+      name: typeof entry.name === "string" ? entry.name : "",
+      overrides,
+      updatedAt: typeof entry.updatedAt === "string" ? entry.updatedAt : new Date(0).toISOString()
+    };
+  }
+  return characters;
+}
+
+async function readCharacterConfigs(spindle: SpindleAPI, userId?: string): Promise<Record<string, StoredCharacterConfig>> {
+  const raw = await spindle.userStorage.getJson<unknown>(CHARACTER_CONFIG_PATH, {
+    fallback: null,
+    ...(userOptions(userId) ?? {})
+  });
+  return normalizeCharacterConfigs(raw);
+}
+
+/**
+ * Every character's own settings. A file that cannot be read counts as none:
+ * the shared settings always load (writes read strictly, see changeCharacterConfig).
+ */
+export async function loadCharacterConfigs(spindle: SpindleAPI, userId?: string): Promise<Record<string, StoredCharacterConfig>> {
+  try {
+    return await readCharacterConfigs(spindle, userId);
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Change one character's own settings as one step, in the same per-user
+ * queue as `changeConfig`, so a character save and a shared save never write
+ * back what they read before the other landed. `change` gets the shared
+ * config and the character's own values as stored now, and returns the new
+ * own values (empty: the character uses the shared settings again) or null
+ * to write nothing. The character's entry is removed once it has no own value.
+ */
+export async function changeCharacterConfig(
+  spindle: SpindleAPI,
+  character: { id: string; name: string },
+  change: (shared: VisualNovelConfig, current: CharacterConfigOverride) => CharacterConfigOverride | null,
+  userId?: string
+): Promise<{ shared: VisualNovelConfig; overrides: CharacterConfigOverride; changed: boolean }> {
+  if (!usableCharacterId(character.id)) throw new Error("This chat's character cannot have settings of its own.");
+  let result: { shared: VisualNovelConfig; overrides: CharacterConfigOverride; changed: boolean } | null = null;
+  await serializedWrite(scopedKey(userId, "config.json"), async () => {
+    const [shared, characters] = await Promise.all([loadConfig(spindle, userId), readCharacterConfigs(spindle, userId)]);
+    const current = characters[character.id]?.overrides ?? {};
+    const proposed = change(shared, current);
+    const overrides = proposed ? normalizeCharacterOverride(proposed) : current;
+    if (!proposed || JSON.stringify(overrides) === JSON.stringify(current)) {
+      result = { shared, overrides: current, changed: false };
+      return;
+    }
+    const next: Record<string, StoredCharacterConfig> = {};
+    for (const [id, entry] of Object.entries(characters)) if (id !== character.id) next[id] = entry;
+    if (Object.keys(overrides).length > 0) {
+      next[character.id] = { name: character.name, overrides, updatedAt: new Date().toISOString() };
+    }
+    const stored: StoredCharacterConfigs = { schemaVersion: CHARACTER_CONFIG_SCHEMA_VERSION, characters: next };
+    await spindle.userStorage.setJson(CHARACTER_CONFIG_PATH, stored, {
+      indent: 2,
+      ...(userOptions(userId) ?? {})
+    });
+    result = { shared, overrides, changed: true };
   });
   return result!;
 }
