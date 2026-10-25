@@ -79,7 +79,7 @@ import {
   puppetShiftFor,
   puppetShiftGain,
   puppetShiftReveal,
-  puppetSnowStep,
+  puppetSnowFrame,
   type PuppetAtmosphere,
   type PuppetPuff,
   type PuppetShiftKind,
@@ -1475,8 +1475,7 @@ export class SpritePuppet {
       const next = actor.air[key] + (goal - actor.air[key]) * k;
       actor.air[key] = Math.abs(next - goal) < 0.003 ? goal : next;
     }
-    actor.snow = s.spriteAtmosphere ? puppetSnowStep(actor.snow, actor.air.snow, dt) : actor.snow * (1 - k);
-    if (actor.snow < 0.001) actor.snow = 0;
+    actor.snow = puppetSnowFrame(actor.snow, actor.air.snow, dt, s.spriteAtmosphere, k);
 
     const cycle = puppetBreathCycle(actor.clocks.breath, actor.phase);
     if (actor.air.breath > 0.3) {

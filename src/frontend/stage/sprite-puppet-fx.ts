@@ -262,6 +262,16 @@ export function puppetSnowStep(coverage: number, target: number, dt: number): nu
   return coverage + (target - coverage) * (1 - Math.exp(-dt / tau));
 }
 
+/**
+ * One frame of settled snow: it builds toward the weather's target while the
+ * atmosphere is on, and fades by `fade` while it's off. The last of a melt
+ * snaps to zero, never the first flakes of a build (a frame adds far less).
+ */
+export function puppetSnowFrame(coverage: number, target: number, dt: number, on: boolean, fade: number): number {
+  const next = on ? puppetSnowStep(coverage, target, dt) : coverage * (1 - fade);
+  return next < 0.001 && !(on && target > next) ? 0 : next;
+}
+
 /* ------------------------------------------------------------------------ */
 /* Breath clouds                                                             */
 /* ------------------------------------------------------------------------ */
