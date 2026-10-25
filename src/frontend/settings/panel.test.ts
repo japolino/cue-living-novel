@@ -6,9 +6,18 @@ import { THEME_PRESET_LABELS, THEME_PRESET_OPTIONS } from "./panel";
 import { TEXT_EFFECT_CATALOGUE } from "../../shared/text-effects.js";
 
 describe("theme preset settings options", () => {
-  test("the selector exposes exactly the canonical five presets", () => {
+  test("the selector exposes exactly the canonical presets", () => {
     expect(THEME_PRESET_OPTIONS.map(({ value }) => value)).toEqual([...THEME_PRESET_IDS]);
-    expect(THEME_PRESET_OPTIONS.length).toBe(7);
+    expect(THEME_PRESET_OPTIONS.length).toBe(10);
+  });
+
+  test("the new layouts have plain labels and no game brand names", () => {
+    expect(THEME_PRESET_LABELS.cinema).toMatch(/^Cinema/);
+    expect(THEME_PRESET_LABELS.nvl).toMatch(/^NVL/);
+    expect(THEME_PRESET_LABELS.daylight).toMatch(/^Daylight/);
+    for (const id of ["cinema", "nvl", "daylight"] as const) {
+      expect(THEME_PRESET_LABELS[id]).not.toMatch(/archive|risu|ddlc|doki/i);
+    }
   });
 
   test("every option carries a non-empty, distinct label", () => {

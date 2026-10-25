@@ -191,3 +191,91 @@ test("effects survive the markdown-stripping presets and forced quotes", () => {
   const result = formatDialogueText("<shake>**No!**</shake>", [], { stripMarkdown: true, forceQuotes: true, hasSpeaker: true });
   assert.equal(result, '"<span data-vn-text-fx="shake">No!</span>"');
 });
+
+// ---- Spoken words (markQuotes) ------------------------------------------
+
+const quoted = (text: string, rules: ReturnType<typeof parseCustomRegexRules> = []) =>
+  formatDialogueText(text, rules, { markQuotes: true });
+
+test("quotes are only marked when asked", () => {
+  assert.equal(formatDialogueText('"Hi," she said.'), '"Hi," she said.');
+});
+
+test("every dialogue quote style is wrapped, marks included", () => {
+  assert.equal(quoted("「やあ」と彼は言った。"), "<span data-vn-quote>「やあ」</span>と彼は言った。");
+  assert.equal(quoted("『静かに』"), "<span data-vn-quote>『静かに』</span>");
+  assert.equal(quoted("He said “wait” twice."), "He said <span data-vn-quote>“wait”</span> twice.");
+  assert.equal(
+    quoted('"Hi," she said. "Bye."'),
+    '<span data-vn-quote>"Hi,"</span> she said. <span data-vn-quote>"Bye."</span>',
+  );
+});
+
+test("narration-only text and unclosed quotes stay narration", () => {
+  assert.equal(quoted("The rain went on."), "The rain went on.");
+  assert.equal(quoted('He was 5\'11" tall.'), 'He was 5\'11" tall.');
+  assert.equal(quoted("「まだ続く"), "「まだ続く");
+});
+
+test("other quote marks inside a quote do not end it", () => {
+  assert.equal(quoted("「彼は『はい』と言った」"), "<span data-vn-quote>「彼は『はい』と言った」</span>");
+  assert.equal(quoted('“A "word" here”'), '<span data-vn-quote>“A "word" here”</span>');
+});
+
+test("back-to-back quotes stay separate spans", () => {
+  assert.equal(quoted('"A""B"'), '<span data-vn-quote>"A"</span><span data-vn-quote>"B"</span>');
+});
+
+test("a quote around effect and markdown tags is one span", () => {
+  assert.equal(
+    quoted('She yelled "<shout>STOP!</shout>" and ran.'),
+    'She yelled <span data-vn-quote>"<span data-vn-text-fx="shout">STOP!</span>"</span> and ran.',
+  );
+  assert.equal(quoted('"It is **mine**," he said.'), '<span data-vn-quote>"It is <strong>mine</strong>,"</span> he said.');
+});
+
+test("a quote inside a tag stays inside it", () => {
+  assert.equal(
+    quoted('<font color="#4a7c59">"Taking the bait?"</font> you murmur.'),
+    '<font color="#4a7c59"><span data-vn-quote>"Taking the bait?"</span></font> you murmur.',
+  );
+});
+
+test("a quote that crosses a tag boundary is wrapped piece by piece and stays well-formed", () => {
+  assert.equal(
+    quoted('<em>"Wait</em> here," she said.'),
+    '<em><span data-vn-quote>"Wait</span></em><span data-vn-quote> here,"</span> she said.',
+  );
+  assert.equal(
+    quoted('"Hi <em>there" she</em> said.'),
+    '<span data-vn-quote>"Hi </span><em><span data-vn-quote>there"</span> she</em> said.',
+  );
+});
+
+test("quote marks inside inline code are literal", () => {
+  assert.equal(quoted('Type `"rm"` then "go".'), 'Type <code>"rm"</code> then <span data-vn-quote>"go"</span>.');
+});
+
+test("display regex output is marked too", () => {
+  const rules = parseCustomRegexRules('/@@(.+?)@@/g => <font color="#f0a">"$1"</font>');
+  assert.equal(quoted("Then @@Run@@ she said.", rules), 'Then <font color="#f0a"><span data-vn-quote>"Run"</span></font> she said.');
+});
+
+test("quote marking keeps every character and adds only its own spans", () => {
+  const input = 'A <wave>"la</wave> la" and 「b」 `"c"` <font color="red">"d"</font>';
+  const plain = (html: string) => html.replace(/<[^>]*>/g, "");
+  const before = formatDialogueText(input);
+  const after = quoted(input);
+  assert.equal(plain(after), plain(before));
+  assert.equal(after.replaceAll("<span data-vn-quote>", "").replace(/<\/span>/g, "").length, before.replace(/<\/span>/g, "").length);
+  const opened = after.match(/<span data-vn-quote>/g)?.length ?? 0;
+  assert.ok(opened >= 3);
+  assert.equal((after.match(/<\/span>/g)?.length ?? 0) - (before.match(/<\/span>/g)?.length ?? 0), opened);
+});
+
+test("forced quotes mark the whole spoken line", () => {
+  assert.equal(
+    formatDialogueText("W-What kind?!", [], { forceQuotes: true, hasSpeaker: true, markQuotes: true }),
+    '<span data-vn-quote>"W-What kind?!"</span>',
+  );
+});

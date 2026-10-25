@@ -25,6 +25,8 @@ import {
 import { generateAmbientMarkup, generateCueEffectMarkup, generateFrontAmbientMarkup } from "./procedural-particles.js";
 import { SpriteLayer, type SpriteLayerSnapshot } from "./sprite-layer.js";
 import { measurePlateLight } from "./sprite-depth.js";
+import { speakerColor } from "./voices.js";
+import { NvlPages } from "./nvl-page.js";
 import type { PlateView, SpriteIllustrationView, SpriteImageView, SpriteTurnView } from "../../shared/sprites.js";
 
 export type { StageEffect };
@@ -582,6 +584,12 @@ export class VnStage {
   private lightningTimer: ReturnType<typeof setTimeout> | null = null;
   /** Plate URL whose light side was last requested (stale answers are dropped). */
   private plateLightUrl: string | null = null;
+  /** NVL layout (preset "nvl"): where the turn's pages start (nvl-page.ts). */
+  private readonly nvlPages = new NvlPages();
+  /** NVL: the page's earlier paragraphs, created on first use so other layouts never have it. */
+  private nvlPageEl: HTMLElement | null = null;
+  /** NVL: markup of the earlier paragraphs on screen (unchanged markup is not rewritten). */
+  private nvlPageMarkup = "";
 
   constructor(options: VnStageOptions) {
     this.state = options.initialState ?? createInitialVnStageState();
@@ -771,9 +779,11 @@ export class VnStage {
     this.syncBacklogTextEffects();
   }
 
-  /** History never animates text effects: "off" stays off, anything else is "static". */
+  /** History (and the NVL page's earlier paragraphs) never animate text effects: "off" stays off, anything else is "static". */
   private syncBacklogTextEffects(): void {
-    this.backlogContent.dataset.vnTextEffects = this.textEffectMode === "off" ? "off" : "static";
+    const mode = this.textEffectMode === "off" ? "off" : "static";
+    this.backlogContent.dataset.vnTextEffects = mode;
+    if (this.nvlPageEl) this.nvlPageEl.dataset.vnTextEffects = mode;
   }
 
   getTextEffects(): VisualNovelTextEffectMode {
@@ -1322,6 +1332,11 @@ export class VnStage {
    */
   setThemePreset(preset: VisualNovelThemePreset): void {
     this.applyThemePreset(preset);
+    this.syncNvlPage();
+    // Another layout has other dialogue chrome: measure its clearance afresh
+    // (it otherwise only grows, and the NVL page reaches up the whole screen).
+    this.dialogueClearanceSize = "";
+    this.measureDialogueClearance();
   }
 
   private applyThemePreset(preset: VisualNovelThemePreset): void {
@@ -1360,6 +1375,7 @@ export class VnStage {
     this.queuedPlateUrl = null;
     this.queuedIllustrationUrl = null;
     this.failedPlateUrls.clear();
+    this.nvlPages.reset();
     this.updateControlButtons();
     this.updateContinueButton();
     this.dispatch({ type: "reset" });
@@ -1370,6 +1386,8 @@ export class VnStage {
     this.ambientOverride = undefined;
     this.errorDetails = null;
     this.hostImageError = null;
+    // A new turn starts on a fresh NVL page.
+    this.nvlPages.reset();
     // Sprite staging belongs to the turn: set it before the first paragraph renders.
     this.spriteLayer.setTurn(turn.sprites ?? null);
     this.forgetChangedParagraphs(turn.paragraphs);
@@ -2349,12 +2367,19 @@ export class VnStage {
       view.paragraph ? this.state.currentParagraphIndex : -1,
     );
     const speaker = view.paragraph?.speaker ?? "";
-    if (this.speaker.textContent !== speaker) this.speaker.textContent = speaker;
+    if (this.speaker.textContent !== speaker) {
+      this.speaker.textContent = speaker;
+      // The speaker's own colour, for layouts that colour the name (voices.ts).
+      if (speaker && typeof this.speaker.style?.setProperty === "function") {
+        this.speaker.style.setProperty("--vn-speaker-color", speakerColor(speaker));
+      }
+    }
     this.speaker.hidden = !view.paragraph?.speaker;
     const progress = view.paragraph
       ? `${view.paragraphNumber} / ${view.paragraphCount}`
       : "";
     if (this.progress.textContent !== progress) this.progress.textContent = progress;
+    this.syncNvlPage();
     this.updateContinueButton();
     this.syncSprites();
 
@@ -2702,15 +2727,107 @@ export class VnStage {
     }
   }
 
-  /** Dialogue markup for a paragraph under the current preset and display rules. */
+  /**
+   * Dialogue markup for a paragraph under the current preset and display rules.
+   * Quoted runs are always marked (`[data-vn-quote]`), so any theme can style
+   * spoken words; Cinema does by default.
+   */
   private formatParagraph(paragraph: VnParagraph): string {
     const currentPreset = this.root.dataset.vnPreset;
     const shouldStripMarkdown = currentPreset === "literature-club" || currentPreset === "yamaku-classic";
     return formatDialogueText(paragraph.text, this.customRegexRules, {
       stripMarkdown: shouldStripMarkdown,
       forceQuotes: shouldStripMarkdown,
-      hasSpeaker: Boolean(paragraph.speaker && paragraph.speaker.trim())
+      hasSpeaker: Boolean(paragraph.speaker && paragraph.speaker.trim()),
+      markQuotes: true,
     });
+  }
+
+  /** NVL: the page of earlier paragraphs, just before the nameplate. */
+  private ensureNvlPage(): HTMLElement {
+    if (this.nvlPageEl) return this.nvlPageEl;
+    const element = document.createElement("div");
+    element.setAttribute("data-vn-nvl-page", "");
+    element.hidden = true;
+    this.speaker.parentNode?.insertBefore(element, this.speaker);
+    this.nvlPageEl = element;
+    this.syncBacklogTextEffects();
+    return element;
+  }
+
+  /**
+   * NVL layout (preset "nvl"): the paragraphs read before the current one on
+   * its page stay above it, dimmed, and the current one types beneath. A
+   * paragraph that would overflow the page starts the next one (NvlPages
+   * remembers where, so Previous shows the same page again). The dialogue
+   * carries `data-vn-nvl-paged` while the page shows; at Your turn it folds
+   * away and the last paragraph sits in an ordinary box under the reply area.
+   */
+  private syncNvlPage(): void {
+    const view = selectVnStageView(this.state);
+    const box = this.speaker.parentNode as HTMLElement | null;
+    const paged = this.root.dataset.vnPreset === "nvl" && view.paragraph !== null && !view.showComposer;
+    if (!paged) {
+      if (box?.dataset.vnNvlPaged !== undefined) delete box.dataset.vnNvlPaged;
+      if (this.nvlPageEl && !this.nvlPageEl.hidden) {
+        this.nvlPageEl.hidden = true;
+        this.renderNvlEntries(0, 0);
+      }
+      return;
+    }
+    const page = this.ensureNvlPage();
+    if (box && box.dataset.vnNvlPaged === undefined) box.dataset.vnNvlPaged = "";
+    page.hidden = false;
+    const index = this.state.currentParagraphIndex;
+    let changed = false;
+    const start = this.nvlPages.place(index, (from, to) => {
+      changed = this.renderNvlEntries(from, to) || changed;
+      return !this.nvlPageOverflows(page);
+    });
+    changed = this.renderNvlEntries(start, index) || changed;
+    if (!changed) return;
+    // The current paragraph got (or lost) room: re-measure its scrolling.
+    if (this.isTyping) this.dialogueScrolls = this.dialogueText.scrollHeight - this.dialogueText.clientHeight > 1;
+    this.updateDialogueOverflow();
+  }
+
+  /** NVL: show paragraphs start..index-1 as the page's earlier entries. Returns true when the page changed. */
+  private renderNvlEntries(start: number, index: number): boolean {
+    const page = this.nvlPageEl;
+    if (!page) return false;
+    let markup = "";
+    for (let at = start; at < index; at += 1) {
+      const paragraph = this.state.paragraphs[at];
+      if (!paragraph) continue;
+      const name = paragraph.speaker?.trim() ?? "";
+      const speaker = name
+        ? `<span data-vn-nvl-speaker style="--vn-speaker-color: ${speakerColor(name)}">${escapeHtml(name)}</span>`
+        : "";
+      markup += `<div data-vn-nvl-entry>${speaker}<p data-vn-nvl-text>${this.formatParagraph(paragraph)}</p></div>`;
+    }
+    if (markup === this.nvlPageMarkup) return false;
+    this.nvlPageMarkup = markup;
+    page.innerHTML = markup;
+    applyTextEffects(page);
+    return true;
+  }
+
+  /**
+   * NVL: the page cannot hold its paragraphs. Earlier entries shrink first
+   * (preset CSS), so a clipped page, or a current paragraph that has to
+   * scroll under them, means the newest paragraph does not fit. The page
+   * stacks from its bottom edge, so entries that do not fit spill past its
+   * top, where scrollHeight does not count them: compare the edges instead.
+   */
+  private nvlPageOverflows(page: HTMLElement): boolean {
+    if (!this.nvlPageMarkup) return false;
+    const text = this.dialogueText;
+    const first = page.firstElementChild;
+    const spills = first !== null && typeof page.getBoundingClientRect === "function"
+      && first.getBoundingClientRect().top < page.getBoundingClientRect().top - 1;
+    const clipped = spills || page.scrollHeight - page.clientHeight > 1;
+    const squeezed = text.scrollHeight - text.clientHeight > 1;
+    return clipped || squeezed;
   }
 
   private renderStatus(): void {

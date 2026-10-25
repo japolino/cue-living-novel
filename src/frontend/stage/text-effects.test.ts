@@ -112,6 +112,17 @@ describe("applyTextEffects", () => {
     expect(root.textContent).toBe('She yelled "STOP!" and ran.');
   });
 
+  test("the glue stays inside a spoken-words span", () => {
+    const root = html(formatDialogueText('She yelled "<shout>STOP!</shout>" and ran.', [], { markQuotes: true }));
+    apply(root);
+    const quote = root.querySelector("[data-vn-quote]")!;
+    expect(quote.textContent).toBe('"STOP!"');
+    const glue = quote.querySelector(`[${TEXT_EFFECT_GLUE_ATTRIBUTE}]`)!;
+    expect(glue.textContent).toBe('"STOP!"');
+    expect(letters(root).length).toBe(5);
+    expect(root.textContent).toBe('She yelled "STOP!" and ran.');
+  });
+
   test("no glue when spaces surround the effect", () => {
     const root = html(formatDialogueText("a <wave>b</wave> c"));
     apply(root);

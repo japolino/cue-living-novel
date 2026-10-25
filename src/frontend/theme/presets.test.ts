@@ -18,10 +18,13 @@ const EXPECTED_PRESETS = [
   "midnight-noir",
   "yamaku-classic",
   "literature-club",
+  "cinema",
+  "nvl",
+  "daylight",
 ] as const;
 
 describe("canonical theme preset ids", () => {
-  test("exposes exactly the seven supported presets, in order", () => {
+  test("exposes exactly the ten supported presets, in order", () => {
     expect(THEME_PRESET_IDS).toEqual(EXPECTED_PRESETS);
   });
 
@@ -134,6 +137,46 @@ describe("authored preset signatures", () => {
     expect(controlsRule).toContain("transform: translateX(-50%)");
     expect(css).toContain("[data-vn-control]");
     expect(css).toContain("[data-vn-badge]");
+  });
+
+  test("cinema has no box, centres a ruled nameplate in the speaker's colour and sets spoken words apart", () => {
+    const css = THEME_PRESET_CSS.cinema;
+    const dialogueRule = css.match(/\[data-vn-dialogue\] \{[\s\S]*?\}/)?.[0] ?? "";
+    const speakerRule = css.match(/\[data-vn-speaker\] \{[\s\S]*?\}/)?.[0] ?? "";
+    expect(dialogueRule).toContain("background: transparent");
+    expect(dialogueRule).toContain("border: 0");
+    expect(dialogueRule).toContain("text-align: center");
+    expect(css).toMatch(/\[data-vn-narrative\] \{[^}]*background: var\(--vn-dialogue-bg\)/);
+    expect(speakerRule).toContain("justify-content: center");
+    expect(speakerRule).toContain("color: var(--vn-speaker-color");
+    expect(css).toContain('[data-vn-speaker]::before');
+    expect(css).toMatch(/\[data-vn-dialogue-text\] \[data-vn-quote\][\s\S]*?font-weight: 700/);
+    expect(css).toContain('content: "▼"');
+    expect(css).toMatch(/\[data-vn-controls\] \{[^}]*position: static/);
+  });
+
+  test("nvl darkens the screen, fades characters back and lays out a page", () => {
+    const css = THEME_PRESET_CSS.nvl;
+    expect(css).toMatch(/\[data-vn-scrim\] \{[^}]*rgba\(4, 5, 10, 0\.72\)/);
+    expect(css).toMatch(/\[data-vn-sprites\] \{[^}]*opacity: 0\.5;[^}]*filter: brightness/);
+    // Sprites stand on the floor behind the page, not above it.
+    expect(css).toMatch(/\[data-vn-sprites\] \{[^}]*--vn-dialogue-top: 0px/);
+    expect(css).toMatch(/\[data-vn-dialogue\]\[data-vn-nvl-paged\] \{[^}]*flex-direction: column/);
+    expect(css).toMatch(/\[data-vn-nvl-page\] \{[^}]*flex: 0 1000 auto/);
+    expect(css).toMatch(/\[data-vn-nvl-entry\] \{[^}]*opacity: 0\.56/);
+    expect(css).toContain("color: var(--vn-speaker-color, var(--vn-accent))");
+  });
+
+  test("daylight is a light stage with dark ink, a blue-underlined name and a blue arrow", () => {
+    const css = THEME_PRESET_CSS.daylight;
+    const speakerRule = css.match(/\[data-vn-speaker\] \{[\s\S]*?\}/)?.[0] ?? "";
+    expect(css).toMatch(/\[data-vn-scrim\] \{[^}]*backdrop-filter: blur\(1\.5px\) brightness\(1\.12\)/);
+    expect(css).toContain("--vn-text: #1d2736");
+    expect(css).toContain("--vn-overlay-text: #1b2433");
+    expect(speakerRule).toContain("border-bottom: 3px solid #2f7de1");
+    expect(speakerRule).toContain("font-weight: 800");
+    expect(css).toMatch(/\[data-vn-continue\] \{[^}]*color: #2f7de1/);
+    expect(css.toLowerCase()).not.toMatch(/blue archive|ブルアカ|블루 아카이브/);
   });
 });
 
