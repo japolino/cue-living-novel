@@ -1,5 +1,5 @@
 import type { SpindleFrontendContext } from "lumiverse-spindle-types";
-import { spritePuppetSettings, spriteSizeMatchSettings, stageFeelSettings, textEffectModeFor, type VisualNovelConfig, type VisualNovelEffectIntensity, type VisualNovelPresentationMode, type VisualNovelSpritePuppet, type VisualNovelSpriteSizeMatch, type VisualNovelStageFeel, type VisualNovelTextEffectMode } from "../../config.js";
+import { spritePuppetSettings, spriteSizeMatchSettings, spriteTouchSettings, stageFeelSettings, textEffectModeFor, type VisualNovelConfig, type VisualNovelEffectIntensity, type VisualNovelPresentationMode, type VisualNovelSpritePuppet, type VisualNovelSpriteSizeMatch, type VisualNovelSpriteTouch, type VisualNovelStageFeel, type VisualNovelTextEffectMode } from "../../config.js";
 import { REFERENCE_IMAGE_MAX_BYTES, REFERENCE_IMAGE_MIMES } from "../../protocol.js";
 import type { AssetView, BackendResponse, ConnectionCatalogOption, DecisionStatus, FrontendRequest, TurnView } from "../../protocol.js";
 import { AudioEngine, VnStage, isAmbientEffect, isStageEffect, type VnReadingFlow } from "../stage/index.js";
@@ -441,6 +441,8 @@ export type VisualStageThemeTarget = Pick<
   setReadingFlow?: (flow: VnReadingFlow) => void;
   /** Click sparks, press-to-bounce, interface sounds and extra inner voices. */
   setStageFeel?: (settings: VisualNovelStageFeel) => void;
+  /** Touch mode: the hand button, the reactions' size, in-character lines. */
+  setSpriteTouch?: (settings: VisualNovelSpriteTouch) => void;
 };
 
 /** The reading-flow settings of a config (what the stage needs). */
@@ -482,6 +484,7 @@ export function applyVisualConfigToStage(
   stage.setSpriteSizeMatch?.(spriteSizeMatchSettings(config));
   stage.setReadingFlow?.(readingFlowSettings(config));
   stage.setStageFeel?.(stageFeelSettings(config));
+  stage.setSpriteTouch?.(spriteTouchSettings(config));
 }
 
 /**
@@ -810,6 +813,20 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       });
     },
     onSpriteRetry: (setKey) => ctx.sendToBackend({ type: "vn_sprite_action", action: "retry_failed", setKey }),
+    // Touch mode: bond and lines live in their own store; the story and the planner never see them.
+    onTouchCharacters: (characters) => {
+      const activeChatId = chatId();
+      if (activeChatId) ctx.sendToBackend({ type: "vn_touch_get", chatId: activeChatId, characters });
+    },
+    onTouchBond: (character, bond) => {
+      const activeChatId = chatId();
+      if (activeChatId) ctx.sendToBackend({ type: "vn_touch_bond", chatId: activeChatId, character, bond });
+    },
+    onTouchLines: (character, refresh) => {
+      const activeChatId = chatId();
+      if (activeChatId) ctx.sendToBackend({ type: "vn_touch_lines", chatId: activeChatId, character, ...(refresh ? { refresh: true } : {}) });
+      else stage.setTouchLines(character.characterKey, null, "Open a chat first.");
+    },
     onReadingStart: () => {
       const work = readingStartWork;
       readingStartWork = null;
@@ -1425,6 +1442,14 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     }
     if (type === "vn_sprite_library" && message.type === "vn_sprite_library") {
       settingsPanel?.setSpriteLibrary(message.sets, message.plates);
+      return;
+    }
+    if (type === "vn_touch_state" && message.type === "vn_touch_state") {
+      if (message.chatId === chatId()) stage.setTouchStates(message.characters);
+      return;
+    }
+    if (type === "vn_touch_lines" && message.type === "vn_touch_lines") {
+      if (message.chatId === chatId()) stage.setTouchLines(message.characterKey, message.pack ?? null, message.error);
       return;
     }
     if (type === "vn_audio_scanned" && message.type === "vn_audio_scanned") {

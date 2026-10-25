@@ -41,6 +41,8 @@ import {
   type MessageResolutionCache
 } from "./message-text.js";
 import { loadConnectionCatalog } from "./connections.js";
+import { saveTouchBond, touchLinePack, touchStates } from "./touch.js";
+import { normalizeTouchRef } from "../../shared/touch.js";
 import { decisionConnectionStatus, LEGACY_SYSTEM_ONE_KEY } from "./system-one.js";
 import {
   clearAudioCatalogCache,
@@ -2127,6 +2129,31 @@ async function handleFrontendMessage(spindle: SpindleAPI, request: FrontendReque
     case "vn_get_sprite_library":
       await spriteService(spindle).sendLibrary(userId);
       return;
+    case "vn_touch_get": {
+      // Touch mode: bond and lines only; the planner and the story never read them.
+      if (typeof request.chatId !== "string" || !request.chatId || !Array.isArray(request.characters)) return;
+      const refs = request.characters.slice(0, 8).map(normalizeTouchRef).filter((ref) => ref !== null);
+      spindle.sendToFrontend({ type: "vn_touch_state", chatId: request.chatId, characters: await touchStates(spindle, userId, request.chatId, refs) }, userId);
+      return;
+    }
+    case "vn_touch_bond": {
+      const ref = normalizeTouchRef(request.character);
+      if (typeof request.chatId !== "string" || !request.chatId || !ref || typeof request.bond !== "number") return;
+      await saveTouchBond(spindle, userId, request.chatId, ref, request.bond);
+      return;
+    }
+    case "vn_touch_lines": {
+      const ref = normalizeTouchRef(request.character);
+      if (typeof request.chatId !== "string" || !request.chatId || !ref) return;
+      try {
+        const pack = await touchLinePack(spindle, userId, request.chatId, ref, request.refresh === true);
+        dbg(spindle, userId, `touch lines for ${ref.characterKey}${request.refresh ? " (refresh)" : ""}`);
+        spindle.sendToFrontend({ type: "vn_touch_lines", chatId: request.chatId, characterKey: ref.characterKey, pack }, userId);
+      } catch (error) {
+        spindle.sendToFrontend({ type: "vn_touch_lines", chatId: request.chatId, characterKey: ref.characterKey, error: error instanceof Error ? error.message : String(error) }, userId);
+      }
+      return;
+    }
     case "vn_sprite_cutout_ready": {
       const queued = await spriteService(spindle).onCutoutModelArrived(userId);
       dbg(spindle, userId, `cut-out model ready in the browser: ${queued} cut(s) queued again`);

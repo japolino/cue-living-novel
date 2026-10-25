@@ -116,6 +116,16 @@ export type VisualNovelSpriteSizeMatch = Pick<VisualNovelConfig,
  */
 export type VisualNovelStageFeel = Pick<VisualNovelConfig,
   "clickEffect" | "spritePressBounce" | "interfaceSounds" | "interfaceSoundVolume" | "innerVoices">;
+/**
+ * Sprite mode: touch mode (docs/SPRITE_MODE.md, "Touch"). `spriteTouch`
+ * offers the hand button that lets taps on a character pat, stroke, squish
+ * or poke it instead of reading on; `spriteTouchIntensity` sizes the
+ * reactions; `spriteTouchLines` has one short model call per character
+ * write its reaction lines once (off: generic lines, no call at all).
+ */
+export const SPRITE_TOUCH_INTENSITIES = ["gentle", "normal", "lively"] as const;
+export type VisualNovelSpriteTouchIntensity = (typeof SPRITE_TOUCH_INTENSITIES)[number];
+export type VisualNovelSpriteTouch = Pick<VisualNovelConfig, "spriteTouch" | "spriteTouchIntensity" | "spriteTouchLines">;
 export type VisualNovelTextEffectMode = (typeof TEXT_EFFECT_MODES)[number];
 
 /**
@@ -294,6 +304,12 @@ export type VisualNovelConfig = {
   clickEffect: VisualNovelClickEffect;
   /** Sprite mode: pressing a character squishes it and it bounces back; that click does not read on. */
   spritePressBounce: boolean;
+  /** Sprite mode: the hand button turns on touch mode (pat, stroke, squish, poke a character). */
+  spriteTouch: boolean;
+  /** Sprite mode, touch mode: how big the reactions are (SPRITE_TOUCH_INTENSITIES). */
+  spriteTouchIntensity: VisualNovelSpriteTouchIntensity;
+  /** Sprite mode, touch mode: one model call per character writes its reaction lines once; off: generic lines. */
+  spriteTouchLines: boolean;
   /** Soft typing ticks and a pop, synthesized in the browser. Never while a voice reads aloud. */
   interfaceSounds: boolean;
   /** Volume of the interface sounds, 0..1. */
@@ -398,6 +414,9 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   interfaceSounds: false,
   interfaceSoundVolume: 0.4,
   innerVoices: "",
+  spriteTouch: true,
+  spriteTouchIntensity: "normal",
+  spriteTouchLines: true,
   spriteSizeMatch: "heights",
   spriteSizeMatchFace: 15,
   spriteSizeMatchMax: 160,
@@ -542,6 +561,15 @@ export function stageFeelSettings(config: VisualNovelStageFeel): VisualNovelStag
     interfaceSounds: config.interfaceSounds,
     interfaceSoundVolume: config.interfaceSoundVolume,
     innerVoices: config.innerVoices,
+  };
+}
+
+/** The touch mode settings of a config (what VnStage.setSpriteTouch needs). */
+export function spriteTouchSettings(config: VisualNovelSpriteTouch): VisualNovelSpriteTouch {
+  return {
+    spriteTouch: config.spriteTouch,
+    spriteTouchIntensity: config.spriteTouchIntensity,
+    spriteTouchLines: config.spriteTouchLines,
   };
 }
 
@@ -693,6 +721,9 @@ export const CHARACTER_SCOPED_KEYS = [
   "interfaceSounds",
   "interfaceSoundVolume",
   "innerVoices",
+  // Touch mode: whether the hand button is there, and how big the reactions are.
+  "spriteTouch",
+  "spriteTouchIntensity",
 ] as const satisfies readonly (keyof VisualNovelConfig)[];
 
 export type CharacterScopedKey = (typeof CHARACTER_SCOPED_KEYS)[number];
@@ -845,6 +876,9 @@ export function normalizeConfig(value: unknown): VisualNovelConfig {
     interfaceSounds: bool(input.interfaceSounds, DEFAULT_CONFIG.interfaceSounds),
     interfaceSoundVolume: Math.round(floatBetween(input.interfaceSoundVolume, 0, 1, DEFAULT_CONFIG.interfaceSoundVolume) * 100) / 100,
     innerVoices: stringValue(input.innerVoices, DEFAULT_CONFIG.innerVoices).slice(0, 2000),
+    spriteTouch: bool(input.spriteTouch, DEFAULT_CONFIG.spriteTouch),
+    spriteTouchIntensity: oneOf(input.spriteTouchIntensity, SPRITE_TOUCH_INTENSITIES, DEFAULT_CONFIG.spriteTouchIntensity),
+    spriteTouchLines: bool(input.spriteTouchLines, DEFAULT_CONFIG.spriteTouchLines),
     spriteSizeMatch: oneOf(input.spriteSizeMatch, SPRITE_SIZE_MATCH_MODES, DEFAULT_CONFIG.spriteSizeMatch),
     spriteSizeMatchFace: Math.round(floatBetween(input.spriteSizeMatchFace, SPRITE_SIZE_MATCH_FACE_MIN, SPRITE_SIZE_MATCH_FACE_MAX, DEFAULT_CONFIG.spriteSizeMatchFace) * 2) / 2,
     spriteSizeMatchMax: integer(input.spriteSizeMatchMax, SPRITE_SIZE_MATCH_MAX_RANGE[0], SPRITE_SIZE_MATCH_MAX_RANGE[1], DEFAULT_CONFIG.spriteSizeMatchMax),

@@ -3,6 +3,7 @@ import type { PanelArtifact } from "./shared/panels.js";
 import type { CueImageRequest, CueImageResult } from "./shared/cue-images.js";
 import type { NovelAiInsetLayoutId, PixelRect } from "./shared/novelai-inset.js";
 import type { PlateView, SpriteCutMeta, SpriteFaceBox, SpriteImageView, SpriteSetView, SpriteTurnView } from "./shared/sprites.js";
+import type { TouchCharacterRef, TouchCharacterState, TouchLinePack } from "./shared/touch.js";
 
 export type FrontendRequest =
   | { type: "vn_external_image"; request: CueImageRequest }
@@ -106,6 +107,18 @@ export type FrontendRequest =
       dataBase64?: string;
       error?: string;
     }
+  /**
+   * Touch mode: the bond and lines of the characters on stage (answered by
+   * `vn_touch_state`). Never read by the planner or the story.
+   */
+  | { type: "vn_touch_get"; chatId: string; characters: TouchCharacterRef[] }
+  /** Touch mode: a character's bond changed (saved with its card; no answer). */
+  | { type: "vn_touch_bond"; chatId: string; character: TouchCharacterRef; bond: number }
+  /**
+   * Touch mode: a character's in-character lines. The cached pack, or one
+   * model call when there is none (or `refresh`). Answered by `vn_touch_lines`.
+   */
+  | { type: "vn_touch_lines"; chatId: string; character: TouchCharacterRef; refresh?: boolean }
   /** Sprite mode: ask for the whole sprite library (sets and plates). */
   | { type: "vn_get_sprite_library" }
   /** Sprite mode: library actions from settings or the stage. */
@@ -340,6 +353,13 @@ export type BackendResponse =
   | { type: "vn_plate_update"; plate: PlateView }
   /** Sprite mode: the whole library, answering `vn_get_sprite_library` or after a library action. */
   | { type: "vn_sprite_library"; sets: SpriteSetView[]; plates: PlateView[] }
+  /** Touch mode: the saved bond and lines of the characters asked for (`vn_touch_get`). */
+  | { type: "vn_touch_state"; chatId: string; characters: TouchCharacterState[] }
+  /**
+   * Touch mode: a character's lines (`vn_touch_lines`): `pack` when there is
+   * one, `error` when the call failed (the stage keeps the generic lines).
+   */
+  | { type: "vn_touch_lines"; chatId: string; characterKey: string; pack?: TouchLinePack; error?: string }
   | { type: "vn_error"; chatId?: string; operation: string; error: string };
 
 export function isFrontendRequest(value: unknown): value is FrontendRequest {

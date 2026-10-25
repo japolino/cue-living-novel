@@ -11,6 +11,8 @@ import {
   SPRITE_IMAGE_SIZES,
   KEY_ILLUSTRATION_MODES,
   CLICK_EFFECTS,
+  SPRITE_TOUCH_INTENSITIES,
+  type VisualNovelSpriteTouchIntensity,
   SPRITE_SIZE_MATCH_MODES,
   type VisualNovelClickEffect,
   type VisualNovelSpriteSizeMatchMode,
@@ -785,6 +787,26 @@ export function normalizeClickEffect(value: string): VisualNovelClickEffect {
 
 /** Group hint under "Stage feel". */
 export const STAGE_FEEL_HELP = "Small touches while you read. Motion Still and your system's reduced-motion setting turn the sparks and the bounce off.";
+
+/* ------------------------------------------------------------------------ */
+/* Touch mode (Look, sprites): pat, stroke, squish, poke                      */
+/* ------------------------------------------------------------------------ */
+
+/** The touch reaction sizes, in the order shown. */
+export const SPRITE_TOUCH_INTENSITY_OPTIONS: ReadonlyArray<{ value: VisualNovelSpriteTouchIntensity; label: string }> = [
+  { value: "gentle", label: "Gentle" },
+  { value: "normal", label: "Normal" },
+  { value: "lively", label: "Lively" },
+];
+
+export function normalizeSpriteTouchIntensity(value: string): VisualNovelSpriteTouchIntensity {
+  return (SPRITE_TOUCH_INTENSITIES as readonly string[]).includes(value)
+    ? value as VisualNovelSpriteTouchIntensity
+    : DEFAULT_CONFIG.spriteTouchIntensity;
+}
+
+/** Group hint under "Touch". */
+export const SPRITE_TOUCH_HELP = "Pat a head, stroke hair (or animal ears), squish cheeks or poke a character for a reaction and a short line. It never changes the story, and nothing touches clothing. Gentle keeps reactions small, with no marks over the head but a blush; Motion Still and reduced motion keep everyone still. Sounds follow Interface sounds.";
 
 /** "Off" / "40%" for the interface sound volume. */
 export function describeInterfaceVolume(on: boolean, volume: number): string {

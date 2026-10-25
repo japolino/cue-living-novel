@@ -87,6 +87,9 @@ import {
   describeSpriteOutline,
   CLICK_EFFECT_OPTIONS,
   normalizeClickEffect,
+  SPRITE_TOUCH_INTENSITY_OPTIONS,
+  normalizeSpriteTouchIntensity,
+  SPRITE_TOUCH_HELP,
   STAGE_FEEL_HELP,
   describeInterfaceVolume,
   normalizeSpriteExpressionCount,
@@ -760,6 +763,14 @@ export class VisualNovelSettingsPanel {
                 <label data-field ${find("Centre faces", "sprites centre center face slot horizontal align")}><span>Centre faces in their place <span data-size-center-val>100%</span></span><input name="spriteSizeMatchCenter" type="range" min="0" max="100" step="5" /></label>
                 <div data-actions><button type="button" data-size-match-reset>Default sizes</button></div>
               `, { id: "character-size", help: esc(SPRITE_SIZE_MATCH_HELP), find: find("Character size", "sprites size face head height match same scale zoom") })}
+              ${group("Touch", `
+                <label data-check ${find("Touch mode", "sprites touch hand pat head stroke ears hair cheeks squish poke interact bond heart")}><input name="spriteTouch" type="checkbox" /><span>Touch mode<small>The hand button (T) lets a tap on a character pat, stroke, squish or poke it instead of turning the page.</small></span></label>
+                <fieldset ${find("Touch reactions", "sprites touch reaction size gentle normal lively intensity")}>
+                  <legend>Reactions</legend>
+                  ${segments("spriteTouchIntensity", SPRITE_TOUCH_INTENSITY_OPTIONS, false)}
+                </fieldset>
+                <label data-check ${find("Touch lines in character", "sprites touch lines in character model call voice bubble refresh")}><input name="spriteTouchLines" type="checkbox" /><span>Lines in character<small>One short call to the story reader per character, made once and saved, writes its reaction lines (Refresh writes new ones). Off: simple lines, no call.</small></span></label>
+              `, { id: "sprite-touch", help: esc(SPRITE_TOUCH_HELP), find: find("Touch", "sprites touch hand pat stroke squish poke bond heart lines") })}
             </div>
             ${group("Stage feel", `
               <fieldset ${find("Click effect", "click tap sparks sparkle star burst pop exclamation feedback")}>
@@ -1634,6 +1645,9 @@ export class VisualNovelSettingsPanel {
       case "spriteSizeMatchMin": return { spriteSizeMatchMin: clamp(Math.round(Number(target.value)), SPRITE_SIZE_MATCH_MIN_RANGE[0], SPRITE_SIZE_MATCH_MIN_RANGE[1], DEFAULT_CONFIG.spriteSizeMatchMin) };
       case "spriteSizeMatchCenter": return { spriteSizeMatchCenter: clamp(Math.round(Number(target.value)), 0, 100, DEFAULT_CONFIG.spriteSizeMatchCenter) };
       case "spritePressBounce": return { spritePressBounce: checked };
+      case "spriteTouch": return { spriteTouch: checked };
+      case "spriteTouchIntensity": return { spriteTouchIntensity: normalizeSpriteTouchIntensity(target.value) };
+      case "spriteTouchLines": return { spriteTouchLines: checked };
       case "clickEffect": return { clickEffect: normalizeClickEffect(target.value) };
       case "interfaceSounds": return { interfaceSounds: checked };
       case "interfaceSoundVolume": return { interfaceSoundVolume: clamp(Number(target.value), 0, 1, DEFAULT_CONFIG.interfaceSoundVolume) };
@@ -2432,6 +2446,13 @@ export class VisualNovelSettingsPanel {
     for (const input of this.root.querySelectorAll<HTMLInputElement>('input[name="spriteTransitions"]')) input.disabled = config.spriteMotion <= 0;
     this.control<HTMLInputElement>("spriteFocusBlur").checked = config.spriteFocusBlur;
     this.control<HTMLInputElement>("spritePressBounce").checked = config.spritePressBounce;
+    // Touch: the size and the lines read as not applying while touch mode is off.
+    this.control<HTMLInputElement>("spriteTouch").checked = config.spriteTouch;
+    this.setRadio("spriteTouchIntensity", config.spriteTouchIntensity);
+    for (const input of this.root.querySelectorAll<HTMLInputElement>('input[name="spriteTouchIntensity"]')) input.disabled = !config.spriteTouch;
+    const touchLines = this.control<HTMLInputElement>("spriteTouchLines");
+    touchLines.checked = config.spriteTouchLines;
+    touchLines.disabled = !config.spriteTouch;
     const outlineColor = this.control<HTMLInputElement>("spriteOutlineColor");
     outlineColor.value = config.spriteOutlineColor;
     outlineColor.disabled = config.spriteOutline <= 0;

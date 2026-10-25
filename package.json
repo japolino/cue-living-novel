@@ -23,6 +23,7 @@
     "test:sprite-size": "bun run ./scripts/test-sprite-size-browser.ts",
     "test:sprite-cutout": "bun run ./scripts/test-sprite-cutout-browser.ts",
     "test:sprite-face": "bun run ./scripts/test-sprite-face-browser.ts",
+    "test:touch": "bun run ./scripts/test-sprite-touch-browser.ts",
     "test:layouts": "bun run ./scripts/test-layouts-browser.ts",
     "typecheck": "tsc --project tsconfig.json --noEmit",
     "typecheck:build": "tsc --project tsconfig.build.json --noEmit",

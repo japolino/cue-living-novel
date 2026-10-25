@@ -24,16 +24,29 @@ import {
   type VnTurnInput,
 } from "../store";
 import { generateAmbientMarkup, generateCueEffectMarkup, generateFrontAmbientMarkup } from "./procedural-particles.js";
-import { SpriteLayer, spritePressTarget, type SpriteLayerSnapshot } from "./sprite-layer.js";
-import { buildWaitingRecap, sceneAt, USER_PARAGRAPH_PREFIX } from "./recap.js";
+import { SpriteLayer, resolveSpriteImage, spritePressTarget, type SpriteFigureHit, type SpriteLayerSnapshot, type SpriteTouchReaction } from "./sprite-layer.js";
+import { buildWaitingRecap, sceneAt, USER_PARAGRAPH_PREFIX, type RecapImage } from "./recap.js";
 import { LocationLabel, OpeningCard } from "./scene-card.js";
-import { WaitingScreen } from "./waiting-screen.js";
+import { WaitingScreen, type WaitingTouchFigure } from "./waiting-screen.js";
 import { measurePlateLight } from "./sprite-depth.js";
 import { clickEffectFor, spawnClickSparks } from "./click-sparks.js";
 import { interfaceSounds, type InterfaceSounds } from "./interface-sounds.js";
 import { applyInnerVoiceGlow, innerVoiceNames, paragraphInnerVoice } from "./inner-voice.js";
 import { speakerColor, type InnerVoice } from "./voices.js";
 import { NvlPages } from "./nvl-page.js";
+import { SpriteTouch, type SpriteTouchSnapshot, type TouchShow } from "./sprite-touch-ui.js";
+import {
+  TOUCH_BUTTON_ICON,
+  spriteTouchAreaAt,
+  spriteTouchZones,
+  touchClientPoint,
+  touchHandFor,
+  touchImagePoint,
+  type TouchArea,
+  type TouchHand,
+  type TouchZones,
+} from "./sprite-touch.js";
+import { hasAnimalEars, type TouchCharacterRef, type TouchCharacterState, type TouchLinePack } from "../../shared/touch.js";
 import type { PlateView, SpriteIllustrationView, SpriteImageView, SpriteTurnView } from "../../shared/sprites.js";
 
 export type { StageEffect };
@@ -107,6 +120,7 @@ import {
   DEFAULT_CONFIG,
   TEXT_SCALE_MAX,
   TEXT_SCALE_MIN,
+  spriteTouchSettings,
   stageFeelSettings,
   type VisualNovelConfig,
   type VisualNovelEffectIntensity,
@@ -114,6 +128,7 @@ import {
   type VisualNovelSceneImageFit,
   type VisualNovelSpritePuppet,
   type VisualNovelSpriteSizeMatch,
+  type VisualNovelSpriteTouch,
   type VisualNovelStageFeel,
   type VisualNovelTextEffectMode,
   type VisualNovelThemePreset,
@@ -156,6 +171,12 @@ export interface VnStageCallbacks {
   onSpriteRetry?: (setKey: string) => void;
   /** The opening card closed and reading starts (the host plays the first paragraph's sound and voice now). */
   onReadingStart?: () => void;
+  /** Touch mode: characters new to the stage; load their saved bond and lines (`setTouchStates`). */
+  onTouchCharacters?: (characters: TouchCharacterRef[]) => void;
+  /** Touch mode: a character's bond changed (saved with its card, never read by the story). */
+  onTouchBond?: (character: TouchCharacterRef, bond: number) => void;
+  /** Touch mode: make a character's line pack (once, or again on Refresh); answered by `setTouchLines`. */
+  onTouchLines?: (character: TouchCharacterRef, refresh: boolean) => void;
 }
 
 /** The settings that shape how a reply opens, waits and ends (see config.ts). */
@@ -254,6 +275,9 @@ const THEME_MARKUP = `
           </button>
           <button data-vn-control="skip" type="button" aria-label="Skip" aria-pressed="false" aria-describedby="vn-skip-description" aria-keyshortcuts="S" title="Skip to the end of the reply (S)">
             <span data-vn-control-icon aria-hidden="true"><svg viewBox="0 0 16 16" width="14" height="14" focusable="false" fill="currentColor" stroke="none" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3.5v9L7.6 8z" /><path d="M8.2 3.5v9L13.8 8z" /></svg></span><span data-vn-control-label>Skip</span>
+          </button>
+          <button data-vn-control="touch" type="button" aria-label="Touch mode" aria-pressed="false" aria-keyshortcuts="T" title="Touch characters (T)" hidden>
+            <span data-vn-control-icon aria-hidden="true">${TOUCH_BUTTON_ICON}</span><span data-vn-control-label>Touch</span>
           </button>
           <span id="vn-skip-description" data-vn-skip-description hidden></span>
         </nav>
@@ -434,6 +458,34 @@ const restatesTitle = (message: string, title: string): boolean => {
 
 const SKIP_DESCRIPTION = "Skips to the end of the reply and stops at Your turn.";
 
+/** Touch mode: where the line bubble points, the middle of the head top (client px). */
+function touchHeadPoint(zones: TouchZones, toClient: (u: number, v: number) => { x: number; y: number }): { x: number; y: number } {
+  return toClient((zones.head.left + zones.head.right) / 2, zones.head.top);
+}
+
+/** Touch mode: what the sprite layer shows for a reaction (no emote at gentle intensity, no motion when still). */
+function spriteTouchReactionFor(show: TouchShow): SpriteTouchReaction {
+  return {
+    expression: show.reaction.expression,
+    emote: show.emote ? show.reaction.emote : "none",
+    motion: show.motion ? show.reaction.motion : null,
+    amp: show.amp,
+    holdMs: show.holdMs,
+    animate: show.motion,
+  };
+}
+
+/** A sprite image as the waiting screen frames it. */
+function recapImageOf(image: SpriteImageView & { url: string }): RecapImage {
+  return {
+    url: image.url,
+    ...(image.bbox ? { bbox: image.bbox } : {}),
+    ...(image.width ? { width: image.width } : {}),
+    ...(image.height ? { height: image.height } : {}),
+    ...(image.face !== undefined ? { face: image.face } : {}),
+  };
+}
+
 function createBadgeIconSvg(icon: "spinner" | "image" | "check" | "alert" | "reroll"): SVGElement {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("viewBox", "0 0 24 24");
@@ -565,6 +617,13 @@ export class VnStage {
   private readonly autoButton: HTMLButtonElement;
   private readonly autoBar: HTMLElement | null;
   private readonly skipButton: HTMLButtonElement;
+  /** Touch mode's hand button (sprite mode with `spriteTouch` on). */
+  private readonly touchButton: HTMLButtonElement;
+  private touchSettings: VisualNovelSpriteTouch = spriteTouchSettings(DEFAULT_CONFIG);
+  /** Touch mode: the hand, the line bubble, the heart gauges and each character's touch state. */
+  private readonly touch: SpriteTouch;
+  /** The pointer position waiting for the next frame's hand update (null: none pending). */
+  private touchHover: { x: number; y: number } | null = null;
   private readonly backlogModal: HTMLElement;
   private readonly backlogClose: HTMLButtonElement;
   private readonly backlogContent: HTMLElement;
@@ -751,7 +810,11 @@ export class VnStage {
     this.spriteLayer = new SpriteLayer({
       container: () => this.spriteContainer(),
       loadImage: (url) => this.loadSpriteImage(url),
-      onStatusChange: () => { if (!this.destroyed) this.renderStatus(); },
+      onStatusChange: () => {
+        if (this.destroyed) return;
+        this.renderStatus();
+        this.syncTouchCharacters();
+      },
     });
     this.statusStack = queryRequired(this.themeRoot, "[data-vn-status-stack]");
     this.emptyState = queryRequired(this.themeRoot, "[data-vn-empty-state]");
@@ -774,6 +837,17 @@ export class VnStage {
     this.autoButton = queryRequired(this.themeRoot, "[data-vn-control='auto']");
     this.autoBar = this.themeRoot.querySelector<HTMLElement>(".vn-auto-bar");
     this.skipButton = queryRequired(this.themeRoot, "[data-vn-control='skip']");
+    this.touchButton = queryRequired(this.themeRoot, "[data-vn-control='touch']");
+    this.touch = new SpriteTouch({
+      root: this.root,
+      sounds: this.sounds,
+      motion: () => this.sceneMotion(),
+      callbacks: {
+        onCharacters: (characters) => this.callbacks.onTouchCharacters?.(characters),
+        onBond: (character, bond) => this.callbacks.onTouchBond?.(character, bond),
+        ...(options.onTouchLines ? { onLines: (character: TouchCharacterRef, refresh: boolean) => this.callbacks.onTouchLines?.(character, refresh) } : {}),
+      },
+    });
     this.backlogModal = queryRequired(this.themeRoot, "[data-vn-backlog]");
     this.backlogClose = queryRequired(this.themeRoot, "[data-vn-backlog-close]");
     this.backlogContent = queryRequired(this.themeRoot, "[data-vn-backlog-content]");
@@ -835,6 +909,7 @@ export class VnStage {
     }, `${this.writer || "The story"} is writing the next scene\u2026`);
     this.waitingScreen.element.setAttribute("tabindex", "-1");
     this.waitingScreen.element.focus({ preventScroll: true });
+    this.syncTouchCharacters();
   }
 
   /** Read the reply again from its first paragraph. */
@@ -1075,6 +1150,7 @@ export class VnStage {
     this.presentationMode = next;
     this.root.dataset.vnPresentation = next;
     this.syncDepthLayers();
+    this.syncTouchButton();
     if (next === "scene") {
       this.spriteLayer.setEnabled(false);
       this.queuedPlateUrl = null;
@@ -1129,6 +1205,191 @@ export class VnStage {
 
   getStageFeel(): VisualNovelStageFeel {
     return { ...this.stageFeel };
+  }
+
+  /**
+   * Touch mode settings (config `spriteTouch`, `spriteTouchIntensity`,
+   * `spriteTouchLines`): whether the hand button is there, how big the
+   * reactions are, and whether characters get lines of their own.
+   */
+  setSpriteTouch(settings: VisualNovelSpriteTouch): void {
+    this.touchSettings = spriteTouchSettings(settings);
+    this.touch.setSettings(this.touchSettings);
+    this.syncTouchButton();
+  }
+
+  getSpriteTouch(): VisualNovelSpriteTouch {
+    return { ...this.touchSettings };
+  }
+
+  /** Touch mode on or off (the hand button, T). Only in sprite mode with `spriteTouch` on. */
+  setTouchMode(on: boolean): void {
+    if (this.destroyed) return;
+    const next = on && this.touchAvailable();
+    if (next === this.touch.isActive()) return;
+    this.touch.setActive(next);
+    if (next) this.syncTouchCharacters();
+    this.syncTouchButton();
+  }
+
+  isTouchMode(): boolean {
+    return this.touch.isActive();
+  }
+
+  /** Saved bonds and line packs of characters on stage (`vn_touch_state`). */
+  setTouchStates(states: readonly TouchCharacterState[]): void {
+    if (!this.destroyed) this.touch.applyStates(states);
+  }
+
+  /** A character's line pack arrived, or its call failed (`vn_touch_lines`). */
+  setTouchLines(characterKey: string, pack: TouchLinePack | null, error?: string): void {
+    if (!this.destroyed) this.touch.applyLines(characterKey, pack, error);
+  }
+
+  /** Touch mode's state (tests, diagnostics). */
+  getTouchSnapshot(): SpriteTouchSnapshot {
+    return this.touch.snapshot();
+  }
+
+  private touchAvailable(): boolean {
+    return this.presentationMode === "sprites" && this.touchSettings.spriteTouch;
+  }
+
+  /** The hand button shows in sprite mode with touch on in Settings; pressed while touch mode is on. */
+  private syncTouchButton(): void {
+    const available = this.touchAvailable();
+    if (!available && this.touch.isActive()) this.touch.setActive(false);
+    this.touchButton.hidden = !available;
+    const on = this.touch.isActive();
+    this.touchButton.setAttribute("aria-pressed", String(on));
+    this.touchButton.dataset.vnActive = String(on);
+    this.touchButton.title = on ? "Stop touching (T)" : "Touch characters (T)";
+  }
+
+  /** A character of the turn's cast as touch mode names it (its card, name and appearance tags). */
+  private touchRefOf(characterKey: string, fallbackName?: string): TouchCharacterRef {
+    const member = this.spriteLayer.getView()?.staging.cast.find((item) => item.characterKey === characterKey);
+    const name = member?.name ?? fallbackName ?? characterKey;
+    return {
+      characterKey,
+      name,
+      ...(member?.characterId ? { characterId: member.characterId } : {}),
+      ...(member?.identity ? { identity: member.identity } : {}),
+    };
+  }
+
+  /** Who touch mode can touch now: the line-up while the waiting screen shows it, else the characters on stage. */
+  private syncTouchCharacters(): void {
+    if (this.destroyed || !this.touch?.isActive()) return;
+    const lineup = this.waitingOpen() ? this.waitingScreen.lineupFigures() : null;
+    const refs = lineup
+      ? lineup.map((figure) => this.touchRefOf(figure.key, figure.name))
+      : this.spriteLayer.snapshot().actors.filter((actor) => actor.url).map((actor) => this.touchRefOf(actor.characterKey, actor.name));
+    this.touch.setCharacters(refs);
+  }
+
+  /**
+   * Touch mode: a tap on a character on stage pats, strokes, squishes or
+   * pokes it (by where it lands) instead of reading on. False when the tap
+   * is not on a character (it reads on as before).
+   */
+  private touchSprite(event: MouseEvent): boolean {
+    if (!this.touch.isActive() || this.presentationMode !== "sprites") return false;
+    if (event.target instanceof Element && event.target.closest(STAGE_CHROME_SELECTOR)) return false;
+    if (typeof event.clientX !== "number") return false;
+    const target = this.touchTarget(event.clientX, event.clientY);
+    if (!target) return false;
+    const { hit, zones, area } = target;
+    const ref = this.touchRefOf(hit.key);
+    this.touch.touch({
+      ref,
+      area,
+      point: { x: event.clientX, y: event.clientY },
+      head: touchHeadPoint(zones, (u, v) => touchClientPoint(hit.rect, u, v, hit.mirrored)),
+      animalEars: hasAnimalEars(ref.identity),
+      react: (show) => this.spriteLayer.react(hit.key, spriteTouchReactionFor(show)),
+    });
+    return true;
+  }
+
+  /**
+   * The figure on stage a touch at a point lands on, and where. Figures
+   * overlap on narrow screens: a head, ear or cheek of a figure behind wins
+   * over the empty corner of the one in front; otherwise the front one is
+   * poked.
+   */
+  private touchTarget(x: number, y: number): { hit: SpriteFigureHit; zones: TouchZones; area: TouchArea } | null {
+    if (this.presentationMode !== "sprites") return null;
+    let front: { hit: SpriteFigureHit; zones: TouchZones; area: TouchArea } | null = null;
+    for (const hit of this.spriteLayer.figuresAt(x, y)) {
+      const zones = spriteTouchZones(hit.geometry, hit.spot);
+      const point = touchImagePoint(hit.rect, x, y, hit.mirrored);
+      const area = (point && spriteTouchAreaAt(zones, point.u, point.v)) ?? "body";
+      if (area !== "body") return { hit, zones, area };
+      front ??= { hit, zones, area };
+    }
+    return front;
+  }
+
+  /** The hand follows the pointer over a character (one update per frame). */
+  private touchPointer(event: PointerEvent): void {
+    if (!this.touch.isActive() || event.pointerType === "touch") return;
+    const pending = this.touchHover !== null;
+    this.touchHover = { x: event.clientX, y: event.clientY };
+    if (pending) return;
+    const run = () => {
+      const at = this.touchHover;
+      this.touchHover = null;
+      if (!at || this.destroyed || !this.touch.isActive()) return;
+      this.touch.hover(at.x, at.y, this.touchHandAt(at.x, at.y));
+    };
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
+    else run();
+  }
+
+  /** The hand for a point: over a figure on stage or in the line-up, by its zone; null elsewhere. */
+  private touchHandAt(x: number, y: number): TouchHand | null {
+    if (this.waitingOpen()) {
+      const figure = this.waitingScreen.figureAtPoint(x, y);
+      if (!figure) return null;
+      const point = figure.toImage(x, y);
+      return touchHandFor(point ? spriteTouchAreaAt(spriteTouchZones(figure.geometry, figure.spot), point.u, point.v) : null);
+    }
+    const root = this.root.getRootNode() as ShadowRoot | Document;
+    const under = typeof root.elementFromPoint === "function" ? root.elementFromPoint(x, y) : null;
+    if (under instanceof Element && under.closest(`${STAGE_CHROME_SELECTOR}, [data-vn-touch-hud], [data-vn-controls]`)) return null;
+    const target = this.touchTarget(x, y);
+    return target ? touchHandFor(target.area) : null;
+  }
+
+  /**
+   * Touch mode on the waiting screen: a tap on a line-up figure touches it
+   * with the same zones (its picture swaps to the reaction's expression for
+   * a moment and the line shows above it). False: not touch mode (the
+   * screen does what it always did).
+   */
+  private touchWaitingFigure(event: MouseEvent, figure: WaitingTouchFigure): boolean {
+    if (!this.touch.isActive()) return false;
+    const zones = spriteTouchZones(figure.geometry, figure.spot);
+    const point = figure.toImage(event.clientX, event.clientY);
+    const area: TouchArea = (point && spriteTouchAreaAt(zones, point.u, point.v)) ?? "body";
+    const ref = this.touchRefOf(figure.key, figure.name);
+    this.touch.touch({
+      ref,
+      area,
+      point: { x: event.clientX, y: event.clientY },
+      head: touchHeadPoint(zones, figure.toClient),
+      animalEars: hasAnimalEars(ref.identity),
+      react: (show) => {
+        const image = resolveSpriteImage(this.spriteLayer.getView()?.sets[figure.key], show.reaction.expression);
+        return this.waitingScreen.touchFigure(figure.key, {
+          image: image ? recapImageOf(image) : null,
+          motion: show.motion ? show.reaction.motion : null,
+          holdMs: show.holdMs,
+        });
+      },
+    });
+    return true;
   }
 
   /** The inner voice speaking the line on screen (voices.ts), or null. */
@@ -1579,6 +1840,8 @@ export class VnStage {
     this.readParagraphIds.clear();
     this.spriteLayer.setTurn(null);
     this.spriteLayer.clear();
+    // Cast keys are per chat: the next chat's characters load their own bond and lines.
+    this.touch.forget();
     this.queuedPlateUrl = null;
     this.queuedIllustrationUrl = null;
     this.failedPlateUrls.clear();
@@ -1831,6 +2094,7 @@ export class VnStage {
     this.destroyed = true;
     this.dialogueObserver?.disconnect();
     this.dialogueObserver = null;
+    this.touch.destroy();
     this.spriteLayer.destroy();
     if (this.speechHold) this.sounds.releaseHold(this.speechHold);
     this.host.remove();
@@ -2329,6 +2593,11 @@ export class VnStage {
       this.toggleSkip();
     });
 
+    this.touchButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      this.setTouchMode(!this.touch.isActive());
+    });
+
     this.backlogClose.addEventListener("click", (event) => {
       event.stopPropagation();
       this.closeBacklog();
@@ -2382,6 +2651,9 @@ export class VnStage {
 
     // Every press on the stage sparks at the pointer (clickEffect).
     this.root.addEventListener("pointerdown", (event) => this.sparkAt(event));
+    // Touch mode: the drawn hand follows the pointer over a character.
+    this.root.addEventListener("pointermove", (event) => this.touchPointer(event));
+    this.root.addEventListener("pointerleave", () => this.touch.leave());
     // A double-click or a long press never paints the selection highlight
     // over the picture or the chrome; the dialogue and History stay selectable.
     this.root.addEventListener("mousedown", (event) => {
@@ -2394,6 +2666,9 @@ export class VnStage {
     this.root.addEventListener("click", (event) => {
       if (this.isBacklogOpen) return;
       if (isInteractiveTarget(event.target)) return;
+      if (event.target instanceof Element && event.target.closest("[data-vn-touch-hud]")) return;
+      // Touch mode: a tap on a character touches it and reads nothing on.
+      if (this.touchSprite(event)) return;
       // A press on a character makes it bounce and reads nothing on.
       if (this.pressSprite(event)) return;
       this.advance(true);
@@ -2411,7 +2686,14 @@ export class VnStage {
       // Shortcuts work from buttons too (a focused suggestion, a toolbar
       // control), never while typing; Enter and Space still press a button.
       if (isTextEntryTarget(event.target)) return;
-      if (this.waitingPreview()) return;
+      if (this.waitingPreview()) {
+        // The preview keeps its keys, except T: its line-up can be touched too.
+        if ((event.key === "t" || event.key === "T") && this.touchAvailable()) {
+          event.preventDefault();
+          this.setTouchMode(!this.touch.isActive());
+        }
+        return;
+      }
       if (this.cardOpen()) {
         // The card is the first thing to read: any reading key starts; S starts and skips.
         if (event.key === "Escape" || event.key === "Enter" || event.key === " " || event.key === "ArrowRight") {
@@ -2450,6 +2732,16 @@ export class VnStage {
       if (event.key === "s" || event.key === "S") {
         event.preventDefault();
         this.toggleSkip();
+        return;
+      }
+      if ((event.key === "t" || event.key === "T") && this.touchAvailable()) {
+        event.preventDefault();
+        this.setTouchMode(!this.touch.isActive());
+        return;
+      }
+      if (event.key === "Escape" && this.touch.isActive()) {
+        event.preventDefault();
+        this.setTouchMode(false);
         return;
       }
       if (event.key !== "Enter" && event.key !== " " && event.key !== "ArrowRight") return;
@@ -3559,6 +3851,8 @@ export class VnStage {
       this.waitingScreenEl = new WaitingScreen({
         // Its taps spark through the stage's own pointerdown (sparkAt); a new bubble or card pops.
         onPop: () => this.sounds.pop(),
+        // Touch mode: line-up figures are touchable with the same zones.
+        onFigureTouch: (event, figure) => this.touchWaitingFigure(event, figure),
         onClose: () => this.root.focus({ preventScroll: true }),
       });
       this.root.insertBefore(this.waitingScreenEl.element, this.openingCardEl?.element ?? null);
@@ -3700,5 +3994,7 @@ export class VnStage {
     const covered = this.cardOpen() || this.waitingOpen();
     const scene = this.flow.locationLabel && reading && !covered ? this.currentScene() : null;
     if (scene || this.locationLabelEl) this.locationLabel.render(scene);
+    // The line-up and the stage take turns being touchable.
+    this.syncTouchCharacters();
   }
 }
