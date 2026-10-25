@@ -757,6 +757,51 @@ describe("sprite jobs: scenery check", () => {
     expect(f.log.some((line) => line.startsWith(`sprite ${setKey}/idle: scenery -> regenerate with a new set seed`))).toBe(true);
   });
 
+  test("anchored expressions drawn from an idle that kept scenery are not rendered again for it", async () => {
+    const f = setup({ provider: "comfyui", config: { referenceAnchoring: true } });
+    await f.service.prepareCast("u1", [MIRA], spriteConfig({ referenceAnchoring: true }));
+    await f.service.settle("u1");
+    const setKey = spriteSetKeyFor(MIRA, f.styleKey);
+    // The idle and its automatic retry both keep scenery; every expression inherits it.
+    await f.answerAll(() => false, () => true);
+    await f.service.settle("u1");
+    expect(f.callsBy().filter((entry) => entry.name === label(setKey, "idle"))).toHaveLength(2);
+    expect(f.calls).toHaveLength(SPRITE_HOT_SET.length + 1);
+    expect(f.log.some((line) => /\/(?!idle)\w+: scenery -> regenerate/.test(line))).toBe(false);
+    const set = (await f.library()).sets[setKey]!;
+    expect(set.images.idle).toMatchObject({ status: "ready", scenery: true, autoRetried: true });
+    expect(set.images.smile).toMatchObject({ status: "ready", scenery: true, autoRetried: false });
+  });
+
+  test("an idle cut without the check (basic or pre-cut): anchored expressions keep their scenery cut", async () => {
+    const f = setup({ provider: "comfyui", config: { referenceAnchoring: true } });
+    await f.service.prepareCast("u1", [MIRA], spriteConfig({ referenceAnchoring: true }));
+    await f.service.settle("u1");
+    for (let guard = 0; guard < 30; guard += 1) {
+      const pending = f.cutRequests().filter((request) => !f.answered.has(request.requestId));
+      if (!pending.length) break;
+      for (const request of pending) {
+        f.answered.add(request.requestId);
+        f.answerCut(request, request.expression === "idle" ? { ...CUT_META, twoFigures: false } : { ...CUT_META, twoFigures: false, scenery: true });
+      }
+      await f.service.settle("u1");
+    }
+    expect(f.calls).toHaveLength(SPRITE_HOT_SET.length);
+    expect((await f.library()).sets[spriteSetKeyFor(MIRA, f.styleKey)]!.images.idle!.scenery).toBeNull();
+  });
+
+  test("an idle checked clean: an anchored expression with scenery is rendered again", async () => {
+    const f = setup({ provider: "comfyui", config: { referenceAnchoring: true } });
+    await f.service.prepareCast("u1", [MIRA], spriteConfig({ referenceAnchoring: true }));
+    await f.service.settle("u1");
+    const setKey = spriteSetKeyFor(MIRA, f.styleKey);
+    await f.answerAll(() => false, (request) => request.expression === "smile");
+    await f.service.settle("u1");
+    expect(f.callsBy().filter((entry) => entry.name === label(setKey, "smile"))).toHaveLength(2);
+    expect(f.calls).toHaveLength(SPRITE_HOT_SET.length + 1);
+    expect(f.log).toContain(`sprite ${setKey}/smile: scenery -> regenerate`);
+  });
+
   test("a user Re-cut never regenerates, even of a render whose first cut ran no check", async () => {
     const f = setup();
     await f.service.prepareCast("u1", [MIRA], spriteConfig());

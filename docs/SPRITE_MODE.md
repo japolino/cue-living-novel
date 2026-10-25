@@ -399,7 +399,12 @@ wanted: it keeps one pose across the expressions.
     already rendered, or is rendering, with the old set seed is queued again,
     so the set keeps one pose and the new idle as its reference.
   Scenery, like duplicates, comes with the composition, so it follows the
-  seed. A flagged retry is kept and shown (never a loop); the Sprite
+  seed. An expression drawn from the idle (ComfyUI img2img at 0.5, or a
+  NovelAI V5 inset) also inherits the idle's scenery: it re-rolls for
+  scenery only when the idle's own check came out clean (`scenery: false`),
+  not when the idle kept scenery or was cut without the check (basic, or a
+  workflow cut), which would cost one render per expression and break the
+  shared pose. A flagged retry is kept and shown (never a loop); the Sprite
   library says "may show two figures" or "may show scenery behind" and
   Regenerate draws a new one. The check's result is stored per image
   (`twoFigures`, `scenery`; null until checked, and `scenery` stays null for

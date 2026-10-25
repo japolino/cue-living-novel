@@ -127,6 +127,8 @@ type InflightWork = WorkItem & {
   producedImageUrl?: string;
   /** NovelAI V5 inset render: the idle raw render it is anchored to (set before it is sent). */
   insetReference?: string;
+  /** Expression drawn from the set's idle render (its reference image; set before it is sent). */
+  anchored?: boolean;
   /** NovelAI V5 inset render: the part of the raw render the cut-out is made from (set once it rendered). */
   crop?: PixelRect;
 };
@@ -238,11 +240,12 @@ export class SpriteService {
   /** When each fresh idle render (by raw image id) started waiting for its duplicate check. */
   private readonly idleCheckSince = new Map<string, number>();
   /**
-   * Sprite renders (raw image ids) whose first cut-out has not come back yet:
-   * only their first cut can bring the automatic regeneration, never a
-   * Re-cut or a Retry. In memory: after a restart the cut is only checked.
+   * Sprite renders (raw image ids) whose first cut-out has not come back yet,
+   * and whether each was drawn from the set's idle: only their first cut can
+   * bring the automatic regeneration, never a Re-cut or a Retry. In memory:
+   * after a restart the cut is only checked.
    */
-  private readonly freshRenders = new Set<string>();
+  private readonly freshRenders = new Map<string, { anchored: boolean }>();
   readonly insetBridge: NovelAiInsetBridge;
   /** NovelAI V5 insets NovelAI rejected (novelAiInsetKey): plain renders until the backend restarts. */
   private readonly insetOff = new Set<string>();
@@ -1210,6 +1213,7 @@ export class SpriteService {
     const inset = anchorable && work.expression !== "idle" ? novelAiInsetModelFor(provider, config.imageModel) : null;
     if (inset) return this.generateInsetSprite(userId, work, signal, config, set, request, inset);
     const reference = anchorable && work.expression !== "idle" ? await this.idleReference(userId, set, signal) : null;
+    work.anchored = reference !== null;
     const base = await this.baseParameters(
       userId,
       provider,
@@ -1520,7 +1524,7 @@ export class SpriteService {
       return () => this.broadcastPlate(userId, plate);
     });
     if (orphan) await this.deleteImage(userId, imageId);
-    else if (work.kind === "sprite") this.markFresh(imageId);
+    else if (work.kind === "sprite") this.markFresh(imageId, Boolean(work.anchored || work.insetReference));
     if (stale && work.kind === "sprite") this.deps.log?.(`sprite ${work.setKey}/${work.expression}: its idle changed while it rendered -> requeued as an inset of the current idle`, userId);
     if (requeued.length && work.kind === "sprite") this.deps.log?.(`sprite ${work.setKey}/idle: new idle render -> requeued inset expressions made from the old one: ${requeued.join(", ")}`, userId);
     broadcast?.();
@@ -1528,10 +1532,10 @@ export class SpriteService {
     return stale;
   }
 
-  private markFresh(imageId: string): void {
-    this.freshRenders.add(imageId);
+  private markFresh(imageId: string, anchored: boolean): void {
+    this.freshRenders.set(imageId, { anchored });
     while (this.freshRenders.size > 256) {
-      const oldest = this.freshRenders.values().next().value;
+      const oldest = this.freshRenders.keys().next().value;
       if (oldest === undefined) break;
       this.freshRenders.delete(oldest);
     }
@@ -1603,7 +1607,7 @@ export class SpriteService {
     const first = current();
     if (!first) return;
     // The render's first cut-out (any later one is a Re-cut or a Retry).
-    const fresh = this.freshRenders.has(target.imageId);
+    const fresh = this.freshRenders.get(target.imageId);
     if (outcome.ok) this.freshRenders.delete(target.imageId);
     if (first.status === "ready") {
       // A silent upgrade re-cut, tried only once: it replaces a basic cut with
@@ -1643,8 +1647,13 @@ export class SpriteService {
     // Duplicate and scenery checks: the first cut of a fresh render that looks
     // like two figures, or kept scenery drawn behind the character, gets one
     // automatic regeneration between them (a flagged retry is kept and
-    // shown). A Re-cut or Retry keeps the render it cuts.
-    const flag = outcome.meta.twoFigures === true ? "two figures" : outcome.meta.scenery === true ? "scenery" : null;
+    // shown). A Re-cut or Retry keeps the render it cuts. An expression drawn
+    // from the idle inherits the idle's scenery, so another render would only
+    // cost its shared pose: it re-rolls for scenery only when the idle was
+    // checked and came out clean.
+    const idleClean = library.sets[target.setKey]?.images.idle?.scenery === false;
+    const scenery = outcome.meta.scenery === true && (!fresh?.anchored || idleClean);
+    const flag = outcome.meta.twoFigures === true ? "two figures" : scenery ? "scenery" : null;
     if (fresh && first.status === "cutting" && flag && first.twoFigures === null && first.scenery === null && !first.autoRetried) {
       await this.regenerateFlagged(userId, target, flag);
       return;
