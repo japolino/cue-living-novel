@@ -378,8 +378,26 @@ function retiredLegacySuffix(value: string): string {
   return value.trim() === LEGACY_DEFAULT_PROMPT_SUFFIX ? "" : value;
 }
 
+/**
+ * Settings that merged into others. Each applies only while its retired key
+ * is still stored; the next save writes the merged value without it, so each
+ * happens once.
+ * - `textEffects` "static" (tagged words kept still) or "off" (plain text,
+ *   no longer offered) became Motion: such a config loads with Motion Still,
+ *   so text that did not move still does not (scene effects stop too).
+ * - `mode`: Suggest replies did nothing outside "cyoa". They cost
+ *   story-reader tokens on every reply, so a config saved with another mode
+ *   (the old default "standard") loads with them off.
+ */
+function migrateRetired(input: Record<string, unknown>): Record<string, unknown> {
+  const next = { ...input };
+  if (input.textEffects === "static" || input.textEffects === "off") next.effectIntensity = "off";
+  if ("mode" in input && input.mode !== "cyoa") next.generateChoices = false;
+  return next;
+}
+
 export function normalizeConfig(value: unknown): VisualNovelConfig {
-  const input = record(value);
+  const input = migrateRetired(record(value));
   const themePreset = (THEME_PRESET_IDS as readonly string[]).includes(input.themePreset as string)
     ? input.themePreset as VisualNovelThemePreset
     : "lumiverse";

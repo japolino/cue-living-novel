@@ -33,12 +33,19 @@ test("configuration preserves the custom CSS control", () => {
   assert.match(config.customCss, /color: pink/);
 });
 
-test("the old reply mode is dropped: suggested replies follow generateChoices alone", () => {
-  // Saved configs from before the unified Your turn still carry `mode`.
-  const standard = normalizeConfig({ mode: "standard" });
+test("the old reply mode is dropped; a reader who never chose CYOA gets no suggested replies they did not get before", () => {
+  // Saved configs from before the unified Your turn still carry `mode`; in
+  // "standard" (the old default) Suggest replies did nothing. Suggestions cost
+  // story-reader tokens on every reply, so they stay off until turned on.
+  const standard = normalizeConfig({ mode: "standard", generateChoices: true });
   assert.equal("mode" in standard, false);
-  assert.equal(standard.generateChoices, true, "suggestions are on by default for everyone");
+  assert.equal(standard.generateChoices, false);
+  assert.equal(normalizeConfig({ mode: "anything" }).generateChoices, false);
+  assert.equal(normalizeConfig({ mode: "cyoa" }).generateChoices, true);
   assert.equal(normalizeConfig({ mode: "cyoa", generateChoices: false }).generateChoices, false);
+  // New configs (no `mode`) get them by default; once saved, `mode` is gone and the choice sticks.
+  assert.equal(normalizeConfig({}).generateChoices, true);
+  assert.equal(normalizeConfig({ ...standard, generateChoices: true }).generateChoices, true);
 });
 
 test("scene image fit defaults to cover for absent or invalid values", () => {

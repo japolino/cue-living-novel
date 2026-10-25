@@ -342,10 +342,19 @@ describe("Motion (effectIntensity) decides the text effects", () => {
     expect(EFFECT_INTENSITY_OPTIONS.map((option) => option.label)).toEqual(["Full", "Gentle", "Still"]);
   });
 
-  test("an old saved textEffects value is dropped; Motion stays as saved", () => {
-    const config = normalizeConfig({ textEffects: "off", effectIntensity: "gentle" } as Record<string, unknown>);
-    expect("textEffects" in config).toBe(false);
-    expect(config.effectIntensity).toBe("gentle");
+  test("an old saved textEffects value moves into Motion: text that did not move still does not", () => {
+    // "static" kept effects still; "off" (plain text) no longer exists, so it becomes Still too.
+    for (const textEffects of ["static", "off"]) {
+      for (const effectIntensity of ["full", "gentle", "off"]) {
+        const config = normalizeConfig({ textEffects, effectIntensity } as Record<string, unknown>);
+        expect("textEffects" in config).toBe(false);
+        expect(config.effectIntensity).toBe("off");
+        expect(textEffectModeFor(config.effectIntensity)).toBe("static");
+      }
+    }
+    // "animated" (the old default) keeps Motion as saved.
+    expect(normalizeConfig({ textEffects: "animated", effectIntensity: "gentle" } as Record<string, unknown>).effectIntensity).toBe("gentle");
+    expect(normalizeConfig({ textEffects: "bogus", effectIntensity: "gentle" } as Record<string, unknown>).effectIntensity).toBe("gentle");
     expect(DEFAULT_CONFIG.effectIntensity).toBe("full");
   });
 });
