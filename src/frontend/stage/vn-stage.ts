@@ -300,6 +300,15 @@ const isTouchOnly = (): boolean => {
   }
 };
 
+/** The OS asks for reduced motion: long paragraphs page without a smooth scroll. */
+const prefersReducedMotion = (): boolean => {
+  try {
+    return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  } catch {
+    return false;
+  }
+};
+
 const phaseLoadingLabel = (phase: VnPhase): string | null => {
   switch (phase) {
     case "waiting-for-response":
@@ -553,6 +562,12 @@ export class VnStage {
   private dialogueClearance = 0;
   private dialogueClearanceSize = "";
   private dialogueObserver: ResizeObserver | null = null;
+  /** How far the dialogue chrome reaches up from the stage bottom right now (px), for the reply area. */
+  private dialogueReach = 0;
+  /** The paragraph is taller than its box (measured when it starts typing). */
+  private dialogueScrolls = false;
+  /** The typewriter keeps its line in view until the reader scrolls the paragraph. */
+  private dialogueFollow = true;
   private spritesEl: HTMLElement | null = null;
   /** Plate URL whose scene-image request is queued for the next microtask. */
   private queuedPlateUrl: string | null = null;
@@ -671,7 +686,10 @@ export class VnStage {
     this.backlogContent = queryRequired(this.themeRoot, "[data-vn-backlog-content]");
 
     if (typeof ResizeObserver === "function") {
-      this.dialogueObserver = new ResizeObserver(() => this.measureDialogueClearance());
+      this.dialogueObserver = new ResizeObserver(() => {
+        this.measureDialogueClearance();
+        this.updateDialogueOverflow();
+      });
       this.dialogueObserver.observe(this.root);
       this.dialogueObserver.observe(this.narrative);
     }
@@ -720,6 +738,7 @@ export class VnStage {
     this.textScale = Math.round(next * 100) / 100;
     this.root.style.setProperty("--vn-text-scale", String(this.textScale));
     this.root.dataset.vnTextScale = String(this.textScale);
+    this.updateDialogueOverflow();
   }
 
   getTextScale(): number {
@@ -992,7 +1011,10 @@ export class VnStage {
       this.dialogueClearanceSize = size;
       this.dialogueClearance = 0;
     }
-    if (this.narrative.hidden) return;
+    if (this.narrative.hidden) {
+      this.setDialogueReach(0);
+      return;
+    }
     let top = Number.POSITIVE_INFINITY;
     for (const element of [this.narrative, this.speaker, this.themeRoot.querySelector<HTMLElement>("[data-vn-controls]")]) {
       if (!element) continue;
@@ -1000,10 +1022,78 @@ export class VnStage {
       if (rect.height > 0 && rect.width > 0) top = Math.min(top, rect.top);
     }
     if (!Number.isFinite(top)) return;
-    const clearance = Math.max(0, Math.ceil((stage.bottom - top) / 8) * 8);
+    const reach = Math.max(0, Math.ceil(stage.bottom - top));
+    this.setDialogueReach(reach);
+    const clearance = Math.ceil(reach / 8) * 8;
     if (clearance <= this.dialogueClearance) return;
     this.dialogueClearance = clearance;
     this.root.style.setProperty("--vn-dialogue-top", `${clearance}px`);
+  }
+
+  /**
+   * Publish `--vn-dialogue-reach`: the dialogue chrome's height right now,
+   * which, unlike `--vn-dialogue-top`, also shrinks. The reply area stays
+   * above it (`--vn-interaction-clearance`, base-css.ts).
+   */
+  private setDialogueReach(reach: number): void {
+    if (reach === this.dialogueReach) return;
+    this.dialogueReach = reach;
+    if (reach > 0) this.root.style.setProperty("--vn-dialogue-reach", `${reach}px`);
+    else this.root.style.removeProperty("--vn-dialogue-reach");
+  }
+
+  /**
+   * Mark which ends of a long paragraph are scrolled out of view
+   * (`data-vn-overflow`, faded in base-css.ts). While it types, the untyped
+   * rest below does not count. Continue reads "Show more" while it pages.
+   */
+  private updateDialogueOverflow(): void {
+    const text = this.dialogueText;
+    const above = text.scrollTop > 1;
+    const below = !this.isTyping && text.scrollHeight - text.clientHeight - text.scrollTop > 1;
+    const value = above && below ? "both" : above ? "above" : below ? "below" : "";
+    if ((text.dataset.vnOverflow ?? "") === value) return;
+    if (value) text.dataset.vnOverflow = value;
+    else delete text.dataset.vnOverflow;
+    this.continueButton.setAttribute("aria-label", below ? "Show more" : "Continue");
+  }
+
+  private dialogueLineHeight(): number {
+    const value = typeof getComputedStyle === "function" ? parseFloat(getComputedStyle(this.dialogueText).lineHeight) : Number.NaN;
+    return Number.isFinite(value) && value > 0 ? value : 24;
+  }
+
+  /**
+   * A paragraph taller than its box: scroll one page down, keeping the last
+   * line seen at the top, and report true; false once its end is in view.
+   */
+  private pageDialogue(): boolean {
+    const text = this.dialogueText;
+    if (!(text.scrollHeight - text.clientHeight - text.scrollTop > 1)) return false;
+    const line = this.dialogueLineHeight();
+    const top = text.scrollTop + Math.max(line, text.clientHeight - line);
+    const smooth = this.effectIntensity !== "off" && !prefersReducedMotion();
+    if (typeof text.scrollTo === "function") text.scrollTo({ top, behavior: smooth ? "smooth" : "auto" });
+    else text.scrollTop = top;
+    return true;
+  }
+
+  /** A new paragraph starts at its first line, followed by the typewriter. */
+  private resetDialogueScroll(): void {
+    this.dialogueFollow = true;
+    this.dialogueScrolls = false;
+    if (this.dialogueText.scrollTop !== 0) this.dialogueText.scrollTop = 0;
+  }
+
+  /** Keep the line being typed in view while a long paragraph types out. */
+  private followTypewriter(marker: Element): void {
+    if (!this.dialogueScrolls || !this.dialogueFollow || typeof marker.getClientRects !== "function") return;
+    const line = marker.getClientRects()[0];
+    if (!line) return;
+    const box = this.dialogueText.getBoundingClientRect();
+    // The rect is the glyph box; the line box adds half the leading below it.
+    const below = line.bottom + Math.max(0, (this.dialogueLineHeight() - line.height) / 2) - box.bottom;
+    if (below > 0.5) this.dialogueText.scrollTop += Math.ceil(below);
   }
 
   private spriteContainer(): HTMLElement {
@@ -1976,7 +2066,7 @@ export class VnStage {
     this.exitButton.addEventListener("click", () => this.callbacks.onExit?.());
     this.continueButton.addEventListener("click", (event) => {
       event.stopPropagation();
-      this.advance();
+      this.advance(true);
     });
 
     this.logButton.addEventListener("click", (event) => {
@@ -2010,13 +2100,21 @@ export class VnStage {
     this.root.addEventListener("wheel", (event) => {
       if (this.isBacklogOpen) return;
       if (event.deltaY < -30 && event.target instanceof Element && event.target.closest("[data-vn-dialogue]")) {
+        // A long paragraph scrolled down scrolls back up first.
+        if (this.dialogueText.scrollTop > 0 && event.target.closest("[data-vn-dialogue-text]")) return;
         this.openBacklog();
       }
     }, { passive: true });
 
+    this.dialogueText.addEventListener("scroll", () => this.updateDialogueOverflow(), { passive: true });
+    // The reader scrolling a long paragraph takes over from the typewriter.
+    for (const type of ["wheel", "touchmove"] as const) {
+      this.dialogueText.addEventListener(type, () => { this.dialogueFollow = false; }, { passive: true });
+    }
+
     this.root.addEventListener("click", (event) => {
       if (this.isBacklogOpen) return;
-      if (!isInteractiveTarget(event.target)) this.advance();
+      if (!isInteractiveTarget(event.target)) this.advance(true);
     });
 
     this.root.addEventListener("keydown", (event) => {
@@ -2063,7 +2161,7 @@ export class VnStage {
       if (event.key !== "ArrowRight" && isInteractiveTarget(event.target)) return;
 
       event.preventDefault();
-      this.advance();
+      this.advance(true);
     });
 
     this.choiceList.addEventListener("click", (event) => {
@@ -2145,12 +2243,14 @@ export class VnStage {
     this.callbacks.onPrevious?.(this.state.currentParagraphIndex);
   }
 
-  private advance(): void {
+  /** `fromReader`: a tap, Continue or a key, which pages a long paragraph before moving on. */
+  private advance(fromReader = false): void {
     if (this.isBacklogOpen) return;
     if (this.isTyping) {
       this.completeTypewriter();
       return;
     }
+    if (fromReader && this.pageDialogue()) return;
     if (this.isAutoPlay) {
       this.clearAutoPlayTimer();
     }
@@ -2260,6 +2360,11 @@ export class VnStage {
 
     this.renderStatus();
     this.renderInteraction(view.showChoices, view.showComposer, view.isBusy);
+    // Your turn shows the paragraph's last lines above the reply area (phones keep three).
+    if (previousPhase !== "awaiting-input" && this.state.phase === "awaiting-input") {
+      this.dialogueText.scrollTop = this.dialogueText.scrollHeight;
+      this.updateDialogueOverflow();
+    }
 
     // Your turn: the reply box takes focus so the reader can type at once
     // (not on touch-only devices, where it would open the keyboard).
@@ -2337,6 +2442,11 @@ export class VnStage {
     this.autoPlayTimer = setTimeout(() => {
       if (!this.destroyed && this.isAutoPlay) {
         this.resetAutoRing();
+        // A long paragraph the reader scrolled back shows its next page first.
+        if (this.pageDialogue()) {
+          this.startAutoCountdown(delayMs);
+          return;
+        }
         this.advance();
       }
     }, delayMs);
@@ -2381,6 +2491,7 @@ export class VnStage {
 
   private onTextRenderFinished(): void {
     if (this.destroyed) return;
+    this.updateDialogueOverflow();
     if (this.isSkipping) {
       this.scheduleSkipAdvance();
     } else if (this.isAutoPlay) {
@@ -2495,6 +2606,8 @@ export class VnStage {
 
     this.isTyping = true;
     this.updateContinueButton();
+    this.dialogueScrolls = this.dialogueText.scrollHeight - this.dialogueText.clientHeight > 1;
+    this.updateDialogueOverflow();
     let nodeIdx = 0;
     let charIdx = 0;
     this.typewriterTimer = setInterval(() => {
@@ -2511,6 +2624,7 @@ export class VnStage {
             current.letter.removeAttribute(TYPEWRITER_PENDING_ATTRIBUTE);
             charIdx = current.fullText.length;
             this.spriteLayer.typed(current.fullText);
+            this.followTypewriter(current.letter);
             return;
           }
           const code = current.fullText.codePointAt(charIdx) ?? 0;
@@ -2521,6 +2635,7 @@ export class VnStage {
           if (current.rest) {
             if (charIdx < current.fullText.length) {
               current.rest.textContent = current.fullText.slice(charIdx);
+              this.followTypewriter(current.rest);
             } else {
               current.rest.remove();
               current.rest = null;
@@ -2541,6 +2656,7 @@ export class VnStage {
     if (!paragraph) {
       this.clearTypewriter();
       this.dialogueText.innerHTML = "";
+      this.resetDialogueScroll();
       this.currentRenderedParagraphId = "";
       this.currentRenderedFormatted = "";
       return;
@@ -2569,6 +2685,7 @@ export class VnStage {
     }
     this.currentRenderedParagraphId = paragraph.id;
     this.currentRenderedFormatted = formatted;
+    this.resetDialogueScroll();
     this.recordBacklogAndRead(paragraph.id, paragraph.speaker, paragraph.text, formatted);
     if (!this.isRewinding) this.triggerParagraphEffects(paragraph);
     this.openingShownAt = !this.isRewinding && this.state.currentParagraphIndex === 0 ? Date.now() : null;

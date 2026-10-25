@@ -70,8 +70,11 @@ textarea {
   --vn-odds-poor: #f4a0a0;
   --vn-interaction-width: min(42rem, 100%);
   --vn-composer-width: min(48rem, 100%);
-  /* Space kept free above the dialogue box for the reply area. */
-  --vn-interaction-clearance: calc(11.5rem + var(--vn-nameplate-lift, 0rem));
+  /* Space kept free above the dialogue box for the reply area: at least the
+     box as it is now (--vn-dialogue-reach, measured by the stage). */
+  --vn-interaction-clearance: max(calc(11.5rem + var(--vn-nameplate-lift, 0rem)), calc(var(--vn-dialogue-reach, 0px) + 1rem));
+  /* Tallest the paragraph text grows before it scrolls inside the box. */
+  --vn-dialogue-text-max: calc(40 * var(--vn-dvh, 1dvh));
   position: relative;
   isolation: isolate;
   width: 100%;
@@ -552,13 +555,68 @@ button[data-vn-badge]:active {
 }
 
 [data-vn-dialogue-text] {
-  margin: 0;
+  /* A long paragraph scrolls inside the box instead of growing over the
+     scene: the stage follows the typewriter and a tap shows the next page.
+     The padding, offset by the margin, keeps moving text effects unclipped. */
+  max-height: calc(var(--vn-dialogue-text-max) + 0.5em);
+  margin: -0.25em -0.3em;
+  padding: 0.25em 0.3em;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, currentColor 32%, transparent) transparent;
   color: var(--vn-text);
   font-size: calc(var(--vn-dialogue-font-size) * var(--vn-text-scale, 1));
   line-height: 1.6;
   letter-spacing: 0.005em;
   text-wrap: pretty;
   white-space: pre-wrap;
+}
+
+@supports (max-height: round(down, 10px, 1lh)) {
+  [data-vn-dialogue-text] {
+    /* Whole lines only, so a page never ends on half a line. */
+    max-height: calc(max(1lh, round(down, var(--vn-dialogue-text-max), 1lh)) + 0.5em);
+  }
+}
+
+/* The ends of a long paragraph that are scrolled out of view fade out. */
+[data-vn-dialogue-text][data-vn-overflow="below"] {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.3em), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 1.3em), transparent);
+}
+
+[data-vn-dialogue-text][data-vn-overflow="above"] {
+  -webkit-mask-image: linear-gradient(to top, #000 calc(100% - 1.3em), transparent);
+  mask-image: linear-gradient(to top, #000 calc(100% - 1.3em), transparent);
+}
+
+[data-vn-dialogue-text][data-vn-overflow="both"] {
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 1.3em, #000 calc(100% - 1.3em), transparent);
+  mask-image: linear-gradient(to bottom, transparent, #000 1.3em, #000 calc(100% - 1.3em), transparent);
+}
+
+/* Your turn on a phone or a short screen: the paragraph keeps its last three
+   lines (it still scrolls) so the reply area fits above the box. */
+@media (max-width: 640px), (max-height: 560px) {
+  [data-vn-root]:has([data-vn-interaction]:not([hidden])) {
+    --vn-dialogue-text-max: 4.8em;
+  }
+}
+
+@supports (max-height: 1lh) {
+  @media (max-width: 640px), (max-height: 560px) {
+    [data-vn-root]:has([data-vn-interaction]:not([hidden])) {
+      --vn-dialogue-text-max: 3lh;
+    }
+  }
+}
+
+@media (max-height: 560px) {
+  [data-vn-root] {
+    --vn-dialogue-text-max: calc(34 * var(--vn-dvh, 1dvh));
+  }
 }
 
 [data-vn-dialogue-text] em,
@@ -1208,7 +1266,9 @@ button[data-vn-badge]:active {
 
   [data-vn-root] {
     /* Leave the dialogue box and its toolbar reachable below the reply area. */
-    --vn-interaction-clearance: calc(var(--vn-control-size) + 13rem + var(--vn-nameplate-lift, 0rem));
+    --vn-interaction-clearance: max(calc(var(--vn-control-size) + 13rem + var(--vn-nameplate-lift, 0rem)), calc(var(--vn-dialogue-reach, 0px) + 0.75rem));
+    /* A long paragraph scrolls once it fills under a third of the screen. */
+    --vn-dialogue-text-max: calc(30 * var(--vn-dvh, 1dvh));
     --vn-interaction-width: 100%;
     --vn-composer-width: 100%;
   }

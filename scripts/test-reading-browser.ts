@@ -50,6 +50,61 @@ try {
   assert.equal(await mobile.evaluate(() => (window as any).readingFixture.stage.getState().currentParagraphIndex), 1, "Previous is tappable at Your turn");
   await phone.close();
 
+  // ---- Phone: long paragraphs scroll inside a capped box ----
+  // Regression: a long roleplay paragraph grew the box over ~75% of a phone
+  // screen, and at Your turn the reply area covered the text.
+  const longText = (i: number) => `Paragraph ${i}. ` + "The rain had not let up since noon, and the lamps of the village were coming on one by one, small and yellow and very far away. \"You promised,\" she called into the stairwell. ".repeat(5);
+  const longTurn = (prefix: string) => ({ paragraphs: [0, 1, 2].map((i) => ({ id: `${prefix}-${i}`, text: longText(i), speaker: "Mira" })), choices: [
+    { id: "stay", label: "Stay until sunrise", value: "stay" },
+    { id: "return", label: "Head back together", value: "return" },
+    { id: "ask", label: "Ask what she wants", value: "ask" },
+  ] });
+  const longPhone = await browser.newContext({ ...devices["Pixel 5"], viewport: { width: 393, height: 851 } });
+  const lp = await longPhone.newPage();
+  await lp.goto(url("suggestions"));
+  await lp.locator("[data-vn-dialogue]").waitFor();
+  await lp.evaluate((t) => (window as any).readingFixture.stage.loadTurn(t), longTurn("long"));
+  const text = lp.locator("[data-vn-dialogue-text]");
+  const textScroll = () => text.evaluate((el) => ({ top: el.scrollTop, client: el.clientHeight, height: el.scrollHeight, overflow: (el as HTMLElement).dataset.vnOverflow ?? "" }));
+  const paragraphIndex = () => lp.evaluate(() => (window as any).readingFixture.stage.getState().currentParagraphIndex as number);
+  const dialogueBox = await lp.locator("[data-vn-dialogue]").boundingBox();
+  assert.ok(dialogueBox && dialogueBox.height <= 851 * 0.42, `phone: a long paragraph keeps the box under 42% of the screen (got ${dialogueBox?.height}px)`);
+  let scroll = await textScroll();
+  assert.ok(scroll.height > scroll.client + 1 && scroll.overflow === "below", `phone: the long paragraph scrolls inside the box and fades below (${JSON.stringify(scroll)})`);
+  await lp.getByRole("button", { name: "Show more", exact: true }).tap({ force: true });
+  await lp.waitForTimeout(500);
+  scroll = await textScroll();
+  assert.equal(await paragraphIndex(), 0, "phone: a tap on a long paragraph shows its next page instead of moving on");
+  assert.ok(scroll.top > 0, "phone: Show more scrolls the paragraph down");
+  for (let i = 0; i < 8 && /below|both/.test((await textScroll()).overflow); i++) {
+    await text.tap();
+    await lp.waitForTimeout(500);
+  }
+  scroll = await textScroll();
+  assert.ok(scroll.top + scroll.client >= scroll.height - 1, "phone: paging reaches the paragraph's end");
+  assert.equal(await lp.locator("[data-vn-continue]").getAttribute("aria-label"), "Continue", "phone: Continue is back once the end shows");
+  await lp.locator("[data-vn-continue]").tap({ force: true });
+  assert.equal(await paragraphIndex(), 1, "phone: at the end a tap moves on");
+  assert.equal((await textScroll()).top, 0, "phone: the next paragraph starts at its first line");
+  await lp.evaluate(() => { const s = (window as any).readingFixture.stage; for (let i = 0; i < 4 && s.getState().phase !== "awaiting-input"; i++) s.advance(); });
+  await lp.getByRole("heading", { name: "Your turn" }).waitFor();
+  await lp.waitForTimeout(300);
+  const reply = await lp.locator("[data-vn-input-form]").boundingBox();
+  const turnControls = await lp.locator("[data-vn-controls]").boundingBox();
+  const turnBox = await lp.locator("[data-vn-dialogue]").boundingBox();
+  assert.ok(reply && turnControls && reply.y + reply.height <= turnControls.y + 0.5, "phone: at Your turn the reply box stays above the toolbar and the long paragraph");
+  assert.ok(turnBox && turnBox.height <= 851 * 0.22, `phone: at Your turn the box keeps a few lines (got ${turnBox?.height}px)`);
+  scroll = await textScroll();
+  assert.ok(scroll.top + scroll.client >= scroll.height - 1, "phone: at Your turn the paragraph's last lines show");
+  await lp.screenshot({ path: ".cache/ux-redesign/reading-mobile-long-your-turn.png" });
+  // The typewriter keeps the line it types in view.
+  await lp.evaluate((t) => { const s = (window as any).readingFixture.stage; s.setTextSpeed(2); s.loadTurn(t); }, longTurn("typed"));
+  await lp.waitForFunction(() => {
+    const el = document.querySelector("[data-vn-stage-host]")?.shadowRoot?.querySelector("[data-vn-theme-host]")?.shadowRoot?.querySelector("[data-vn-dialogue-text]");
+    return Boolean(el && el.scrollTop > 0);
+  }, undefined, { timeout: 15_000 });
+  await longPhone.close();
+
   // ---- Desktop: keyboard, focus, history, status, errors, themes ----
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   await page.goto(url("css=" + encodeURIComponent("[data-vn-root][data-vn-preset] [data-vn-dialogue] { border-top-left-radius: 3px; }")));
@@ -225,5 +280,5 @@ try {
     }
   }
 
-  console.log("Reading browser checks passed: touch targets, toolbar bounds, keyboard focus, History focus return, Your turn hand-off, draft preservation, status labels, error card details/retry, custom CSS order, text scale, reduced motion, preset toolbars, Lumiverse UI scale coverage.");
+  console.log("Reading browser checks passed: touch targets, toolbar bounds, keyboard focus, History focus return, Your turn hand-off, long paragraphs paging on phones, draft preservation, status labels, error card details/retry, custom CSS order, text scale, reduced motion, preset toolbars, Lumiverse UI scale coverage.");
 } finally { await browser?.close(); server.stop(); }

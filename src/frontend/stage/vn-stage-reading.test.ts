@@ -187,6 +187,32 @@ describe("reading UX", () => {
     expect(next.disabled).toBe(true);
   });
 
+  test("a paragraph taller than its box: Continue shows the next page first, Your turn shows its end", () => {
+    const s = create();
+    s.loadTurn({ paragraphs: paragraphs(2) });
+    const text = q(s, "[data-vn-dialogue-text]");
+    const next = q(s, "[data-vn-continue]");
+    Object.assign(text, { clientHeight: 100, scrollHeight: 260 });
+    next.dispatchEvent(new FakeEvent("click"));
+    expect(s.getState().currentParagraphIndex).toBe(0);
+    expect(text.scrollTop).toBe(76);
+    text.dispatchEvent(new FakeEvent("scroll"));
+    expect(text.dataset.vnOverflow).toBe("both");
+    expect(next.getAttribute("aria-label")).toBe("Show more");
+    next.dispatchEvent(new FakeEvent("click"));
+    text.scrollTop = 160;
+    text.dispatchEvent(new FakeEvent("scroll"));
+    expect(text.dataset.vnOverflow).toBe("above");
+    expect(next.getAttribute("aria-label")).toBe("Continue");
+    next.dispatchEvent(new FakeEvent("click"));
+    expect(s.getState().currentParagraphIndex).toBe(1);
+    expect(text.scrollTop).toBe(0);
+    // An advance that is not the reader's (Skip) never pages; Your turn scrolls to the paragraph's last lines.
+    advance(s);
+    expect(s.getState().phase).toBe("awaiting-input");
+    expect(text.scrollTop).toBe(260);
+  });
+
   test("Your turn is the same for everyone: suggestions above an always-present reply box", () => {
     const s = create();
     const interaction = q(s, "[data-vn-interaction]");
