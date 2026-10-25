@@ -874,13 +874,33 @@ and the head tilts and bobs around the neck while the feet stay planted.
   3060). Under SwiftShader in headless Chromium a frame costs ≈ 50 ms,
   mostly rasterizing and copying in software, which is why software GL is
   refused.
+- **Render scale** (`sprite-puppet-quality.ts`): a layer's shading and copy
+  cost about its pixel count, so while frames run long the canvases draw
+  fewer pixels (×0.8, ×0.65, then ×0.5 of the full backing size; the CSS
+  size stays and the browser scales them up) and climb back when there is
+  headroom. Motion keeps its own clock, so it stays at the display's rate.
+  Frame intervals are judged by the median of 30-frame windows: slow above
+  22 ms (under ≈ 45 fps), fast at 17.5 ms or less. A step down is a trial:
+  if the next window isn't at least 10% faster, the time goes elsewhere (a
+  busy page, a 30 fps cap on battery), so the scale goes back and waits
+  8 s, then twice as long each time, up to 2 min. A step up comes after 4 s
+  of fast frames and must go 10 s without a slow window, or it goes straight
+  back and the next one waits twice as long. Intervals over 250 ms are
+  pauses (a hidden tab, a stopped loop) and start a fresh window. The sprite
+  snapshot's `puppet.scale` reports it; `puppetGlOptions.renderScale` pins
+  it (the browser fixture pins 1 unless `?scale=auto`).
 - **Checks**: `sprite-puppet-rig.test.ts` (rig, pose, mesh, colour matrices,
   outline offsets), `sprite-puppet-acting.test.ts` (moods, voice, gestures,
-  the 2.5D turn, shoulders, posture, trails, springs, wind);
+  the 2.5D turn, shoulders, posture, trails, springs, wind),
+  `sprite-puppet-quality.test.ts` (the render scale against frame-time
+  models: canvas-bound, a slowdown from elsewhere, a step up that doesn't
+  hold, spikes and pauses);
   `bun run test:sprite-stage` asserts puppet mode, that the head band moves
   more than the feet, the marks following the head, the nod, the outline,
   settings, the pauses, the CSS fallback and a plan that lands mid-line
-  (`fx.load(p, { provisional: true })`, then `fx.plan()`), plus acting and
+  (`fx.load(p, { provisional: true })`, then `fx.plan()`), the render scale
+  (pinned at half: half the backing, same size on screen; adaptive on a
+  page kept busy by something else: back at full), plus acting and
   physics (see below), and writes `.cache/sprite-stage/puppet-frames.png` and
   `puppet-diff.png` (four frames 0.25 s apart and their differences ×12).
 

@@ -362,7 +362,7 @@ describe("SpriteLayer DOM", () => {
     expect(activeLayer("mira").dataset.vnSpriteCanvas).toBeUndefined();
     const snap = layer.snapshot();
     expect(snap.actors.map((a) => a.puppet)).toEqual(["css", "css"]);
-    expect(snap.puppet).toEqual({ strength: 1, running: false });
+    expect(snap.puppet).toEqual({ strength: 1, running: false, scale: 1 });
     expect(container.style["--vn-sprite-breath"]).toBe("1");
     expect(container.dataset.vnSpriteBlur).toBe("true");
     layer.setPuppet({ spriteMotion: 50, spriteBreathing: false, spriteSway: true, spriteHeadMotion: true, spriteActing: true, spritePhysics: false, spriteOutline: 3, spriteFocusBlur: false, spriteTransitions: "soft", spriteAtmosphere: false });

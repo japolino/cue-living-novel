@@ -62,6 +62,7 @@ import {
   type PuppetSpring,
   type PuppetTracker,
 } from "./sprite-puppet-physics.js";
+import { puppetQuality, puppetQualityFrame, puppetRenderScale } from "./sprite-puppet-quality.js";
 import {
   PUPPET_ARRIVAL_S,
   PUPPET_CALM_AIR,
@@ -79,7 +80,7 @@ import {
   puppetShiftFor,
   puppetShiftGain,
   puppetShiftReveal,
-  puppetSnowStep,
+  puppetSnowFrame,
   type PuppetAtmosphere,
   type PuppetPuff,
   type PuppetShiftKind,
@@ -151,8 +152,9 @@ const TEXTURE_CACHE = 8;
  * Test seam: software WebGL (SwiftShader, llvmpipe) is refused by default,
  * since warping full-size sprites on the CPU every frame costs more than it
  * gives; the browser fixtures turn this on to exercise the WebGL path.
+ * `renderScale` pins the adaptive render scale (null: adaptive).
  */
-export const puppetGlOptions = { allowSoftware: false };
+export const puppetGlOptions: { allowSoftware: boolean; renderScale: number | null } = { allowSoftware: false, renderScale: null };
 
 type Look = {
   key: string;
@@ -679,6 +681,8 @@ export class SpritePuppet {
   private readonly bakes = new Map<string, HTMLCanvasElement>();
   private raf = 0;
   private lastFrame = 0;
+  /** Fewer canvas pixels while frames run long (sprite-puppet-quality.ts). */
+  private readonly quality = puppetQuality();
   /** The danger pulse's beat this frame (readBeat). */
   private beat = 0;
   /** When the actors' screen positions were last read (seconds). */
@@ -929,6 +933,11 @@ export class SpritePuppet {
   /** Whether the rAF loop is scheduled now. */
   isRunning(): boolean {
     return this.raf !== 0;
+  }
+
+  /** The render scale in effect: a factor on the canvases' full backing size. */
+  renderScale(): number {
+    return puppetGlOptions.renderScale ?? puppetRenderScale(this.quality);
   }
 
   /** Re-decide every actor's mode (settings, Motion, reduced motion, WebGL) and get its layers ready. */
@@ -1323,6 +1332,7 @@ export class SpritePuppet {
     if (this.destroyed || !this.shouldRun()) return;
     const dt = this.lastFrame ? Math.min(0.1, Math.max(0, (time - this.lastFrame) / 1000)) : 1 / 60;
     this.lastFrame = time;
+    puppetQualityFrame(this.quality, time);
     this.beat = this.readBeat();
     this.attend(time / 1000, dt);
     for (const actor of this.actors.values()) {
@@ -1475,8 +1485,7 @@ export class SpritePuppet {
       const next = actor.air[key] + (goal - actor.air[key]) * k;
       actor.air[key] = Math.abs(next - goal) < 0.003 ? goal : next;
     }
-    actor.snow = s.spriteAtmosphere ? puppetSnowStep(actor.snow, actor.air.snow, dt) : actor.snow * (1 - k);
-    if (actor.snow < 0.001) actor.snow = 0;
+    actor.snow = puppetSnowFrame(actor.snow, actor.air.snow, dt, s.spriteAtmosphere, k);
 
     const cycle = puppetBreathCycle(actor.clocks.breath, actor.phase);
     if (actor.air.breath > 0.3) {
@@ -1613,9 +1622,10 @@ export class SpritePuppet {
     const canvas = this.canvasOf(state);
     const ctx = state.ctx;
     if (!canvas || !ctx) return false;
-    // Backing size: the CSS size at the device pixel ratio, never above the image's own pixels.
+    // Backing size: the CSS size at the device pixel ratio, never above the image's own pixels,
+    // times the render scale (fewer pixels while frames run long).
     const dpr = Math.min(MAX_DPR, (typeof devicePixelRatio === "number" && devicePixelRatio > 0) ? devicePixelRatio : 1);
-    const scale = Math.max(0.25, Math.min(dpr, entry.width / cssW, MAX_BACKING / Math.max(cssW, cssH)));
+    const scale = Math.max(0.25, Math.min(dpr, entry.width / cssW, MAX_BACKING / Math.max(cssW, cssH)) * this.renderScale());
     const width = Math.max(1, Math.round(cssW * scale));
     const height = Math.max(1, Math.round(cssH * scale));
     if (canvas.width !== width || canvas.height !== height) {
@@ -1715,7 +1725,9 @@ export class SpritePuppet {
     const u = g.uniforms;
     const actor = state.actor;
     const air = actor.air;
-    g.gl.uniform2f(u.texel, 1 / width, 1 / height);
+    // In full-scale pixels, so the render scale doesn't change the effects' size on screen.
+    const scale = this.renderScale();
+    g.gl.uniform2f(u.texel, scale / width, scale / height);
     g.gl.uniform4f(u.atmoA, air.fog, air.wet, air.fire > 0.001 ? air.fire * puppetFireFlicker(time, actor.phase) : 0, air.grain);
     g.gl.uniform4f(u.atmoB, air.haze, air.pulse * this.beat, actor.snow, time % 1000);
     if (air.fireflies > 0.01) {

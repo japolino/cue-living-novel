@@ -19,8 +19,10 @@ import {
  * downscaled copies of the sprite bake-off assets in scripts/fixtures/sprites/.
  *
  * Query: ?preset, ?intensity (full|gentle|off), ?speed (typewriter ms), ?mode (sprites|scene),
- * ?puppet=css (no WebGL puppet: the CSS fallback), ?outline (px).
- * window.fx: { stage, load(paragraphs, options), plan(), go(index), illustrate(index, status), ready(...), view(), effect(name), ambient(name), puppet(settings), feel(settings) }.
+ * ?puppet=css (no WebGL puppet: the CSS fallback), ?outline (px),
+ * ?scale=auto (the puppet's adaptive render scale; pinned at 1 otherwise, so
+ * canvas sizes don't change under the pixel checks).
+ * window.fx: { stage, load(paragraphs, options), plan(), go(index), illustrate(index, status), ready(...), view(), effect(name), ambient(name), puppet(settings), feel(settings), renderScale(scale | null) }.
  * `load(paragraphs, { provisional: true })` shows the text before its plan (no
  * nameplates, no staging); `plan()` lands the plan (VnStage.upgradeTurn).
  * Headless Chromium only has software WebGL (SwiftShader), which the puppet
@@ -31,6 +33,7 @@ import {
  */
 const q = new URL(location.href).searchParams;
 puppetGlOptions.allowSoftware = q.get("puppet") !== "css";
+puppetGlOptions.renderScale = q.get("scale") === "auto" ? null : 1;
 
 /** Opaque bbox of each fixture cut-out (alpha > 24), normalized [x, y, w, h]. */
 const BBOX: Record<string, [number, number, number, number]> = {
@@ -221,5 +224,7 @@ Object.assign(window, {
     ambient: (name: string | null) => stage.applyAmbient(name as never),
     puppet,
     feel,
+    /** Pin the puppet's render scale (null: adaptive). */
+    renderScale: (scale: number | null) => { puppetGlOptions.renderScale = scale; },
   },
 });

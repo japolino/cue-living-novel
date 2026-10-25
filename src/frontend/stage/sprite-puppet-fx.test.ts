@@ -22,6 +22,7 @@ import {
   puppetShiftGain,
   puppetShiftGesture,
   puppetShiftReveal,
+  puppetSnowFrame,
   puppetSnowStep,
 } from "./sprite-puppet-fx";
 import { puppetBreathCycle } from "./sprite-puppet-rig";
@@ -153,6 +154,20 @@ describe("puppet atmosphere", () => {
     expect(coverage).toBeLessThan(0.35);
     const melted = puppetSnowStep(coverage, 0, 8);
     expect(melted).toBeLessThan(coverage * 0.4);
+  });
+
+  test("snow builds from nothing at any frame rate, and the last of a melt goes to zero", () => {
+    for (const fps of [30, 60, 144]) {
+      let coverage = 0;
+      for (let i = 0; i < 5 * fps; i += 1) coverage = puppetSnowFrame(coverage, 1, 1 / fps, true, 0);
+      expect(coverage).toBeGreaterThan(0.1);
+      let melting = coverage;
+      for (let i = 0; i < 120 * fps; i += 1) melting = puppetSnowFrame(melting, 0, 1 / fps, true, 0);
+      expect(melting).toBe(0);
+      let off = coverage;
+      for (let i = 0; i < 10 * fps; i += 1) off = puppetSnowFrame(off, 1, 1 / fps, false, 1 - Math.exp(-1 / fps / 0.4));
+      expect(off).toBe(0);
+    }
   });
 });
 

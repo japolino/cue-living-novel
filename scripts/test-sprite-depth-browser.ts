@@ -327,9 +327,12 @@ try {
       const names = await page.evaluate(() => document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!.querySelector("[data-vn-sprites]")!.getAnimations().map((a) => (a as CSSAnimation).animationName));
       assert.ok(names.includes(`vn-depth-${effect}`), `${effect}: sprites follow with depth (${names})`);
       if (effect === "tilt") {
+        // Frozen at the wait: with the puppet on software GL the animation may not have started by then.
+        await freezeAt(wait);
         p = await probe();
         near(Number.parseFloat(p.sprites.rotate) / Number.parseFloat(p.front.rotate), 1.15 / 1.4, 0.03, "tilt: sprites vs front rotation");
         await shot(page, "parallax-tilt-midframe");
+        await release();
       }
       await page.waitForTimeout(900);
     }
