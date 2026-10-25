@@ -15,8 +15,9 @@ import { SPRITE_EMOTES, SPRITE_LIGHTS, SPRITE_MOTIONS } from "../src/shared/spri
  * fallback), puppet acting (listeners look at the speaker and nod, the voice
  * follows the text, moods, emote reactions), transitions (a shift per emotion,
  * the classic fade, the entrance focus pull), atmosphere (snow and breath,
- * firelight, fog, off) and physics (follow-through on a
- * slot move, wind), and no console errors.
+ * firelight, fog, off), the render scale (pinned; adaptive on a page busy with
+ * something else) and physics (follow-through on a slot move, wind), and no
+ * console errors.
  * Screenshots: .cache/sprite-stage/ (puppet-frames.png and puppet-diff.png:
  * four frames 0.25 s apart and their differences amplified x12).
  * Run: bun run ./scripts/test-sprite-stage-browser.ts
@@ -1051,6 +1052,57 @@ try {
     await page.waitForTimeout(2500);
     const calm = (await snap(page)).actors[0].effects.air;
     assert.ok(Object.values(calm).every((v) => (v as number) < 0.05), `atmosphere off: calm (${JSON.stringify(calm)})`);
+    await page.close();
+  }
+
+  // ---- Puppet render scale -------------------------------------------------------------
+  {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+    watch(page);
+    await open(page);
+    await load(page, [{ actors: [{ characterKey: "mira", slot: "left", focus: true }, { characterKey: "ren", slot: "right" }] }], 900);
+    const backing = () => page.evaluate(() => {
+      const theme = document.querySelector("[data-vn-stage-host]")!.shadowRoot!.querySelector("[data-vn-theme-host]")!.shadowRoot!;
+      return [...theme.querySelectorAll<HTMLElement>("[data-vn-sprite-image][data-vn-sprite-layer='active']")].map((layer) => {
+        const canvas = layer.querySelector("canvas")!;
+        return { width: canvas.width, css: Math.round(canvas.getBoundingClientRect().width), mode: layer.dataset.vnSpriteCanvas ?? null };
+      });
+    });
+    const full = await backing();
+    assert.equal((await snap(page)).puppet.scale, 1, "pinned at full scale");
+    // Half scale: half the pixels each way, the same size on screen, still the warped canvas.
+    await page.evaluate(() => (window as any).fx.renderScale(0.5));
+    await page.waitForTimeout(400);
+    const half = await backing();
+    assert.equal((await snap(page)).puppet.scale, 0.5, "the snapshot reports the scale");
+    half.forEach((layer, i) => {
+      assert.ok(Math.abs(layer.width - full[i]!.width / 2) <= 1, `half scale halves the backing (${full[i]!.width} -> ${layer.width})`);
+      assert.equal(layer.css, full[i]!.css, "the canvas keeps its size on screen");
+      assert.equal(layer.mode, "puppet", "still the warped canvas");
+    });
+    await shot(page, "puppet-render-scale-half");
+    // Adaptive, on a page kept busy by something else: a step down doesn't make frames faster, so it goes back.
+    await page.evaluate(() => {
+      (window as any).fx.renderScale(null);
+      const spin = () => { const end = performance.now() + 40; while (performance.now() < end) { /* busy */ } if ((window as any).busy) requestAnimationFrame(spin); };
+      (window as any).busy = true;
+      requestAnimationFrame(spin);
+    });
+    const busy = await page.evaluate(() => new Promise<number[]>((resolve) => {
+      const scales: number[] = [];
+      const start = performance.now();
+      const step = () => {
+        const scale = (window as any).fx.stage.getSpriteSnapshot().puppet.scale as number;
+        scales.push(scale);
+        const back = scale === 1 && scales.some((s) => s < 1);
+        if (back || performance.now() - start > 20000) resolve(scales); else requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    }));
+    await page.evaluate(() => { (window as any).busy = false; });
+    assert.equal(busy.at(-1), 1, `a busy page doesn't keep the scale down (${[...new Set(busy)].join(", ")})`);
+    await page.waitForTimeout(200);
+    assert.deepEqual((await backing()).map((layer) => layer.width), full.map((layer) => layer.width), "back at the full backing");
     await page.close();
   }
 

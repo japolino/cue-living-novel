@@ -489,8 +489,8 @@ export type SpriteLayerSnapshot = {
   plateKey: string | null;
   actors: SpriteActorSnapshot[];
   badges: SpriteStatusBadge[];
-  /** Puppet motion strength in effect (0 = still) and whether its frame loop runs now. */
-  puppet: { strength: number; running: boolean };
+  /** Puppet motion strength in effect (0 = still), whether its frame loop runs now, and its render scale. */
+  puppet: { strength: number; running: boolean; scale: number };
 };
 
 type ActorEntry = {
@@ -806,7 +806,7 @@ export class SpriteLayer {
       plateKey: this.index >= 0 ? effectivePlateKey(view, this.index) : null,
       actors,
       badges: this.badges(),
-      puppet: { strength: this.puppet.strength(), running: this.puppet.isRunning() },
+      puppet: { strength: this.puppet.strength(), running: this.puppet.isRunning(), scale: this.puppet.renderScale() },
     };
   }
 
