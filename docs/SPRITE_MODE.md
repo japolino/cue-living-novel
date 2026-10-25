@@ -860,6 +860,112 @@ Small answers to the reader's hand, in both presentation modes unless noted.
   browser never paints its selection over the picture. The dialogue,
   History and error details stay selectable.
 
+### Touch (`sprite-touch.ts`, `sprite-touch-ui.ts`, `touch-css.ts`; backend `runtime/touch.ts`)
+
+Touch mode lets the reader pat, stroke, squish and poke the characters on
+stage. Every touch reacts with no model call; one call per character, made
+once, writes the lines it says. Nothing in it changes or removes clothing,
+and there is no clothing zone (Cue cannot tell whether a character is an
+adult). Touches never reach the story: only the stage and
+`runtime/touch.ts` read them, and `touch.test.ts` checks that no story,
+planner or prompt module imports the touch modules.
+
+- **Turning it on** (`setTouchMode`). The hand button
+  (`[data-vn-control="touch"]`, after Skip, `aria-pressed`, label "Touch
+  mode", icon only under 640 px so five controls fit 360 px) or **T**;
+  **Escape** leaves. Only in sprite mode with `spriteTouch` on. While on,
+  `data-vn-touch="on"` sits on the root, a click on a character touches it
+  and does not read on, and any other click reads on as before. The
+  waiting screen's line-up is touchable too (**T** works in the preview;
+  the hand button sits under the screen).
+- **Zones** (`spriteTouchZones`, from the face box `touchFaceBox`: the
+  detected face, else `estimateSpriteFace`'s proportions of the opaque
+  bbox). With w × h the face box: **head** (pat) from 0.55 h above the
+  face top to 0.34 h into it, 0.15 w wider each side; **sides** (hair
+  stroke, or ears when the appearance tags match `hasAnimalEars`: cat, fox,
+  wolf, bunny… ears, kemonomimi; not elf or pointy ears) from 0.45 w outside
+  each face edge to 0.08 w inside, down to the cheek line; **cheeks** the
+  lower face (0.34 h to 0.06 h below the chin); **body** (poke) the rest
+  of the opaque box. All are clipped to the opaque box. Cheeks win over
+  sides over head over body. Where figures overlap (a phone),
+  `SpriteLayer.figuresAt` lists every figure under the point and a head,
+  ear or cheek zone of a figure behind wins over the empty corner of the
+  front one (`touchTarget`).
+- **The hand** (`touchHandMarkup`, inline SVG, aria-hidden): an open palm
+  for the head and sides, two hands for the cheeks, a finger for pokes. It
+  follows a mouse or pen over a character (one update per frame; the
+  pointer is hidden there, `cursor: none`), and plays the touch where it
+  lands (0.56 s). Finger taps show it only at the touch.
+- **Reactions** (`touchStep`, `touchReaction`, `TOUCH_LOOKS`). A touch
+  less than 380 ms after the last only moves the hand. Touches on the same
+  zone within 4.5 s make a streak; touching another zone ends the others'
+  streaks. The mood is the bond tier (shy, warm, fond), or **content** at
+  the 3rd pat or stroke in a streak, or **annoyed** at the 8th pat, 6th
+  ear, 7th hair stroke, 4th cheek squish or 3rd poke (pokes are never
+  content). Annoyed starts a 4 s sulk: every touch meanwhile only huffs
+  (no line, −1 bond) and extends it. Each zone and mood names an expression
+  (shown through `resolveSpriteImage`, so a 4-set stands in with its
+  nearest), an emote, a motion (pat, stroke, squish, poke, huff:
+  `data-vn-sprite-touch` with `--vn-sprite-touch-amp` in CSS, plus the
+  puppet's gesture and a kick to the hair and body springs,
+  `SpritePuppet.touch`) and a soft sound (`InterfaceSounds.touch`, under
+  the Interface sounds switch and volume). `SpriteLayer.react` holds the
+  expression and emote 1.9–2.7 s, then the staged ones return; the next
+  staging ends it at once.
+- **Lines** (`pickTouchLine`). From the character's pack, else the mood's
+  fallbacks (fond → warm → shy; content → warm; annoyed only annoyed),
+  ears → hair, then `TOUCH_GENERIC_LINES`; never one of the last three
+  again while others remain. The bubble (`role="status"`, polite) shows the
+  name and the line above the head for about 2 s; a screen reader hears
+  "Mira: …".
+- **Bond meter** (`addTouchBond`, 0–100). +2 for a shy, warm or fond
+  touch (+1 for pokes and squishes), +3 content, −4 annoyed, −1 a sulk;
+  gains slow as it grows (×(1 − 0.6 × bond/100), at least 1). Tiers: shy
+  under 30, warm from 30, fond from 70: about 50 friendly touches from shy
+  to fond. One heart per character (`[data-vn-touch-hud]`, top centre,
+  `role="meter"` with its value) shows it. Saved (`vn_touch_bond`) 1.2 s
+  after the last change and when touch mode ends or the chat changes.
+- **Store** (`touch-characters.json`, per user, `serializedWrite`):
+  `{ schemaVersion: 1, characters: { "<key>": { name, bond, pack, packAt,
+  updatedAt } } }`, at most 300 characters (least recently touched go
+  first). The key (`touchStoreKey`) is the character's own card
+  (`card:<id>`), else its name under the chat's card (`card:<chat
+  card>#<hash>`), else under the chat: a character keeps its bond in every
+  chat of its card and across reloads.
+- **Line pack** (`touchLinePack`, `vn_touch_lines`). Asked once per
+  character when touch mode first sees it without a pack, on the story
+  reader's connection (`resolvePlannerConnection`), JSON mode where the
+  provider has one, reasoning off, temperature 0.9, `max_tokens` 1500. The
+  prompt (`touchLineMessages`): short (≤ 8 words), in the character's own
+  language and voice, playful and wholesome, never sexual, never about
+  clothing; 3 lines each for shy, warm and fond and 2 for content and
+  annoyed per zone (ears only with animal ears): about 65 lines. It reads
+  the name, the appearance tags (≤ 400 chars) and the card's description
+  and personality (≤ 1600 chars, as data). Cost: about 1.4 k characters of
+  instructions plus up to 2 k of character (roughly 400–900 input tokens)
+  and about 2 k characters of JSON back (600–1000 output tokens), once per
+  character. The pack is checked (`normalizeTouchLinePack`: known zones
+  and moods, ≤ 60 chars a line, no markup, 4 a mood at most) and saved
+  with the card; asks while one runs share it. **Refresh** (per heart)
+  makes it again. With `spriteTouchLines` off there is no call; a failed
+  call keeps the generic lines and Refresh says why.
+- **Intensity** (`spriteTouchIntensity`): gentle (×0.55 motion, no emote
+  but a blush, 1.9 s), normal, lively (×1.45, 2.7 s). Motion "Still" and
+  reduced motion (`data-vn-touch-still`, CSS `prefers-reduced-motion`)
+  keep the figures and the hand still; expressions, hearts and lines
+  still show.
+- **Keyboard.** The hand button, T and Escape, and the Refresh buttons;
+  the touch itself needs a pointer.
+
+Unit checks: `sprite-touch.test.ts` (zones, escalation, reactions,
+lines, the hand), `shared/touch.test.ts` (bond meter, ears, line pack,
+store keys), `runtime/touch.test.ts` (one cached call, Refresh, shared
+asks, lines off, storage per card). Browser check: `bun run test:touch`
+(desktop and 393×851 phone, every zone, escalation, hearts, Refresh, lines
+off, failed call, Gentle, Motion Still, reduced motion, the line-up;
+screenshots in `.cache/sprite-touch/`). By hand:
+`bun run ./scripts/sprite-touch-playground.ts` (http://localhost:5179).
+
 ### Puppet motion (`sprite-puppet.ts`, `sprite-puppet-rig.ts`, `sprite-outline.ts`)
 
 Cut-outs move like a PNG puppet instead of a rigid picture: the image is
@@ -1122,7 +1228,9 @@ while the outline is off; Blur characters who are not speaking), then
 "Character size" (Match face sizes: Same face size, keep heights / Same
 face size, heads in line / Off; Face size, Largest zoom, Smallest zoom and
 Centre faces in their place, disabled while off; Default sizes puts them
-back). All save at once. Under Motion "Still", or the system's reduced
+back), then "Touch" (Touch mode; Reactions: Gentle / Normal / Lively; Lines
+in character; the last two disabled while touch mode is off; Touch mode and
+Reactions can be kept per character card). All save at once. Under Motion "Still", or the system's reduced
 motion, "Character motion" reads as not applying (`data-inactive`) with a
 note (`spriteMotionHold`, `[data-motion-note]`); the choices are kept.
 Right after them, in both modes, "Stage feel": Click effect (Sparks + ! /

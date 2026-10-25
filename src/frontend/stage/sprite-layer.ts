@@ -44,7 +44,7 @@ import {
   type SpriteTurnView,
 } from "../../shared/sprites.js";
 import { DEFAULT_CONFIG, spritePuppetSettings, spriteSizeMatchSettings, type VisualNovelEffectIntensity, type VisualNovelSpritePuppet, type VisualNovelSpriteSizeMatch } from "../../config.js";
-import { SpritePuppet, type PuppetEffects, type PuppetImage, type PuppetMode } from "./sprite-puppet.js";
+import { SpritePuppet, type PuppetEffects, type PuppetImage, type PuppetMode, type PuppetTouchMotion } from "./sprite-puppet.js";
 import { puppetColdPlace } from "./sprite-puppet-fx.js";
 import { puppetNarrating, puppetSpeech, puppetSpoken, type PuppetSpeech } from "./sprite-puppet-acting.js";
 import { puppetReactionFor, type PuppetPose } from "./sprite-puppet-rig.js";
@@ -78,6 +78,9 @@ export const SPRITE_CROSSFADE_MS = 200;
 export const SPRITE_EMOTE_POP_MS = 420;
 /** A pressed character squishes and bounces back (sprite-css.ts `vn-sprite-press`). */
 export const SPRITE_PRESS_MS = 350;
+
+/** A touch motion (sprite-css.ts `vn-sprite-touch-*`) runs this long. */
+export const SPRITE_TOUCH_MOTION_MS = 520;
 
 /** Sprites fade out under a key illustration (and back) with the scene-image crossfade. */
 export const SPRITE_ILLUSTRATION_FADE_MS = 350;
@@ -619,6 +622,34 @@ export type SpriteActorSnapshot = {
   /** Size matching: the image's zoom (1 = unmatched) and how far the figure sinks (standing-figure heights). */
   match: number;
   lift: number;
+  /** Touch mode: the reaction showing now (`react`), or null. */
+  touch: { expression: string; emote: SpriteEmote; motion: PuppetTouchMotion | null } | null;
+};
+
+/** What a touch-mode reaction shows for a moment (`SpriteLayer.react`). */
+export type SpriteTouchReaction = {
+  /** Catalogue expression; the set's best available stand-in shows. */
+  expression: string;
+  /** Emote to show ("none": the staged one stays). */
+  emote: SpriteEmote;
+  /** Body motion, or null for none (Motion off, reduced motion). */
+  motion: PuppetTouchMotion | null;
+  /** Puppet strength of the motion (the touch intensity). */
+  amp: number;
+  /** How long the expression and emote stay before the staged ones return (ms). */
+  holdMs: number;
+  /** Pop the emote in (false keeps it still). */
+  animate: boolean;
+};
+
+/** The figure under a point (`SpriteLayer.figureAt`): what touch zones are built from. */
+export type SpriteFigureHit = {
+  key: string;
+  /** The active image layer's box (client px). */
+  rect: DOMRect;
+  geometry: SpriteGeometry;
+  spot: SpriteFaceSpot | null;
+  mirrored: boolean;
 };
 
 export type SpriteLayerSnapshot = {
@@ -669,6 +700,8 @@ type ActorEntry = {
   /** Whether the last staging animated (an expression change then plays its puppet transition). */
   animate: boolean;
   pressTimer: ReturnType<typeof setTimeout> | null;
+  /** Touch mode: the reaction on show and its timers (cleared when the staging moves on). */
+  touch: { expression: string; emote: SpriteEmote; motion: PuppetTouchMotion | null; holdTimer: ReturnType<typeof setTimeout>; motionTimer: ReturnType<typeof setTimeout> | null } | null;
 };
 
 const reflow = (element: HTMLElement): void => {
@@ -913,22 +946,104 @@ export class SpriteLayer {
    * with a picture count, and none under a key illustration.
    */
   actorAt(x: number, y: number): string | null {
-    if (this.destroyed || !this.enabled || this.illustration !== null || !Number.isFinite(x) || !Number.isFinite(y)) return null;
-    let best: { key: string; z: number } | null = null;
+    return this.figureAt(x, y)?.key ?? null;
+  }
+
+  /**
+   * The figure drawn at a point, as `actorAt` finds it, with what touch
+   * zones are built from: its image layer's box, geometry, face spot and
+   * mirroring.
+   */
+  figureAt(x: number, y: number): SpriteFigureHit | null {
+    return this.figuresAt(x, y)[0] ?? null;
+  }
+
+  /**
+   * Every figure whose opaque box holds a point, front-most first (touch
+   * mode looks past a front figure's empty corners to a head behind it).
+   */
+  figuresAt(x: number, y: number): SpriteFigureHit[] {
+    if (this.destroyed || !this.enabled || this.illustration !== null || !Number.isFinite(x) || !Number.isFinite(y)) return [];
+    const hits: Array<{ hit: SpriteFigureHit; z: number }> = [];
     for (const entry of this.actors.values()) {
       if (entry.exiting || entry.url === null || !entry.geometry) continue;
       const state = entry.el.dataset.vnSpriteState;
       if (state !== "shown" && state !== "entering") continue;
       const layer = entry.layers[entry.active];
       if (typeof layer.getBoundingClientRect !== "function") continue;
-      const box = spriteFigureBox(layer.getBoundingClientRect(), entry.geometry, spriteMirrored(entry.stage.facing));
+      const rect = layer.getBoundingClientRect();
+      const mirrored = spriteMirrored(entry.stage.facing);
+      const box = spriteFigureBox(rect, entry.geometry, mirrored);
       if (x < box.left || x > box.right || y < box.top || y > box.bottom) continue;
       // Stacking as in sprite-css.ts: the focused actor, then the middle one, then the sides.
       const order = entry.el.dataset.vnSpriteOrder;
       const z = entry.stage.focus ? 4 : order === "1" ? 2 : 1;
-      if (!best || z > best.z) best = { key: entry.key, z };
+      hits.push({ hit: { key: entry.key, rect, geometry: entry.geometry, spot: entry.spot, mirrored }, z });
     }
-    return best?.key ?? null;
+    // Stable: equal stacking keeps the stage's order, as before.
+    return hits.sort((left, right) => right.z - left.z).map((entry) => entry.hit);
+  }
+
+  /** The figure of a character on stage (as `figureAt` reports it), or null. */
+  figureOf(key: string): SpriteFigureHit | null {
+    const entry = this.actors.get(key);
+    if (this.destroyed || !entry || entry.exiting || entry.url === null || !entry.geometry) return null;
+    const layer = entry.layers[entry.active];
+    if (typeof layer.getBoundingClientRect !== "function") return null;
+    return { key, rect: layer.getBoundingClientRect(), geometry: entry.geometry, spot: entry.spot, mirrored: spriteMirrored(entry.stage.facing) };
+  }
+
+  /**
+   * Touch mode: a character reacts to a touch for a moment: another of its
+   * expressions (the best stand-in its set has), an emote and a body motion
+   * (the CSS squash plus the puppet's gesture and springs), then the staged
+   * expression and emote return. The staging moving on ends it at once.
+   * False when the character is not on stage with a picture.
+   */
+  react(key: string, reaction: SpriteTouchReaction): boolean {
+    const entry = this.actors.get(key);
+    if (this.destroyed || !entry || entry.exiting || entry.url === null) return false;
+    this.endTouch(entry, false);
+    const holdTimer = setTimeout(() => this.endTouch(entry, true), Math.max(200, reaction.holdMs));
+    entry.touch = { expression: reaction.expression, emote: reaction.emote, motion: reaction.motion, holdTimer, motionTimer: null };
+    // A quick change: the plain crossfade, never the puppet's emotion transition.
+    const animate = entry.animate;
+    entry.animate = false;
+    this.refreshActorImage(entry);
+    entry.animate = animate;
+    if (reaction.emote !== "none") {
+      // Restart the pop on a repeated emote.
+      if (entry.emoteName === reaction.emote && reaction.animate) entry.emoteName = "none";
+      this.applyEmote(entry, reaction.emote, reaction.animate);
+    }
+    if (reaction.motion) {
+      delete entry.el.dataset.vnSpriteTouch;
+      reflow(entry.el);
+      entry.el.dataset.vnSpriteTouch = reaction.motion;
+      setVars(entry.el, { "--vn-sprite-touch-amp": round(reaction.amp) });
+      this.puppet.touch(key, reaction.motion, reaction.amp);
+      entry.touch.motionTimer = setTimeout(() => {
+        if (entry.touch) entry.touch.motionTimer = null;
+        delete entry.el.dataset.vnSpriteTouch;
+      }, SPRITE_TOUCH_MOTION_MS + 40);
+    }
+    return true;
+  }
+
+  /** End a touch reaction; `restore` puts the staged expression and emote back. */
+  private endTouch(entry: ActorEntry, restore: boolean): void {
+    const touch = entry.touch;
+    if (!touch) return;
+    clearTimeout(touch.holdTimer);
+    if (touch.motionTimer) clearTimeout(touch.motionTimer);
+    entry.touch = null;
+    delete entry.el.dataset.vnSpriteTouch;
+    if (!restore || this.destroyed || entry.exiting) return;
+    const animate = entry.animate;
+    entry.animate = false;
+    this.refreshActorImage(entry);
+    entry.animate = animate;
+    this.applyEmote(entry, entry.stage.emote, false);
   }
 
   /** A press on a character: it squishes and bounces back. False when it is not on stage. */
@@ -1036,6 +1151,7 @@ export class SpriteLayer {
         effects: this.puppet.effectsFor(entry.key),
         match: entry.match,
         lift: entry.lift,
+        touch: entry.touch ? { expression: entry.touch.expression, emote: entry.touch.emote, motion: entry.touch.motion } : null,
       });
     }
     actors.sort((a, b) => a.x - b.x);
@@ -1111,6 +1227,8 @@ export class SpriteLayer {
         this.actors.set(actor.characterKey, entry);
         container.append(entry.el);
       }
+      // The staging moves on: a touch reaction on show ends here (the new staging applies below).
+      this.endTouch(entry, false);
       entry.stage = actor;
       entry.x = x;
       entry.animate = animate;
@@ -1230,14 +1348,15 @@ export class SpriteLayer {
       key, el, body, figure, marks, emote, layers, faceSource: null, geometry: null, spot: null, match: 1, lift: 0, active: 0, url: null, shownExpression: null,
       stage: { characterKey: key, expression: "idle", slot: "center", facing: "viewer", focus: false, motion: "none", emote: "none", intensity: 3 },
       x: 50, emoteName: "none", talking: false, token: 0, exiting: false,
-      exitTimer: null, motionTimer: null, emoteTimer: null, enterTimer: null, fadeTimer: null, animate: true, pressTimer: null,
+      exitTimer: null, motionTimer: null, emoteTimer: null, enterTimer: null, fadeTimer: null, animate: true, pressTimer: null, touch: null,
     };
   }
 
   /** Show the best available image for the actor's requested expression. */
   private refreshActorImage(entry: ActorEntry, enter = false): void {
     const set = this.view?.sets[entry.key];
-    const image = resolveSpriteImage(set, entry.stage.expression);
+    // A touch reaction shows its expression for a moment (`react`).
+    const image = (entry.touch ? resolveSpriteImage(set, entry.touch.expression) : null) ?? resolveSpriteImage(set, entry.stage.expression);
     if (!image) {
       // Nothing of the set is ready: no sprite (the stage shows a badge).
       entry.token += 1;
@@ -1441,6 +1560,7 @@ export class SpriteLayer {
   }
 
   private disposeActor(entry: ActorEntry): void {
+    this.endTouch(entry, false);
     for (const timer of [entry.exitTimer, entry.motionTimer, entry.emoteTimer, entry.enterTimer, entry.fadeTimer, entry.pressTimer]) {
       if (timer) clearTimeout(timer);
     }

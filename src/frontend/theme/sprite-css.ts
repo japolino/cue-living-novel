@@ -568,6 +568,14 @@ export const VN_SPRITE_CSS = `
   [data-vn-sprite][data-vn-sprite-press="true"] {
     animation: vn-sprite-press 350ms ease-out both;
   }
+  /* Touch mode (sprite-touch.ts): the body answers a touch around its feet,
+     scaled by the touch intensity (--vn-sprite-touch-amp), on top of the
+     puppet's own gesture (SPRITE_TOUCH_MOTION_MS). */
+  [data-vn-sprite][data-vn-sprite-touch="pat"] { animation: vn-sprite-touch-pat 520ms cubic-bezier(0.3, 0.7, 0.4, 1) both; }
+  [data-vn-sprite][data-vn-sprite-touch="stroke"] { animation: vn-sprite-touch-stroke 520ms ease-in-out both; }
+  [data-vn-sprite][data-vn-sprite-touch="squish"] { animation: vn-sprite-touch-squish 520ms ease-out both; }
+  [data-vn-sprite][data-vn-sprite-touch="poke"] { animation: vn-sprite-touch-poke 520ms cubic-bezier(0.25, 1, 0.5, 1) both; }
+  [data-vn-sprite][data-vn-sprite-touch="huff"] { animation: vn-sprite-touch-huff 520ms linear both; }
 
   /* Idle breathing (CSS fallback; the puppet breathes in its warp): a slow
      rise of the chest line, around the feet, scaled by spriteMotion. */
@@ -638,6 +646,7 @@ export const VN_SPRITE_CSS = `
 
   /* "Off": no motion or emote animation; positions still change. */
   [data-vn-root][data-vn-effect-intensity="off"] [data-vn-sprite][data-vn-sprite-press],
+  [data-vn-root][data-vn-effect-intensity="off"] [data-vn-sprite][data-vn-sprite-touch],
   [data-vn-root][data-vn-effect-intensity="off"] [data-vn-sprite] [data-vn-sprite-body],
   [data-vn-root][data-vn-effect-intensity="off"] [data-vn-sprite] [data-vn-sprite-figure],
   [data-vn-root][data-vn-effect-intensity="off"] [data-vn-sprite] [data-vn-sprite-marks],
@@ -671,6 +680,32 @@ export const VN_SPRITE_CSS = `
   52% { transform: scale(0.97, 1.05); }
   76% { transform: scale(1.015, 0.99); }
   100% { transform: none; }
+}
+@keyframes vn-sprite-touch-pat {
+  0%, 100% { transform: none; }
+  30% { transform: scale(calc(1 + 0.025 * var(--vn-sprite-touch-amp, 1)), calc(1 - 0.04 * var(--vn-sprite-touch-amp, 1))); }
+  62% { transform: scale(calc(1 - 0.008 * var(--vn-sprite-touch-amp, 1)), calc(1 + 0.012 * var(--vn-sprite-touch-amp, 1))); }
+}
+@keyframes vn-sprite-touch-stroke {
+  0%, 100% { transform: none; }
+  40% { transform: rotate(calc(1.6deg * var(--vn-sprite-touch-amp, 1))); }
+  75% { transform: rotate(calc(-0.5deg * var(--vn-sprite-touch-amp, 1))); }
+}
+@keyframes vn-sprite-touch-squish {
+  0%, 100% { transform: none; }
+  25% { transform: scale(calc(1 - 0.045 * var(--vn-sprite-touch-amp, 1)), calc(1 + 0.03 * var(--vn-sprite-touch-amp, 1))); }
+  55% { transform: scale(calc(1 + 0.02 * var(--vn-sprite-touch-amp, 1)), calc(1 - 0.012 * var(--vn-sprite-touch-amp, 1))); }
+  80% { transform: scale(calc(1 - 0.006 * var(--vn-sprite-touch-amp, 1)), 1); }
+}
+@keyframes vn-sprite-touch-poke {
+  0%, 100% { transform: none; }
+  22% { transform: rotate(calc(-2.2deg * var(--vn-sprite-touch-amp, 1))) translateX(calc(-4px * var(--vn-sprite-touch-amp, 1))); }
+  60% { transform: rotate(calc(0.8deg * var(--vn-sprite-touch-amp, 1))); }
+}
+@keyframes vn-sprite-touch-huff {
+  0%, 100% { transform: none; }
+  15%, 45%, 75% { transform: translateX(calc(-3px * var(--vn-sprite-touch-amp, 1))); }
+  30%, 60%, 90% { transform: translateX(calc(3px * var(--vn-sprite-touch-amp, 1))); }
 }
 @keyframes vn-sprite-exit {
   from { opacity: 1; translate: 0 0; }

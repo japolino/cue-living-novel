@@ -272,7 +272,9 @@ function buildStandardStageDOM(parent: MockNode) {
     skipBtn.setAttribute("data-vn-control", "skip");
     const previousBtn = new MockNode("button");
     previousBtn.setAttribute("data-vn-control", "previous");
-    controls.append(previousBtn, logBtn, autoBtn, skipBtn);
+    const touchBtn = new MockNode("button");
+    touchBtn.setAttribute("data-vn-control", "touch");
+    controls.append(previousBtn, logBtn, autoBtn, skipBtn, touchBtn);
 
   const speaker = new MockNode("span");
   speaker.setAttribute("data-vn-speaker", "");

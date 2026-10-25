@@ -21,6 +21,23 @@ export const POP_MIN_GAP_MS = 80;
 /** Interface sounds stay small: volume 1 plays at this share of full scale. */
 const MASTER_GAIN = 0.32;
 
+/** Touch mode's soft sounds (sprite-touch.ts `TouchSound`). */
+export type TouchSoundKind = "pat" | "stroke" | "squish" | "poke" | "huff";
+
+/**
+ * One gliding tone per touch: wave, start and end pitch (Hz), length (s)
+ * and level (share of the volume). A pat is a soft low tap, a stroke a slow
+ * rising hum, a squish a falling boing, a poke a quick boop, a huff a low
+ * grumble.
+ */
+export const TOUCH_SOUNDS: Readonly<Record<TouchSoundKind, { wave: OscillatorType; from: number; to: number; seconds: number; level: number }>> = {
+  pat: { wave: "sine", from: 250, to: 165, seconds: 0.11, level: 0.85 },
+  stroke: { wave: "triangle", from: 420, to: 640, seconds: 0.22, level: 0.4 },
+  squish: { wave: "sine", from: 620, to: 230, seconds: 0.17, level: 0.75 },
+  poke: { wave: "sine", from: 900, to: 680, seconds: 0.07, level: 0.7 },
+  huff: { wave: "triangle", from: 230, to: 150, seconds: 0.16, level: 0.6 },
+};
+
 /** Whether a typed piece of text ticks now: it is visible text and the last tick is `gap` ms old. */
 export function shouldTick(text: string, now: number, lastTickAt: number, gap = TYPING_TICK_GAP_MS): boolean {
   if (!/\S/u.test(text)) return false;
@@ -112,6 +129,34 @@ export class InterfaceSounds {
     const now = this.now();
     if (now - this.lastPopAt < POP_MIN_GAP_MS) return false;
     if (!this.play("pop")) return false;
+    this.lastPopAt = now;
+    return true;
+  }
+
+  /** A touch in touch mode: its soft sound, at most one per POP_MIN_GAP_MS. True when it played. */
+  touch(kind: TouchSoundKind): boolean {
+    if (!this.canPlay()) return false;
+    const now = this.now();
+    if (now - this.lastPopAt < POP_MIN_GAP_MS) return false;
+    const sound = TOUCH_SOUNDS[kind];
+    const context = sound ? this.audio() : null;
+    if (!sound || !context) return false;
+    try {
+      const t = context.currentTime;
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = sound.wave;
+      oscillator.frequency.setValueAtTime(sound.from, t);
+      oscillator.frequency.exponentialRampToValueAtTime(sound.to, t + sound.seconds * 0.85);
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(Math.max(0.0002, this.volume * MASTER_GAIN * sound.level), t + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + sound.seconds);
+      oscillator.connect(gain).connect(context.destination);
+      oscillator.start(t);
+      oscillator.stop(t + sound.seconds + 0.01);
+    } catch {
+      return false;
+    }
     this.lastPopAt = now;
     return true;
   }

@@ -107,6 +107,23 @@ Pictures can be framed differently: a waist-up sprite, a close-up expression, a 
 
 The picture, the characters and the buttons can no longer be selected or dragged by mistake (a double-click no longer paints the browser's selection over the scene); the dialogue and History stay selectable.
 
+## Touch
+
+In sprite mode, the hand button next to **Skip** (or **T**) turns on touch mode: a tap on a character touches it instead of turning the page, and a tap anywhere else still reads on. **Escape** or the button again turns it off. Where you tap decides what happens:
+
+- the top of the head: a **head pat** (an open palm);
+- the sides of the head: a **hair stroke**, or **ear scritches** for a character whose appearance tags mention animal ears (cat ears, fox ears, kemonomimi…);
+- the cheeks: a **cheek squish** (two hands);
+- anywhere else on the character: a **poke** (a finger).
+
+The hand is drawn by Cue (no images) and follows your mouse over a character. Each touch gets an answer at once, with no model call: a fitting expression from the character's set for a moment, an emote, a little motion (with hair and cloth following it), a soft sound when **Interface sounds** is on, and a short line in a bubble. Characters react to repetition: the third head pat in a row makes them content, while too many cheek squishes or pokes make them pout ("hey!") and sulk for a few seconds. Nothing ever touches or changes clothing, and touches never reach the story, the planner or the prompts.
+
+A small heart per character at the top of the stage fills with every friendly touch (more slowly as it grows) and drops when you annoy them. It is saved with the character card, so it is still there in another chat or after a reload; at **Warm** and **Fond** the character answers more warmly.
+
+**Lines in character** (on by default): the first time a character is touched, Cue asks the story reader once for a small set of short lines in that character's voice and language (about 65 lines for every zone and mood) and saves them with the card. That one call reads the card's description and personality and the appearance tags: roughly 400 to 900 input tokens and 600 to 1,000 output tokens (capped at 1,500), once per character. The refresh button next to a heart writes a new set (one more call). With the setting off, or while the call runs or if it fails, characters use simple built-in lines and no call is made.
+
+**Settings → Look → Touch** (sprite mode) has **Touch mode** (hides the hand button when off), **Reactions** (**Gentle**: smaller, with no marks over the head but a blush; **Normal**; **Lively**) and **Lines in character**. Touch mode and Reactions can be set per character card. Motion **Still** and the system's reduced-motion setting keep everyone still: the expression, the hearts and the line still show. The waiting screen's line-up can be touched the same way (press **T** there). Touching needs a mouse, a pen or a finger; with the keyboard you can turn touch mode on and off and use the refresh buttons. Check: `bun run test:touch`; to try it by hand, `bun run ./scripts/sprite-touch-playground.ts` serves a stage on http://localhost:5179 (stand-in lines, no model call).
+
 ## Scene image reuse (temporary cache)
 
 Cue keeps a small, in-memory cache of the scene images it generated so an

@@ -1,7 +1,8 @@
 import { VnStage } from "../src/frontend/stage/vn-stage.js";
 import type { VnTurnInput } from "../src/frontend/store/vn-store.js";
 import { puppetGlOptions } from "../src/frontend/stage/sprite-puppet.js";
-import { DEFAULT_CONFIG, spritePuppetSettings, spriteSizeMatchSettings, stageFeelSettings, type VisualNovelSpritePuppet, type VisualNovelSpriteSizeMatch, type VisualNovelStageFeel } from "../src/config.js";
+import { DEFAULT_CONFIG, spritePuppetSettings, spriteSizeMatchSettings, spriteTouchSettings, stageFeelSettings, type VisualNovelSpritePuppet, type VisualNovelSpriteSizeMatch, type VisualNovelSpriteTouch, type VisualNovelStageFeel } from "../src/config.js";
+import type { TouchCharacterRef, TouchLinePack } from "../src/shared/touch.js";
 import {
   SPRITE_HOT_SET,
   type PlateView,
@@ -22,7 +23,10 @@ import {
  * ?puppet=css (no WebGL puppet: the CSS fallback), ?outline (px),
  * ?scale=auto (the puppet's adaptive render scale; pinned at 1 otherwise, so
  * canvas sizes don't change under the pixel checks).
- * window.fx: { stage, load(paragraphs, options), plan(), go(index), illustrate(index, status), ready(...), view(), effect(name), ambient(name), puppet(settings), feel(settings), sizeMatch(settings), renderScale(scale | null) }.
+ * window.fx: { stage, load(paragraphs, options), plan(), go(index), illustrate(index, status), ready(...), view(), effect(name), ambient(name), puppet(settings), feel(settings), sizeMatch(settings), renderScale(scale | null), touch(settings), touchBackend, identity(key, tags) }.
+ * Touch mode (scripts/test-sprite-touch-browser.ts) talks to a stand-in
+ * backend here: `touchBackend` keeps the bonds, answers line-pack asks with
+ * TOUCH_PACK (or an error) after a moment and logs every ask.
  * `load(paragraphs, { provisional: true })` shows the text before its plan (no
  * nameplates, no staging); `plan()` lands the plan (VnStage.upgradeTurn).
  * Headless Chromium only has software WebGL (SwiftShader), which the puppet
@@ -119,6 +123,34 @@ const illustrationView = (paragraphIndex: number, status: SpriteIllustrationView
   paragraphIndex, jobId: `job-${paragraphIndex}`, status, ...(status === "ready" ? { url: ILLUSTRATION_URL } : {}),
 });
 
+/** The stand-in line pack: the same lines for everyone, none of them generic. */
+const TOUCH_PACK: TouchLinePack = {
+  version: 1,
+  lines: {
+    pat: { shy: ["O-oh… a head pat?"], warm: ["Hehe, that's nice."], fond: ["Mm… don't stop."], content: ["Okay, you can keep going…"], annoyed: ["My hair! Enough!"] },
+    ears: { shy: ["Eep! My ears!"], warm: ["Gently with the ears."], fond: ["Purr… right there."], content: ["Mmm, so soft…"], annoyed: ["Ears are off-limits now!"] },
+    hair: { shy: ["You're touching my hair?"], warm: ["You like my hair?"], fond: ["Heh, it tickles."], content: ["That's… soothing."], annoyed: ["Stop tangling it!"] },
+    cheeks: { shy: ["Mmf?! My cheeks!"], warm: ["Squishy, huh?"], fond: ["Hehe, mochi cheeks."], content: ["Fine, one more squish."], annoyed: ["Hey! Not my face!"] },
+    poke: { shy: ["Y-yes?"], warm: ["Need something?"], fond: ["Poke back!"], content: ["Hm?"], annoyed: ["Stop poking me!"] },
+  },
+};
+/** Touch mode's stand-in backend: saved bonds and packs, every ask logged, answers after a moment. */
+const touchBackend = {
+  bonds: {} as Record<string, number>,
+  packs: {} as Record<string, TouchLinePack>,
+  /** Character keys of each `vn_touch_get`. */
+  gets: [] as string[][],
+  saves: [] as Array<[string, number]>,
+  /** [character key, refresh] of each line-pack call (one model call each). */
+  calls: [] as Array<[string, boolean]>,
+  /** The next line-pack calls fail with this. */
+  failWith: null as string | null,
+  /** How long a line-pack call takes (ms). */
+  delay: 80,
+  pack: TOUCH_PACK,
+};
+const touchStates = (refs: TouchCharacterRef[]) => refs.map((ref) => ({ characterKey: ref.characterKey, bond: touchBackend.bonds[ref.characterKey] ?? 0, pack: touchBackend.packs[ref.characterKey] ?? null }));
+
 const mount = document.createElement("div");
 Object.assign(mount.style, { position: "fixed", inset: "0", background: "#08090d" });
 document.body.append(mount);
@@ -131,6 +163,22 @@ const stage = new VnStage({
   themePreset: (q.get("preset") as never) ?? "lumiverse",
   onReroll: () => {}, onSubmit: async () => {}, onChoice: async () => {}, onExit: () => {},
   onSpriteRetry: (setKey) => { retried.push(setKey); },
+  onTouchCharacters: (refs) => {
+    touchBackend.gets.push(refs.map((ref) => ref.characterKey));
+    setTimeout(() => stage.setTouchStates(touchStates(refs)), 30);
+  },
+  onTouchBond: (ref, bond) => {
+    touchBackend.saves.push([ref.characterKey, bond]);
+    touchBackend.bonds[ref.characterKey] = bond;
+  },
+  onTouchLines: (ref, refresh) => {
+    touchBackend.calls.push([ref.characterKey, refresh]);
+    setTimeout(() => {
+      if (touchBackend.failWith) return stage.setTouchLines(ref.characterKey, null, touchBackend.failWith);
+      touchBackend.packs[ref.characterKey] = touchBackend.pack;
+      stage.setTouchLines(ref.characterKey, touchBackend.pack);
+    }, touchBackend.delay);
+  },
 });
 stage.setEffectIntensity((q.get("intensity") as never) ?? "full");
 stage.setPresentationMode((q.get("mode") as never) ?? "sprites");
@@ -140,6 +188,8 @@ if (q.get("outline")) puppet({ spriteOutline: Number(q.get("outline")) });
 const feel = (settings: Partial<VisualNovelStageFeel>) => stage.setStageFeel({ ...stageFeelSettings(DEFAULT_CONFIG), ...settings });
 /** Size matching (scripts/test-sprite-size-browser.ts); the defaults apply until it is called. */
 const sizeMatch = (settings: Partial<VisualNovelSpriteSizeMatch>) => stage.setSpriteSizeMatch({ ...spriteSizeMatchSettings(DEFAULT_CONFIG), ...settings });
+/** Touch mode settings (scripts/test-sprite-touch-browser.ts); the defaults apply until it is called. */
+const touch = (settings: Partial<VisualNovelSpriteTouch>) => stage.setSpriteTouch({ ...spriteTouchSettings(DEFAULT_CONFIG), ...settings });
 
 let current: SpriteTurnView | null = null;
 let turnCounter = 0;
@@ -227,6 +277,13 @@ Object.assign(window, {
     puppet,
     feel,
     sizeMatch,
+    touch,
+    touchBackend,
+    /** Change a cast member's appearance tags (the next load uses them). */
+    identity: (key: string, tags: string) => {
+      const member = CAST.find((entry) => entry.characterKey === key);
+      if (member) member.identity = tags;
+    },
     /** Pin the puppet's render scale (null: adaptive). */
     renderScale: (scale: number | null) => { puppetGlOptions.renderScale = scale; },
   },

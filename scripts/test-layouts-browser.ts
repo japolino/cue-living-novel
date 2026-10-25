@@ -133,7 +133,8 @@ const facts = (page: Page) => page.evaluate(() => {
     phase: state.phase as string,
     index: state.currentParagraphIndex as number,
     dialogue: rect(dialogue), speaker: speaker.hidden ? null : rect(speaker), text: rect(text), next: rect(next), controls: rect(controls), progress: rect(progress),
-    controlButtons: [...controls.querySelectorAll("[data-vn-control]")].map((el) => ({ name: (el as HTMLElement).dataset.vnControl!, rect: rect(el) })),
+    // Hidden controls (the hand button outside sprite mode) take no place.
+    controlButtons: [...controls.querySelectorAll("[data-vn-control]:not([hidden])")].map((el) => ({ name: (el as HTMLElement).dataset.vnControl!, rect: rect(el) })),
     dialogueBg: cs(dialogue).backgroundColor, dialogueBgImage: cs(dialogue).backgroundImage, dialogueBorder: cs(dialogue).borderTopWidth,
     speakerText: speaker.textContent ?? "", speakerColor: cs(speaker).color, speakerVar: resolve(speaker.style.getPropertyValue("--vn-speaker-color")),
     speakerRule: cs(speaker, "::before").width, speakerUnderline: `${cs(speaker).borderBottomStyle} ${cs(speaker).borderBottomWidth} ${cs(speaker).borderBottomColor}`, speakerWeight: Number(cs(speaker).fontWeight),

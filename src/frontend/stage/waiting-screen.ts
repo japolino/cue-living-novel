@@ -20,6 +20,7 @@
 import type { VisualNovelWaitingBackdrop, VisualNovelWaitingRecap } from "../../config.js";
 import type { RecapCharacter, RecapEntry, RecapImage, RecapLine, WaitingRecap } from "./recap.js";
 import { cssUrl, sceneCardWords } from "./scene-card.js";
+import { spriteFaceSpot, spriteGeometry, type SpriteFaceSpot, type SpriteGeometry } from "./sprite-layer.js";
 
 export type WaitingBackdrop = Exclude<VisualNovelWaitingBackdrop, "off">;
 export type WaitingRecapMode = Exclude<VisualNovelWaitingRecap, "auto">;
@@ -33,9 +34,40 @@ export type WaitingScreenOptions = {
   motion: boolean;
 };
 
+/**
+ * A line-up figure as touch mode sees it (VnStage `touchWaitingFigure`):
+ * its picture's geometry and face spot, and the mapping between client px
+ * and image-normalized coordinates on its picture.
+ */
+export type WaitingTouchFigure = {
+  key: string;
+  name: string;
+  geometry: SpriteGeometry;
+  spot: SpriteFaceSpot;
+  toImage: (x: number, y: number) => { u: number; v: number } | null;
+  toClient: (u: number, v: number) => { x: number; y: number };
+};
+
+/** A touch reaction on a line-up figure (`WaitingScreen.touchFigure`). */
+export type WaitingTouchReaction = {
+  /** The picture to show for a moment, or null to keep the one shown. */
+  image: RecapImage | null;
+  /** The figure's touch motion (CSS), or null to keep it still. */
+  motion: string | null;
+  holdMs: number;
+};
+
+/** A line-up figure's touch motion runs this long; matches the CSS. */
+export const WAITING_TOUCH_MOTION_MS = 520;
+
 export type WaitingScreenHooks = {
   /** A tap on a character or a card (sparks at the pointer). */
   onTap?: (event: MouseEvent) => void;
+  /**
+   * Touch mode: a tap on a line-up figure with a picture. True: it was a
+   * touch (the figure keeps its line; no bounce, no next line).
+   */
+  onFigureTouch?: (event: MouseEvent, figure: WaitingTouchFigure) => boolean;
   /** A bubble or card changed because of a tap (a pop sound). */
   onPop?: () => void;
   /** The preview closed. */
@@ -135,8 +167,19 @@ function initialOf(name: string): string {
 }
 
 /** One character standing in the line-up, with the line in their bubble. */
-/** `spoke`: its bubble has shown (a crowded line-up's next turn for it is its next line). */
-type Figure = { character: RecapCharacter; element: HTMLElement; line: number; swapTimer: ReturnType<typeof setTimeout> | null; spoke: boolean };
+type Figure = {
+  character: RecapCharacter;
+  element: HTMLElement;
+  line: number;
+  swapTimer: ReturnType<typeof setTimeout> | null;
+  /** Its bubble has shown (a crowded line-up's next turn for it is its next line). */
+  spoke: boolean;
+  /** The picture shown now (touch zones are built from it). */
+  image: RecapImage | null;
+  /** A touch reaction's picture goes back to the line's after this. */
+  touchTimer: ReturnType<typeof setTimeout> | null;
+  touchMotionTimer: ReturnType<typeof setTimeout> | null;
+};
 
 export class WaitingScreen {
   readonly element: HTMLElement;
@@ -213,7 +256,10 @@ export class WaitingScreen {
     this.element.innerHTML = this.markup(data, options, mode);
     this.element.hidden = false;
     this.figures = Array.from(this.element.querySelectorAll<HTMLElement>("[data-vn-waiting-figure]"))
-      .map((element, index) => ({ character: this.lineupCharacters(data, mode)[index]!, element, line: 0, swapTimer: null, spoke: false }))
+      .map((element, index): Figure => {
+        const character = this.lineupCharacters(data, mode)[index]!;
+        return { character, element, line: 0, swapTimer: null, spoke: false, image: character ? character.lines[0]?.image ?? character.image : null, touchTimer: null, touchMotionTimer: null };
+      })
       .filter((figure) => Boolean(figure.character));
     this.nextFigure = 0;
     const lineup = this.element.querySelector<HTMLElement>("[data-vn-lineup]");
@@ -227,6 +273,76 @@ export class WaitingScreen {
     this.cardIndex = 0;
     if (mode === "cards") this.renderCard(false);
     this.startTimers(mode);
+  }
+
+  /** Touch mode: the line-up figures with a picture (their cast key and name). */
+  lineupFigures(): Array<{ key: string; name: string }> {
+    if (!this.open) return [];
+    return this.figures.filter((figure) => figure.image).map((figure) => ({ key: figure.character.key, name: figure.character.name }));
+  }
+
+  /** Touch mode: the line-up figure with a picture under a point (client px), or null. */
+  figureAtPoint(x: number, y: number): WaitingTouchFigure | null {
+    if (!this.open) return null;
+    for (const figure of this.figures) {
+      const touch = this.touchInfo(figure);
+      if (!touch) continue;
+      const point = touch.toImage(x, y);
+      const [bx, by, bw, bh] = figure.image?.bbox ?? [0, 0, 1, 1];
+      if (point && point.u >= bx && point.u <= bx + bw && point.v >= by && point.v <= by + bh) return touch;
+    }
+    return null;
+  }
+
+  /**
+   * Touch mode: a line-up figure reacts for a moment: the reaction's
+   * picture, then its line's again, and a small touch motion. False when
+   * the figure is not in the line-up.
+   */
+  touchFigure(key: string, reaction: WaitingTouchReaction): boolean {
+    const figure = this.figures.find((item) => item.character.key === key);
+    if (!this.open || !figure) return false;
+    if (figure.touchTimer !== null) clearTimeout(figure.touchTimer);
+    figure.touchTimer = null;
+    if (reaction.image) {
+      this.swapFigureImage(figure, reaction.image);
+      figure.touchTimer = setTimeout(() => {
+        figure.touchTimer = null;
+        if (!this.open) return;
+        const own = figure.character.lines[figure.line]?.image ?? figure.character.image;
+        if (own) this.swapFigureImage(figure, own);
+      }, Math.max(200, reaction.holdMs));
+    }
+    if (figure.touchMotionTimer !== null) clearTimeout(figure.touchMotionTimer);
+    figure.touchMotionTimer = null;
+    figure.element.removeAttribute("data-vn-figure-touch");
+    if (reaction.motion && this.options?.motion) {
+      void figure.element.offsetWidth;
+      figure.element.setAttribute("data-vn-figure-touch", reaction.motion);
+      figure.touchMotionTimer = setTimeout(() => {
+        figure.touchMotionTimer = null;
+        figure.element.removeAttribute("data-vn-figure-touch");
+      }, WAITING_TOUCH_MOTION_MS + 40);
+    }
+    return true;
+  }
+
+  /** A figure's picture box (the front image, the whole cut-out) as touch mode maps it; null without a picture or layout. */
+  private touchInfo(figure: Figure): WaitingTouchFigure | null {
+    const image = figure.image;
+    const front = figure.element.querySelector<HTMLElement>("[data-vn-figure-img][data-vn-front]");
+    if (!image || !front || typeof front.getBoundingClientRect !== "function") return null;
+    const rect = front.getBoundingClientRect();
+    if (!(rect.width > 0) || !(rect.height > 0)) return null;
+    const geometry = spriteGeometry(image);
+    return {
+      key: figure.character.key,
+      name: figure.character.name,
+      geometry,
+      spot: spriteFaceSpot(image, geometry),
+      toImage: (x, y) => ({ u: (x - rect.left) / rect.width, v: (y - rect.top) / rect.height }),
+      toClient: (u, v) => ({ x: rect.left + rect.width * u, y: rect.top + rect.height * v }),
+    };
   }
 
   /** The status line ("Mira is writing the next scene…"). */
@@ -425,9 +541,12 @@ export class WaitingScreen {
     }
     const figure = target?.closest<HTMLElement>("[data-vn-waiting-figure]");
     if (figure) {
+      const found = this.figures.find((item) => item.element === figure);
+      // Touch mode: the tap touches the figure where it lands.
+      const touch = found && this.hooks.onFigureTouch ? this.touchInfo(found) : null;
+      if (touch && this.hooks.onFigureTouch!(event, touch)) return;
       this.hooks.onTap?.(event);
       this.bounce(figure);
-      const found = this.figures.find((item) => item.element === figure);
       if (found && this.element.dataset.vnRecap === "lineup") {
         this.hooks.onPop?.();
         const spoke = found.spoke;
@@ -524,7 +643,8 @@ export class WaitingScreen {
         bubble.innerHTML = `${line.chip ? `<span data-vn-bubble-chip>${escapeHtml(line.chip)}</span>` : ""}<span data-vn-bubble-text>${escapeHtml(quoteLine(line.excerpt))}</span>`;
         bubble.dataset.vnBubbleState = "in";
       }
-      this.swapFigureImage(figure.element, line.image);
+      // A touch reaction's picture stays until it ends.
+      if (figure.touchTimer === null) this.swapFigureImage(figure, line.image);
     };
     if (figure.swapTimer !== null) clearTimeout(figure.swapTimer);
     if (bubble && this.options?.motion) {
@@ -535,8 +655,10 @@ export class WaitingScreen {
     }
   }
 
-  private swapFigureImage(element: HTMLElement, image: RecapImage | null): void {
+  private swapFigureImage(figure: Figure, image: RecapImage | null): void {
     if (!image) return;
+    const element = figure.element;
+    figure.image = image;
     const body = element.querySelector<HTMLElement>("[data-vn-figure-body]");
     const layers = Array.from(element.querySelectorAll<HTMLImageElement>("[data-vn-figure-img]"));
     if (!body || layers.length < 2) return;
@@ -697,7 +819,10 @@ export class WaitingScreen {
     this.lineTimer = null;
     this.cardTimer = null;
     this.tipTimer = null;
-    for (const figure of this.figures) if (figure.swapTimer !== null) clearTimeout(figure.swapTimer);
+    for (const figure of this.figures) {
+      for (const timer of [figure.swapTimer, figure.touchTimer, figure.touchMotionTimer]) if (timer !== null) clearTimeout(timer);
+      figure.swapTimer = figure.touchTimer = figure.touchMotionTimer = null;
+    }
     if (this.fadeTimer !== null) clearTimeout(this.fadeTimer);
     this.fadeTimer = null;
     if (this.rushTimer !== null) clearTimeout(this.rushTimer);

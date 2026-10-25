@@ -251,6 +251,23 @@ const PUFF_LIMIT = 6;
 
 type Gesture = { kind: PuppetGestureKind; start: number; gain: number; side: number };
 
+/** How the body answers a touch (sprite-touch.ts `TouchMotion`). */
+export type PuppetTouchMotion = "pat" | "stroke" | "squish" | "poke" | "huff";
+
+/**
+ * Per touch: the gesture and its gain, and the velocity pushed into the
+ * hair and body springs (image heights per second, x toward the head's
+ * tilt side, y up). A pat presses the hair down, a stroke sweeps it aside,
+ * a squish and a poke wobble the body.
+ */
+export const PUPPET_TOUCH: Readonly<Record<PuppetTouchMotion, { gesture: PuppetGestureKind; gain: number; hair: [number, number]; body: [number, number] }>> = {
+  pat: { gesture: "nod", gain: 0.9, hair: [0, -0.22], body: [0, -0.05] },
+  stroke: { gesture: "lean_in", gain: 0.6, hair: [0.2, -0.04], body: [0.03, 0] },
+  squish: { gesture: "bounce", gain: 0.7, hair: [0, 0.12], body: [0, -0.1] },
+  poke: { gesture: "startle", gain: 0.8, hair: [-0.14, 0.05], body: [-0.12, 0] },
+  huff: { gesture: "puff", gain: 0.8, hair: [0, 0.06], body: [0, 0.04] },
+};
+
 type LayerState = {
   el: HTMLElement;
   actor: ActorState;
@@ -850,6 +867,22 @@ export class SpritePuppet {
     const actor = this.actors.get(key);
     const kind = PUPPET_MOTION_GESTURE[motion];
     if (actor && kind) this.gesture(actor, kind, kind === "nod" ? 1.6 : 1);
+  }
+
+  /**
+   * A touch in touch mode (sprite-touch.ts): a small gesture, and a push on
+   * the hair and body springs, so loose hair bounces under a pat, sways
+   * under a stroke and the body wobbles from a squish or a poke. `amp`
+   * scales it (the touch intensity).
+   */
+  touch(key: string, motion: PuppetTouchMotion, amp = 1): void {
+    const actor = this.actors.get(key);
+    if (!actor || actor.mode !== "gl" || !(amp > 0)) return;
+    const push = PUPPET_TOUCH[motion];
+    this.gesture(actor, push.gesture, push.gain * amp);
+    const side = actor.side || 1;
+    springKick(actor.hair, push.hair[0] * side * amp, push.hair[1] * amp);
+    springKick(actor.body, push.body[0] * side * amp, push.body[1] * amp);
   }
 
   /**
