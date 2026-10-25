@@ -177,7 +177,7 @@ export type TurnApplicationDecision =
   | { kind: "planning" }
   | { kind: "error"; error: string }
   | { kind: "same-turn"; paragraphIndex: number }
-  /** The planned turn for the provisional one on the stage: upgrade it in place at the cursor. */
+  /** The planned turn (or other text) for the provisional one on the stage: upgrade it in place at the cursor. */
   | { kind: "upgrade"; paragraphIndex: number }
   | { kind: "load-turn" };
 
@@ -307,6 +307,13 @@ export function stageTurnInput(
   };
 }
 
+/** Same paragraphs and the same speakers for them. */
+function sameTurnText(a: TurnView, b: TurnView): boolean {
+  const same = (x: readonly unknown[] | undefined, y: readonly unknown[] | undefined) =>
+    (x ?? []).length === (y ?? []).length && (x ?? []).every((value, index) => value === (y ?? [])[index]);
+  return same(a.paragraphs, b.paragraphs) && same(a.paragraphSpeakers, b.paragraphSpeakers);
+}
+
 export function decideTurnApplication(
   previous: TurnView | null,
   next: TurnView,
@@ -325,7 +332,12 @@ export function decideTurnApplication(
   // the paragraphs, so the first active delivery still needs a real load-turn.
   const shown = Boolean(previous && hasLoadedTurn && sameTurnIdentity(previous, next));
   // The text before the plan reads like a turn, although its status is "planning".
-  if (next.provisional) return shown ? { kind: "same-turn", paragraphIndex: cursor } : { kind: "load-turn" };
+  // The same text again is a cursor sync; other text for the same reply (Try
+  // again after a failed line check) is applied where the reader is.
+  if (next.provisional) {
+    if (!shown) return { kind: "load-turn" };
+    return previous && sameTurnText(previous, next) ? { kind: "same-turn", paragraphIndex: cursor } : { kind: "upgrade", paragraphIndex: cursor };
+  }
   if (next.status === "planning") return { kind: "planning" };
   if (next.status === "failed") return { kind: "error", error: next.error ?? "Visual planning failed." };
   if (shown) {

@@ -42,6 +42,13 @@ describe("decideTurnApplication with provisional turns", () => {
     expect(decideTurnApplication(provisional(), provisional(), 1, true, true)).toEqual({ kind: "same-turn", paragraphIndex: 1 });
   });
 
+  test("the same reply's text again with other paragraphs (Try again after a failed line check) is applied, not a cursor sync", () => {
+    const fewer = provisional({ paragraphs: ["The door opens."], paragraphSpeakers: [""] });
+    expect(decideTurnApplication(provisional(), fewer, 0, true, true)).toEqual({ kind: "upgrade", paragraphIndex: 0 });
+    const renamed = provisional({ paragraphSpeakers: ["", ""] });
+    expect(decideTurnApplication(provisional(), renamed, 1, true, true)).toEqual({ kind: "upgrade", paragraphIndex: 1 });
+  });
+
   test("another swipe's provisional turn replaces the provisional one on screen", () => {
     const swipe = provisional({ swipeId: 1, sourceFingerprint: "0123456789abcdef" });
     expect(decideTurnApplication(provisional(), swipe, 1, true, true)).toEqual({ kind: "load-turn" });

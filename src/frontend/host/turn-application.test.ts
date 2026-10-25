@@ -111,4 +111,13 @@ describe("applyTurn", () => {
     await flush(30);
     expect(h.sceneImage()).toBe("/api/v1/images/old-scene");
   });
+
+  test("the same reply's text again without a line (Try again after a failed line check) replaces the text on screen", async () => {
+    const h = await open();
+    h.receive({ type: "vn_turn_text", turn: text({ paragraphs: [texts[0]!, "Word count: 312.", texts[2]!] }) });
+    h.receive({ type: "vn_turn_text", turn: text({ paragraphs: [texts[0]!, texts[2]!], paragraphSpeakers: ["", ""] }) });
+    expect(h.text()).toBe(texts[0]!);
+    h.next();
+    expect(h.text()).toBe(texts[2]!);
+  });
 });
