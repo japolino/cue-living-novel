@@ -22,6 +22,7 @@ import {
   type ConnectionOption,
   effectiveImageConnection,
   isNovelAiConnection,
+  novelAiDrawsTransparentSprites,
   readNovelAiParameters,
   parseNovelAiSeed,
   NOVELAI_SEED_MAX,
@@ -228,6 +229,19 @@ describe("NovelAI effective connection & parameters", () => {
     const unresolved = effectiveImageConnection({ status: "ready", options: noDefaultOptions }, null);
     expect(unresolved).toBeNull();
     expect(isNovelAiConnection(unresolved)).toBe(false);
+  });
+
+  test("novelAiDrawsTransparentSprites: only NovelAI V5, by override or connection model", () => {
+    const nai = (model: string): ConnectionOption => ({ id: "n", name: "N", provider: "NovelAI", model, isDefault: true });
+    expect(novelAiDrawsTransparentSprites(nai("nai-diffusion-5-full"), "")).toBe(true);
+    expect(novelAiDrawsTransparentSprites(nai("nai-diffusion-4-5-full"), "")).toBe(false);
+    // The override wins over the connection's model, as on the backend.
+    expect(novelAiDrawsTransparentSprites(nai("nai-diffusion-4-5-full"), " nai-diffusion-5-curated ")).toBe(true);
+    expect(novelAiDrawsTransparentSprites(nai("nai-diffusion-5-full"), "nai-diffusion-4-5-curated")).toBe(false);
+    // No model anywhere: the backend sends V4.5.
+    expect(novelAiDrawsTransparentSprites(nai(""), "")).toBe(false);
+    expect(novelAiDrawsTransparentSprites({ ...nai("nai-diffusion-5-full"), provider: "comfyui" }, "")).toBe(false);
+    expect(novelAiDrawsTransparentSprites(null, "nai-diffusion-5-full")).toBe(false);
   });
 
   test("effectiveImageConnection: resolves explicit selection", () => {

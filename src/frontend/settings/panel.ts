@@ -62,6 +62,7 @@ import {
   snapDimension,
   effectiveImageConnection,
   isNovelAiConnection,
+  novelAiDrawsTransparentSprites,
   readNovelAiParameters,
   NOVELAI_DEFAULT_GUIDANCE,
   NOVELAI_DEFAULT_SAMPLER,
@@ -1790,6 +1791,8 @@ export class VisualNovelSettingsPanel {
     this.root.querySelector<HTMLElement>("[data-novelai-sampling]")!.hidden = !isNovelAi;
     // NovelAI renders sprites and backgrounds at its own sizes (and scenes at the dimensions above).
     this.root.querySelector<HTMLElement>('[data-group-id="sprite-size"]')!.hidden = isNovelAi;
+    // NovelAI V5 sprites arrive transparent and skip the cut-out (one that comes back opaque is still cut).
+    this.root.querySelector<HTMLElement>('[data-group-id="cutout"]')!.hidden = isNovelAi && novelAiDrawsTransparentSprites(effective, config.imageModel);
     if (!isNovelAi) return;
 
     const params = readNovelAiParameters(config.imageParameters);

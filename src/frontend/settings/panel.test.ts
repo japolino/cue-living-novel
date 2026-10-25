@@ -223,6 +223,11 @@ describe("settings panel markup", () => {
     expect(source).toContain("this.root.querySelector<HTMLElement>('[data-group-id=\"sprite-size\"]')!.hidden = isNovelAi;");
   });
 
+  test("sprite cut-out hides for NovelAI V5, whose sprites arrive transparent", () => {
+    expect(source.match(/id: "cutout"/g)).toHaveLength(1);
+    expect(source).toContain("this.root.querySelector<HTMLElement>('[data-group-id=\"cutout\"]')!.hidden = isNovelAi && novelAiDrawsTransparentSprites(effective, config.imageModel);");
+  });
+
   test("expressions per character: one control right after Image size in Advanced, shown only for sprites", () => {
     expect(source.match(/optionList\("spriteExpressionCount"/g)).toHaveLength(1);
     expect(source).toContain('case "spriteExpressionCount": return { spriteExpressionCount: normalizeSpriteExpressionCount(target.value) };');

@@ -41,6 +41,7 @@ import {
   type SpriteSetView,
 } from "../../shared/sprites.js";
 import type { CutoutModelState } from "../sprites/cutout/index.js";
+import { novelAiCapabilities } from "../../shared/novelai-capabilities.js";
 
 /* ------------------------------------------------------------------------ */
 /* Image source: one choice that maps onto two stored flags.                 */
@@ -542,6 +543,17 @@ export function effectiveImageConnection(
 
 export function isNovelAiConnection(connection: ConnectionOption | null): boolean {
   return Boolean(connection && connection.provider.trim().toLowerCase() === "novelai");
+}
+
+/**
+ * NovelAI V5 draws sprites on a real transparent background (the sprite
+ * prompt asks for one), so they keep their own alpha and need no cut-out.
+ * The model is the one the backend sends: the override, else the
+ * connection's model, else NovelAI's V4.5 default.
+ */
+export function novelAiDrawsTransparentSprites(connection: ConnectionOption | null, imageModel: string): boolean {
+  if (!connection || !isNovelAiConnection(connection)) return false;
+  return novelAiCapabilities(imageModel.trim() || connection.model.trim() || "nai-diffusion-4-5-full").alpha;
 }
 
 export type NovelAiSamplerOption = {

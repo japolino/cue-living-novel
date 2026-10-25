@@ -509,6 +509,25 @@ try {
   assert.deepEqual(currentParams.characterTags, ["test_tag"], "unrelated incoming keys preserved");
   assert.equal(currentParams.seed, 12345, "unrelated incoming seed preserved");
 
+  // --- Test 11b: Sprite cut-out hides for NovelAI V5 (its sprites arrive transparent) ---
+  const cutoutHidden = async (connection: { provider: string; model: string }, imageModel: string) => {
+    await page.evaluate(({ connection, imageModel }) => {
+      const f = (window as any).settingsFixture;
+      f.panel.setConnectionCatalog("image", {
+        status: "ready",
+        options: [{ id: "img-default", name: "Image", provider: connection.provider, model: connection.model, isDefault: true }],
+      });
+      f.config = { ...f.config, imageConnectionId: null, imageModel };
+      f.panel.setConfig(f.config);
+    }, { connection, imageModel });
+    return settings.locator('[data-group-id="cutout"]').evaluate((el) => (el as HTMLElement).hidden);
+  };
+  assert.equal(await cutoutHidden({ provider: "novelai", model: "nai-diffusion-4-5-full" }, ""), false, "V4.5 sprites still need the cut-out");
+  assert.equal(await cutoutHidden({ provider: "novelai", model: "nai-diffusion-5-full" }, ""), true, "V5 connection hides the cut-out");
+  assert.equal(await cutoutHidden({ provider: "novelai", model: "nai-diffusion-5-full" }, "nai-diffusion-4-5-full"), false, "a V4.5 model override shows it again");
+  assert.equal(await cutoutHidden({ provider: "novelai", model: "nai-diffusion-4-5-full" }, "nai-diffusion-5-curated"), true, "a V5 model override hides it");
+  assert.equal(await cutoutHidden({ provider: "comfyui", model: "nai-diffusion-5-full" }, ""), false, "other providers keep the cut-out");
+
   // --- Test 12: Network assertion (no paid or external requests) ---
   assert.deepEqual(
     externalRequests,
