@@ -148,7 +148,7 @@ export class SpeechSettingsSection {
       "speak-before-plan",
       settings.speakBeforePlan,
       "Read before the scene is ready",
-      "A reply's text shows before its scene plan. Off: reading starts once the plan says who speaks. On: reading starts at once, with the narrator voice wherever the text does not name the speaker.",
+      "A reply's text shows before its scene plan. Off: reading starts once the plan says who speaks. On: reading starts at once, and a paragraph whose speaker the text does not name is read as narration.",
       (checked) => this.save((next) => { next.speakBeforePlan = checked; }),
     );
     const speechCard = card("Read aloud", enable, muteNarrator, beforePlan);
