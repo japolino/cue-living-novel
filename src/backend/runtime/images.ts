@@ -1239,13 +1239,28 @@ export async function generateAssets(
   }
 }
 
-const CLOTHING_TAG_REGEX = /\b(?:clothes|clothing|attire|outfit|uniform|dress(?:es)?|sundress(?:es)?|skirt(?:s)?|shirt(?:s)?|t-?shirt(?:s)?|tee-?shirt(?:s)?|sweatshirt(?:s)?|blouse(?:s)?|sweater(?:s)?|cardigan(?:s)?|jacket(?:s)?|coat(?:s)?|hoodie(?:s)?|vest(?:s)?|suit(?:s)?|robe(?:s)?|kimono(?:s)?|yukata|hanfu|gi|pants|trousers|jeans|shorts|leggings|tights|pantyhose|socks?|stockings?|shoes?|boots?|sneakers?|heels?|sandals?|gloves?|hat(?:s)?|cap(?:s)?|hood(?:s)?|scarf|scarves|tie(?:s)?|necktie(?:s)?|ribbon(?:s)?|(?:hair\s*)?bows?(?!\s*[-]?\s*(?:shaped|lips|mouth))|collar(?:s)?|apron(?:s)?|swimsuit(?:s)?|bikini(?:s)?|pajamas?|leotard(?:s)?|bodysuit(?:s)?|armor|armour|breastplate(?:s)?|cloak(?:s)?|cape(?:s)?)\b/i;
+const CLOTHING_TAG_REGEX = /\b(?:clothes|clothing|attire|outfit|uniform|dress(?:es)?|sundress(?:es)?|skirt(?:s)?|shirt(?:s)?|t-?shirt(?:s)?|tee-?shirt(?:s)?|sweatshirt(?:s)?|blouse(?:s)?|sweater(?:s)?|cardigan(?:s)?|jacket(?:s)?|coat(?:s)?|hoodie(?:s)?|vest(?:s)?|suit(?:s)?|robe(?:s)?|kimono(?:s)?|yukata|hanfu|gi|pants|trousers|jeans|shorts|leggings|tights|pantyhose|socks?|stockings?|shoes?|boots?|sneakers?|heels?|sandals?|loafers?|flats|slippers?|mary janes|geta|clogs?|gloves?|hat(?:s)?|cap(?:s)?|hood(?:s)?|scarf|scarves|tie(?:s)?|necktie(?:s)?|ribbon(?:s)?|(?:hair\s*)?bows?(?!\s*[-]?\s*(?:shaped|lips|mouth))|collar(?:s)?|apron(?:s)?|swimsuit(?:s)?|bikini(?:s)?|pajamas?|leotard(?:s)?|bodysuit(?:s)?|armor|armour|breastplate(?:s)?|cloak(?:s)?|cape(?:s)?)\b/i;
+
+/** Words for the hair itself (not a hair accessory). */
+const HAIR_TAG_REGEX = /\b(?:hair|haired|twin[- ]?tails?|pig[- ]?tails?|pony[- ]?tails?|side[- ]?tails?|braids?|braided|buns?|bangs|fringe|ahoge|drills?|ringlets|curls|updo)\b/i;
+/** Hair accessories by themselves ("black hair ribbons", "a bow in her hair"): these stay outfit. */
+const HAIR_ACCESSORY_REGEX = /\bhair\s*(?:ribbons?|bows?|ties?|clips?|pins?|bands?|ornaments?|flowers?|accessor(?:y|ies))\b|\b(?:in|on)\s+(?:her|his|their|the)\s+hair\b/gi;
+
+/**
+ * A tag about the hair itself, even when it says what ties it ("red
+ * twin-tails tied with black ribbons"): part of the look, never swapped out
+ * with the outfit, or the hair colour and style go with the ribbons.
+ */
+function isHairTag(normalized: string): boolean {
+  return HAIR_TAG_REGEX.test(normalized.replace(HAIR_ACCESSORY_REGEX, " "));
+}
 
 export function isClothingTag(tag: string): boolean {
   if (/\b(?:bow[- ]shaped|cupid(?:'s)?\s+bow|lips?|mouth)\b/i.test(tag)) {
     return false;
   }
   const normalized = tag.toLowerCase().replace(/_/g, " ");
+  if (isHairTag(normalized)) return false;
   return CLOTHING_TAG_REGEX.test(normalized);
 }
 

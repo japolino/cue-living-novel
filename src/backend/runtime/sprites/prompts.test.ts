@@ -232,6 +232,21 @@ describe("sprite image size (spriteImageSize)", () => {
 });
 
 describe("sprite prompts: NovelAI syntax", () => {
+  test("the outfit swap keeps hair that is tied with ribbons (a set that came out blonde)", () => {
+    const karin = {
+      name: "Akabane Karin",
+      identity: "petite girl, vibrant red twin-tails tied with black ribbons, prominent snaggletooth fang, sailor uniform with white shirt, dark ribbon ties, brown pleated skirt, knee-high white socks, brown loafers",
+      attire: "sailor uniform, white shirt, dark ribbon ties, brown pleated skirt, knee-high white socks, brown loafers",
+      subjectCategory: "female" as const,
+    };
+    const request = compileSpriteRequest({
+      config: config({ imageModel: "nai-diffusion-4-5-full" }), provider: "novelai", member: karin, expression: "idle", seed: 1,
+    });
+    const caption = (request.parameters.characterTags as Array<{ tags: string }>)[0]!.tags;
+    expect(caption).toContain("vibrant red twin-tails tied with black ribbons");
+    expect(caption).toContain("dark ribbon ties");
+  });
+
   test("V4+: character caption, quality tags, NovelAI negative, portrait resolution and seed", () => {
     const request = compileSpriteRequest({
       config: config({ imageModel: "nai-diffusion-4-5-full" }), provider: "novelai", member: mira, expression: "laughing", seed: 77,

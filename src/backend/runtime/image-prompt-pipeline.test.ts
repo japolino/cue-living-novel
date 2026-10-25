@@ -103,6 +103,22 @@ describe("Finding #4: Attire override and permanent identity", () => {
     expect(overridden).not.toContain("pleated_skirt");
   });
 
+  test("keeps the hair when its tag says what ties it; hair accessories alone still go with the outfit", () => {
+    const overridden = applyAttireOverride(
+      "petite girl, vibrant red twin-tails tied with black ribbons, prominent snaggletooth fang, black hair ribbons, white bow in her hair, sailor uniform with white shirt, brown loafers",
+      "sailor uniform, white shirt, brown loafers"
+    );
+    expect(overridden).toContain("vibrant red twin-tails tied with black ribbons");
+    expect(overridden).toContain("prominent snaggletooth fang");
+    expect(overridden).not.toContain("black hair ribbons");
+    expect(overridden).not.toContain("white bow in her hair");
+    expect(overridden).not.toContain("sailor uniform with white shirt");
+    // Loafers are footwear: only the new outfit's pair is left.
+    expect(overridden.match(/brown loafers/g)).toHaveLength(1);
+    expect(applyAttireOverride("girl, long silver hair with a blue bow, ponytail tied with a scrunchie", "kimono"))
+      .toBe("girl, long silver hair with a blue bow, ponytail tied with a scrunchie, kimono");
+  });
+
   test("appends known attire even when base identity is empty", () => {
     const overridden = applyAttireOverride("", "yellow raincoat");
     expect(overridden).toBe("yellow raincoat");
