@@ -143,14 +143,14 @@ function unsafeKey(key: string): boolean {
  * arrays and scalars replace, and a nested `null` is written (only a
  * top-level null or undefined source changes nothing).
  */
-function deepMerge(target: unknown, source: unknown): unknown {
+export function deepMergeRawOverride(target: unknown, source: unknown): unknown {
   if (source === null || source === undefined) return target;
   if (!isObject(source) || !isObject(target)) return source;
   const result: JsonObject = { ...target };
   for (const key of Object.keys(source)) {
     if (unsafeKey(key)) continue;
     const value = source[key];
-    result[key] = isObject(result[key]) && isObject(value) ? deepMerge(result[key], value) : value;
+    result[key] = isObject(result[key]) && isObject(value) ? deepMergeRawOverride(result[key], value) : value;
   }
   return result;
 }
@@ -185,8 +185,8 @@ export function mergeNovelAiRawOverride(
   size: { width: number; height: number },
 ): string {
   let merged: unknown = { parameters: { noise: 0 } };
-  for (const override of userOverrides) merged = deepMerge(merged, parseRawOverride(override));
-  merged = deepMerge(merged, { action: "infill", parameters: { width: size.width, height: size.height, image: canvas.image, mask: canvas.mask } });
+  for (const override of userOverrides) merged = deepMergeRawOverride(merged, parseRawOverride(override));
+  merged = deepMergeRawOverride(merged, { action: "infill", parameters: { width: size.width, height: size.height, image: canvas.image, mask: canvas.mask } });
   return JSON.stringify(merged);
 }
 

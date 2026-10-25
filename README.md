@@ -10,6 +10,8 @@ NovelAI profiles automatically use model-aware prompt formatting. V4+ receives s
 
 Under Advanced, NovelAI has toggles for model-specific quality tags and default negative tags. Custom positive prefixes and edited or empty negatives are preserved. Automatic quality tags are written into the request so they can be inspected; V4.5 Curated includes `rating:general` and reduced feet emphasis. These options do not affect other providers. The Lumiverse NovelAI adapter must also include the accompanying change that honors `qualityToggle: false` and empty negatives.
 
+**Inlay art styles.** With Inlay Illustrator on (a build that shares its styles, testing branch), its art styles appear in Advanced → Image prompts → Preset, under "Inlay art styles". Choosing one copies its prompt and negative into the prompt fields. On NovelAI it also sets the style's steps, guidance and CFG rescale. Inlay shares each user's styles over Lumiverse's shared RPC pool (`inlay_illustrator.artists.<user>`; readers need `image_gen`), and Cue reads the current list each time Settings asks. CFG rescale (NovelAI sampling) goes to NovelAI as `cfg_rescale` in the raw request override, merged over Cue's own override or else the connection's.
+
 - paragraph-by-paragraph reveal with a final acknowledgement gate
 - Previous button and Left Arrow to reread earlier paragraphs in the current reply. Going back pauses Auto and Skip, keeps your response draft, and does not rewind the chat.
 - **Skip** runs to the end of the reply and stops at Your turn. **Auto** stays on across replies: it pauses at Your turn (it never sends anything) and goes on when the next reply arrives.

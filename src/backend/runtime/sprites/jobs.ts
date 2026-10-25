@@ -48,6 +48,7 @@ import {
 import { NovelAiInsetBridge, type NovelAiInsetResultMessage } from "./inset-bridge.js";
 import { compileKeyMomentRequest, type KeyMomentScene } from "./moment-prompts.js";
 import { compileNovelAiInsetRequest, connectionRawOverride, novelAiInsetKey, novelAiInsetModelFor, novelAiInsetRejected, type NovelAiInsetModel } from "./novelai-inset.js";
+import { cfgRescaleOf, cfgRescaleOverride, withNovelAiCfgRescale } from "../novelai-cfg-rescale.js";
 import { compilePlateRequest, compileSpriteRequest, type SpriteImageRequest } from "./prompts.js";
 import { spriteSeedFor, spriteSetSeedFor, spriteStyleKey } from "./style.js";
 import { plateView, resolveSpriteSet, spriteImageView, spriteLibraryView, spriteTurnView, stagingPlateKeys } from "./views.js";
@@ -1230,7 +1231,7 @@ export class SpriteService {
     if (switched.note) this.deps.log?.(`${label}: ${switched.note}`, userId);
     const cut = cutoutSwitchParameters(provider, config.imageParameters, switched.parameters, cutout, switches?.cutout ?? null, switches?.defaults ?? null);
     if (cut.note) this.deps.log?.(`${label}: ${cut.note}`, userId);
-    return cut.parameters;
+    return withNovelAiCfgRescale(cut.parameters, provider, () => connectionRawOverride(this.spindle, config, userId));
   }
 
   private async generateSprite(userId: string | undefined, work: InflightWork & { kind: "sprite" }, signal: AbortSignal): Promise<{ imageId: string; imageUrl: string }> {
@@ -1312,7 +1313,9 @@ export class SpriteService {
     try {
       // The override the plain request would carry: Cue's own replaces the connection's (Lumiverse merges one level deep).
       const own = config.imageParameters.rawRequestOverride;
-      const overrides = [own !== undefined ? own : await connectionRawOverride(this.spindle, config, userId)];
+      const overrides: unknown[] = [own !== undefined ? own : await connectionRawOverride(this.spindle, config, userId)];
+      const cfgRescale = cfgRescaleOf(config.imageParameters);
+      if (cfgRescale !== null) overrides.push(cfgRescaleOverride(cfgRescale));
       insetRequest = compileNovelAiInsetRequest({ request, layout, canvas: composed.canvas, userOverrides: overrides });
     } catch (error) {
       delete work.insetReference;

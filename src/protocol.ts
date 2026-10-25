@@ -1,6 +1,7 @@
 import { CHARACTER_SCOPED_KEYS, isCharacterScopedKey, type CharacterConfigOverride, type CharacterScopedKey, type VisualNovelConfig } from "./config.js";
 import type { PanelArtifact } from "./shared/panels.js";
 import type { CueImageRequest, CueImageResult } from "./shared/cue-images.js";
+import type { InlayStylesStatus } from "./shared/inlay-styles.js";
 import type { NovelAiInsetLayoutId, PixelRect } from "./shared/novelai-inset.js";
 import type { PlateView, SpriteCutMeta, SpriteFaceBox, SpriteImageView, SpriteSetView, SpriteTurnView } from "./shared/sprites.js";
 import type { TouchCharacterRef, TouchCharacterState, TouchLinePack } from "./shared/touch.js";
@@ -28,6 +29,8 @@ export type FrontendRequest =
   | { type: "vn_get_decision_status" }
   /** Show Lumiverse's Connections drawer, where Decision models are set up. */
   | { type: "vn_open_decision_connections" }
+  /** Inlay Illustrator's art styles for the prompt preset list (answered by `vn_inlay_styles`). */
+  | { type: "vn_get_inlay_styles" }
   /**
    * Save settings. Without `character`: the shared settings. With it: the
    * character's own (only CHARACTER_SCOPED_KEYS; a patch with any other key is
@@ -289,6 +292,7 @@ export type BackendResponse =
    */
   | { type: "vn_config"; config: VisualNovelConfig; chatId?: string; characterScope?: CharacterConfigView | null }
   | { type: "vn_decision_status"; status: DecisionStatus }
+  | { type: "vn_inlay_styles"; status: InlayStylesStatus }
   | {
     type: "vn_connection_catalog";
     planner: ConnectionCatalogOption[];

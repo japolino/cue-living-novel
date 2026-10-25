@@ -869,6 +869,8 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   const imageBridge = connectImageBridge(window, chatId, (request) => ctx.sendToBackend(request));
 
   const panels = new PanelDock(stage.panelMount);
+  let inlayStylesRetried = false;
+  let inlayStylesRetry: ReturnType<typeof setTimeout> | null = null;
   const panelRequests = new Map<string, { resolve: (template: string) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   panels.onResolveTemplate = (template) => new Promise((resolve, reject) => {
     const requestId = crypto.randomUUID();
@@ -920,6 +922,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     onRefreshConnections: () => requestConnectionCatalog(),
     onCheckDecisions: () => ctx.sendToBackend({ type: "vn_get_decision_status" }),
     onOpenDecisionConnections: () => ctx.sendToBackend({ type: "vn_open_decision_connections" }),
+    onRefreshInlayStyles: () => ctx.sendToBackend({ type: "vn_get_inlay_styles" }),
     onScanAudio: (directory) => {
       ctx.sendToBackend({ type: "vn_scan_audio", directory });
     },
@@ -1432,6 +1435,15 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       settingsPanel?.setConnectionCatalog("image", states.image);
       return;
     }
+    if (type === "vn_inlay_styles" && message.type === "vn_inlay_styles") {
+      settingsPanel?.setInlayStyles(message.status);
+      // Inlay shares its styles once it has loaded, which can be after Cue: ask once more.
+      if (message.status.state !== "ready" && !inlayStylesRetried && !destroyed) {
+        inlayStylesRetried = true;
+        inlayStylesRetry = setTimeout(() => ctx.sendToBackend({ type: "vn_get_inlay_styles" }), 10_000);
+      }
+      return;
+    }
     if (type === "vn_decision_status" && message.type === "vn_decision_status") {
       const { connections, error } = message.status;
       settingsPanel?.setConnectionCatalog("decision", connections
@@ -1634,6 +1646,10 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
           : decisionStatusMessage({ state: "unavailable", error: message.error }));
         return;
       }
+      if (message.operation === "vn_get_inlay_styles") {
+        settingsPanel?.setInlayStyles({ state: "unavailable", reason: `Could not read Inlay's styles: ${message.error}` });
+        return;
+      }
       if (message.operation === "vn_get_connection_catalog") {
         settingsPanel?.setConnectionCatalog("planner", { status: "error", options: [], error: message.error });
         settingsPanel?.setConnectionCatalog("image", { status: "error", options: [], error: message.error });
@@ -1682,6 +1698,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
 
   requestConnectionCatalog();
   ctx.sendToBackend({ type: "vn_get_decision_status" });
+  ctx.sendToBackend({ type: "vn_get_inlay_styles" });
   requestState({ boot: true });
   ctx.ready();
 
@@ -1689,6 +1706,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     if (destroyed) return;
     deactivate();
     destroyed = true;
+    if (inlayStylesRetry) clearTimeout(inlayStylesRetry);
     unsubBackend();
     unsubAction();
     unsubChat();

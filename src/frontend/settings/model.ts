@@ -580,6 +580,8 @@ export const NOVELAI_STEPS_MIN = 1;
 export const NOVELAI_STEPS_MAX = 50;
 export const NOVELAI_GUIDANCE_MIN = 1;
 export const NOVELAI_GUIDANCE_MAX = 20;
+export const NOVELAI_CFG_RESCALE_MIN = 0;
+export const NOVELAI_CFG_RESCALE_MAX = 1;
 
 export type NovelAiResolutionPresetId = "landscape" | "portrait" | "square" | "custom";
 
@@ -638,6 +640,8 @@ export function buildNovelAiSamplerOptions(currentSampler: string): NovelAiSampl
 export type NovelAiParameters = {
   steps: number;
   guidance: number;
+  /** null = NovelAI's own (0). Cue sends it as `cfg_rescale` in the raw request override. */
+  cfgRescale: number | null;
   sampler: string;
   /** null = random (the provider picks one per image). */
   seed: number | null;
@@ -654,6 +658,12 @@ export const NOVELAI_SEED_MAX = 9007199254740992;
 export function parseNovelAiSeed(value: unknown): number | null {
   const n = typeof value === "string" ? (value.trim() === "" ? NaN : Number(value)) : value;
   return typeof n === "number" && Number.isInteger(n) && n >= 0 && n <= NOVELAI_SEED_MAX ? n : null;
+}
+
+/** A CFG rescale field or stored value; empty or out of range means NovelAI's own (null). */
+export function parseNovelAiCfgRescale(value: unknown): number | null {
+  const n = typeof value === "string" ? (value.trim() === "" ? NaN : Number(value)) : value;
+  return typeof n === "number" && Number.isFinite(n) && n >= NOVELAI_CFG_RESCALE_MIN && n <= NOVELAI_CFG_RESCALE_MAX ? n : null;
 }
 
 export function readNovelAiParameters(params: Record<string, unknown> | undefined | null): NovelAiParameters {
@@ -681,6 +691,7 @@ export function readNovelAiParameters(params: Record<string, unknown> | undefine
   }
 
   const sampler = typeof p.sampler === "string" && p.sampler.trim() ? p.sampler.trim() : NOVELAI_DEFAULT_SAMPLER;
+  const cfgRescale = parseNovelAiCfgRescale(p.cfgRescale);
   const resStr = typeof p.resolution === "string" && p.resolution.trim() ? p.resolution.trim() : NOVELAI_DEFAULT_RESOLUTION;
   const preset = novelAiResolutionPresetFor(resStr);
   const dims = parseDimensions(resStr);
@@ -688,6 +699,7 @@ export function readNovelAiParameters(params: Record<string, unknown> | undefine
   return {
     steps,
     guidance,
+    cfgRescale,
     sampler,
     seed: parseNovelAiSeed(p.seed),
     resolution: resStr,

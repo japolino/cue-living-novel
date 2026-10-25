@@ -44,6 +44,7 @@ import { loadConnectionCatalog } from "./connections.js";
 import { saveTouchBond, touchLinePack, touchStates } from "./touch.js";
 import { normalizeTouchRef } from "../../shared/touch.js";
 import { decisionConnectionStatus, LEGACY_SYSTEM_ONE_KEY } from "./system-one.js";
+import { loadInlayStyles } from "./inlay-styles.js";
 import {
   clearAudioCatalogCache,
   normalizeAudioStoragePrefix,
@@ -1955,6 +1956,10 @@ async function handleFrontendMessage(spindle: SpindleAPI, request: FrontendReque
     case "vn_get_connection_catalog": {
       const catalog = await loadConnectionCatalog(spindle, userId);
       spindle.sendToFrontend({ type: "vn_connection_catalog", ...catalog }, userId);
+      return;
+    }
+    case "vn_get_inlay_styles": {
+      spindle.sendToFrontend({ type: "vn_inlay_styles", status: await loadInlayStyles(spindle, userId) }, userId);
       return;
     }
     case "vn_get_decision_status": {

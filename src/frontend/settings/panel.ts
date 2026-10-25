@@ -69,6 +69,9 @@ import {
   NOVELAI_DEFAULT_STEPS,
   NOVELAI_GUIDANCE_MAX,
   NOVELAI_GUIDANCE_MIN,
+  NOVELAI_CFG_RESCALE_MAX,
+  NOVELAI_CFG_RESCALE_MIN,
+  parseNovelAiCfgRescale,
   NOVELAI_NOTICE,
   NOVELAI_RESOLUTION_PRESETS,
   NOVELAI_SEED_MAX,
@@ -126,6 +129,7 @@ import type { PlateView, SpriteImageView, SpriteSetView } from "../../shared/spr
 import type { CutoutModelState } from "../sprites/cutout/index.js";
 import { TEXT_EFFECT_AUTHOR_GUIDE, TEXT_EFFECT_CATALOGUE } from "../../shared/text-effects.js";
 import { formatDialogueText } from "../stage/rich-text.js";
+import { INLAY_STYLE_OPTION_PREFIX, matchingInlayStyle, type InlayStyle, type InlayStylesStatus } from "../../shared/inlay-styles.js";
 import { applyTextEffects } from "../stage/text-effects.js";
 import { VN_TEXT_EFFECTS_CSS } from "../theme/text-effects-css.js";
 
@@ -168,6 +172,8 @@ export type SettingsPanelOptions = {
   onCheckDecisions?: () => void;
   /** Show Lumiverse's Connections drawer, where Decision models are set up. */
   onOpenDecisionConnections?: () => void;
+  /** Ask the backend for Inlay Illustrator's art styles (the answer comes as `setInlayStyles`). */
+  onRefreshInlayStyles?: () => void;
   onScanAudio?: (directory: string) => Promise<{ bgmCount: number; sfxCount: number } | void> | void;
   /** Import user-picked audio files into the extension's scoped storage. */
   onImportAudio?: (files: readonly File[]) => Promise<void> | void;
@@ -529,6 +535,8 @@ export class VisualNovelSettingsPanel {
   private config: VisualNovelConfig = DEFAULT_CONFIG;
   private drafts = new Set<AdvancedKey>();
   private promptPresets: VisualNovelPromptPreset[] = [];
+  private inlayStyles: InlayStyle[] = [];
+  private inlayStylesAskedAt = 0;
   private statusTimer: ReturnType<typeof setTimeout> | null = null;
   private resetTimer: ReturnType<typeof setTimeout> | null = null;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -930,7 +938,8 @@ export class VisualNovelSettingsPanel {
                   <button type="button" data-preset-save>Save preset</button>
                   <button type="button" data-preset-delete>Delete</button>
                 </div>
-                <small>Choosing a preset fills the fields below. Save preset stores them under the name at once.</small>
+                <small>Choosing a preset fills the fields below. Save preset stores them under the name at once. An Inlay art style also sets NovelAI steps, guidance and CFG rescale when it has them.</small>
+                <div data-actions><small data-inlay-styles-status>Looking for Inlay Illustrator's art styles…</small><button type="button" data-inlay-styles-reload>Reload Inlay styles</button></div>
               </div>
               <div data-row>
                 <label data-field ${find("Positive prefix", "prompt prefix tags")}><span>Positive prefix</span><input name="promptPrefix" type="text" /></label>
@@ -969,6 +978,9 @@ export class VisualNovelSettingsPanel {
                   <span>Seed <small>(empty = random each image)</small></span>
                   <div data-actions style="flex-wrap: nowrap"><input name="novelAiSeed" type="number" inputmode="numeric" min="0" max="${NOVELAI_SEED_MAX}" step="1" placeholder="Random" aria-label="Seed" /><button type="button" data-novelai-random-seed>Random</button></div>
                 </div>
+              </div>
+              <div data-row>
+                <label data-field><span>CFG rescale <small>(empty = NovelAI's 0)</small></span><input name="novelAiCfgRescale" type="number" min="${NOVELAI_CFG_RESCALE_MIN}" max="${NOVELAI_CFG_RESCALE_MAX}" step="0.05" placeholder="0" />${more("Tones down the over-bright, over-saturated look a high guidance gives. Inlay's art styles set it with their steps and guidance.")}</label>
               </div>
             </section>
             ${group("What the story reader sees", `
@@ -1542,6 +1554,11 @@ export class VisualNovelSettingsPanel {
     const presetSelect = this.control<HTMLSelectElement>("promptPresetSelect");
     const presetName = this.control<HTMLInputElement>("promptPresetName");
     presetSelect.addEventListener("change", () => {
+      if (presetSelect.value.startsWith(INLAY_STYLE_OPTION_PREFIX)) {
+        const style = this.inlayStyles.find((candidate) => INLAY_STYLE_OPTION_PREFIX + candidate.id === presetSelect.value);
+        if (style) this.applyInlayStyle(style);
+        return;
+      }
       const preset = this.promptPresets.find((candidate) => candidate.id === presetSelect.value);
       if (!preset) return;
       this.control<HTMLInputElement>("promptPrefix").value = preset.positive;
@@ -1549,6 +1566,11 @@ export class VisualNovelSettingsPanel {
       presetName.value = preset.name;
       this.commitAdvanced(["promptPrefix", "negativePrompt"], `Preset “${preset.name}”`);
     });
+    // A list that came back empty (Inlay not loaded yet) is asked for again when the dropdown is opened.
+    presetSelect.addEventListener("focus", () => {
+      if (this.inlayStyles.length === 0 && Date.now() - this.inlayStylesAskedAt > 5000) this.refreshInlayStyles();
+    });
+    this.root.querySelector("[data-inlay-styles-reload]")?.addEventListener("click", () => this.refreshInlayStyles());
     this.root.querySelector("[data-preset-save]")?.addEventListener("click", () => {
       const name = presetName.value.trim();
       if (!name) {
@@ -1690,6 +1712,7 @@ export class VisualNovelSettingsPanel {
       case "systemOneOn": return { systemOneMode: checked ? "on" : "off" };
       case "novelAiSteps":
       case "novelAiGuidance":
+      case "novelAiCfgRescale":
       case "novelAiSampler":
       case "novelAiSeed":
       case "novelAiResolutionPreset":
@@ -1753,6 +1776,16 @@ export class VisualNovelSettingsPanel {
         const val = clamp(Number(target.value), NOVELAI_GUIDANCE_MIN, NOVELAI_GUIDANCE_MAX, NOVELAI_DEFAULT_GUIDANCE);
         params.guidance = val;
         return { key: "guidance", value: val };
+      }
+      case "novelAiCfgRescale": {
+        const val = parseNovelAiCfgRescale(target.value);
+        if (val === null) {
+          delete params.cfgRescale;
+          target.value = "";
+          return { key: "cfgRescale", value: undefined };
+        }
+        params.cfgRescale = val;
+        return { key: "cfgRescale", value: val };
       }
       case "novelAiSampler": {
         const val = target.value.trim() || NOVELAI_DEFAULT_SAMPLER;
@@ -1821,6 +1854,7 @@ export class VisualNovelSettingsPanel {
     const params = readNovelAiParameters(config.imageParameters);
     this.control<HTMLInputElement>("novelAiSteps").value = String(params.steps);
     this.control<HTMLInputElement>("novelAiGuidance").value = String(params.guidance);
+    this.control<HTMLInputElement>("novelAiCfgRescale").value = params.cfgRescale === null ? "" : String(params.cfgRescale);
 
     const samplerSelect = this.control<HTMLSelectElement>("novelAiSampler");
     const samplerOptions = buildNovelAiSamplerOptions(params.sampler);
@@ -2863,17 +2897,97 @@ export class VisualNovelSettingsPanel {
 
   private renderPromptPresetOptions(selectedId: string): void {
     const select = this.control<HTMLSelectElement>("promptPresetSelect");
-    const options = [
-      { value: "", label: "Custom (no preset)" },
-      ...this.promptPresets.map((preset) => ({ value: preset.id, label: preset.name })),
-    ];
-    select.replaceChildren(...options.map((item) => {
-      const option = document.createElement("option");
-      option.value = item.value;
-      option.textContent = item.label;
-      return option;
-    }));
-    select.value = this.promptPresets.some((preset) => preset.id === selectedId) ? selectedId : "";
+    const option = (value: string, label: string) => {
+      const item = document.createElement("option");
+      item.value = value;
+      item.textContent = label;
+      return item;
+    };
+    const children: HTMLElement[] = [option("", "Custom (no preset)"), ...this.promptPresets.map((preset) => option(preset.id, preset.name))];
+    if (this.inlayStyles.length > 0) {
+      const group = document.createElement("optgroup");
+      group.label = "Inlay art styles";
+      group.append(...this.inlayStyles.map((style) => option(INLAY_STYLE_OPTION_PREFIX + style.id, style.builtIn ? `${style.title} (Inlay built-in)` : style.title)));
+      children.push(group);
+    }
+    select.replaceChildren(...children);
+    // A Cue preset stays picked; otherwise fields that hold an Inlay style show that style.
+    if (this.promptPresets.some((preset) => preset.id === selectedId)) {
+      select.value = selectedId;
+      return;
+    }
+    const matched = matchingInlayStyle(
+      this.inlayStyles,
+      this.control<HTMLInputElement>("promptPrefix").value,
+      this.control<HTMLInputElement>("negativePrompt").value,
+    );
+    select.value = matched ? INLAY_STYLE_OPTION_PREFIX + matched.id : "";
+  }
+
+  private refreshInlayStyles(): void {
+    if (!this.options.onRefreshInlayStyles) return;
+    this.inlayStylesAskedAt = Date.now();
+    this.setInlayStylesLine("Looking for Inlay Illustrator's art styles…");
+    this.options.onRefreshInlayStyles();
+  }
+
+  private setInlayStylesLine(text: string): void {
+    const line = this.root.querySelector<HTMLElement>("[data-inlay-styles-status]");
+    if (line) line.textContent = text;
+  }
+
+  /** Inlay Illustrator's art styles, listed under the prompt presets. */
+  setInlayStyles(status: InlayStylesStatus): void {
+    this.inlayStyles = status.state === "ready" ? status.styles : [];
+    this.renderPromptPresetOptions(this.control<HTMLSelectElement>("promptPresetSelect").value);
+    if (status.state !== "ready") {
+      this.setInlayStylesLine(status.reason);
+      return;
+    }
+    const own = status.styles.filter((style) => !style.builtIn).length;
+    const fallback = status.styles.find((style) => style.id === status.defaultId);
+    this.setInlayStylesLine(status.styles.length === 0
+      ? "Inlay Illustrator has no art styles yet."
+      : `${status.styles.length} Inlay art style${status.styles.length === 1 ? "" : "s"} in the list (${own} of yours)${fallback ? `; Inlay's default is ${fallback.title}` : ""}.`);
+  }
+
+  /**
+   * Fills the prompt fields with an Inlay style and, on NovelAI, its steps,
+   * guidance and CFG rescale: one save, with Undo. An unsaved Image
+   * parameters draft that is not valid JSON keeps the sampling as it is.
+   */
+  private applyInlayStyle(style: InlayStyle): void {
+    this.control<HTMLInputElement>("promptPrefix").value = style.prompt;
+    this.control<HTMLInputElement>("negativePrompt").value = style.negativePrompt;
+    this.control<HTMLInputElement>("promptPresetName").value = style.title;
+    const keys: AdvancedKey[] = ["promptPrefix", "negativePrompt"];
+    const sampling = {
+      ...(style.steps !== undefined ? { steps: style.steps } : {}),
+      ...(style.guidance !== undefined ? { guidance: style.guidance } : {}),
+      ...(style.cfgRescale !== undefined ? { cfgRescale: style.cfgRescale } : {}),
+    };
+    const novelAi = imageSourceFromConfig(this.config) === "generated"
+      && isNovelAiConnection(effectiveImageConnection(this.connectionStates.image, this.config.imageConnectionId));
+    let keptSampling = false;
+    if (novelAi && Object.keys(sampling).length > 0) {
+      const editor = this.control<HTMLTextAreaElement>("imageParameters");
+      let base: Record<string, unknown> | null = { ...(this.config.imageParameters ?? {}), ...this.pendingEverydayFields };
+      if (this.drafts.has("imageParameters")) {
+        try {
+          base = jsonObject(editor.value, "Image parameters");
+        } catch {
+          base = null;
+        }
+      }
+      if (base) {
+        editor.value = JSON.stringify({ ...base, ...sampling }, null, 2);
+        keys.push("imageParameters");
+      } else keptSampling = true;
+    }
+    this.commitAdvanced(keys, `Inlay style “${style.title}”`);
+    if (keys.includes("imageParameters")) this.syncNovelAiControls(this.config, imageSourceFromConfig(this.config));
+    this.renderPromptPresetOptions("");
+    if (keptSampling) this.setStatus("Prompts saved. Image parameters has an unsaved draft that is not valid JSON, so steps and guidance were left as they are.", "error");
   }
 
   destroy(): void {

@@ -7,6 +7,8 @@ import { AssetScheduler } from "../core/asset-scheduler.js";
 import { sceneSizeParameters } from "./image-size.js";
 import { cutoutSwitchParameters, drivesComfyWorkflow, referenceSwitchParameters, resolveComfySwitches } from "./comfy-reference-switch.js";
 import { withOneTransientRetry } from "./image-retry.js";
+import { withNovelAiCfgRescale } from "./novelai-cfg-rescale.js";
+import { connectionRawOverride } from "./sprites/novelai-inset.js";
 import {
   SceneImageCache,
   sceneEpisodeOf,
@@ -1112,12 +1114,12 @@ export async function generateAssets(
           const { connectionId, workflowId } = splitConnectionSelection(config.imageConnectionId);
           // Scene pictures are wide on the stage: send a landscape size
           // unless the user's image parameters already set one.
-          const effectiveParameters = {
+          const effectiveParameters = await withNovelAiCfgRescale({
             ...sceneSizeParameters(provider, config),
             ...parameters,
             ...(nai?.parameters ?? {}),
             ...(workflowId ? { workflow_id: workflowId } : {})
-          };
+          }, provider, () => connectionRawOverride(spindle, config, userId));
           // Relay/capture waits and storage operations can outlive cancellation.
           // Never start paid work after either the batch or job was cancelled.
           if (signal.aborted) throw abortError(signal);

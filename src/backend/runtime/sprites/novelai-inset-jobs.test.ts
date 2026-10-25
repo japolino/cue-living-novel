@@ -202,6 +202,19 @@ describe("NovelAI V5 inset: sprite expressions", () => {
     });
   });
 
+  test("CFG rescale (Image parameters, Inlay styles) goes into the raw override of the idle and the inset", async () => {
+    const connection = { rawRequestOverride: JSON.stringify({ parameters: { steps: 14 } }) };
+    const f = setup({ defaultParameters: connection, config: { imageConnectionId: "conn-1", imageParameters: { cfgRescale: 0.3 } } });
+    await f.service.prepareCast("u1", [MIRA], f.config);
+    await f.drive(f.allSettled);
+    const idle = f.calls[0]!.parameters;
+    expect(idle.cfgRescale).toBeUndefined();
+    expect(JSON.parse(idle.rawRequestOverride as string)).toEqual({ parameters: { steps: 14, cfg_rescale: 0.3 } });
+    const inset = f.calls.find(inpainting)!.parameters;
+    expect(inset.cfgRescale).toBeUndefined();
+    expect(JSON.parse(inset.rawRequestOverride as string)).toMatchObject({ action: "infill", parameters: { noise: 0, steps: 14, cfg_rescale: 0.3 } });
+  });
+
   test("an invalid user override skips the inset (plain expression)", async () => {
     const f = setup({ config: { imageParameters: { rawRequestOverride: "{oops" } } });
     await f.service.prepareCast("u1", [MIRA], f.config);

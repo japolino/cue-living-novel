@@ -528,6 +528,79 @@ try {
   assert.equal(await cutoutHidden({ provider: "novelai", model: "nai-diffusion-4-5-full" }, "nai-diffusion-5-curated"), true, "a V5 model override hides it");
   assert.equal(await cutoutHidden({ provider: "comfyui", model: "nai-diffusion-5-full" }, ""), false, "other providers keep the cut-out");
 
+  // --- Test 11E: Inlay art styles in the prompt preset list; CFG rescale ---
+  await page.evaluate(() => {
+    const f = (window as any).settingsFixture;
+    f.panel.setConnectionCatalog("image", {
+      status: "ready",
+      options: [{ id: "nai-default", name: "NovelAI", provider: "novelai", model: "nai-diffusion-4-5-full", isDefault: true }],
+    });
+    f.config = { ...f.config, imageConnectionId: null, imageModel: "", imageParameters: { steps: 28, seed: 4242, guidance: 5 } };
+    f.panel.setConfig(f.config);
+    f.inlayRefreshes = 0;
+    f.panel.options.onRefreshInlayStyles = () => { f.inlayRefreshes += 1; };
+  });
+  await advancedTab.click();
+  const presetSelect = settings.locator('select[name="promptPresetSelect"]');
+  const inlayLine = settings.locator("[data-inlay-styles-status]");
+  const STYLES = {
+    state: "ready",
+    defaultId: "artist_b",
+    styles: [
+      { id: "artist_b", title: "Korean Sharp Eyes", prompt: "2.0::artist:chamchami ::, year 2025", negativePrompt: "text, logo", steps: 20, guidance: 6, cfgRescale: 0.3, builtIn: false },
+      { id: "detail", title: "Detail anime", prompt: "detail anime", negativePrompt: "lowres", builtIn: true },
+    ],
+  };
+  await page.evaluate((status) => (window as any).settingsFixture.panel.setInlayStyles(status), STYLES);
+  assert.deepEqual(
+    await presetSelect.locator('optgroup[label="Inlay art styles"] option').allInnerTexts(),
+    ["Korean Sharp Eyes", "Detail anime (Inlay built-in)"],
+    "Inlay styles listed under the presets",
+  );
+  assert.match(await inlayLine.innerText(), /2 Inlay art styles in the list \(1 of yours\); Inlay's default is Korean Sharp Eyes/);
+
+  await presetSelect.selectOption("inlay:artist_b");
+  patch = await lastPatch(page);
+  assert.equal(patch?.promptPrefix, "2.0::artist:chamchami ::, year 2025");
+  assert.equal(patch?.negativePrompt, "text, logo");
+  assert.deepEqual(patch?.imageParameters, { steps: 20, seed: 4242, guidance: 6, cfgRescale: 0.3 }, "the style's sampling, the rest kept");
+  assert.equal(await settings.locator('input[name="novelAiSteps"]').inputValue(), "20");
+  assert.equal(await settings.locator('input[name="novelAiCfgRescale"]').inputValue(), "0.3");
+  assert.equal(await presetSelect.inputValue(), "inlay:artist_b", "the style stays picked after the save");
+  assert.match(await settings.locator("[data-undo-text]").innerText(), /Inlay style “Korean Sharp Eyes” saved/);
+
+  // CFG rescale: emptied, it goes back to NovelAI's own.
+  const cfgInput = settings.locator('input[name="novelAiCfgRescale"]');
+  await cfgInput.fill("");
+  await cfgInput.press("Tab");
+  patch = await lastPatch(page);
+  assert.equal("cfgRescale" in ((patch?.imageParameters as Record<string, unknown>) ?? {}), false, "empty CFG rescale is dropped");
+  await cfgInput.fill("0.25");
+  await cfgInput.press("Tab");
+  assert.equal(((await lastPatch(page))?.imageParameters as any)?.cfgRescale, 0.25);
+
+  // Not NovelAI: only the prompts.
+  await page.evaluate(() => {
+    const f = (window as any).settingsFixture;
+    f.panel.setConnectionCatalog("image", {
+      status: "ready",
+      options: [{ id: "comfy-default", name: "ComfyUI", provider: "comfyui", model: "anima", isDefault: true }],
+    });
+    f.panel.setConfig(f.config);
+  });
+  await presetSelect.selectOption("inlay:detail");
+  patch = await lastPatch(page);
+  assert.equal(patch?.promptPrefix, "detail anime");
+  assert.equal("imageParameters" in (patch ?? {}), false, "no sampling change off NovelAI");
+
+  // Inlay not sharing: the list goes, the line says why, Reload asks again.
+  await page.evaluate(() => (window as any).settingsFixture.panel.setInlayStyles({ state: "unavailable", reason: "Inlay isn't sharing art styles." }));
+  assert.equal(await presetSelect.locator("optgroup").count(), 0);
+  assert.equal(await inlayLine.innerText(), "Inlay isn't sharing art styles.");
+  await settings.locator("[data-inlay-styles-reload]").click();
+  assert.equal(await page.evaluate(() => (window as any).settingsFixture.inlayRefreshes), 1);
+  await page.screenshot({ path: ".cache/novelai-controls/inlay-styles.png", fullPage: true });
+
   // --- Test 12: Network assertion (no paid or external requests) ---
   assert.deepEqual(
     externalRequests,
