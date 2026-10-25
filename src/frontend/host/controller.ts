@@ -1,5 +1,5 @@
 import type { SpindleFrontendContext } from "lumiverse-spindle-types";
-import { spritePuppetSettings, stageFeelSettings, textEffectModeFor, type VisualNovelConfig, type VisualNovelEffectIntensity, type VisualNovelPresentationMode, type VisualNovelSpritePuppet, type VisualNovelStageFeel, type VisualNovelTextEffectMode } from "../../config.js";
+import { spritePuppetSettings, spriteSizeMatchSettings, stageFeelSettings, textEffectModeFor, type VisualNovelConfig, type VisualNovelEffectIntensity, type VisualNovelPresentationMode, type VisualNovelSpritePuppet, type VisualNovelSpriteSizeMatch, type VisualNovelStageFeel, type VisualNovelTextEffectMode } from "../../config.js";
 import { REFERENCE_IMAGE_MAX_BYTES, REFERENCE_IMAGE_MIMES } from "../../protocol.js";
 import type { AssetView, BackendResponse, ConnectionCatalogOption, FrontendRequest, TurnView } from "../../protocol.js";
 import { AudioEngine, VnStage, isAmbientEffect, isStageEffect, type VnReadingFlow } from "../stage/index.js";
@@ -430,6 +430,8 @@ export type VisualStageThemeTarget = Pick<
   setPresentationMode?: (mode: VisualNovelPresentationMode) => void;
   /** Sprite puppet motion, outline and focus blur. */
   setSpritePuppet?: (settings: VisualNovelSpritePuppet) => void;
+  /** Sprite size matching: every face at one size. */
+  setSpriteSizeMatch?: (settings: VisualNovelSpriteSizeMatch) => void;
   /** How a reply opens, waits and ends (opening card, location label, waiting screen, playback). */
   setReadingFlow?: (flow: VnReadingFlow) => void;
   /** Click sparks, press-to-bounce, interface sounds and extra inner voices. */
@@ -472,6 +474,7 @@ export function applyVisualConfigToStage(
   stage.setTextEffects?.(textEffectModeFor(config.effectIntensity));
   stage.setPresentationMode?.(config.presentationMode);
   stage.setSpritePuppet?.(spritePuppetSettings(config));
+  stage.setSpriteSizeMatch?.(spriteSizeMatchSettings(config));
   stage.setReadingFlow?.(readingFlowSettings(config));
   stage.setStageFeel?.(stageFeelSettings(config));
 }

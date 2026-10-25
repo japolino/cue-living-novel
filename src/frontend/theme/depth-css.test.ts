@@ -95,7 +95,7 @@ describe("sprite grounding and rim light", () => {
   });
   test("narrow portrait trio: speaker whole and in front, others smaller", () => {
     const portrait = VN_SPRITE_CSS.slice(VN_SPRITE_CSS.indexOf("@media (orientation: portrait)"));
-    expect(portrait).toContain("left: var(--vn-sprite-xn, var(--vn-sprite-x, 50%));");
+    expect(portrait).toContain("left: calc(var(--vn-sprite-xn, var(--vn-sprite-x, 50%)) + var(--vn-sprite-shift-px));");
     expect(portrait).toMatch(/\[data-vn-sprite-dim="true"\] \{\s*scale: 0\.8;/);
     expect(portrait).toMatch(/\[data-vn-sprite-focus="true"\] \{\s*left: clamp\(/);
   });

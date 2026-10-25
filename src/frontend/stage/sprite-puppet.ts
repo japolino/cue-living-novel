@@ -1078,7 +1078,7 @@ export class SpritePuppet {
       return;
     }
     const radius = this.outlineRadius(state, img);
-    const key = `${image.url}|${radius}`;
+    const key = `${image.url}|${radius}|${radius > 0 ? this.settings.spriteOutlineColor : ""}`;
     if (state.actor.mode === "gl") {
       if (state.sourceKey === key && this.textures.has(key)) return;
       if (!this.texture(key, img, radius)) {
@@ -1161,7 +1161,7 @@ export class SpritePuppet {
       this.bakes.set(key, cached);
       return cached;
     }
-    const baked = bakeSpriteOutline(img, img.naturalWidth, img.naturalHeight, radius);
+    const baked = bakeSpriteOutline(img, img.naturalWidth, img.naturalHeight, radius, document, this.settings.spriteOutlineColor);
     if (!baked) return null;
     this.bakes.set(key, baked);
     while (this.bakes.size > BAKE_CACHE) {

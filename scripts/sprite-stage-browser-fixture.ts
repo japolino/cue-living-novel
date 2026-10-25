@@ -1,7 +1,7 @@
 import { VnStage } from "../src/frontend/stage/vn-stage.js";
 import type { VnTurnInput } from "../src/frontend/store/vn-store.js";
 import { puppetGlOptions } from "../src/frontend/stage/sprite-puppet.js";
-import { DEFAULT_CONFIG, spritePuppetSettings, stageFeelSettings, type VisualNovelSpritePuppet, type VisualNovelStageFeel } from "../src/config.js";
+import { DEFAULT_CONFIG, spritePuppetSettings, spriteSizeMatchSettings, stageFeelSettings, type VisualNovelSpritePuppet, type VisualNovelSpriteSizeMatch, type VisualNovelStageFeel } from "../src/config.js";
 import {
   SPRITE_HOT_SET,
   type PlateView,
@@ -22,7 +22,7 @@ import {
  * ?puppet=css (no WebGL puppet: the CSS fallback), ?outline (px),
  * ?scale=auto (the puppet's adaptive render scale; pinned at 1 otherwise, so
  * canvas sizes don't change under the pixel checks).
- * window.fx: { stage, load(paragraphs, options), plan(), go(index), illustrate(index, status), ready(...), view(), effect(name), ambient(name), puppet(settings), feel(settings), renderScale(scale | null) }.
+ * window.fx: { stage, load(paragraphs, options), plan(), go(index), illustrate(index, status), ready(...), view(), effect(name), ambient(name), puppet(settings), feel(settings), sizeMatch(settings), renderScale(scale | null) }.
  * `load(paragraphs, { provisional: true })` shows the text before its plan (no
  * nameplates, no staging); `plan()` lands the plan (VnStage.upgradeTurn).
  * Headless Chromium only has software WebGL (SwiftShader), which the puppet
@@ -138,6 +138,8 @@ const puppet = (settings: Partial<VisualNovelSpritePuppet>) => stage.setSpritePu
 if (q.get("outline")) puppet({ spriteOutline: Number(q.get("outline")) });
 /** Click sparks, press-to-bounce, interface sounds and inner voices (scripts/test-stage-feel-browser.ts). */
 const feel = (settings: Partial<VisualNovelStageFeel>) => stage.setStageFeel({ ...stageFeelSettings(DEFAULT_CONFIG), ...settings });
+/** Size matching (scripts/test-sprite-size-browser.ts); the defaults apply until it is called. */
+const sizeMatch = (settings: Partial<VisualNovelSpriteSizeMatch>) => stage.setSpriteSizeMatch({ ...spriteSizeMatchSettings(DEFAULT_CONFIG), ...settings });
 
 let current: SpriteTurnView | null = null;
 let turnCounter = 0;
@@ -224,6 +226,7 @@ Object.assign(window, {
     ambient: (name: string | null) => stage.applyAmbient(name as never),
     puppet,
     feel,
+    sizeMatch,
     /** Pin the puppet's render scale (null: adaptive). */
     renderScale: (scale: number | null) => { puppetGlOptions.renderScale = scale; },
   },

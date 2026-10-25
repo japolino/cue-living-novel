@@ -67,8 +67,9 @@ export const KEY_ILLUSTRATION_CAP: Readonly<Record<VisualNovelKeyIllustrations, 
  * Sprite mode only: PNG-puppet motion of the cut-outs (docs/SPRITE_MODE.md,
  * "Puppet motion"). `spriteMotion` is the strength in percent (0 = still,
  * 100 = default, up to SPRITE_MOTION_MAX); breathing, body sway and head
- * movement switch on and off separately. `spriteOutline` is a white sticker
- * outline in px (0 = none). `spriteFocusBlur` blurs the characters who are
+ * movement switch on and off separately. `spriteOutline` is a sticker
+ * outline in px (0 = none), in `spriteOutlineColor` (white by default).
+ * `spriteFocusBlur` blurs the characters who are
  * not speaking a little. `spriteActing` (off by default) lets the body carry
  * the mood, the speaker's head follow the typed words and the others look at
  * whoever speaks ("Puppet acting"); `spritePhysics` lets hair and loose clothes
@@ -82,11 +83,32 @@ export const KEY_ILLUSTRATION_CAP: Readonly<Record<VisualNovelKeyIllustrations, 
  */
 export const SPRITE_MOTION_MAX = 150;
 export const SPRITE_OUTLINE_MAX = 6;
+/** The sticker outline's default colour. */
+export const SPRITE_OUTLINE_COLOR_DEFAULT = "#ffffff";
 export const SPRITE_TRANSITION_STYLES = ["expressive", "soft", "classic"] as const;
 export type VisualNovelSpriteTransitions = (typeof SPRITE_TRANSITION_STYLES)[number];
 export type VisualNovelSpritePuppet = Pick<VisualNovelConfig,
   "spriteMotion" | "spriteBreathing" | "spriteSway" | "spriteHeadMotion" | "spriteActing" | "spritePhysics" | "spriteOutline" | "spriteFocusBlur"
-  | "spriteTransitions" | "spriteAtmosphere">;
+  | "spriteTransitions" | "spriteAtmosphere" | "spriteOutlineColor">;
+/**
+ * Sprite mode: every character's face drawn at the same size
+ * (docs/SPRITE_MODE.md, "Size matching"), from the detected face box (or the
+ * framing estimate). "heights" keeps their feet on the floor, so height
+ * differences show; "heads" also lowers the taller ones until every face top
+ * is on one line; "off" sizes each figure by its own height, as before.
+ * `spriteSizeMatchFace` is the face height in percent of a standing figure's
+ * height; `spriteSizeMatchMax` / `-Min` limit the zoom in percent of the
+ * unmatched size; `spriteSizeMatchCenter` moves the face toward the slot
+ * centre (percent of the way).
+ */
+export const SPRITE_SIZE_MATCH_MODES = ["heights", "heads", "off"] as const;
+export type VisualNovelSpriteSizeMatchMode = (typeof SPRITE_SIZE_MATCH_MODES)[number];
+export const SPRITE_SIZE_MATCH_FACE_MIN = 5;
+export const SPRITE_SIZE_MATCH_FACE_MAX = 30;
+export const SPRITE_SIZE_MATCH_MAX_RANGE = [100, 250] as const;
+export const SPRITE_SIZE_MATCH_MIN_RANGE = [30, 100] as const;
+export type VisualNovelSpriteSizeMatch = Pick<VisualNovelConfig,
+  "spriteSizeMatch" | "spriteSizeMatchFace" | "spriteSizeMatchMax" | "spriteSizeMatchMin" | "spriteSizeMatchCenter">;
 /**
  * How the stage answers the reader's hand (VnStage.setStageFeel): click
  * sparks, pressing a sprite to make it bounce, the interface sounds (typing
@@ -253,8 +275,10 @@ export type VisualNovelConfig = {
   spriteActing: boolean;
   /** Sprite mode: hair and loose clothes trail, overshoot and settle; wind makes them flutter. */
   spritePhysics: boolean;
-  /** Sprite mode: white sticker outline width in px (0 = none, up to SPRITE_OUTLINE_MAX). */
+  /** Sprite mode: sticker outline width in px (0 = none, up to SPRITE_OUTLINE_MAX). */
   spriteOutline: number;
+  /** Sprite mode: the sticker outline's colour, "#rrggbb". */
+  spriteOutlineColor: string;
   /** Sprite mode: blur the characters who are not speaking a little. */
   spriteFocusBlur: boolean;
   /** Sprite mode: how expression changes, entrances and exits play (SPRITE_TRANSITION_STYLES). */
@@ -271,6 +295,16 @@ export type VisualNovelConfig = {
   interfaceSoundVolume: number;
   /** More inner-voice names (comma separated): their lines dim everyone and light the screen edges. */
   innerVoices: string;
+  /** Sprite mode: draw every face at the same size (SPRITE_SIZE_MATCH_MODES). */
+  spriteSizeMatch: VisualNovelSpriteSizeMatchMode;
+  /** Sprite mode, size matching: face height in percent of a standing figure's height. */
+  spriteSizeMatchFace: number;
+  /** Sprite mode, size matching: largest zoom, percent of the unmatched size. */
+  spriteSizeMatchMax: number;
+  /** Sprite mode, size matching: smallest zoom, percent of the unmatched size. */
+  spriteSizeMatchMin: number;
+  /** Sprite mode, size matching: how far the face moves to the slot centre, percent. */
+  spriteSizeMatchCenter: number;
   /** Dialogue text size multiplier, 1 = the theme's own size. */
   textScale: number;
   audioDirectory: string;
@@ -351,6 +385,7 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   spriteActing: false,
   spritePhysics: true,
   spriteOutline: 0,
+  spriteOutlineColor: SPRITE_OUTLINE_COLOR_DEFAULT,
   spriteFocusBlur: true,
   spriteTransitions: "expressive",
   spriteAtmosphere: true,
@@ -359,6 +394,11 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   interfaceSounds: false,
   interfaceSoundVolume: 0.4,
   innerVoices: "",
+  spriteSizeMatch: "heights",
+  spriteSizeMatchFace: 15,
+  spriteSizeMatchMax: 160,
+  spriteSizeMatchMin: 60,
+  spriteSizeMatchCenter: 100,
   textScale: 1,
   audioDirectory: "",
   bgmVolume: 0.7,
@@ -514,7 +554,28 @@ export function spritePuppetSettings(config: VisualNovelSpritePuppet): VisualNov
     spriteFocusBlur: config.spriteFocusBlur,
     spriteTransitions: config.spriteTransitions,
     spriteAtmosphere: config.spriteAtmosphere,
+    spriteOutlineColor: config.spriteOutlineColor,
   };
+}
+
+/** The size matching settings of a config (what the sprite layer needs). */
+export function spriteSizeMatchSettings(config: VisualNovelSpriteSizeMatch): VisualNovelSpriteSizeMatch {
+  return {
+    spriteSizeMatch: config.spriteSizeMatch,
+    spriteSizeMatchFace: config.spriteSizeMatchFace,
+    spriteSizeMatchMax: config.spriteSizeMatchMax,
+    spriteSizeMatchMin: config.spriteSizeMatchMin,
+    spriteSizeMatchCenter: config.spriteSizeMatchCenter,
+  };
+}
+
+/** A "#rrggbb" colour (lower case; "#rgb" is widened), or the default outline colour. */
+export function normalizeOutlineColor(value: unknown): string {
+  if (typeof value !== "string") return SPRITE_OUTLINE_COLOR_DEFAULT;
+  const text = value.trim().toLowerCase();
+  if (/^#[0-9a-f]{6}$/.test(text)) return text;
+  if (/^#[0-9a-f]{3}$/.test(text)) return `#${text[1]}${text[1]}${text[2]}${text[2]}${text[3]}${text[3]}`;
+  return SPRITE_OUTLINE_COLOR_DEFAULT;
 }
 
 export function normalizeSpriteTransitions(value: unknown): VisualNovelSpriteTransitions {
@@ -624,6 +685,7 @@ export function normalizeConfig(value: unknown): VisualNovelConfig {
     spriteActing: bool(input.spriteActing, DEFAULT_CONFIG.spriteActing),
     spritePhysics: bool(input.spritePhysics, DEFAULT_CONFIG.spritePhysics),
     spriteOutline: integer(input.spriteOutline, 0, SPRITE_OUTLINE_MAX, DEFAULT_CONFIG.spriteOutline),
+    spriteOutlineColor: normalizeOutlineColor(input.spriteOutlineColor),
     spriteFocusBlur: bool(input.spriteFocusBlur, DEFAULT_CONFIG.spriteFocusBlur),
     spriteTransitions: normalizeSpriteTransitions(input.spriteTransitions),
     spriteAtmosphere: bool(input.spriteAtmosphere, DEFAULT_CONFIG.spriteAtmosphere),
@@ -634,6 +696,11 @@ export function normalizeConfig(value: unknown): VisualNovelConfig {
     interfaceSounds: bool(input.interfaceSounds, DEFAULT_CONFIG.interfaceSounds),
     interfaceSoundVolume: Math.round(floatBetween(input.interfaceSoundVolume, 0, 1, DEFAULT_CONFIG.interfaceSoundVolume) * 100) / 100,
     innerVoices: stringValue(input.innerVoices, DEFAULT_CONFIG.innerVoices).slice(0, 2000),
+    spriteSizeMatch: oneOf(input.spriteSizeMatch, SPRITE_SIZE_MATCH_MODES, DEFAULT_CONFIG.spriteSizeMatch),
+    spriteSizeMatchFace: Math.round(floatBetween(input.spriteSizeMatchFace, SPRITE_SIZE_MATCH_FACE_MIN, SPRITE_SIZE_MATCH_FACE_MAX, DEFAULT_CONFIG.spriteSizeMatchFace) * 2) / 2,
+    spriteSizeMatchMax: integer(input.spriteSizeMatchMax, SPRITE_SIZE_MATCH_MAX_RANGE[0], SPRITE_SIZE_MATCH_MAX_RANGE[1], DEFAULT_CONFIG.spriteSizeMatchMax),
+    spriteSizeMatchMin: integer(input.spriteSizeMatchMin, SPRITE_SIZE_MATCH_MIN_RANGE[0], SPRITE_SIZE_MATCH_MIN_RANGE[1], DEFAULT_CONFIG.spriteSizeMatchMin),
+    spriteSizeMatchCenter: integer(input.spriteSizeMatchCenter, 0, 100, DEFAULT_CONFIG.spriteSizeMatchCenter),
     textScale: textScale(input.textScale),
     audioDirectory: stringValue(input.audioDirectory, DEFAULT_CONFIG.audioDirectory).trim(),
     bgmVolume: floatBetween(input.bgmVolume, 0, 1, DEFAULT_CONFIG.bgmVolume),

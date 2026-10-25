@@ -1,8 +1,9 @@
 /**
- * White sticker outline for cut-out sprites (docs/SPRITE_MODE.md, "Puppet
- * motion"), baked once per image and radius into a canvas the size of the
- * image: the alpha is thresholded first (faint haze around a cut-out must not
- * grow into a halo), the white silhouette is drawn around a few rings of
+ * Sticker outline for cut-out sprites (docs/SPRITE_MODE.md, "Puppet
+ * motion"), baked once per image, radius and colour (white by default,
+ * config `spriteOutlineColor`) into a canvas the size of the image: the alpha
+ * is thresholded first (faint haze around a cut-out must not grow into a
+ * halo), the coloured silhouette is drawn around a few rings of
  * offsets (a dilation), and the original is drawn on top. The stage then
  * shows the canvas (or uploads it as the puppet texture); there is no
  * per-frame CSS drop-shadow.
@@ -27,14 +28,22 @@ export function outlineOffsets(radius: number): Array<[number, number]> {
   return offsets;
 }
 
-/** Threshold an RGBA buffer into a white silhouette in place (see OUTLINE_ALPHA_LOW/HIGH). */
-export function silhouetteInPlace(rgba: Uint8ClampedArray): void {
+/** "#rrggbb" as [r, g, b] (white for anything else). */
+export function outlineRgb(color: string): [number, number, number] {
+  const match = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(color.trim());
+  if (!match) return [255, 255, 255];
+  return [parseInt(match[1]!, 16), parseInt(match[2]!, 16), parseInt(match[3]!, 16)];
+}
+
+/** Threshold an RGBA buffer into a silhouette of one colour in place (see OUTLINE_ALPHA_LOW/HIGH). */
+export function silhouetteInPlace(rgba: Uint8ClampedArray, rgb: readonly [number, number, number] = [255, 255, 255]): void {
   const span = OUTLINE_ALPHA_HIGH - OUTLINE_ALPHA_LOW;
+  const [red, green, blue] = rgb;
   for (let i = 0; i < rgba.length; i += 4) {
     const alpha = rgba[i + 3]!;
-    rgba[i] = 255;
-    rgba[i + 1] = 255;
-    rgba[i + 2] = 255;
+    rgba[i] = red;
+    rgba[i + 1] = green;
+    rgba[i + 2] = blue;
     rgba[i + 3] = alpha <= OUTLINE_ALPHA_LOW ? 0 : alpha >= OUTLINE_ALPHA_HIGH ? 255 : Math.round(((alpha - OUTLINE_ALPHA_LOW) / span) * 255);
   }
 }
@@ -53,12 +62,12 @@ const canvas2d = (doc: Document, width: number, height: number, readback = false
 };
 
 /**
- * The image with a white outline of `radius` image pixels, as a canvas of
+ * The image with an outline of `radius` image pixels in `color` ("#rrggbb"), as a canvas of
  * the image's size; null when canvases are not available. A cross-origin
  * image without CORS cannot be read back: its silhouette is then not
  * thresholded and fewer offsets are used, so haze stays faint.
  */
-export function bakeSpriteOutline(source: CanvasImageSource, width: number, height: number, radius: number, doc: Document = document): HTMLCanvasElement | null {
+export function bakeSpriteOutline(source: CanvasImageSource, width: number, height: number, radius: number, doc: Document = document, color = "#ffffff"): HTMLCanvasElement | null {
   if (!(width > 0 && height > 0)) return null;
   const silhouette = canvas2d(doc, width, height, true);
   const out = canvas2d(doc, width, height);
@@ -69,11 +78,11 @@ export function bakeSpriteOutline(source: CanvasImageSource, width: number, heig
   let offsets = outlineOffsets(radius);
   try {
     const pixels = sil.getImageData(0, 0, width, height);
-    silhouetteInPlace(pixels.data);
+    silhouetteInPlace(pixels.data, outlineRgb(color));
     sil.putImageData(pixels, 0, 0);
   } catch {
     sil.globalCompositeOperation = "source-in";
-    sil.fillStyle = "#fff";
+    sil.fillStyle = color;
     sil.fillRect(0, 0, width, height);
     offsets = offsets.filter((_, i) => i % 4 === 0);
   }

@@ -4,7 +4,13 @@ import {
   textEffectModeFor,
   SPRITE_MOTION_MAX,
   SPRITE_OUTLINE_MAX,
+  SPRITE_SIZE_MATCH_FACE_MAX,
+  SPRITE_SIZE_MATCH_FACE_MIN,
+  SPRITE_SIZE_MATCH_MAX_RANGE,
+  SPRITE_SIZE_MATCH_MIN_RANGE,
+  normalizeOutlineColor,
   normalizeSpriteTransitions,
+  spriteSizeMatchSettings,
   type VisualNovelConfig,
   type VisualNovelPromptPreset,
 } from "../../config.js";
@@ -19,6 +25,10 @@ import {
   SCENE_IMAGE_FIT_OPTIONS,
   SETUP_DONE_KEY,
   SPRITE_TRANSITION_OPTIONS,
+  SPRITE_SIZE_MATCH_HELP,
+  SPRITE_SIZE_MATCH_OPTIONS,
+  describePercent,
+  normalizeSpriteSizeMatch,
   TEXT_SCALE_MAX,
   TEXT_SCALE_MIN,
   TEXT_SCALE_STEPS,
@@ -681,8 +691,20 @@ export class VisualNovelSettingsPanel {
               `, { id: "sprite-motion", help: esc(SPRITE_MOTION_HELP), find: find("Character motion", "sprites puppet png motion breathing sway head speaker nod bounce press") })}
               ${group("Character look", `
                 <label data-field ${find("Sticker outline", "sprites outline border white sticker stroke edge")}><span>Sticker outline <span data-sprite-outline-val>Off</span></span><input name="spriteOutline" type="range" min="0" max="${SPRITE_OUTLINE_MAX}" step="1" /></label>
+                <label data-field ${find("Outline colour", "sprites outline color colour border sticker stroke black white")}><span>Outline colour <span data-sprite-outline-color-val>#ffffff</span></span><input name="spriteOutlineColor" type="color" /></label>
                 <label data-check ${find("Blur others", "sprites focus speaker dim blur depth")}><input name="spriteFocusBlur" type="checkbox" /><span>Blur characters who are not speaking<small>The speaker steps forward a little; the others are dimmed.</small></span></label>
-              `, { id: "sprite-look", find: find("Character look", "sprites outline sticker focus speaker dim blur") })}
+              `, { id: "sprite-look", find: find("Character look", "sprites outline sticker colour color focus speaker dim blur") })}
+              ${group("Character size", `
+                <fieldset ${find("Match face sizes", "sprites size face head height match same scale zoom normalize full body waist")}>
+                  <legend>Match face sizes</legend>
+                  ${optionList("spriteSizeMatch", SPRITE_SIZE_MATCH_OPTIONS)}
+                </fieldset>
+                <label data-field ${find("Face size", "sprites face size head share height")}><span>Face size <span data-size-face-val>15%</span></span><input name="spriteSizeMatchFace" type="range" min="${SPRITE_SIZE_MATCH_FACE_MIN}" max="${SPRITE_SIZE_MATCH_FACE_MAX}" step="0.5" /></label>
+                <label data-field ${find("Largest zoom", "sprites zoom limit enlarge grow max")}><span>Largest zoom <span data-size-max-val>160%</span></span><input name="spriteSizeMatchMax" type="range" min="${SPRITE_SIZE_MATCH_MAX_RANGE[0]}" max="${SPRITE_SIZE_MATCH_MAX_RANGE[1]}" step="5" /></label>
+                <label data-field ${find("Smallest zoom", "sprites zoom limit shrink min")}><span>Smallest zoom <span data-size-min-val>60%</span></span><input name="spriteSizeMatchMin" type="range" min="${SPRITE_SIZE_MATCH_MIN_RANGE[0]}" max="${SPRITE_SIZE_MATCH_MIN_RANGE[1]}" step="5" /></label>
+                <label data-field ${find("Centre faces", "sprites centre center face slot horizontal align")}><span>Centre faces in their place <span data-size-center-val>100%</span></span><input name="spriteSizeMatchCenter" type="range" min="0" max="100" step="5" /></label>
+                <div data-actions><button type="button" data-size-match-reset>Default sizes</button></div>
+              `, { id: "sprite-size", help: esc(SPRITE_SIZE_MATCH_HELP), find: find("Character size", "sprites size face head height match same scale zoom") })}
             </div>
             ${group("Stage feel", `
               <fieldset ${find("Click effect", "click tap sparks sparkle star burst pop exclamation feedback")}>
@@ -1317,11 +1339,18 @@ export class VisualNovelSettingsPanel {
       if (this.isAdvanced(target.name)) { this.markDraft(target.name); return; }
       // Sliders and number fields preview while dragging or typing; the save happens on change.
       if (target.name === "bgmVolume" || target.name === "sfxVolume") this.updateVolumeLabels();
-      if (target.name === "spriteMotion" || target.name === "spriteOutline") this.updatePuppetLabels();
+      if (target.name === "spriteMotion" || target.name === "spriteOutline" || target.name === "spriteOutlineColor" || target.name.startsWith("spriteSizeMatch")) this.updatePuppetLabels();
       if (target.name === "openingCardMinMs") this.updateReadingFlowLabels();
       if (target.name === "interfaceSoundVolume") this.updateInterfaceVolumeLabel();
       if (target.name === "textSpeed") this.restartSample();
       if (target.name === "textScale") this.root.querySelector<HTMLElement>("[data-sample-stage]")!.style.setProperty("--sample-scale", String(clamp(Number(target.value), TEXT_SCALE_MIN, TEXT_SCALE_MAX, this.config.textScale)));
+    });
+    // Character size: "Default sizes" puts the size matching knobs back.
+    this.root.querySelector<HTMLButtonElement>("[data-size-match-reset]")!.addEventListener("click", () => {
+      const patch = spriteSizeMatchSettings(DEFAULT_CONFIG);
+      this.config = { ...this.config, ...patch };
+      this.syncEveryday(this.config);
+      this.save(patch);
     });
     // "Random" clears the NovelAI seed and saves (an explicit null overrides a stored seed).
     this.root.querySelector<HTMLButtonElement>("[data-novelai-random-seed]")?.addEventListener("click", () => {
@@ -1547,6 +1576,12 @@ export class VisualNovelSettingsPanel {
       case "spriteTransitions": return { spriteTransitions: normalizeSpriteTransitions(target.value) };
       case "spriteOutline": return { spriteOutline: clamp(Math.round(Number(target.value)), 0, SPRITE_OUTLINE_MAX, DEFAULT_CONFIG.spriteOutline) };
       case "spriteFocusBlur": return { spriteFocusBlur: checked };
+      case "spriteOutlineColor": return { spriteOutlineColor: normalizeOutlineColor(target.value) };
+      case "spriteSizeMatch": return { spriteSizeMatch: normalizeSpriteSizeMatch(target.value) };
+      case "spriteSizeMatchFace": return { spriteSizeMatchFace: Math.round(clamp(Number(target.value), SPRITE_SIZE_MATCH_FACE_MIN, SPRITE_SIZE_MATCH_FACE_MAX, DEFAULT_CONFIG.spriteSizeMatchFace) * 2) / 2 };
+      case "spriteSizeMatchMax": return { spriteSizeMatchMax: clamp(Math.round(Number(target.value)), SPRITE_SIZE_MATCH_MAX_RANGE[0], SPRITE_SIZE_MATCH_MAX_RANGE[1], DEFAULT_CONFIG.spriteSizeMatchMax) };
+      case "spriteSizeMatchMin": return { spriteSizeMatchMin: clamp(Math.round(Number(target.value)), SPRITE_SIZE_MATCH_MIN_RANGE[0], SPRITE_SIZE_MATCH_MIN_RANGE[1], DEFAULT_CONFIG.spriteSizeMatchMin) };
+      case "spriteSizeMatchCenter": return { spriteSizeMatchCenter: clamp(Math.round(Number(target.value)), 0, 100, DEFAULT_CONFIG.spriteSizeMatchCenter) };
       case "spritePressBounce": return { spritePressBounce: checked };
       case "clickEffect": return { clickEffect: normalizeClickEffect(target.value) };
       case "interfaceSounds": return { interfaceSounds: checked };
@@ -2118,6 +2153,16 @@ export class VisualNovelSettingsPanel {
     for (const input of this.root.querySelectorAll<HTMLInputElement>('input[name="spriteTransitions"]')) input.disabled = config.spriteMotion <= 0;
     this.control<HTMLInputElement>("spriteFocusBlur").checked = config.spriteFocusBlur;
     this.control<HTMLInputElement>("spritePressBounce").checked = config.spritePressBounce;
+    const outlineColor = this.control<HTMLInputElement>("spriteOutlineColor");
+    outlineColor.value = config.spriteOutlineColor;
+    outlineColor.disabled = config.spriteOutline <= 0;
+    // Character size: the knobs read as not applying while matching is off.
+    this.setRadio("spriteSizeMatch", config.spriteSizeMatch);
+    for (const name of ["spriteSizeMatchFace", "spriteSizeMatchMax", "spriteSizeMatchMin", "spriteSizeMatchCenter"] as const) {
+      const input = this.control<HTMLInputElement>(name);
+      input.value = String(config[name]);
+      input.disabled = config.spriteSizeMatch === "off";
+    }
     this.updatePuppetLabels();
     // Motion Still (or the system's reduced motion) keeps the characters still; the choices here are kept.
     const hold = spriteMotionHold(config.effectIntensity, typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches);
@@ -2299,6 +2344,10 @@ export class VisualNovelSettingsPanel {
   private updatePuppetLabels(): void {
     this.root.querySelector("[data-sprite-motion-val]")!.textContent = describeSpriteMotion(Number(this.control<HTMLInputElement>("spriteMotion").value));
     this.root.querySelector("[data-sprite-outline-val]")!.textContent = describeSpriteOutline(Number(this.control<HTMLInputElement>("spriteOutline").value));
+    this.root.querySelector("[data-sprite-outline-color-val]")!.textContent = normalizeOutlineColor(this.control<HTMLInputElement>("spriteOutlineColor").value);
+    for (const [name, selector] of [["spriteSizeMatchFace", "[data-size-face-val]"], ["spriteSizeMatchMax", "[data-size-max-val]"], ["spriteSizeMatchMin", "[data-size-min-val]"], ["spriteSizeMatchCenter", "[data-size-center-val]"]] as const) {
+      this.root.querySelector(selector)!.textContent = describePercent(Number(this.control<HTMLInputElement>(name).value));
+    }
   }
 
   private updateVolumeLabels(): void {

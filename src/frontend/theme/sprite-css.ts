@@ -12,6 +12,12 @@
  * bottom-centre sits on the anchor, so transparent margins never float a
  * character above the floor.
  *
+ * Size matching (sprite-layer.ts `spriteSizeMatchZoom`): `--vn-sprite-match`
+ * zooms each image so every face has the same size, `--vn-sprite-face-shift`
+ * (image widths) moves the anchor so the face nears the slot centre, and
+ * `--vn-sprite-lift` (standing-figure heights, 0 or less) sinks the taller
+ * figures in "heads" mode so the face tops line up.
+ *
  * Depth (sprite-depth.ts): a contact shadow and leg occlusion ground each
  * figure, a rim light coloured by the light preset sits on the edge that
  * faces the plate's light, weather and mood grades tint the characters, and
@@ -95,7 +101,7 @@ export const VN_SPRITE_CSS = `
   [data-vn-sprites][data-vn-sprite-count="3"] {
     --vn-sprite-figure-h: min(var(--vn-sprite-figure-max), calc((100cqh - var(--vn-dialogue-top, 0px)) * 1.18));
   }
-  [data-vn-sprites] [data-vn-sprite] { bottom: var(--vn-sprite-floor, 0px); }
+  [data-vn-sprites] [data-vn-sprite] { bottom: calc(var(--vn-sprite-floor, 0px) + var(--vn-sprite-lift, 0) * var(--vn-sprite-figure-h)); }
   /* A raised figure must not end in a straight cut above the box. */
   [data-vn-sprites] [data-vn-sprite-image] {
     --vn-sprite-feather-bottom: 16%;
@@ -105,7 +111,7 @@ export const VN_SPRITE_CSS = `
      off-screen) and back (smaller), in the same left-to-right order
      (narrowSpriteX in sprite-layer.ts). */
   [data-vn-sprites][data-vn-sprite-count="3"] [data-vn-sprite] {
-    left: var(--vn-sprite-xn, var(--vn-sprite-x, 50%));
+    left: calc(var(--vn-sprite-xn, var(--vn-sprite-x, 50%)) + var(--vn-sprite-shift-px));
     transition:
       left var(--vn-sprite-move-ms) cubic-bezier(0.33, 1, 0.68, 1),
       scale var(--vn-sprite-move-ms) cubic-bezier(0.33, 1, 0.68, 1),
@@ -118,7 +124,7 @@ export const VN_SPRITE_CSS = `
   }
   /* The speaker always stands whole on screen. */
   [data-vn-sprites][data-vn-sprite-count="3"] [data-vn-sprite][data-vn-sprite-focus="true"] {
-    left: clamp(var(--vn-sprite-half-w), var(--vn-sprite-xn, 50%), calc(100% - var(--vn-sprite-half-w)));
+    left: clamp(var(--vn-sprite-half-w), calc(var(--vn-sprite-xn, 50%) + var(--vn-sprite-shift-px)), calc(100% - var(--vn-sprite-half-w)));
   }
 }
 
@@ -137,13 +143,27 @@ export const VN_SPRITE_CSS = `
   --vn-sprite-fig-h: calc(var(--vn-sprite-img-h) * var(--vn-sprite-bh, 1));
 }
 
+/* Size matching (data-vn-size-match on the layer): the face decides the
+   size, not the slot width (a wide picture would otherwise end up with a
+   smaller face), but never past the stage top, so a full-body picture keeps
+   its head on screen. */
+[data-vn-sprites][data-vn-size-match] [data-vn-sprite],
+[data-vn-sprites][data-vn-size-match] [data-vn-sprite-image] {
+  --vn-sprite-img-h: min(
+    calc(var(--vn-sprite-figure-h) * var(--vn-sprite-s, 1) * var(--vn-sprite-match, 1)),
+    calc(98cqh * var(--vn-sprite-s, 1))
+  );
+}
+
 [data-vn-sprite] {
   position: absolute;
   /* The slot anchor, pulled in so the whole figure stays on stage (the
      speaker's zoom included). */
   --vn-sprite-half-w: calc(var(--vn-sprite-img-w) * var(--vn-sprite-bw, 1) / 2 * var(--vn-sprite-zoom, 1));
-  left: clamp(var(--vn-sprite-half-w), var(--vn-sprite-x, 50%), calc(100% - var(--vn-sprite-half-w)));
-  bottom: 0;
+  /* Size matching: the face toward the slot centre (mirrored figures flip it). */
+  --vn-sprite-shift-px: calc(var(--vn-sprite-img-w) * var(--vn-sprite-face-shift, 0) * var(--vn-sprite-flip, 1));
+  left: clamp(var(--vn-sprite-half-w), calc(var(--vn-sprite-x, 50%) + var(--vn-sprite-shift-px)), calc(100% - var(--vn-sprite-half-w)));
+  bottom: calc(var(--vn-sprite-lift, 0) * var(--vn-sprite-figure-h));
   width: 0;
   height: 0;
   z-index: 1;

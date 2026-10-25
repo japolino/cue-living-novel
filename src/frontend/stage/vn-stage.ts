@@ -113,6 +113,7 @@ import {
   type VisualNovelPresentationMode,
   type VisualNovelSceneImageFit,
   type VisualNovelSpritePuppet,
+  type VisualNovelSpriteSizeMatch,
   type VisualNovelStageFeel,
   type VisualNovelTextEffectMode,
   type VisualNovelThemePreset,
@@ -1102,6 +1103,11 @@ export class VnStage {
   /** Sprite puppet motion, outline and focus blur (sprite-layer.ts `setPuppet`). */
   setSpritePuppet(settings: VisualNovelSpritePuppet): void {
     this.spriteLayer.setPuppet(settings);
+  }
+
+  /** Sprite size matching: every face at one size (sprite-layer.ts `setSizeMatch`). */
+  setSpriteSizeMatch(settings: VisualNovelSpriteSizeMatch): void {
+    this.spriteLayer.setSizeMatch(settings);
   }
 
   /**

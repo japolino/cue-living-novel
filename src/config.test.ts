@@ -18,6 +18,7 @@ import {
   WAITING_BACKDROPS,
   WAITING_RECAPS,
   spritePuppetSettings,
+  spriteSizeMatchSettings,
   stageFeelSettings,
 } from "./config";
 
@@ -322,7 +323,7 @@ test("sprite puppet settings default on (no outline) and clamp to their ranges",
   assert.equal(clamped.spriteFocusBlur, false);
   assert.equal(normalizeConfig({ spriteMotion: -5, spriteOutline: "2" }).spriteMotion, 0);
   assert.equal(normalizeConfig({ spriteOutline: "2" }).spriteOutline, 2);
-  assert.deepEqual(Object.keys(spritePuppetSettings(defaults)).sort(), ["spriteActing", "spriteAtmosphere", "spriteBreathing", "spriteFocusBlur", "spriteHeadMotion", "spriteMotion", "spriteOutline", "spritePhysics", "spriteSway", "spriteTransitions"]);
+  assert.deepEqual(Object.keys(spritePuppetSettings(defaults)).sort(), ["spriteActing", "spriteAtmosphere", "spriteBreathing", "spriteFocusBlur", "spriteHeadMotion", "spriteMotion", "spriteOutline", "spriteOutlineColor", "spritePhysics", "spriteSway", "spriteTransitions"]);
 });
 
 test("reading-flow settings: the opening card, the waiting screen and the reply box", () => {
@@ -374,6 +375,34 @@ test("stage feel settings: sparks and press-to-bounce on, interface sounds off, 
   assert.equal(normalizeConfig({ innerVoices: 42 }).innerVoices, "");
   assert.equal(normalizeConfig({ innerVoices: "x".repeat(5000) }).innerVoices.length, 2000);
   assert.deepEqual(Object.keys(stageFeelSettings(defaults)).sort(), ["clickEffect", "innerVoices", "interfaceSoundVolume", "interfaceSounds", "spritePressBounce"]);
+});
+
+test("outline colour: #rrggbb in lower case, #rgb widened, anything else white", () => {
+  assert.equal(DEFAULT_CONFIG.spriteOutlineColor, "#ffffff");
+  assert.equal(normalizeConfig({ spriteOutlineColor: "#2B1D3A" }).spriteOutlineColor, "#2b1d3a");
+  assert.equal(normalizeConfig({ spriteOutlineColor: " #f0a " }).spriteOutlineColor, "#ff00aa");
+  assert.equal(normalizeConfig({ spriteOutlineColor: "red" }).spriteOutlineColor, "#ffffff");
+  assert.equal(normalizeConfig({ spriteOutlineColor: "url(x)" }).spriteOutlineColor, "#ffffff");
+  assert.equal(normalizeConfig({ spriteOutlineColor: 7 }).spriteOutlineColor, "#ffffff");
+});
+
+test("size matching: on by default (keep heights), knobs clamp to their ranges", () => {
+  const defaults = normalizeConfig({});
+  assert.deepEqual(spriteSizeMatchSettings(defaults), {
+    spriteSizeMatch: "heights", spriteSizeMatchFace: 15, spriteSizeMatchMax: 160, spriteSizeMatchMin: 60, spriteSizeMatchCenter: 100,
+  });
+  assert.equal(normalizeConfig({ spriteSizeMatch: "heads" }).spriteSizeMatch, "heads");
+  assert.equal(normalizeConfig({ spriteSizeMatch: "off" }).spriteSizeMatch, "off");
+  assert.equal(normalizeConfig({ spriteSizeMatch: "giant" }).spriteSizeMatch, "heights");
+  assert.equal(normalizeConfig({ spriteSizeMatchFace: 99 }).spriteSizeMatchFace, 30);
+  assert.equal(normalizeConfig({ spriteSizeMatchFace: 1 }).spriteSizeMatchFace, 5);
+  assert.equal(normalizeConfig({ spriteSizeMatchFace: 14.3 }).spriteSizeMatchFace, 14.5);
+  assert.equal(normalizeConfig({ spriteSizeMatchMax: 900 }).spriteSizeMatchMax, 250);
+  assert.equal(normalizeConfig({ spriteSizeMatchMax: 50 }).spriteSizeMatchMax, 100);
+  assert.equal(normalizeConfig({ spriteSizeMatchMin: 5 }).spriteSizeMatchMin, 30);
+  assert.equal(normalizeConfig({ spriteSizeMatchMin: 150 }).spriteSizeMatchMin, 100);
+  assert.equal(normalizeConfig({ spriteSizeMatchCenter: -3 }).spriteSizeMatchCenter, 0);
+  assert.equal(normalizeConfig({ spriteSizeMatchCenter: "x" }).spriteSizeMatchCenter, 100);
 });
 
 test("stage feel fields sit right after the sprite puppet keys", () => {

@@ -11,7 +11,9 @@ import {
   SPRITE_IMAGE_SIZES,
   KEY_ILLUSTRATION_MODES,
   CLICK_EFFECTS,
+  SPRITE_SIZE_MATCH_MODES,
   type VisualNovelClickEffect,
+  type VisualNovelSpriteSizeMatchMode,
   type VisualNovelSpriteExpressionCount,
   type VisualNovelKeyIllustrations,
   type VisualNovelPresentationMode,
@@ -196,6 +198,29 @@ export const SPRITE_TRANSITION_OPTIONS: ReadonlyArray<{ value: VisualNovelSprite
   { value: "soft", label: "Soft", help: "Every new expression spreads gently from the face." },
   { value: "classic", label: "Simple fade", help: "A plain crossfade between the two pictures." },
 ];
+
+/* ------------------------------------------------------------------------ */
+/* Character size: every face at one size, in plain words.                   */
+/* ------------------------------------------------------------------------ */
+
+export const SPRITE_SIZE_MATCH_OPTIONS: ReadonlyArray<{ value: VisualNovelSpriteSizeMatchMode; label: string; help: string }> = [
+  { value: "heights", label: "Same face size, keep heights", help: "Every face is drawn the same size and feet stay on the floor, so a tall character still stands taller." },
+  { value: "heads", label: "Same face size, heads in line", help: "Also lowers the taller characters until every head is at the same height." },
+  { value: "off", label: "Off", help: "Each picture is sized by its own height, as before." },
+];
+
+export const SPRITE_SIZE_MATCH_HELP = "Pictures can be framed differently (full body, waist up, close up). Cue finds each face and sizes the picture so faces match.";
+
+export function normalizeSpriteSizeMatch(value: string): VisualNovelSpriteSizeMatchMode {
+  return (SPRITE_SIZE_MATCH_MODES as readonly string[]).includes(value)
+    ? value as VisualNovelSpriteSizeMatchMode
+    : DEFAULT_CONFIG.spriteSizeMatch;
+}
+
+/** "12.5%" / "160%" for the size matching sliders. */
+export function describePercent(value: number): string {
+  return `${Math.round(value * 10) / 10}%`;
+}
 
 export function normalizeSceneImageFit(value: string): VisualNovelSceneImageFit {
   return (SCENE_IMAGE_FITS as readonly string[]).includes(value)

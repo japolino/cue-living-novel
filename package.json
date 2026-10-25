@@ -19,6 +19,7 @@
     "test:sprite-stage": "bun run ./scripts/test-sprite-stage-browser.ts",
     "test:sprite-depth": "bun run ./scripts/test-sprite-depth-browser.ts",
     "test:feel": "bun run ./scripts/test-stage-feel-browser.ts",
+    "test:sprite-size": "bun run ./scripts/test-sprite-size-browser.ts",
     "test:sprite-cutout": "bun run ./scripts/test-sprite-cutout-browser.ts",
     "test:sprite-face": "bun run ./scripts/test-sprite-face-browser.ts",
     "test:layouts": "bun run ./scripts/test-layouts-browser.ts",

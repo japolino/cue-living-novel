@@ -43,7 +43,7 @@ import {
   type SpriteSlot,
   type SpriteTurnView,
 } from "../../shared/sprites.js";
-import { DEFAULT_CONFIG, spritePuppetSettings, type VisualNovelEffectIntensity, type VisualNovelSpritePuppet } from "../../config.js";
+import { DEFAULT_CONFIG, spritePuppetSettings, spriteSizeMatchSettings, type VisualNovelEffectIntensity, type VisualNovelSpritePuppet, type VisualNovelSpriteSizeMatch } from "../../config.js";
 import { SpritePuppet, type PuppetEffects, type PuppetImage, type PuppetMode } from "./sprite-puppet.js";
 import { puppetColdPlace } from "./sprite-puppet-fx.js";
 import { puppetNarrating, puppetSpeech, puppetSpoken, type PuppetSpeech } from "./sprite-puppet-acting.js";
@@ -395,6 +395,49 @@ export function spriteFaceVars(spot: SpriteFaceSpot): Record<string, string> {
   };
 }
 
+/**
+ * Size matching (config `spriteSizeMatch`, docs/SPRITE_MODE.md "Size
+ * matching"): the zoom that draws this image's face at the chosen share of a
+ * standing figure's height (1 = the unmatched size, where the figure itself
+ * fills that height), within the zoom limits; 1 when matching is off.
+ */
+export function spriteSizeMatchZoom(settings: VisualNovelSpriteSizeMatch, geometry: SpriteGeometry, spot: SpriteFaceSpot): number {
+  if (settings.spriteSizeMatch === "off") return 1;
+  // Face height in standing-figure heights at the unmatched size.
+  const face = (spot.top - spot.bottom) * geometry.scale;
+  if (!(face > 0)) return 1;
+  const zoom = settings.spriteSizeMatchFace / 100 / face;
+  return Math.max(settings.spriteSizeMatchMin / 100, Math.min(settings.spriteSizeMatchMax / 100, zoom));
+}
+
+/** How far the image moves sideways (image widths, not mirrored) so its face nears the slot centre; 0 when matching is off. */
+export function spriteFaceShift(settings: VisualNovelSpriteSizeMatch, spot: SpriteFaceSpot): number {
+  if (settings.spriteSizeMatch === "off") return 0;
+  return -spot.dx * (settings.spriteSizeMatchCenter / 100);
+}
+
+/** The face top above the floor, in standing-figure heights, at a zoom. */
+export function spriteFaceTop(geometry: SpriteGeometry, spot: SpriteFaceSpot, zoom: number): number {
+  return spot.top * geometry.scale * zoom;
+}
+
+/**
+ * "heads": how far each figure sinks (standing-figure heights, 0 or less) so
+ * every face top is on the lowest one's line. Nobody rises, so no figure
+ * floats or shows a cut-off bottom edge. Other modes: nobody moves.
+ */
+export function spriteHeadLift(mode: VisualNovelSpriteSizeMatch["spriteSizeMatch"], faceTops: ReadonlyMap<string, number>): Map<string, number> {
+  const lifts = new Map<string, number>();
+  const line = Math.min(...faceTops.values());
+  for (const [key, top] of faceTops) lifts.set(key, mode === "heads" && Number.isFinite(line) ? Math.min(0, line - top) : 0);
+  return lifts;
+}
+
+/** CSS custom properties for size matching (sprite-css.ts). */
+export function spriteSizeMatchVars(zoom: number, shift: number): Record<string, string> {
+  return { "--vn-sprite-match": round(zoom), "--vn-sprite-face-shift": round(shift) };
+}
+
 /** Whether the requested facing mirrors the cut-out (see SPRITE_NATURAL_FACING). */
 export function spriteMirrored(facing: SpriteFacing | undefined): boolean {
   return facing !== undefined && facing !== "viewer" && facing !== SPRITE_NATURAL_FACING;
@@ -565,6 +608,9 @@ export type SpriteActorSnapshot = {
   voice: number;
   /** The puppet's transition and atmosphere state (null in CSS mode). */
   effects: PuppetEffects | null;
+  /** Size matching: the image's zoom (1 = unmatched) and how far the figure sinks (standing-figure heights). */
+  match: number;
+  lift: number;
 };
 
 export type SpriteLayerSnapshot = {
@@ -594,6 +640,10 @@ type ActorEntry = {
   faceSource: SpriteFaceSpot["source"] | null;
   /** Geometry of the image shown (null while none is): where a press lands. */
   geometry: SpriteGeometry | null;
+  /** Face spot and size matching zoom of the image shown. */
+  spot: SpriteFaceSpot | null;
+  match: number;
+  lift: number;
   active: 0 | 1;
   url: string | null;
   shownExpression: string | null;
@@ -656,6 +706,7 @@ export class SpriteLayer {
   private illustration: string | null = null;
   private illustrationFade: { cancel(): void } | null = null;
   private puppetSettings: VisualNovelSpritePuppet = spritePuppetSettings(DEFAULT_CONFIG);
+  private sizeMatch: VisualNovelSpriteSizeMatch = spriteSizeMatchSettings(DEFAULT_CONFIG);
   private readonly puppet = new SpritePuppet({ container: () => this.container() });
 
   constructor(private readonly options: SpriteLayerOptions) {}
@@ -922,6 +973,22 @@ export class SpriteLayer {
     return { ...this.puppetSettings };
   }
 
+  /** Size matching (config `spriteSizeMatch` and its knobs): every face at one size, applied at once. */
+  setSizeMatch(settings: VisualNovelSpriteSizeMatch): void {
+    const next = spriteSizeMatchSettings(settings);
+    if (JSON.stringify(next) === JSON.stringify(this.sizeMatch)) return;
+    this.sizeMatch = next;
+    if (this.containerEl) this.applyPuppetVars(this.containerEl);
+    for (const entry of this.actors.values()) {
+      if (!entry.exiting && entry.url) this.refreshActorImage(entry);
+    }
+    this.applyHeadLine();
+  }
+
+  getSizeMatch(): VisualNovelSpriteSizeMatch {
+    return { ...this.sizeMatch };
+  }
+
   /** Text the typewriter just revealed: the speaking puppet follows it (syllables, punctuation). */
   typed(text: string): void {
     if (!this.talking) return;
@@ -959,6 +1026,8 @@ export class SpriteLayer {
         pose: this.puppet.poseFor(entry.key),
         voice: this.puppet.voiceActive(entry.key),
         effects: this.puppet.effectsFor(entry.key),
+        match: entry.match,
+        lift: entry.lift,
       });
     }
     actors.sort((a, b) => a.x - b.x);
@@ -1004,6 +1073,9 @@ export class SpriteLayer {
     });
     container.dataset.vnSpriteBlur = this.puppetSettings.spriteFocusBlur ? "true" : "false";
     container.dataset.vnSpriteTransitions = this.puppetSettings.spriteTransitions;
+    // Size matching sizes pictures by their faces (sprite-css.ts).
+    if (this.sizeMatch.spriteSizeMatch === "off") delete container.dataset.vnSizeMatch;
+    else container.dataset.vnSizeMatch = this.sizeMatch.spriteSizeMatch;
   }
 
   private applyStage(stage: SpriteParagraphStage | null, animate: boolean): void {
@@ -1056,7 +1128,23 @@ export class SpriteLayer {
       if (animate) this.playMotion(entry, actor.motion);
       this.syncTalking(entry);
     });
+    this.applyHeadLine();
     this.puppet.refresh();
+  }
+
+  /** Size matching "heads": sink the taller figures until every face top is on one line (`spriteHeadLift`). */
+  private applyHeadLine(): void {
+    const tops = new Map<string, number>();
+    for (const entry of this.actors.values()) {
+      if (entry.exiting || !entry.geometry || !entry.spot) continue;
+      tops.set(entry.key, spriteFaceTop(entry.geometry, entry.spot, entry.match));
+    }
+    const lifts = spriteHeadLift(this.sizeMatch.spriteSizeMatch, tops);
+    for (const entry of this.actors.values()) {
+      const lift = lifts.get(entry.key) ?? 0;
+      entry.lift = lift;
+      setVars(entry.el, { "--vn-sprite-lift": round(lift) });
+    }
   }
 
   /** Characters to dim for the line on screen (`spriteDimmedKeys`). */
@@ -1117,7 +1205,7 @@ export class SpriteLayer {
     el.append(body);
     this.puppet.attach({ key, el, body, marks, layers });
     return {
-      key, el, body, figure, marks, emote, layers, faceSource: null, geometry: null, active: 0, url: null, shownExpression: null,
+      key, el, body, figure, marks, emote, layers, faceSource: null, geometry: null, spot: null, match: 1, lift: 0, active: 0, url: null, shownExpression: null,
       stage: { characterKey: key, expression: "idle", slot: "center", facing: "viewer", focus: false, motion: "none", emote: "none", intensity: 3 },
       x: 50, emoteName: "none", talking: false, token: 0, exiting: false,
       exitTimer: null, motionTimer: null, emoteTimer: null, enterTimer: null, fadeTimer: null, animate: true, pressTimer: null,
@@ -1140,12 +1228,16 @@ export class SpriteLayer {
     }
     const geometry = spriteGeometry(image);
     const spot = spriteFaceSpot(image, geometry);
-    const vars = { ...spriteGeometryVars(geometry), ...spriteFaceVars(spot) };
+    const match = spriteSizeMatchZoom(this.sizeMatch, geometry, spot);
+    const vars = { ...spriteGeometryVars(geometry), ...spriteFaceVars(spot), ...spriteSizeMatchVars(match, spriteFaceShift(this.sizeMatch, spot)) };
     const puppetImage: PuppetImage = { url: image.url, geometry, spot };
     entry.faceSource = spot.source;
     if (entry.url === image.url) {
       entry.shownExpression = image.expression;
       entry.geometry = geometry;
+      entry.spot = spot;
+      entry.match = match;
+      this.applyHeadLine();
       setVars(entry.layers[entry.active], vars);
       setVars(entry.el, vars);
       entry.el.dataset.vnSpriteFace = spot.source;
@@ -1160,9 +1252,12 @@ export class SpriteLayer {
     const apply = () => {
       if (this.destroyed || token !== entry.token) return;
       entry.geometry = geometry;
+      entry.spot = spot;
+      entry.match = match;
       entry.el.dataset.vnSpriteFace = spot.source;
       if (firstImage) this.paintFirst(entry, puppetImage, image.expression, vars, enter);
       else this.crossfade(entry, puppetImage, image.expression, vars);
+      this.applyHeadLine();
     };
     if (this.loaded.has(image.url) || !this.options.loadImage) {
       this.loaded.add(image.url);

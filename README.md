@@ -83,6 +83,16 @@ Scene mode (the default) paints a full picture for each scene. That takes 20–5
 
 **Who stands out.** The speaker steps forward a little (3% larger) and the others drop to half brightness (and blur by 1 px with **Blur characters who are not speaking**), but only while the speaker is on stage: narration, your own lines and a voice that is not on stage leave everyone bright. Characters fade in and rise a few pixels as they enter (0.15 s), slide to new places in 0.4 s and change expression with a 0.2 s cross-fade.
 
+## Character size and outline
+
+Pictures can be framed differently: a waist-up sprite, a close-up expression, a card's full-body picture. **Settings → Look → Character size** (sprite mode) draws every face at the same size, so a character's head no longer grows or shrinks between expressions or next to someone else:
+
+- **Same face size, keep heights** (default): feet stay on the floor, so a tall character still stands taller.
+- **Same face size, heads in line**: the taller characters also sink until every head is at the same height (nobody is lifted off the floor).
+- **Off**: each picture is sized by its own height, as before.
+
+**Face size** (15% of a standing character's height by default), **Largest zoom** and **Smallest zoom** (160% and 60%), and **Centre faces in their place** (100%: the face sits on the middle of the character's place) fine-tune it; **Default sizes** puts them back. A full-body picture never grows past the top of the screen. **Character look** also has **Outline colour** for the sticker outline (white by default). Check: `bun run test:sprite-size`.
+
 ## Stage feel
 
 **Settings → Look** holds a few small touches. In sprite mode, **Character motion** has **Press a character to make it bounce** (on by default): clicking or tapping a character squishes it and it bounces back, and that click does not turn the page; clicking anywhere else, Enter or Space still does. Right after the character groups, **Stage feel** (both modes) has:
