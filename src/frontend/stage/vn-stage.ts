@@ -171,7 +171,7 @@ const REPLY_ENTER_GRACE_MS = 500;
 const EMPTY_TEXT = "There is no reply to show yet. Go back to chat, send the first message, then open Cue again.";
 
 const THEME_MARKUP = `
-  <main data-vn-root data-vn-phase="idle" tabindex="0" aria-label="Cue">
+  <main data-vn-root data-vn-mode="standard" data-vn-phase="idle" tabindex="0" aria-label="Cue">
     <div data-vn-scene aria-hidden="true">
       <img data-vn-scene-image data-vn-layer="active" data-vn-empty="true" alt="" />
       <img data-vn-scene-image data-vn-layer="incoming" data-vn-empty="true" alt="" />
@@ -2108,6 +2108,8 @@ export class VnStage {
   private render(previousPhase: VnPhase | null): void {
     const view = selectVnStageView(this.state);
     this.root.dataset.vnPhase = this.state.phase;
+    // Kept for custom CSS written for the retired reply modes: "cyoa" while the turn offers suggested replies.
+    this.root.dataset.vnMode = this.state.choices.length > 0 ? "cyoa" : "standard";
     this.root.dataset.vnImageStatus = this.state.pendingImage
       ? "loading"
       : this.state.imageError

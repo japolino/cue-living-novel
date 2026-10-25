@@ -131,6 +131,16 @@ describe("reading UX", () => {
     expect(sent).toEqual(["Now"]);
   });
 
+  test("custom CSS written for the old reply modes still matches: data-vn-mode is cyoa while the turn offers suggested replies", () => {
+    const s = create();
+    const main = root(s);
+    expect(main.getAttribute("data-vn-mode")).toBe("standard");
+    s.loadTurn({ paragraphs: paragraphs(1), choices: [{ id: "a", label: "A", value: "a" }] });
+    expect(main.getAttribute("data-vn-mode")).toBe("cyoa");
+    s.loadTurn({ paragraphs: paragraphs(1), choices: [] });
+    expect(main.getAttribute("data-vn-mode")).toBe("standard");
+  });
+
   test("exitLabel option still overrides the Back to chat accessible name", () => {
     const s = create({ exitLabel: "Leave the story" });
     expect(shell(s).querySelector("[data-vn-exit]")!.getAttribute("aria-label")).toBe("Leave the story");

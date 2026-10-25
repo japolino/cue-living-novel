@@ -237,6 +237,8 @@ Inside the nested theme shadow root the style layers are appended in a fixed cas
 2. `preset` — exactly one scoped block from `THEME_PRESET_CSS`, selected by `data-vn-preset="<id>"`. The preset *style element* lives in `themeRoot`, after base and before user CSS, and never in the outer safety root.
 3. `user` — the sanitized custom-CSS layer. It is always last, so a user rule of equal specificity wins over a preset rule.
 
+The root keeps `data-vn-mode` for custom CSS written for the retired reply modes: `cyoa` while the turn offers suggested replies, else `standard`.
+
 The `Lumiverse` preset maps the VN custom properties onto the real host tokens the Lumiverse page exposes — `--lumiverse-text`, `--lumiverse-text-muted`, `--lumiverse-primary` (accent), `--lumiverse-card-bg` (card), `--lumiverse-border`, `--lumiverse-font-family`, and `--lumiverse-*` key-control tokens (`primary-contrast`, `fill-medium`, `bg-elevated`) — each with a hard fallback so a host that does not export a token still renders the original default look.
 
 Presets restyle the stage chrome through root custom properties rather than by re-declaring layout: `--vn-accent-contrast`, `--vn-focus-ring`, `--vn-chrome-*` (reading toolbar and buttons), `--vn-panel-*` (interaction panel), `--vn-overlay-text` / `--vn-overlay-muted` (text drawn directly over the scene, such as the "Your turn" heading), `--vn-odds-*` (game-move odds pills), `--vn-interaction-width`, `--vn-interaction-clearance`, `--vn-composer-width`, `--vn-nameplate-lift`, and `--vn-error` / `--vn-error-title`. Stable chrome hooks include `[data-vn-control-icon]` on every reading control, `[data-vn-submit-label]` / `[data-vn-submit-icon]`, and `[data-vn-empty-card]` / `[data-vn-empty-icon]` / `[data-vn-empty-text]`.

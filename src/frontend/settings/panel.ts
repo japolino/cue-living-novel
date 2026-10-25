@@ -878,6 +878,8 @@ export class VisualNovelSettingsPanel {
    */
   openSection(id: SettingsSectionId | string, options: { focus?: boolean; remember?: boolean } = {}): void {
     const next = normalizeSettingsSection(id);
+    // Undo belongs to the section it was offered in.
+    if (next !== this.section) this.hideUndo();
     this.section = next;
     for (const tab of this.root.querySelectorAll<HTMLButtonElement>("[data-tab]")) {
       const selected = tab.dataset.tab === next;
@@ -1688,6 +1690,8 @@ export class VisualNovelSettingsPanel {
   /** Advanced fields whose text does not parse (JSON, URL): kept on screen, marked, not saved. */
   private readonly invalid = new Set<AdvancedKey>();
   private undoPatch: Partial<VisualNovelConfig> | null = null;
+  /** What the change Undo would revert saved: a setting saved again since keeps its newer value. */
+  private undoSaved: Partial<VisualNovelConfig> | null = null;
   private undoTimer: ReturnType<typeof setTimeout> | null = null;
 
   private advancedValue(name: AdvancedKey): string {
@@ -1751,12 +1755,12 @@ export class VisualNovelSettingsPanel {
       }
       const what = label ?? this.fieldLabel(saved[0]!);
       this.save(patch as Partial<VisualNovelConfig>, `${what} saved.`);
-      this.offerUndo(`${what} saved.`, previous as Partial<VisualNovelConfig>);
+      this.offerUndo(`${what} saved.`, previous as Partial<VisualNovelConfig>, patch as Partial<VisualNovelConfig>);
     }
     if (error) this.setStatus(error, "error");
   }
 
-  /** Enter in a field or Ctrl+S commits the focused Advanced field at once. */
+  /** Ctrl+S commits the focused Advanced field at once (Enter in a single-line field commits through its change event). */
   private commitFocused(): void {
     const active = this.root.activeElement;
     const name = active instanceof HTMLElement ? active.getAttribute("name") : null;
@@ -1767,9 +1771,10 @@ export class VisualNovelSettingsPanel {
     return this.root.querySelector<HTMLElement>(`[name="${name}"]`)?.closest<HTMLElement>("[data-find-label]")?.dataset.findLabel ?? name;
   }
 
-  private offerUndo(text: string, previous: Partial<VisualNovelConfig>): void {
+  private offerUndo(text: string, previous: Partial<VisualNovelConfig>, saved: Partial<VisualNovelConfig>): void {
     const toast = this.root.querySelector<HTMLElement>("[data-undo-toast]")!;
     this.undoPatch = previous;
+    this.undoSaved = saved;
     toast.querySelector<HTMLElement>("[data-undo-text]")!.textContent = text;
     toast.hidden = false;
     if (this.undoTimer) clearTimeout(this.undoTimer);
@@ -1779,15 +1784,24 @@ export class VisualNovelSettingsPanel {
   private hideUndo(): void {
     if (this.undoTimer) { clearTimeout(this.undoTimer); this.undoTimer = null; }
     this.undoPatch = null;
+    this.undoSaved = null;
     const toast = this.root.querySelector<HTMLElement>("[data-undo-toast]");
     if (toast) toast.hidden = true;
   }
 
   /** Puts the last Advanced save back and saves that. */
   private undo(): void {
-    const previous = this.undoPatch;
+    const saved = this.undoSaved;
+    const config = this.config as unknown as Record<string, unknown>;
+    // Only a setting that still holds what this change saved goes back.
+    const previous = this.undoPatch && Object.fromEntries(Object.entries(this.undoPatch)
+      .filter(([name]) => !saved || JSON.stringify(config[name]) === JSON.stringify((saved as Record<string, unknown>)[name]))) as Partial<VisualNovelConfig>;
     if (!previous) return;
     this.hideUndo();
+    if (Object.keys(previous).length === 0) {
+      this.setStatus("Not undone: that setting changed after this save.", "error");
+      return;
+    }
     for (const name of Object.keys(previous) as AdvancedKey[]) {
       this.drafts.delete(name);
       this.invalid.delete(name);

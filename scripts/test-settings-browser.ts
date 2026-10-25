@@ -353,6 +353,25 @@ try {
   assert.deepEqual(await lastPatch(page), { spriteModelUrl: defaultModelUrl }, "Undo saves the previous value");
   assert.equal(await modelUrl.inputValue(), defaultModelUrl, "Undo puts the field back");
   assert.equal(await settings.locator("[data-undo-toast]").isVisible(), false);
+  // Enter in a single-line Advanced field commits it, as the field's help says.
+  await modelUrl.fill("https://models.example.com/enter.onnx");
+  await modelUrl.press("Enter");
+  assert.deepEqual(await lastPatch(page), { spriteModelUrl: "https://models.example.com/enter.onnx" }, "Enter saves the field");
+  // Undo belongs to the section it was offered in: another tab drops it.
+  assert.equal(await settings.locator("[data-undo-toast]").isVisible(), true);
+  await openTab("Look");
+  assert.equal(await settings.locator("[data-undo-toast]").isVisible(), false, "switching sections drops the Undo");
+  await openTab("Advanced");
+  // A setting saved again after the change is not put back by its Undo.
+  await modelUrl.fill("https://models.example.com/first.onnx");
+  await modelUrl.press("Tab");
+  await page.evaluate(() => { const f = (window as any).settingsFixture; f.panel.setConfig({ ...f.config, spriteModelUrl: "https://models.example.com/elsewhere.onnx" }); });
+  const beforeStaleUndo = (await fixture(page)).patches.length;
+  await settings.locator("[data-undo]").click();
+  assert.equal((await fixture(page)).patches.length, beforeStaleUndo, "a stale Undo writes nothing");
+  assert.match(await settings.locator("[data-status]").innerText(), /changed after/);
+  await modelUrl.fill(defaultModelUrl);
+  await modelUrl.press("Tab");
   await modelUrl.fill("https://models.example.com/isnetis_int8.onnx");
   await modelUrl.press("Tab");
   await modelUrl.fill("");
@@ -580,8 +599,8 @@ try {
   await openTab("Advanced");
   await settings.locator('[name="customCss"]').fill("/* mobile */");
   await page.keyboard.press("Control+s");
-  await openTab("Sound");
-  const lastControl = await settings.locator('input[name="sfxVolume"]').evaluate((element) => { element.scrollIntoView({ block: "end" }); return element.getBoundingClientRect().bottom; });
+  // Undo stays with its section: the section's last control scrolls clear of the toast.
+  const lastControl = await settings.locator("[data-show-setup]").evaluate((element) => { element.scrollIntoView({ block: "end" }); return element.getBoundingClientRect().bottom; });
   const undoToast = await settings.locator("[data-undo-toast]").boundingBox();
   assert.ok(undoToast && lastControl <= undoToast.y + 1, `controls scrolled into view sit above the Undo toast (${lastControl} vs ${undoToast?.y})`);
   await settings.locator("[data-undo]").click();
