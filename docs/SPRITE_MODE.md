@@ -52,6 +52,7 @@ own expression and there is no picture cap.
 | `spriteSizeMatchFace` | `5`–`30` (% of a standing figure, steps of 0.5) | `15` | at once (everyday, sprite mode only) |
 | `spriteSizeMatchMax` / `spriteSizeMatchMin` | `100`–`250` / `30`–`100` (% of the unmatched size) | `160` / `60` | at once (everyday, sprite mode only) |
 | `spriteSizeMatchCenter` | `0`–`100` (%) | `100` | at once (everyday, sprite mode only) |
+| `spritePlateDepth` | boolean | `true` | at once (everyday, sprite mode only) |
 
 The eleven puppet keys (`VisualNovelSpritePuppet`, `spritePuppetSettings`)
 reach the stage through `VnStage.setSpritePuppet`; see "Puppet motion",
@@ -60,11 +61,12 @@ atmosphere". The five stage feel keys (`VisualNovelStageFeel`,
 `stageFeelSettings`) reach it through `VnStage.setStageFeel`; see
 "Stage feel". The five size matching keys (`VisualNovelSpriteSizeMatch`,
 `spriteSizeMatchSettings`) reach it through `VnStage.setSpriteSizeMatch`;
-see "Size matching".
+see "Size matching". `spritePlateDepth` reaches it through
+`VnStage.setPlateDepth`; see "3D backgrounds".
 
 Per character: `presentationMode`, `keyIllustrations`, the eleven puppet
-keys, the five size matching keys and the five stage feel keys can be
-saved for one character card
+keys, the five size matching keys, `spritePlateDepth` and the five stage
+feel keys can be saved for one character card
 (Settings, "<name> only"; `CHARACTER_SCOPED_KEYS`), so one card can read in
 sprites while the others keep scene pictures. Planning, staging and the
 sprite service read the chat's config (`loadChatConfig`), so they follow
@@ -1205,6 +1207,51 @@ every 0.8 s while the voice is active; at most six at a time, from the mouth
 (below the face centre, toward the side a profile faces). Gentle effects
 scale the atmosphere by 0.6; Still and reduced motion turn the puppet off.
 
+### 3D backgrounds (`plate-parallax.ts`, `plate-depth-*.ts`, `spritePlateDepth`)
+
+In sprite mode the place behind the characters is drawn as a room, not a
+flat picture: the camera follows the mouse on desktop (the eye moves toward
+the pointer, so near things slide the other way) and drifts slowly on touch
+screens, and a new plate dollies in to 105% over 9 s (half of that at
+gentle Motion). Phone tilt is not used yet.
+
+- **Depth.** Depth Anything V2 Small (int8 ONNX, 27 MB, Apache-2.0;
+  `DEFAULT_PLATE_DEPTH_MODEL_URL`, pinned to one Hugging Face revision) runs
+  in a worker on onnxruntime-web (WASM, the cut-out's runtime and model
+  store). The plate goes in at 392 px on the short side (the model's own
+  518 ordered the same 97.5% of held-out near/far pairs; the old hand-made
+  depth 71%); the output is normalized between its 1st and 99th
+  percentile, softened (Gaussian, sigma 2 px: ghosted pixels at full camera
+  shift 0.59% to 0.12%), and kept at most 512 px wide (`plate-depth-kernel.ts`).
+  About 3–4 s per plate single-threaded, after the model's first download.
+- **Store.** Each depth map is kept in the model store under the plate URL
+  plus `?cue-plate-depth=1` (`plate-depth-service.ts`), so a plate is
+  estimated once per browser; reading one back takes about 40 ms. A
+  failed download or run is tried again after a minute; a browser that
+  cannot run the model is not asked again until the page reloads.
+- **Drawing.** A WebGL canvas (`[data-vn-plate-depth]`, also
+  `data-vn-scene-image`, so camera effects and the plate drift apply to it)
+  sits right above the flat image. Its fragment shader is a backward warp:
+  every screen pixel finds the plate point that lands there in four
+  fixed-point steps on the depth, so nothing tears or leaves holes; edges
+  sample mirrored. The nearest pixels shift 3% of the plate width at the
+  camera's edge, the farthest not at all; at rest it is exactly the flat
+  picture. Cover, contain and fill are drawn; other fits stay flat.
+- **Characters.** The sprites layer moves with the floor they stand on
+  (the median depth of the low middle band, `plateFloorNear`), through
+  `transform` so it composes with the camera effects' `translate`/`scale`.
+- **Falling back.** The flat `<img>` stays underneath and the canvas only
+  fades in once the depth and the picture are on the GPU. It fades out on a
+  plate change, with the setting off, Motion off, the system's reduced
+  motion, a fit it cannot draw, no WebGL or a lost context; no WebGL means no
+  download.
+
+`bun run test:plate-depth` scores the real model on the fixture plates (32
+near/far pairs, set `CUE_PLATE_DEPTH_MODEL` to a local copy; skipped
+without one); `bun run test:plate-parallax` checks the stage with stored
+maps, or the real model when that variable is set
+(`PLATE_PARALLAX_FRAMES=1` writes a mouse sweep to `.cache/plate-parallax/`).
+
 ## Settings (frontend)
 
 Presentation mode control; cut-out quality; model status (absent /
@@ -1222,7 +1269,7 @@ Under Look (sprite mode only, `[data-sprites-look]`): "Character motion"
 (intensity 0–150% in steps of 10, "Still" at 0; Breathing, Body sway,
 Head movement, Acting, Hair and cloth physics, Weather and light on
 characters, and Expression changes: Match the emotion / Soft / Simple fade,
-all disabled at 0; Press a character to make it bounce) and
+all disabled at 0; 3D backgrounds; Press a character to make it bounce) and
 "Character look" (outline 0–6 px, "Off" at 0; Outline colour, disabled
 while the outline is off; Blur characters who are not speaking), then
 "Character size" (Match face sizes: Same face size, keep heights / Same

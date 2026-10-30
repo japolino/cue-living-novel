@@ -437,6 +437,8 @@ export type VisualStageThemeTarget = Pick<
   setSpritePuppet?: (settings: VisualNovelSpritePuppet) => void;
   /** Sprite size matching: every face at one size. */
   setSpriteSizeMatch?: (settings: VisualNovelSpriteSizeMatch) => void;
+  /** 3D backgrounds: sprite-mode plates move with their depth. */
+  setPlateDepth?: (enabled: boolean) => void;
   /** How a reply opens, waits and ends (opening card, location label, waiting screen, playback). */
   setReadingFlow?: (flow: VnReadingFlow) => void;
   /** Click sparks, press-to-bounce, interface sounds and extra inner voices. */
@@ -482,6 +484,7 @@ export function applyVisualConfigToStage(
   stage.setPresentationMode?.(config.presentationMode);
   stage.setSpritePuppet?.(spritePuppetSettings(config));
   stage.setSpriteSizeMatch?.(spriteSizeMatchSettings(config));
+  stage.setPlateDepth?.(config.spritePlateDepth);
   stage.setReadingFlow?.(readingFlowSettings(config));
   stage.setStageFeel?.(stageFeelSettings(config));
   stage.setSpriteTouch?.(spriteTouchSettings(config));

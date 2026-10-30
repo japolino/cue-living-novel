@@ -735,3 +735,11 @@ export function spriteModelF16Url(modelUrl: string): string | undefined {
  * 275 test sprites, slime, animal and monster girls included.
  */
 export const DEFAULT_SPRITE_FACE_MODEL_URL = "https://huggingface.co/deepghs/anime_face_detection/resolve/main/face_detect_v1.4_n/model.onnx";
+
+/**
+ * Depth of a plate for the 3D backgrounds (Depth Anything V2 Small, int8,
+ * 27 MB, Apache-2.0, onnx-community export pinned to a revision). On 10
+ * held-out library plates it ordered 97.5% of hand-marked near/far pairs
+ * right (a vertical ramp: 71%).
+ */
+export const DEFAULT_PLATE_DEPTH_MODEL_URL = "https://huggingface.co/onnx-community/depth-anything-v2-small/resolve/4472b7362082ad9968fee890ca0f1e5aca36b93d/onnx/model_quantized.onnx";

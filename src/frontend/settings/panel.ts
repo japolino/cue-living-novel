@@ -749,6 +749,7 @@ export class VisualNovelSettingsPanel {
                 <label data-check ${find("Acting", "sprites puppet acting mood posture voice words look speaker listen react emote")}><input name="spriteActing" type="checkbox" /><span>Acting<small>The body carries the mood, the speaker's head follows the words, and the others turn to whoever speaks.</small></span></label>
                 <label data-check ${find("Hair and cloth physics", "sprites puppet physics hair cloth skirt bounce wind follow through")}><input name="spritePhysics" type="checkbox" /><span>Hair and cloth physics<small>Loose hair and clothes trail and settle when a character moves, and flutter in the wind.</small></span></label>
                 <label data-check ${find("Weather and light on characters", "sprites puppet atmosphere weather snow rain wet fog mist fire embers fireflies breath cold dream glow")}><input name="spriteAtmosphere" type="checkbox" /><span>Weather and light on characters<small>Snow settles on them, rain soaks them, firelight and fireflies light them, mist covers their feet, and their breath shows in the cold.</small></span></label>
+                <label data-check ${find("3D backgrounds", "sprites background plate place depth 3d parallax camera mouse move dolly room")}><input name="spritePlateDepth" type="checkbox" /><span>3D backgrounds<small>The place moves like a real room as you move the mouse, and the camera eases in on a new place. Downloads a 27 MB depth model once.</small></span></label>
                 <label data-check ${find("Press a character", "sprites press click tap poke character bounce squish jelly")}><input name="spritePressBounce" type="checkbox" /><span>Press a character to make it bounce<small>That click does not turn the page; clicking anywhere else still does.</small></span></label>
                 <fieldset ${find("Expression changes", "sprites puppet transition expression change emotion pop melt flare blush fade crossfade")}>
                   <legend>Expression changes</legend>
@@ -1657,6 +1658,7 @@ export class VisualNovelSettingsPanel {
       case "spriteActing": return { spriteActing: checked };
       case "spritePhysics": return { spritePhysics: checked };
       case "spriteAtmosphere": return { spriteAtmosphere: checked };
+      case "spritePlateDepth": return { spritePlateDepth: checked };
       case "spriteTransitions": return { spriteTransitions: normalizeSpriteTransitions(target.value) };
       case "spriteOutline": return { spriteOutline: clamp(Math.round(Number(target.value)), 0, SPRITE_OUTLINE_MAX, DEFAULT_CONFIG.spriteOutline) };
       case "spriteFocusBlur": return { spriteFocusBlur: checked };
@@ -2480,6 +2482,7 @@ export class VisualNovelSettingsPanel {
     for (const input of this.root.querySelectorAll<HTMLInputElement>('input[name="spriteTransitions"]')) input.disabled = config.spriteMotion <= 0;
     this.control<HTMLInputElement>("spriteFocusBlur").checked = config.spriteFocusBlur;
     this.control<HTMLInputElement>("spritePressBounce").checked = config.spritePressBounce;
+    this.control<HTMLInputElement>("spritePlateDepth").checked = config.spritePlateDepth;
     // Touch: the size and the lines read as not applying while touch mode is off.
     this.control<HTMLInputElement>("spriteTouch").checked = config.spriteTouch;
     this.setRadio("spriteTouchIntensity", config.spriteTouchIntensity);

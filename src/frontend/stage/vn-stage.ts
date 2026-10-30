@@ -29,6 +29,8 @@ import { buildWaitingRecap, sceneAt, USER_PARAGRAPH_PREFIX, type RecapImage } fr
 import { LocationLabel, OpeningCard } from "./scene-card.js";
 import { WaitingScreen, type WaitingTouchFigure } from "./waiting-screen.js";
 import { measurePlateLight } from "./sprite-depth.js";
+import { PlateParallax } from "./plate-parallax.js";
+import { plateDepthFor } from "./plate-depth-service.js";
 import { clickEffectFor, spawnClickSparks } from "./click-sparks.js";
 import { interfaceSounds, type InterfaceSounds } from "./interface-sounds.js";
 import { applyInnerVoiceGlow, innerVoiceNames, paragraphInnerVoice } from "./inner-voice.js";
@@ -666,6 +668,8 @@ export class VnStage {
   /** Sprite mode: a status line of the stage's own (the cut-out model download), or null. */
   private spriteNote: string | null = null;
   private readonly spriteLayer: SpriteLayer;
+  /** 3D backgrounds: the plate over its scene image, moved by its depth map. */
+  private readonly plateParallax: PlateParallax;
   /**
    * Height (px) from the stage bottom to the top of the dialogue chrome
    * (nameplate, toolbar, box). Portrait sprite layouts stand above it. It
@@ -808,6 +812,7 @@ export class VnStage {
     this.flashOverlay = queryRequired(this.themeRoot, "[data-vn-flash]");
     this.fxOverlay = queryRequired(this.themeRoot, "[data-vn-fx]");
     this.ambientOverlay = queryRequired(this.themeRoot, "[data-vn-ambient]");
+    this.plateParallax = new PlateParallax({ scene: this.scene, sprites: () => this.spritesEl, depthFor: plateDepthFor });
     this.setSceneImageFit(options.sceneImageFit ?? "cover");
     this.spriteLayer = new SpriteLayer({
       container: () => this.spriteContainer(),
@@ -985,6 +990,7 @@ export class VnStage {
   setEffectIntensity(level: VnEffectIntensity): void {
     this.effectIntensity = level === "off" || level === "gentle" ? level : "full";
     this.root.dataset.vnEffectIntensity = this.effectIntensity;
+    this.plateParallax.setMotion(this.effectIntensity);
   }
 
   getEffectIntensity(): VnEffectIntensity {
@@ -1143,6 +1149,12 @@ export class VnStage {
     for (const img of this.sceneImages) {
       img.dataset.vnSceneImageFit = fit;
     }
+    this.plateParallax.setFit(fit);
+  }
+
+  /** 3D backgrounds (config `spritePlateDepth`): sprite-mode plates move with their depth. */
+  setPlateDepth(enabled: boolean): void {
+    this.plateParallax.setEnabled(enabled);
   }
 
   /**
@@ -2159,6 +2171,7 @@ export class VnStage {
     this.dialogueObserver = null;
     this.touch.destroy();
     this.spriteLayer.destroy();
+    this.plateParallax.destroy();
     if (this.speechHold) this.sounds.releaseHold(this.speechHold);
     this.host.remove();
   }
@@ -3027,6 +3040,8 @@ export class VnStage {
     } else {
       this.clearSceneImages();
     }
+    // Plates only (not key illustrations), in sprite mode.
+    this.plateParallax.show(this.presentationMode === "sprites" && displayedImage?.requestId.startsWith(PLATE_REQUEST_PREFIX) ? displayedImage.url : null);
 
     this.applyAmbient(this.ambientOverride !== undefined ? this.ambientOverride : this.state.ambient);
 

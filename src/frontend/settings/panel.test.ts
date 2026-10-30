@@ -149,6 +149,15 @@ describe("settings panel markup", () => {
     expect(motion).toContain('name="spriteAtmosphere"');
   });
 
+  test("3D backgrounds: one checkbox in Character motion, saved at once and synced", () => {
+    expect(names.filter((candidate) => candidate === "spritePlateDepth")).toEqual(["spritePlateDepth"]);
+    expect(source).toContain('case "spritePlateDepth": return { spritePlateDepth: checked };');
+    expect(source).toContain('this.control<HTMLInputElement>("spritePlateDepth").checked = config.spritePlateDepth;');
+    expect(advancedKeys).not.toContain("spritePlateDepth");
+    const motion = source.slice(source.indexOf('${group("Character motion"'), source.indexOf('${group("Character look"'));
+    expect(motion).toContain('name="spritePlateDepth"');
+  });
+
   test("stage feel: press-to-bounce in Character motion; click effect, interface sounds and inner voices in Look, saving at once", () => {
     for (const name of ["spritePressBounce", "clickEffect", "interfaceSounds", "interfaceSoundVolume", "innerVoices"]) {
       expect(source).toContain(`case "${name}": return { ${name}: `);

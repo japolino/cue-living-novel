@@ -158,6 +158,23 @@ textarea {
 }
 
 /*
+ * 3D backgrounds (stage/plate-parallax.ts): the plate redrawn in WebGL over
+ * its flat scene image. Transparent until its depth map is on the GPU; with
+ * the active image's z-index and after it in the DOM, so above it and under
+ * an incoming one; a scene image, so the camera effects move it too.
+ */
+[data-vn-scene-image][data-vn-plate-depth] {
+  z-index: 1;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 320ms ease, transform 2s ease;
+}
+
+[data-vn-scene-image][data-vn-plate-depth][data-vn-ready="true"] {
+  opacity: 1;
+}
+
+/*
  * Camera zoom / push-in: CSS transform on scene image (scale 1.12 with smooth 2s ease)
  */
 [data-vn-scene-image].vn-zoom-in,

@@ -322,6 +322,9 @@ test("sprite puppet settings default on (no outline) and clamp to their ranges",
   assert.equal(normalizeConfig({ spriteTransitions: "wobbly" }).spriteTransitions, "expressive");
   assert.equal(normalizeConfig({ spriteAtmosphere: false }).spriteAtmosphere, false);
   assert.equal(normalizeConfig({ spriteAtmosphere: "no" }).spriteAtmosphere, true);
+  assert.equal(defaults.spritePlateDepth, true);
+  assert.equal(normalizeConfig({ spritePlateDepth: false }).spritePlateDepth, false);
+  assert.equal(normalizeConfig({ spritePlateDepth: "no" }).spritePlateDepth, true);
   const clamped = normalizeConfig({ spriteMotion: 400, spriteOutline: 9.6, spriteBreathing: false, spriteSway: "no", spriteFocusBlur: false });
   assert.equal(clamped.spriteMotion, SPRITE_MOTION_MAX);
   assert.equal(clamped.spriteOutline, SPRITE_OUTLINE_MAX);

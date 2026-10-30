@@ -19,6 +19,8 @@
     "test:text-effects": "bun run ./scripts/test-text-effects-browser.ts",
     "test:sprite-stage": "bun run ./scripts/test-sprite-stage-browser.ts",
     "test:sprite-depth": "bun run ./scripts/test-sprite-depth-browser.ts",
+    "test:plate-depth": "bun run ./scripts/test-plate-depth-browser.ts",
+    "test:plate-parallax": "bun run ./scripts/test-plate-parallax-browser.ts",
     "test:feel": "bun run ./scripts/test-stage-feel-browser.ts",
     "test:sprite-size": "bun run ./scripts/test-sprite-size-browser.ts",
     "test:sprite-cutout": "bun run ./scripts/test-sprite-cutout-browser.ts",

@@ -326,6 +326,13 @@ export type VisualNovelConfig = {
   spriteSizeMatchMin: number;
   /** Sprite mode, size matching: how far the face moves to the slot centre, percent. */
   spriteSizeMatchCenter: number;
+  /**
+   * Sprite mode: 3D backgrounds (docs/SPRITE_MODE.md, "3D backgrounds"). The
+   * plate gets a depth map (a 27 MB model, downloaded once) and moves like a
+   * set: with the mouse, a slow drift on touch screens, a dolly-in on a new
+   * place. Motion "off" and reduced motion keep it flat.
+   */
+  spritePlateDepth: boolean;
   /** Dialogue text size multiplier, 1 = the theme's own size. */
   textScale: number;
   audioDirectory: string;
@@ -422,6 +429,7 @@ export const DEFAULT_CONFIG: VisualNovelConfig = {
   spriteSizeMatchMax: 160,
   spriteSizeMatchMin: 60,
   spriteSizeMatchCenter: 100,
+  spritePlateDepth: true,
   textScale: 1,
   audioDirectory: "",
   bgmVolume: 0.7,
@@ -715,6 +723,8 @@ export const CHARACTER_SCOPED_KEYS = [
   "spriteSizeMatchMax",
   "spriteSizeMatchMin",
   "spriteSizeMatchCenter",
+  // Sprites: 3D backgrounds.
+  "spritePlateDepth",
   // Stage feel.
   "clickEffect",
   "spritePressBounce",
@@ -884,6 +894,7 @@ export function normalizeConfig(value: unknown): VisualNovelConfig {
     spriteSizeMatchMax: integer(input.spriteSizeMatchMax, SPRITE_SIZE_MATCH_MAX_RANGE[0], SPRITE_SIZE_MATCH_MAX_RANGE[1], DEFAULT_CONFIG.spriteSizeMatchMax),
     spriteSizeMatchMin: integer(input.spriteSizeMatchMin, SPRITE_SIZE_MATCH_MIN_RANGE[0], SPRITE_SIZE_MATCH_MIN_RANGE[1], DEFAULT_CONFIG.spriteSizeMatchMin),
     spriteSizeMatchCenter: integer(input.spriteSizeMatchCenter, 0, 100, DEFAULT_CONFIG.spriteSizeMatchCenter),
+    spritePlateDepth: bool(input.spritePlateDepth, DEFAULT_CONFIG.spritePlateDepth),
     textScale: textScale(input.textScale),
     audioDirectory: stringValue(input.audioDirectory, DEFAULT_CONFIG.audioDirectory).trim(),
     bgmVolume: floatBetween(input.bgmVolume, 0, 1, DEFAULT_CONFIG.bgmVolume),

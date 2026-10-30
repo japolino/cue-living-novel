@@ -1,6 +1,9 @@
 import { VnStage } from "../src/frontend/stage/vn-stage.js";
 import type { VnTurnInput } from "../src/frontend/store/vn-store.js";
 import { puppetGlOptions } from "../src/frontend/stage/sprite-puppet.js";
+import { configureCutoutRuntime } from "../src/frontend/sprites/cutout/index.js";
+import { writeCachedModel } from "../src/frontend/sprites/cutout/model-store.js";
+import { configurePlateDepth, encodePlateDepth, plateDepthStoreKey } from "../src/frontend/stage/plate-depth-service.js";
 import { DEFAULT_CONFIG, spritePuppetSettings, spriteSizeMatchSettings, spriteTouchSettings, stageFeelSettings, type VisualNovelSpritePuppet, type VisualNovelSpriteSizeMatch, type VisualNovelSpriteTouch, type VisualNovelStageFeel } from "../src/config.js";
 import type { TouchCharacterRef, TouchLinePack } from "../src/shared/touch.js";
 import {
@@ -22,8 +25,12 @@ import {
  * Query: ?preset, ?intensity (full|gentle|off), ?speed (typewriter ms), ?mode (sprites|scene),
  * ?puppet=css (no WebGL puppet: the CSS fallback), ?outline (px),
  * ?scale=auto (the puppet's adaptive render scale; pinned at 1 otherwise, so
- * canvas sizes don't change under the pixel checks).
- * window.fx: { stage, load(paragraphs, options), plan(), go(index), illustrate(index, status), ready(...), view(), effect(name), ambient(name), puppet(settings), feel(settings), sizeMatch(settings), renderScale(scale | null), touch(settings), touchBackend, identity(key, tags) }.
+ * canvas sizes don't change under the pixel checks), ?depth=1 (3D
+ * backgrounds; off otherwise, so no suite downloads the depth model).
+ * window.fx: { stage, load(paragraphs, options), plan(), go(index), illustrate(index, status), ready(...), view(), effect(name), ambient(name), puppet(settings), feel(settings), sizeMatch(settings), renderScale(scale | null), touch(settings), touchBackend, identity(key, tags), depth }.
+ * `depth` (scripts/test-plate-parallax-browser.ts): configure(ortBaseUrl,
+ * modelUrl) runs the real model; seed(url, width, height, depth) stores a
+ * depth map for a plate so no model is needed; set(enabled) is the setting.
  * Touch mode (scripts/test-sprite-touch-browser.ts) talks to a stand-in
  * backend here: `touchBackend` keeps the bonds, answers line-pack asks with
  * TOUCH_PACK (or an error) after a moment and logs every ask.
@@ -182,6 +189,7 @@ const stage = new VnStage({
 });
 stage.setEffectIntensity((q.get("intensity") as never) ?? "full");
 stage.setPresentationMode((q.get("mode") as never) ?? "sprites");
+stage.setPlateDepth(q.get("depth") === "1");
 const puppet = (settings: Partial<VisualNovelSpritePuppet>) => stage.setSpritePuppet({ ...spritePuppetSettings(DEFAULT_CONFIG), ...settings });
 if (q.get("outline")) puppet({ spriteOutline: Number(q.get("outline")) });
 /** Click sparks, press-to-bounce, interface sounds and inner voices (scripts/test-stage-feel-browser.ts). */
@@ -286,5 +294,14 @@ Object.assign(window, {
     },
     /** Pin the puppet's render scale (null: adaptive). */
     renderScale: (scale: number | null) => { puppetGlOptions.renderScale = scale; },
+    depth: {
+      configure: (ortBaseUrl: string, modelUrl: string) => {
+        configureCutoutRuntime({ ortBaseUrl, numThreads: 1 });
+        configurePlateDepth({ modelUrl });
+      },
+      seed: (url: string, width: number, height: number, depth: number[]) =>
+        writeCachedModel(plateDepthStoreKey(url), encodePlateDepth({ width, height, depth: Uint8Array.from(depth) })),
+      set: (enabled: boolean) => stage.setPlateDepth(enabled),
+    },
   },
 });
