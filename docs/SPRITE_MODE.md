@@ -552,8 +552,9 @@ one table, so a scene layout can be added). Request:
   inset is off for that user, connection and inpainting model until the
   backend restarts; anchored expressions then stop waiting for the idle.
   Any other error (429 concurrent-generation lock, 408, 5xx, network,
-  credits, a missing image id) fails the render as usual, with no plain
-  retry, and the inset stays on for the next attempt. No canvas
+  credits, a missing image id) fails the render as usual (a passing one
+  after its silent retry, see "Order of work"), with no plain retry, and
+  the inset stays on for the next attempt. No canvas
   (browser error, timeout, a page without the inset service): the plain
   expression, and that idle is not offered to the browser again for 5
   minutes after an error or 1 minute after a timeout, or until the page
@@ -640,6 +641,16 @@ fill-in not started yet; an image already generating finishes. Work an
 older turn needed and did not start keeps its priority, after the new turn's
 work. A flagged idle re-queues the expressions made with the old seed as turn
 work when the latest turn needs them, else as "next".
+
+A render that fails for a passing reason (NovelAI's 429 concurrent-generation
+lock while the account draws elsewhere, 408, 5xx, a timeout or a dropped
+connection; `image-retry.ts`, as for scene pictures) is asked for once more
+3 s later, in the same slot, before it counts as failed. A plate that still
+fails that way goes back in the queue when a turn needs it again (the turn
+shown, a reload, the next reply), at most once a minute
+(`PLATE_RETRY_AFTER_MS`): the stage shows no notice for a missing place, so
+it would otherwise stay empty until regenerated in the library. A refusal
+(400, 401, 402, 403, 404, 422) fails at once and stays failed.
 
 Lunch scene (3 characters, 29 paragraphs, one plate, anchoring, no key
 moment; `bun scripts/sprite-turn-order.ts <stage-data.json>`):

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { SPRITE_HOT_SET, plateKeyFor, spriteSetKeyFor, type SpriteStaging } from "../../../shared/sprites.js";
 import { CUT_META, KAI, MIRA, fakePng, mockSpindle, sampleStaging, spriteConfig, toBase64, waitFor, type MockSpindleOptions } from "./__fixtures__/sprite-fixtures.js";
 import { SPRITE_LIBRARY_PATH, type SpriteLibrary } from "./library.js";
-import { SpriteService } from "./jobs.js";
+import { PLATE_RETRY_AFTER_MS, SpriteService } from "./jobs.js";
 import { SPRITE_EXPRESSION_TAGS } from "./prompts.js";
 import { spriteStyleKey } from "./style.js";
 import type { VisualNovelConfig } from "../../../config.js";
@@ -20,6 +20,7 @@ function setup(options: MockSpindleOptions & { config?: Partial<VisualNovelConfi
     ...(options.cutTimeoutMs !== undefined ? { cutTimeoutMs: options.cutTimeoutMs } : {}),
     ...(options.idleCheckWaitMs !== undefined ? { idleCheckWaitMs: options.idleCheckWaitMs } : {}),
     referenceTimeoutMs: 300,
+    retryDelayMs: 5,
   });
   const styleKey = spriteStyleKey(config);
   const started = () => log.filter((line) => line.endsWith("-> generating")).map((line) => line.split(" ")[3]!);
@@ -619,6 +620,65 @@ describe("sprite jobs: library actions", () => {
     expect(count).toBe(failedCalls);
     await f.service.settle("u1");
     expect(f.calls.length).toBe(failedCalls * 2);
+  });
+
+  const LOCKED = "NovelAI image generate failed (429): Concurrent generation is locked";
+  const telescope = (call: { prompt: string }) => call.prompt.includes("brass telescope");
+
+  test("a render that fails for a passing reason (NovelAI's 429 lock) is asked for once more, silently", async () => {
+    let locked = true;
+    const f = setup({ failGenerate: (call) => (telescope(call) && locked ? ((locked = false), LOCKED) : null) });
+    const staging = sampleStaging(f.styleKey);
+    const observatory = staging.plates[0]!.plateKey;
+    await f.service.ensureForStaging("u1", staging, spriteConfig());
+    await f.service.settle("u1");
+    expect(f.calls.filter(telescope)).toHaveLength(2);
+    const plate = (await f.library()).plates[observatory]!;
+    expect(plate.status).toBe("ready");
+    expect(plate.error).toBeNull();
+    expect(f.log.some((line) => line.startsWith(`${observatory}: image request failed for a passing reason`))).toBe(true);
+  });
+
+  test("a plate still failing for a passing reason goes again when a turn needs it a minute later", async () => {
+    let locked = true;
+    const f = setup({ failGenerate: (call) => (telescope(call) && locked ? LOCKED : null) });
+    const staging = sampleStaging(f.styleKey);
+    const observatory = staging.plates[0]!.plateKey;
+    await f.service.ensureForStaging("u1", staging, spriteConfig());
+    await f.service.settle("u1");
+    // Both tries hit the lock.
+    expect(f.calls.filter(telescope)).toHaveLength(2);
+    expect((await f.library()).plates[observatory]!).toMatchObject({ status: "failed", error: LOCKED });
+    // The turn shown again at once: not yet.
+    await f.service.ensureForStaging("u1", staging, spriteConfig());
+    await f.service.settle("u1");
+    expect(f.calls.filter(telescope)).toHaveLength(2);
+    // A minute later, the lock gone: the next view of the turn makes it.
+    await f.service.library.update("u1", (library) => {
+      library.plates[observatory]!.updatedAt = new Date(Date.now() - PLATE_RETRY_AFTER_MS - 1_000).toISOString();
+    });
+    locked = false;
+    await f.service.ensureForStaging("u1", staging, spriteConfig());
+    await f.service.settle("u1");
+    expect(f.calls.filter(telescope)).toHaveLength(3);
+    expect((await f.library()).plates[observatory]!).toMatchObject({ status: "ready", error: null });
+  });
+
+  test("a refused render (400) is not retried and its plate stays failed", async () => {
+    const refused = "NovelAI image generate failed (400): bad prompt";
+    const f = setup({ failGenerate: (call) => (telescope(call) ? refused : null) });
+    const staging = sampleStaging(f.styleKey);
+    const observatory = staging.plates[0]!.plateKey;
+    await f.service.ensureForStaging("u1", staging, spriteConfig());
+    await f.service.settle("u1");
+    expect(f.calls.filter(telescope)).toHaveLength(1);
+    await f.service.library.update("u1", (library) => {
+      library.plates[observatory]!.updatedAt = new Date(Date.now() - PLATE_RETRY_AFTER_MS - 1_000).toISOString();
+    });
+    await f.service.ensureForStaging("u1", staging, spriteConfig());
+    await f.service.settle("u1");
+    expect(f.calls.filter(telescope)).toHaveLength(1);
+    expect((await f.library()).plates[observatory]!).toMatchObject({ status: "failed", error: refused });
   });
 
   test("retry_failed (the stage's Try again): one set's failed cuts are cut again from their render, failed renders are made again", async () => {

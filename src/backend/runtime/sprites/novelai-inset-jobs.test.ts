@@ -35,6 +35,7 @@ function setup(options: MockSpindleOptions & {
     referenceTimeoutMs: 300,
     insetTimeoutMs: 60,
     idleCheckWaitMs: 2000,
+    retryDelayMs: 5,
     ...(options.deps ?? {}),
   });
   let insetMode = options.inset ?? "ok";
@@ -248,11 +249,28 @@ describe("NovelAI V5 inset: fallbacks", () => {
     expect(f.log.some((line) => line.includes("reference inset failed on nai-diffusion-5-full-inpainting") && line.includes("inset off"))).toBe(true);
   });
 
-  test("a passing error (429 lock, 5xx, network, no image id) fails the render as usual and keeps the inset on", async () => {
+  test("a passing error (429 lock, 5xx, network) is retried once as an inset, silently, and keeps the inset on", async () => {
     for (const failure of [
       "NovelAI image generate failed (429): Concurrent generation is locked",
       "NovelAI image generate failed (502): Bad Gateway",
       "fetch failed",
+    ]) {
+      let failed = false;
+      const f = setup({ failGenerate: (call) => (inpainting(call) && !failed ? ((failed = true), failure) : null) });
+      await f.service.prepareCast("u1", [MIRA], f.config);
+      await f.drive(f.allSettled);
+      // No plain retry: the idle is the only plain render; the failed inset is asked for once more.
+      expect(f.calls.filter((call) => !inpainting(call))).toHaveLength(1);
+      expect(f.calls.filter(inpainting)).toHaveLength(4);
+      const statuses = await Promise.all(["smile", "sad", "angry"].map(async (expression) => (await f.image(expression)).status));
+      expect(statuses).toEqual(["ready", "ready", "ready"]);
+      expect(f.log.some((line) => line.includes("failed for a passing reason, trying once more"))).toBe(true);
+      expect(f.log.some((line) => line.includes("inset off"))).toBe(false);
+    }
+  });
+
+  test("an error that would fail again (no image id) fails the render as usual and keeps the inset on", async () => {
+    for (const failure of [
       "The image provider completed without a persisted image ID.",
     ]) {
       let failed = false;
