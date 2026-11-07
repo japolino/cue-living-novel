@@ -215,6 +215,16 @@ export class AssetScheduler {
     return this.scheduled.get(jobId)?.job ?? null;
   }
 
+  /**
+   * True while any job waits or runs. A cancelled job whose executor has not
+   * returned yet still runs (providers take no signal) and still holds its
+   * provider slot.
+   */
+  active(): boolean {
+    for (const item of this.scheduled.values()) if (!terminal(item.job.status)) return true;
+    return false;
+  }
+
   snapshot(): readonly AssetJob[] {
     return [...this.scheduled.values()].map(({ job }) => job);
   }

@@ -536,6 +536,24 @@ describe("sprite jobs: library actions", () => {
     expect(f.of("vn_sprite_library")).toHaveLength(2);
   });
 
+  test("a render regenerated while it draws keeps its provider slot until the provider answers", async () => {
+    const f = setup({ gated: true, config: { imageConcurrency: 1 } });
+    const config = spriteConfig({ imageConcurrency: 1 });
+    const staging = sampleStaging(f.styleKey);
+    await f.service.ensureForStaging("u1", staging, config);
+    await waitFor(() => f.gates.length === 1);
+    const plateKey = f.started()[0]!;
+    expect(staging.plates.map((plate) => plate.plateKey)).toContain(plateKey);
+    await f.service.action("u1", { type: "vn_sprite_action", action: "regenerate_plate", plateKey }, { config });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    // The first request cannot be called back: a second call now would meet
+    // NovelAI's "Concurrent generation is locked" (429).
+    expect(f.gates).toHaveLength(1);
+    f.gates[0]!.release();
+    await waitFor(() => f.gates.length === 2);
+    expect(f.gates).toHaveLength(2);
+  });
+
   test("regenerate one expression: old images deleted, a new seed, new render", async () => {
     const f = setup();
     const setKey = await readySet(f);

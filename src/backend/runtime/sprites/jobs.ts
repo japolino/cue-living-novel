@@ -1106,8 +1106,11 @@ export class SpriteService {
   private schedulerFor(userId: string | undefined, state: UserState, config: VisualNovelConfig): AssetScheduler {
     const providerKey = `image:${config.imageConnectionId ?? "default"}`;
     const concurrency = Math.max(1, Math.floor(config.imageConcurrency) || 1);
-    // A drained scheduler is replaced so finished jobs never accumulate.
-    if (state.scheduler && state.inflight.size === 0 && state.moments.size === 0) {
+    // A drained scheduler is replaced so finished jobs never accumulate. Work
+    // forgotten while it draws (regenerate, delete) left `inflight` but still
+    // runs at the provider: replacing the scheduler then would start a second
+    // request beside it and break imageConcurrency (NovelAI answers 429).
+    if (state.scheduler && state.inflight.size === 0 && state.moments.size === 0 && !state.scheduler.active()) {
       state.unsubscribe?.();
       state.scheduler = null;
       state.byJobId.clear();
