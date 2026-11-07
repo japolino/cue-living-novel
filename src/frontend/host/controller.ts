@@ -656,6 +656,9 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
   let pendingNextTurn: TurnView | null = null;
   // Where the reader was when Regenerate / Try again started; restored if the turn comes back unchanged.
   let retryResumePhase: "revealing" | "awaiting-input" | null = null;
+  // The reply generation ended without a reply (stopped or empty) while the
+  // reader was still on their own line: reading past it gives the turn back.
+  let replyEnded = false;
   let overrideHandles: ComponentOverrideHandle[] = [];
   const acknowledgedAssets = new Set<string>();
   let destroyed = false;
@@ -763,7 +766,13 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       if (pendingNextTurn) {
         const next = pendingNextTurn;
         pendingNextTurn = null;
+        replyEnded = false;
         applyTurn(next, turn);
+        return;
+      }
+      if (replyEnded && stage.getState().phase === "waiting-for-response") {
+        replyEnded = false;
+        stage.setPhase("awaiting-input");
         return;
       }
       syncSpeechCursor(turn, paragraphIndex);
@@ -1281,6 +1290,7 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     if (!trimmed) throw new Error("Enter a response first.");
     const userSpeaker = turn?.userSpeaker || "You";
     speech.setCursor(null);
+    replyEnded = false;
     stage.presentUserParagraph(trimmed, userSpeaker);
     await submit(trimmed);
   }
@@ -1611,11 +1621,18 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
     if (type === "vn_generation" && message.type === "vn_generation") {
       if (message.chatId !== chatId()) return;
       if (message.active) {
+        replyEnded = false;
         stage.setError(null);
         stage.setAssetProgress(null);
         if (!stage.isReadingUserParagraph()) {
           stage.setPhase("waiting-for-response");
         }
+      } else if (message.outcome && !message.error) {
+        // Stopped, or finished empty: no reply and no plan will follow, so
+        // the stage stops waiting and gives the turn back (the composer).
+        // A reader still on their own line gets it when they read past it.
+        if (stage.getState().phase === "waiting-for-response") stage.setPhase("awaiting-input");
+        else if (stage.isReadingUserParagraph()) replyEnded = true;
       } else if (message.error) {
         reportStageError({
           message: "The reply finished, but the scene could not be updated.",

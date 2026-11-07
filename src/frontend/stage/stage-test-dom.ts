@@ -46,7 +46,7 @@ export class FakeNode {
   placeholder = "";
   title = "";
   readonly dataset: Record<string, string>;
-  readonly style: Record<string, string> & { setProperty(name: string, value: string): void };
+  readonly style: Record<string, string> & { setProperty(name: string, value: string): void; removeProperty(name: string): void };
   readonly classList: { add(...n: string[]): void; remove(...n: string[]): void; contains(n: string): boolean };
 
   constructor(tagName: string, text = "") {
@@ -62,7 +62,10 @@ export class FakeNode {
       getOwnPropertyDescriptor: () => ({ enumerable: true, configurable: true }),
     });
     const styleStore: Record<string, string> = {};
-    this.style = Object.assign(styleStore, { setProperty: (name: string, value: string) => { styleStore[name] = value; } });
+    this.style = Object.assign(styleStore, {
+      setProperty: (name: string, value: string) => { styleStore[name] = value; },
+      removeProperty: (name: string) => { delete styleStore[name]; },
+    });
     const classes = () => new Set((node.attributes.get("class") ?? "").split(/\s+/).filter(Boolean));
     const write = (set: Set<string>) => { if (set.size) node.attributes.set("class", Array.from(set).join(" ")); else node.attributes.delete("class"); };
     this.classList = {

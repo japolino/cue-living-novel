@@ -1654,7 +1654,7 @@ async function generationEnded(spindle: SpindleAPI, payload: GenerationEndedPayl
     type: "vn_generation",
     chatId: payload.chatId,
     active: false,
-    ...(payload.error ? { error: payload.error } : {})
+    ...(payload.error ? { error: payload.error } : !payload.content ? { outcome: "empty" as const } : {})
   }, userId);
   dbg(spindle, userId, `event GENERATION_ENDED chat=${payload.chatId} message=${payload.messageId ?? "latest"} contentChars=${payload.content?.length ?? 0}${payload.error ? ` error=${payload.error}` : ""}`);
   if (payload.error || !payload.content) return;
@@ -2277,7 +2277,7 @@ export function registerVisualNovelBackend(spindle: SpindleAPI): void {
   spindle.on("GENERATION_STOPPED", (payload, userId) => {
     dbg(spindle, userId, `event GENERATION_STOPPED chat=${payload.chatId}`);
     generatingChats.delete(runtimeKey(userId, payload.chatId));
-    spindle.sendToFrontend({ type: "vn_generation", chatId: payload.chatId, active: false }, userId);
+    spindle.sendToFrontend({ type: "vn_generation", chatId: payload.chatId, active: false, outcome: "stopped" }, userId);
   });
   spindle.on("MESSAGE_SWIPED", (payload: MessageSwipedPayloadDTO, userId) => {
     dbg(spindle, userId, "event MESSAGE_SWIPED");

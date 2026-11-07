@@ -314,7 +314,12 @@ export type BackendResponse =
    * no images were made; the user picks a scene in the chat first.
    */
   | { type: "vn_waiting"; chatId: string; messageId: string; reason: "greeting_unselected" }
-  | { type: "vn_generation"; chatId: string; active: boolean; error?: string }
+  /**
+   * A reply generation started or ended. `outcome` marks an end that brings
+   * no reply to plan (stopped, or finished empty): nothing else follows, so
+   * a stage waiting for the reply gives the turn back to the reader.
+   */
+  | { type: "vn_generation"; chatId: string; active: boolean; error?: string; outcome?: "stopped" | "empty" }
   | { type: "vn_permission"; permission: string; granted: boolean }
   | { type: "vn_audio_scanned"; bgmCount: number; sfxCount: number }
   | {
