@@ -2109,6 +2109,17 @@ export class VnStage {
    * card but never block reading: the paragraph, Continue and Previous stay
    * usable while the host decides what to do next.
    */
+  /**
+   * Remove only the non-blocking image card. `setError(null)` clears every
+   * error, a blocking one with its Try again too, while the phase stays
+   * "error": the reader would be left with no card and no way on.
+   */
+  clearImageNotice(): void {
+    if (!this.hostImageError) return;
+    this.hostImageError = null;
+    this.render(this.state.phase);
+  }
+
   setError(error: VnStageErrorInput): void {
     if (error === null) {
       this.errorDetails = null;

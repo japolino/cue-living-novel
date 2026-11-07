@@ -56,6 +56,20 @@ describe("failed backend requests", () => {
   });
 });
 
+describe("the scene image card", () => {
+  test("goes once Try again re-queued the picture", async () => {
+    const failed = turn({ assets: [{ jobId: "j0", cueId: "c0", paragraphIndex: 0, status: "failed", error: "provider down" }] });
+    const h = await open();
+    h.receive({ type: "vn_turn", turn: failed });
+    await flush();
+    expect(h.badges().some((text) => text.includes("could not be made"))).toBe(true);
+    // Try again kept the turn and queued the picture again (same-turn path).
+    h.receive({ type: "vn_turn", turn: { ...failed, assets: [{ jobId: "j0", cueId: "c0", paragraphIndex: 0, status: "queued" }] } });
+    await flush();
+    expect(h.badges().some((text) => text.includes("could not be made"))).toBe(false);
+  });
+});
+
 describe("a reply generation that brings no reply", () => {
   for (const outcome of ["stopped", "empty"] as const) test(`${outcome}: the stage stops waiting and gives the turn back`, async () => {
     const h = await open();

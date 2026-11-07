@@ -1206,7 +1206,11 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       illustrationNotice = key;
       return;
     }
-    if (illustrationNotice !== null) reportStageError(null);
+    if (illustrationNotice !== null) {
+      // Only this card: a blocking error shown meanwhile stays, with its Try again.
+      illustrationNotice = null;
+      stage.clearImageNotice();
+    }
   }
 
   function registerOverrides(): void {
@@ -1303,7 +1307,10 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       return;
     }
     const assetFailure = currentAssetFailure(turn, paragraphIndex);
+    // The card follows the current picture: it goes once that picture is no
+    // longer failed (Try again re-queued it) or the reader moved past it.
     if (assetFailure) reportStageError(assetFailure);
+    else stage.clearImageNotice();
     const asset = selectCurrentImage(turn, paragraphIndex);
     if (!asset?.imageUrl) {
       vnDebug("image sync", `p${paragraphIndex}`, "no decodable asset yet");

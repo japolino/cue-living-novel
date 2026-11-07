@@ -506,6 +506,19 @@ describe("reading UX", () => {
     expect(q(s, "[data-vn-badge-kind='error'] [data-vn-badge-text]").textContent).toBe("The image provider rejected the prompt. You can keep reading.");
   });
 
+  test("removing the image card keeps a blocking error and its Try again", () => {
+    const s = create({ onReroll: () => {} });
+    s.loadTurn({ paragraphs: paragraphs(2) });
+    s.setError({ source: "image", message: "This scene image could not be made.", retryable: true });
+    s.setError({ source: "generation", message: "The reply finished, but the scene could not be updated.", retryable: false });
+    expect(badgeTexts(s).filter((text) => text.includes("could not be made"))).toHaveLength(1);
+    s.clearImageNotice();
+    expect(badgeTexts(s).some((text) => text.includes("could not be made"))).toBe(false);
+    expect(s.getState().phase).toBe("error");
+    expect(s.getState().error).toBe("The reply finished, but the scene could not be updated.");
+    expect(badgeTexts(s).some((text) => text.includes("scene could not be updated"))).toBe(true);
+  });
+
   test("turn-level errors mention rereading only when text was shown", () => {
     const s = create();
     s.setError("The request failed.");
