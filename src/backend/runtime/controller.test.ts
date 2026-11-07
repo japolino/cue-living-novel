@@ -472,6 +472,9 @@ describe("GENERATION_STARTED abort and ownership invalidation", () => {
     await new Promise<void>((resolve) => setTimeout(resolve, 50));
     expect((sent as Array<{ type: string }>).filter((message) => message.type === "vn_turn")).toHaveLength(0);
     expect(gates.length).toBe(0);
+    // The host always ends a generation. Chat state is module-wide: a reply
+    // left generating would hold off later tests' batches on this chat.
+    fire("GENERATION_STOPPED", { chatId: "chat" });
   });
 });
 

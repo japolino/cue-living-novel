@@ -23,8 +23,9 @@ import { keyMomentScenes } from "./sprites/moment-prompts.js";
 import { resolvePanelTemplate } from "./panel-templates.js";
 import { ViewRegistry } from "./view-registry.js";
 import { isFrontendRequest } from "../../protocol.js";
-import { compareTurnKeys, turnKeyEquals } from "../core/guards.js";
+import { turnKeyEquals } from "../core/guards.js";
 import { PlanningQueue, isAbortError } from "../core/planning-queue.js";
+import { ChatRuntimes, type ChatRuntime } from "../core/chat-runtime.js";
 import { resolveNativeCardJobs } from "./native-assets.js";
 import { handleReferenceImageResponse, loadCardBackgroundUrl } from "./reference-source.js";
 import { CACHE_JOB_PROVIDER, createAssetJobs, prepareAssetJobs, generateAssets, resolveCacheCues, retainPlanEpisodes } from "./images.js";
@@ -82,25 +83,23 @@ type NormalizedChatMessage = ChatMessageDTO & {
 };
 
 const planningQueue = new PlanningQueue();
+/**
+ * Per chat: the turn that owns it, that turn's picture batch, whether a reply
+ * is being generated, the intake epoch, the text shown before the plan and the
+ * work still settling. One explicit state with its transitions; see
+ * `core/chat-runtime.ts`.
+ */
+const runtimes = new ChatRuntimes((userId, chatId, reason) => {
+  planningQueue.cancelChat(userId, chatId, undefined, reason);
+});
+function chatRuntime(userId: string | undefined, chatId: string): ChatRuntime {
+  return runtimes.get(userId, chatId);
+}
 const externalImageServices = new WeakMap<SpindleAPI, ReturnType<typeof createExternalImages>>();
 function externalImages(spindle: SpindleAPI) {
   let service = externalImageServices.get(spindle);
   if (!service) { service = createExternalImages(spindle); externalImageServices.set(spindle, service); }
   return service;
-}
-const assetControllers = new Map<string, AbortController>();
-/**
- * Per chat: settles once every asset batch started there (aborted or not) has
- * returned and every view-close cleanup has saved. An aborted batch keeps
- * running until its provider request returns (requests take no signal), so
- * pictures resume only after this settles: no second paid request for the
- * same picture, and no late "cancelled" save over the resumed record.
- */
-const assetSettles = new Map<string, Promise<void>>();
-function trackAssetWork(key: string, work: Promise<unknown>): void {
-  const settled = Promise.all([assetSettles.get(key), work.then(() => undefined, () => undefined)]).then(() => undefined);
-  assetSettles.set(key, settled);
-  void settled.then(() => { if (assetSettles.get(key) === settled) assetSettles.delete(key); });
 }
 /**
  * Sprite mode: one library/generation service per backend worker. It gates
@@ -128,24 +127,15 @@ export function spriteService(spindle: SpindleAPI): SpriteService {
   return service;
 }
 /**
- * Per-chat intake epoch. Macro resolution awaits the host before the planning
- * queue can see the job, so a cancel, a new generation, a deletion, or a
- * newer message event during that await could otherwise let a stale intake
- * enqueue afterwards. Bumping the epoch invalidates every intake that started
- * before the bump.
+ * Per-chat intake epoch (in the chat's runtime). Macro resolution awaits the
+ * host before the planning queue can see the job, so a cancel, a new
+ * generation, a deletion, or a newer message event during that await could
+ * otherwise let a stale intake enqueue afterwards. Bumping the epoch
+ * invalidates every intake that started before the bump.
  */
-const intakeEpochs = new Map<string, number>();
 function bumpIntakeEpoch(userId: string | undefined, chatId: string): void {
-  const key = runtimeKey(userId, chatId);
-  intakeEpochs.set(key, (intakeEpochs.get(key) ?? 0) + 1);
+  chatRuntime(userId, chatId).bumpIntakeEpoch();
 }
-const activeTurnKeys = new Map<string, StoredTurnRecord["plan"]["key"]>();
-/**
- * The provisional turn (text before the plan) of the plan running per chat,
- * kept so a view that reopens and joins that plan shows the text again. Only
- * in memory; never the chat's active turn.
- */
-const provisionalTurns = new Map<string, { operationId: string; view: TurnView }>();
 
 /** Card background URLs by chat, briefly: a turn view is built several times per reply. */
 const cardBackgrounds = new Map<string, { at: number; url: string | null }>();
@@ -160,8 +150,6 @@ async function cardBackgroundUrl(spindle: SpindleAPI, chatId: string, userId: st
   cardBackgrounds.set(key, { at: Date.now(), url });
   return url;
 }
-/** Chats with a reply being generated: GENERATION_STARTED until it ends or stops. */
-const generatingChats = new Set<string>();
 
 /**
  * Temporary scene-image cache (one per backend worker). See
@@ -215,7 +203,7 @@ export function viewRegistry(): ViewRegistry {
 /**
  * Persist "cancelled" over any queued/generating job of the chat's active turn
  * so a view-close abort leaves nothing that looks stuck. Late in-flight results
- * are already rejected by the ownership check (`activeTurnKeys`).
+ * are already rejected by the ownership check (the chat runtime's owner).
  */
 async function cancelIncompleteJobs(
   spindle: SpindleAPI,
@@ -223,14 +211,14 @@ async function cancelIncompleteJobs(
   userId: string | undefined,
   abortedTurn: StoredTurnRecord["plan"]["key"] | null
 ): Promise<void> {
-  const key = runtimeKey(userId, chatId);
+  const runtime = chatRuntime(userId, chatId);
   // Runs unawaited after a close. The aborted batch never resumes on its own,
   // so its jobs are stamped even if the view reopened meanwhile (otherwise a
   // fast close/reopen leaves "generating" jobs that nothing will ever finish).
   // Only a new owner claiming the chat's turn while we were loading (retry,
   // reply, reuse) makes the stored jobs live work that must be left alone,
   // and only the record of the aborted turn itself is ever touched.
-  const unclaimed = (): boolean => !activeTurnKeys.has(key);
+  const unclaimed = (): boolean => runtime.owner === null;
   const chatState = await loadChatState(spindle, chatId, userId);
   if (!chatState.activeTurnPath || !unclaimed()) return;
   const record = await loadTurnRecord(spindle, chatState.activeTurnPath, userId);
@@ -269,14 +257,11 @@ function abortChatWork(
   reason: string,
   admissionReason = "view_closed"
 ): void {
-  const key = runtimeKey(userId, chatId);
-  planningQueue.cancelChat(userId, chatId, undefined, reason);
-  const abortedTurn = activeTurnKeys.get(key) ?? null;
-  activeTurnKeys.delete(key);
-  assetControllers.get(key)?.abort(reason);
+  const runtime = chatRuntime(userId, chatId);
+  const abortedTurn = runtime.abort(reason);
   releaseSceneCacheAdmission(spindle, userId, chatId, admissionReason);
   // Tracked: a resume waits until these cancelled stamps are saved.
-  trackAssetWork(key, cancelIncompleteJobs(spindle, chatId, userId, abortedTurn).catch((error) => {
+  runtime.track(cancelIncompleteJobs(spindle, chatId, userId, abortedTurn).catch((error) => {
     spindle.log.warn(`Visual novel view-close cleanup failed: ${errorText(error)}`);
   }));
 }
@@ -926,9 +911,9 @@ export async function sendState(
   // The stopped batch is still out: show its pictures as queued (not saved) and resume once it settles.
   let waitingResume: { settling: Promise<void>; preview: StoredTurnRecord } | null = null;
   if (record && !stale && canPlan && chatState.activeTurnPath) {
-    const key = runtimeKey(userId, chatId);
-    const settling = assetSettles.get(key);
-    if (settling && picturesCanResume(record, config, key)) {
+    const runtime = chatRuntime(userId, chatId);
+    const settling = runtime.settling;
+    if (settling && picturesCanResume(record, config, runtime)) {
       waitingResume = { settling, preview: requeueStoppedPictures(record).next };
     } else {
       resumed = await resumeStoppedPictures(spindle, record, chatState.activeTurnPath, userId, config).catch((error: unknown) => {
@@ -1037,36 +1022,39 @@ async function startAssets(
   userId?: string,
   options: { bypassJobIds?: Iterable<string> } = {}
 ): Promise<void> {
-  const config = await loadChatConfig(spindle, userId, record.plan.key.chatId);
-  rememberDebugFlag(userId, config, record.plan.key.chatId);
+  const chatId = record.plan.key.chatId;
+  const runtime = chatRuntime(userId, chatId);
+  const config = await loadChatConfig(spindle, userId, chatId);
+  rememberDebugFlag(userId, config, chatId);
   if (!config.generateImages || record.jobs.length === 0) return;
   // The view may have closed between planning and this batch start; a closed
   // view means nobody sees (or pays for) these images.
-  if (!views.isOpen(userId, record.plan.key.chatId)) {
-    dbg(spindle, userId, `skipped asset batch: view closed chat=${record.plan.key.chatId}`);
-    const cleanup = cancelIncompleteJobs(spindle, record.plan.key.chatId, userId, record.plan.key);
-    trackAssetWork(runtimeKey(userId, record.plan.key.chatId), cleanup);
+  if (!views.isOpen(userId, chatId)) {
+    dbg(spindle, userId, `skipped asset batch: view closed chat=${chatId}`);
+    const cleanup = cancelIncompleteJobs(spindle, chatId, userId, record.plan.key);
+    runtime.track(cleanup);
     await cleanup;
     return;
   }
+  // The caller claimed the turn before awaiting (config here, the turn view
+  // before that): a cancel, a new generation or another turn may have taken
+  // the chat since. Only the turn that still owns it starts its batch, and
+  // none starts while a reply is being generated.
+  const start = runtime.startBatch(record.plan.key);
+  if (!start.ok) {
+    dbg(spindle, userId, `skipped asset batch: ${start.reason === "generating" ? "a reply is being generated" : "the turn no longer owns the chat"} chat=${chatId} message=${record.plan.key.assistantMessageId}`);
+    return;
+  }
   const cacheServed = record.jobs.filter((job) => job.provider === CACHE_JOB_PROVIDER).length;
-  dbg(spindle, userId, `assets starting: ${record.jobs.length - cacheServed} generated job(s)${cacheServed ? ` + ${cacheServed} cache-served swap(s) (not generated)` : ""} for chat=${record.plan.key.chatId} message=${record.plan.key.assistantMessageId} concurrency=${config.imageConcurrency}`);
-  const key = runtimeKey(userId, record.plan.key.chatId);
-  assetControllers.get(key)?.abort("A newer turn replaced this asset batch.");
-  const controller = new AbortController();
-  assetControllers.set(key, controller);
-  let settle!: () => void;
-  trackAssetWork(key, new Promise<void>((resolve) => { settle = resolve; }));
+  dbg(spindle, userId, `assets starting: ${record.jobs.length - cacheServed} generated job(s)${cacheServed ? ` + ${cacheServed} cache-served swap(s) (not generated)` : ""} for chat=${chatId} message=${record.plan.key.assistantMessageId} concurrency=${config.imageConcurrency}`);
   // Only the chat's current, unaborted batch may save or send: a replaced or
   // aborted batch (close, Retry, a newer turn) can still be marking its jobs
   // cancelled while the next owner of the same turn runs.
-  const owns = (turnKey: StoredTurnRecord["plan"]["key"]): boolean =>
-    !controller.signal.aborted && assetControllers.get(key) === controller
-    && compareTurnKeys(activeTurnKeys.get(key) ?? null, turnKey).accepted;
+  const { batch, owns, finish } = start;
   // Every batch start supersedes the previous batch's cache admission, so a
   // late result from the replaced batch can never populate the active cache.
-  releaseSceneCacheAdmission(spindle, userId, record.plan.key.chatId, "batch_start");
-  const scope = sceneImageScope(userId, record.plan.key.chatId);
+  releaseSceneCacheAdmission(spindle, userId, chatId, "batch_start");
+  const scope = sceneImageScope(userId, chatId);
   const admission = sceneCache.admission(scope);
   let current = record;
   // Sprite mode: the jobs are key illustrations; the pipeline sees only their cues.
@@ -1094,7 +1082,7 @@ async function startAssets(
           jobs: record.jobs,
           scenes: keyMomentScenes(record.plan, record.jobs),
           chatId: record.plan.key.chatId,
-          signal: controller.signal,
+          signal: batch.signal,
           onUpdate
         })
       : await generateAssets(
@@ -1102,7 +1090,7 @@ async function startAssets(
           record.plan,
           record.jobs,
           config,
-          controller.signal,
+          batch.signal,
           onUpdate,
           userId,
           { sceneCache, admission, ...(options.bypassJobIds ? { bypassJobIds: options.bypassJobIds } : {}), ...sourceTextOption(record) }
@@ -1112,8 +1100,7 @@ async function startAssets(
       await saveTurnRecord(spindle, path, current, userId);
     }
   } finally {
-    if (assetControllers.get(key) === controller) assetControllers.delete(key);
-    settle();
+    finish();
   }
 }
 
@@ -1123,14 +1110,14 @@ async function startAssets(
  * generating ones nothing runs anymore go back in the queue, with cache
  * lookups allowed. Finished and failed pictures stay as they are (failed ones
  * wait for Try again). Nothing resumes while the chat's turn has an owner
- * (planning, a running batch, a retry), while a reply is being generated for
+ * (a running batch, a retry, a resume), while a reply is being generated for
  * the chat (that turn is about to be replaced), or when the turn was planned
  * for the other presentation mode. Returns the re-queued record, or null.
  *
  * A batch the close aborted keeps running until its provider request returns,
- * and the close's cleanup saves "cancelled" after it; both are tracked in
- * `assetSettles`. While they are out nothing resumes here (null): the caller
- * shows the pictures as queued and resumes once they settle
+ * and the close's cleanup saves "cancelled" after it; both are tracked in the
+ * chat runtime's `settling`. While they are out nothing resumes here (null):
+ * the caller shows the pictures as queued and resumes once they settle
  * (`resumeAfterSettle`).
  */
 async function resumeStoppedPictures(
@@ -1141,29 +1128,28 @@ async function resumeStoppedPictures(
   config: VisualNovelConfig
 ): Promise<StoredTurnRecord | null> {
   const chatId = record.plan.key.chatId;
-  const key = runtimeKey(userId, chatId);
-  if (!picturesCanResume(record, config, key) || assetSettles.has(key)) return null;
+  const runtime = chatRuntime(userId, chatId);
+  if (!picturesCanResume(record, config, runtime) || runtime.settling) return null;
   const { next, resumed } = requeueStoppedPictures(record);
   // Claim before saving so no other owner starts in between; a failed save gives the claim back.
-  activeTurnKeys.set(key, next.plan.key);
+  runtime.claim(next.plan.key);
   try {
     await saveTurnRecord(spindle, path, next, userId);
   } catch (error) {
-    if (activeTurnKeys.get(key) === next.plan.key) activeTurnKeys.delete(key);
+    runtime.release(next.plan.key);
     throw error;
   }
-  dbg(spindle, userId, `view open resumed ${resumed} stopped picture(s) chat=${chatId} message=${record.plan.key.assistantMessageId}`);
+  dbg(spindle, userId, `resumed ${resumed} stopped picture(s) chat=${chatId} message=${record.plan.key.assistantMessageId}`);
   return next;
 }
 
 const stoppedPicture = (job: AssetJob): boolean => job.status === "cancelled" || job.status === "queued" || job.status === "generating";
 
 /** Whether the turn has stopped pictures and nothing else owns the chat's turn (see resumeStoppedPictures). */
-function picturesCanResume(record: StoredTurnRecord, config: VisualNovelConfig, key: string): boolean {
+function picturesCanResume(record: StoredTurnRecord, config: VisualNovelConfig, runtime: ChatRuntime): boolean {
   if (!config.generateImages || config.useNativeCardImages || record.status !== "ready" || record.jobs.length === 0) return false;
-  if (activeTurnKeys.has(key) || generatingChats.has(key)) return false;
-  const running = assetControllers.get(key);
-  if (running && !running.signal.aborted) return false;
+  // An owner (a running batch, a retry, a resume) or a reply being generated has the turn.
+  if (runtime.phase.kind === "owned" || runtime.generating) return false;
   const spritePlanned = isSpritePlannedRecord(record);
   if (spritePlanned ? config.presentationMode !== "sprites" || keyIllustrationCap(config) === 0 : config.presentationMode === "sprites") return false;
   return record.jobs.some(stoppedPicture);
@@ -1203,8 +1189,7 @@ async function resumeAfterSettle(
   turnKey: StoredTurnRecord["plan"]["key"],
   userId: string | undefined
 ): Promise<void> {
-  const key = runtimeKey(userId, chatId);
-  if (assetSettles.has(key) || !views.isOpen(userId, chatId)) return;
+  if (chatRuntime(userId, chatId).settling || !views.isOpen(userId, chatId)) return;
   const config = await loadChatConfig(spindle, userId, chatId);
   if (!config.enabled) return;
   const chatState = await loadChatState(spindle, chatId, userId);
@@ -1237,8 +1222,7 @@ async function requeueKeyIllustrations(
   if (!isSpritePlannedRecord(record) || record.jobs.length === 0) return null;
   const config = await loadChatConfig(spindle, userId, record.plan.key.chatId);
   if (keyIllustrationCap(config) === 0 || config.presentationMode !== "sprites") return null;
-  const running = assetControllers.get(runtimeKey(userId, record.plan.key.chatId));
-  if (running && !running.signal.aborted) return null;
+  if (chatRuntime(userId, record.plan.key.chatId).batch) return null;
   const nowTime = new Date().toISOString();
   const bypassJobIds = new Set<string>();
   let requeued = 0;
@@ -1288,11 +1272,11 @@ async function processAssistantMessage(
   // the resolved text everywhere (plan, storage, frontend). Fingerprints use
   // the selection text (volatile macros masked) so `{{random}}`/`{{time}}`
   // output never looks like a new scene.
-  const intakeKey = runtimeKey(userId, chatId);
-  const intakeEpoch = intakeEpochs.get(intakeKey) ?? 0;
+  const runtime = chatRuntime(userId, chatId);
+  const intakeEpoch = runtime.intakeEpoch;
   const resolutionCache: MessageResolutionCache = new Map();
   const intake = options?.precomputedIntake ?? await resolveMessageIntake(spindle, chatId, content, userId);
-  if ((intakeEpochs.get(intakeKey) ?? 0) !== intakeEpoch) {
+  if (runtime.intakeEpoch !== intakeEpoch) {
     dbg(spindle, userId, `intake for message ${message.id} superseded while resolving; dropped`);
     return;
   }
@@ -1303,7 +1287,7 @@ async function processAssistantMessage(
   const existing = await loadTurnRecord(spindle, path, userId);
   // A newer event may have started its own intake during the read: only the
   // newest version of the message may replace plans of the others.
-  if ((intakeEpochs.get(intakeKey) ?? 0) !== intakeEpoch) {
+  if (runtime.intakeEpoch !== intakeEpoch) {
     dbg(spindle, userId, `intake for message ${message.id} superseded while loading its turn; dropped`);
     return;
   }
@@ -1324,8 +1308,8 @@ async function processAssistantMessage(
   if (!intake.resolved && existing && !options?.forceRegenerate) {
     dbg(spindle, userId, `message ${message.id} could not be resolved by the host; keeping the stored turn`);
     supersedeOthers(`${message.id}:${message.swipe_id}:${existing.plan.key.sourceFingerprint}`);
-    const key = runtimeKey(userId, chatId);
-    activeTurnKeys.set(key, existing.plan.key);
+    // The kept turn takes the chat: a batch still running for another turn stops.
+    runtime.claim(existing.plan.key, "Another stored turn took the chat.");
     await persistActiveTurn(spindle, existing, path, userId);
     spindle.sendToFrontend({ type: "vn_turn", turn: await buildTurnView(spindle, existing, userId) }, userId);
     return;
@@ -1349,8 +1333,8 @@ async function processAssistantMessage(
     if (!hasIncompleteJobs) {
       dbg(spindle, userId, `turn reused from storage chat=${chatId} message=${message.id} fingerprint=${fingerprint}`);
       supersedeOthers(dedupeId);
-      const key = runtimeKey(userId, chatId);
-      activeTurnKeys.set(key, existing.plan.key);
+      // The reused turn takes the chat: a batch still running for another turn stops.
+      runtime.claim(existing.plan.key, "Another stored turn took the chat.");
       await persistActiveTurn(spindle, existing, path, userId);
       // Sprite mode: unfinished key illustrations resume instead of replanning.
       const resumed = spriteMode ? await requeueKeyIllustrations(spindle, existing, path, userId, { bypassCache: false }) : null;
@@ -1418,7 +1402,6 @@ async function processAssistantMessage(
     const cancelled = () => operation.controller.signal.aborted;
     // Text before the plan: once the paragraphs are final (after the non-story
     // check), the stage shows them; the planned turn upgrades them in place.
-    const provisionalKey = runtimeKey(userId, chatId);
     let plannedTurnSent = false;
     const sendProvisional = (story: StoryParagraphs) => {
       void personaLookup.then((persona) => {
@@ -1446,7 +1429,7 @@ async function processAssistantMessage(
           },
           previousAmbient: previous?.ambient,
         });
-        provisionalTurns.set(provisionalKey, { operationId: operation.id, view });
+        runtime.showProvisional({ operationId: operation.id, view });
         spindle.sendToFrontend({ type: "vn_turn_text", turn: view }, userId);
         dbg(spindle, userId, `provisional turn sent chat=${chatId} message=${message.id} after ${Date.now() - planningStartedAt}ms paragraphs=${view.paragraphs.length} speakers=[${view.paragraphSpeakers?.map((name, index) => name ? `p${index}:${name}` : "").filter(Boolean).join(", ") ?? ""}]`);
       }).catch((error: unknown) => {
@@ -1613,12 +1596,12 @@ async function processAssistantMessage(
       dbg(spindle, userId, `planned turn dropped after abort chat=${chatId} message=${message.id}`);
       return;
     }
-    const key = runtimeKey(userId, chatId);
-    activeTurnKeys.set(key, record.plan.key);
+    // The planned turn takes the chat: a batch still running for another turn stops.
+    runtime.claim(record.plan.key, "A newer turn replaced this asset batch.");
     await persistActiveTurn(spindle, record, path, userId);
     if (cancelled()) return;
     plannedTurnSent = true;
-    if (provisionalTurns.get(provisionalKey)?.operationId === operation.id) provisionalTurns.delete(provisionalKey);
+    runtime.dropProvisional(operation.id);
     spindle.sendToFrontend({ type: "vn_turn", turn: view }, userId);
     if ((!spriteMode || jobs.length > 0) && !config.useNativeCardImages && config.generateImages) {
       void startAssets(spindle, record, path, userId).catch((error) => {
@@ -1629,14 +1612,15 @@ async function processAssistantMessage(
       });
     }
   }, dedupeId);
-  const provisionalKey = runtimeKey(userId, chatId);
   if (scheduled.reused) {
     // A reopened view (or a repeated event) joined the plan in flight: show its text again.
-    const pending = provisionalTurns.get(provisionalKey);
-    if (pending?.operationId === scheduled.operation.id) spindle.sendToFrontend({ type: "vn_turn_text", turn: pending.view }, userId);
+    const pending = runtime.provisionalOf(scheduled.operation.id);
+    if (pending) spindle.sendToFrontend({ type: "vn_turn_text", turn: pending.view }, userId);
   } else {
+    runtime.planningStarted(scheduled.operation.id);
     void scheduled.promise.catch(() => undefined).finally(() => {
-      if (provisionalTurns.get(provisionalKey)?.operationId === scheduled.operation.id) provisionalTurns.delete(provisionalKey);
+      runtime.dropProvisional(scheduled.operation.id);
+      runtime.planningSettled(scheduled.operation.id);
     });
   }
 
@@ -1747,9 +1731,9 @@ async function retryTurn(
   message: NormalizedChatMessage,
   userId?: string
 ): Promise<void> {
-  const key = runtimeKey(userId, chatId);
-  assetControllers.get(key)?.abort("Retrying turn.");
-  planningQueue.cancelChat(userId, chatId);
+  const runtime = chatRuntime(userId, chatId);
+  // The owner keeps the turn meanwhile, so nothing resumes before Retry claims it again.
+  runtime.interrupt("Retrying turn.");
   releaseSceneCacheAdmission(spindle, userId, chatId, "retry");
 
   const path = turnPath(chatId, message.id, message.swipe_id);
@@ -1775,7 +1759,7 @@ async function retryTurn(
   // Sprite mode: a usable stored turn keeps its plan; Retry re-queues the
   // failed sprites and plates it uses instead of replanning.
   if (config.presentationMode === "sprites" && existing && existing.status !== "failed") {
-    activeTurnKeys.set(key, existing.plan.key);
+    runtime.claim(existing.plan.key, "Retrying turn.");
     await persistActiveTurn(spindle, existing, path, userId);
     const staging = await stagingForRecord(spindle, existing, config, userId);
     const requeued = await spriteService(spindle).retryFailed(userId, staging, config);
@@ -1860,7 +1844,7 @@ async function retryTurn(
     ]
   };
 
-  activeTurnKeys.set(key, updatedRecord.plan.key);
+  runtime.claim(updatedRecord.plan.key, "Retrying turn.");
   await saveTurnRecord(spindle, path, updatedRecord, userId);
   await persistActiveTurn(spindle, updatedRecord, path, userId);
   spindle.sendToFrontend({ type: "vn_turn", turn: await buildTurnView(spindle, updatedRecord, userId, config) }, userId);
@@ -2210,10 +2194,9 @@ async function clearDeletedTurn(spindle: SpindleAPI, payload: unknown, userId?: 
   const state = await loadChatState(spindle, candidate.chatId, userId);
   const record = await loadTurnRecord(spindle, state.activeTurnPath, userId);
   if (!record || record.plan.key.assistantMessageId !== candidate.messageId) return;
-  bumpIntakeEpoch(userId, candidate.chatId);
-  planningQueue.cancelChat(userId, candidate.chatId);
-  assetControllers.get(runtimeKey(userId, candidate.chatId))?.abort("The source assistant message was deleted.");
-  activeTurnKeys.delete(runtimeKey(userId, candidate.chatId));
+  const runtime = chatRuntime(userId, candidate.chatId);
+  runtime.bumpIntakeEpoch();
+  runtime.abort("The source assistant message was deleted.");
   // The chat's scene lineage restarts (latestScene becomes null): release the
   // whole scope so the next "initial" episode never shares the old entries.
   releaseSceneCacheScope(spindle, userId, candidate.chatId, "scope_cleared");
@@ -2251,24 +2234,20 @@ export function registerVisualNovelBackend(spindle: SpindleAPI): void {
   });
   spindle.on("GENERATION_STARTED", (payload, userId) => {
     dbg(spindle, userId, `event GENERATION_STARTED chat=${payload.chatId}`);
-    // A new generation is starting (a user message was submitted). Drop any
-    // ownership of the previous turn's assets so queued old-turn ComfyUI calls
-    // cannot start and running completions cannot persist/send, then abort the
-    // current asset batch. The new turn's ownership is re-established when it is
-    // actually planned (processAssistantMessage -> activeTurnKeys.set).
-    const key = runtimeKey(userId, payload.chatId);
-    generatingChats.add(key);
-    bumpIntakeEpoch(userId, payload.chatId);
-    // A plan still running would claim the turn again once it lands, send it
-    // and start a paid batch for a reply that is being replaced.
-    planningQueue.cancelChat(userId, payload.chatId, undefined, "A new generation started before this turn was planned.");
-    activeTurnKeys.delete(key);
-    assetControllers.get(key)?.abort("A new generation started before this turn's assets settled.");
+    // A new generation is starting (a user message was submitted). Drop the
+    // ownership of the previous turn so queued old-turn ComfyUI calls cannot
+    // start and running completions cannot persist/send, abort its asset
+    // batch, and cancel a plan still running (it would claim the turn again
+    // once it lands, send it and start a paid batch for a reply that is being
+    // replaced). No batch starts until the generation ends; the new turn
+    // claims the chat once it is planned. Its jobs are not stamped: a reply
+    // usually follows.
+    chatRuntime(userId, payload.chatId).onGenerationStarted("A new generation started before this turn settled.");
     releaseSceneCacheAdmission(spindle, userId, payload.chatId, "generation_started");
     spindle.sendToFrontend({ type: "vn_generation", chatId: payload.chatId, active: true }, userId);
   });
   spindle.on("GENERATION_ENDED", (payload, userId) => {
-    generatingChats.delete(runtimeKey(userId, payload.chatId));
+    chatRuntime(userId, payload.chatId).onGenerationEnded();
     void generationEnded(spindle, payload, userId).catch((error) => {
       spindle.log.error(`Visual novel turn failed: ${errorText(error)}`);
       spindle.sendToFrontend({ type: "vn_error", chatId: payload.chatId, operation: "generation_ended", error: errorText(error) }, userId);
@@ -2276,7 +2255,7 @@ export function registerVisualNovelBackend(spindle: SpindleAPI): void {
   });
   spindle.on("GENERATION_STOPPED", (payload, userId) => {
     dbg(spindle, userId, `event GENERATION_STOPPED chat=${payload.chatId}`);
-    generatingChats.delete(runtimeKey(userId, payload.chatId));
+    chatRuntime(userId, payload.chatId).onGenerationEnded();
     spindle.sendToFrontend({ type: "vn_generation", chatId: payload.chatId, active: false, outcome: "stopped" }, userId);
   });
   spindle.on("MESSAGE_SWIPED", (payload: MessageSwipedPayloadDTO, userId) => {

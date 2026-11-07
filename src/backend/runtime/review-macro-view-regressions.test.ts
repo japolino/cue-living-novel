@@ -416,6 +416,9 @@ describe("view close ownership (review F2, F5)", () => {
     // the old cleanup (aborted turn m1) must leave it exactly as it is.
     const stamped = rt.writes.filter(([path, value]) => path.includes("m2") && (value as StoredTurnRecord).jobs?.some((job) => job.status === "cancelled"));
     expect(stamped.length).toBe(0);
+    // The host always ends a generation. Chat state is module-wide: a reply
+    // left generating would hold off later tests' batches on this chat.
+    rt.fire("GENERATION_STOPPED", { chatId: "c1" });
   });
 });
 

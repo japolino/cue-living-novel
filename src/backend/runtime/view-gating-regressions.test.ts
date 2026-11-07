@@ -128,7 +128,7 @@ test("closing the view during post-plan awaits persists nothing and sends no vn_
   const turnSent = sent.find(isPlannedTurn);
   expect(Boolean(turnSent)).toBe(false);
 
-  // 2. Did it claim activeTurnKeys and persist active turn?
+  // 2. Did it claim the chat's turn and persist active turn?
   const chatState = data.get(chatStatePath("chat-abort2")) as StoredChatState;
   expect(chatState?.activeTurnPath ?? null).toBeNull();
 

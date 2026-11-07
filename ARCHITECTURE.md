@@ -169,15 +169,27 @@ reruns them with Try again (`vn_retry_turn`). The stage counts a stopped
 picture as neither done nor in flight. An aborted batch runs on until its
 provider request returns (`imageGen.generate` takes no signal; the late result
 is thrown away), so every batch and every close cleanup is tracked per chat
-(`assetSettles`). A view that reopens while they are out gets the stopped
+(the chat runtime's `settling`). A view that reopens while they are out gets the stopped
 pictures as `queued` in `vn_state` (not saved) and resumes them only once they
 settled (`resumeAfterSettle`, same turn, view still open): one request per
 picture at a time, which a one-at-a-time provider such as NovelAI needs, and
 no late `cancelled` save over the resumed record. Only the chat's current,
-unaborted batch (`assetControllers` identity) that also owns the turn may save
+unaborted batch (the runtime's batch identity) that also owns the turn may save
 or send, which also keeps a batch replaced by Retry from writing over it. The
 resume claims the turn before saving and gives the claim back if the save
 fails. `vn_cancel` aborts like a close, cleanup included.
+
+The owner and its batch live in one `ChatRuntime` per chat
+(`src/backend/core/chat-runtime.ts`), with the reply-generation flag, the
+intake epoch, the provisional text and the settle chain. Its phase is `idle`,
+`planning` or `owned(turn, batch)`, and it changes only through `claim`,
+`startBatch`, `interrupt` (Retry), `abort` and the generation events, so the
+owner never moves without its batch: a turn that takes the chat (a new plan, a
+swipe back to a finished turn, a stored turn kept because the host cannot
+resolve it) aborts the batch of any other turn. A batch starts only if its
+turn still owns the chat once the batch has loaded its config, and never while
+a reply is being generated; a cancel, a close or a new generation that lands
+while it is starting stops it before its first request.
 
 A scene picture that fails for a passing reason (a timeout, a dropped
 connection, a busy provider: HTTP 408, 425, 429, 5xx, including NovelAI's
@@ -189,7 +201,7 @@ batch never retries.
 The text before the plan (`vn_turn_text`, see below) follows the same
 gates. Only a plan that runs for an open view sends it; it is never persisted,
 never the chat's active turn, and `vn_state` never carries it. The backend
-keeps it in memory (`provisionalTurns`, per chat, tied to the plan's operation)
+keeps it in memory (the chat runtime's `provisional`, tied to the plan's operation)
 only while that plan runs: a request that joins the plan in flight (a reloaded
 page whose view stayed open, a repeated event) gets it again right after
 `vn_planning`. A view that closed cancelled its plan, so reopening plans again;
