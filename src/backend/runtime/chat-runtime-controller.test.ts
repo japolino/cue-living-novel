@@ -10,7 +10,9 @@ import { isPlannedTurn } from "./__fixtures__/turns.js";
  * - (c) a turn that takes the chat back from storage stops the batch of the
  *   turn it replaces, so nobody pays for pictures no turn will show;
  * - (d) a cancel or a new generation that lands while a batch is still
- *   starting stops it before its first request.
+ *   starting stops it before its first request;
+ * - (e) pictures a new generation stopped resume once that generation ends
+ *   without a reply (stopped, empty or failed), without a reopen.
  */
 
 const A = "Aurelia lowers the report.\n\nShe studies the visitor.\n\nThe hall is silent.";
@@ -228,3 +230,33 @@ describe("(d) an abort while the batch is starting", () => {
   });
 });
 
+describe("(e) a generation that ends without a reply gives the pictures back", () => {
+  const ends: Array<[string, (f: ReturnType<typeof fixture>, chatId: string) => void]> = [
+    ["stopped", (f, chatId) => f.fire("GENERATION_STOPPED", { chatId })],
+    ["ended empty", (f, chatId) => f.fire("GENERATION_ENDED", { chatId, messageId: "m1", content: "" })],
+    ["ended with an error", (f, chatId) => f.fire("GENERATION_ENDED", { chatId, messageId: "m1", content: "", error: "Provider failed" })]
+  ];
+  for (const [label, end] of ends) {
+    test(`pictures stopped by GENERATION_STARTED resume once the generation ${label}`, async () => {
+      const chatId = `e-${label.replace(/\s+/g, "-")}`;
+      const f = fixture(chatId);
+      f.open();
+      f.reply(A);
+      await waitFor(() => f.gates.length >= 1);
+      f.fire("GENERATION_STARTED", { chatId });
+      end(f, chatId);
+      // The request the generation stopped is still out: nothing is asked for again yet.
+      await settle();
+      expect(f.gates.length).toBe(1);
+      f.gates[0]!.resolve(f.image());
+      // Once it returned, the turn's pictures resume with the view still open.
+      await waitFor(() => f.gates.length >= 2);
+      f.gates[1]!.resolve(f.image());
+      await waitFor(() => f.gates.length >= 3);
+      f.gates[2]!.resolve(f.image());
+      await waitFor(() => f.record(0)!.jobs.every((job) => job.status === "generated"));
+      const assets = f.sent.filter((message) => message.type === "vn_asset").map((message) => (message.asset as { status: string }).status);
+      expect(assets.filter((status) => status === "generated")).toHaveLength(2);
+    });
+  }
+});

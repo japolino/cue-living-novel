@@ -189,7 +189,10 @@ swipe back to a finished turn, a stored turn kept because the host cannot
 resolve it) aborts the batch of any other turn. A batch starts only if its
 turn still owns the chat once the batch has loaded its config, and never while
 a reply is being generated; a cancel, a close or a new generation that lands
-while it is starting stops it before its first request.
+while it is starting stops it before its first request. A generation that ends
+without a reply (stopped, empty or failed) gives the chat's turn back: with the
+view open, the pictures `GENERATION_STARTED` stopped resume once the stopped
+batch has returned, as a reopen would resume them.
 
 A scene picture that fails for a passing reason (a timeout, a dropped
 connection, a busy provider: HTTP 408, 425, 429, 5xx, including NovelAI's

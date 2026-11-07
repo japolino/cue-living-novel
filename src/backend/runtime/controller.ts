@@ -1179,14 +1179,16 @@ function launchResumedPictures(spindle: SpindleAPI, record: StoredTurnRecord, pa
 }
 
 /**
- * The view reopened while the batch a close stopped was still out: once it
- * (and the close's cleanup) settled, resume the same turn's pictures if the
- * view is still open on it. A newer close waits for its own settle.
+ * The batch that stopped the pictures was still out (a close, or a new
+ * generation that then ended without a reply): once it and any cleanup
+ * settled, resume the active turn's pictures if the view is still open on it.
+ * `turnKey` names the turn the caller saw (null: whichever turn is active). A
+ * newer close or batch waits for its own settle.
  */
 async function resumeAfterSettle(
   spindle: SpindleAPI,
   chatId: string,
-  turnKey: StoredTurnRecord["plan"]["key"],
+  turnKey: StoredTurnRecord["plan"]["key"] | null,
   userId: string | undefined
 ): Promise<void> {
   if (chatRuntime(userId, chatId).settling || !views.isOpen(userId, chatId)) return;
@@ -1196,7 +1198,7 @@ async function resumeAfterSettle(
   const path = chatState.activeTurnPath;
   if (!path) return;
   const record = await loadTurnRecord(spindle, path, userId);
-  if (!record || !turnKeyEquals(record.plan.key, turnKey) || !views.isOpen(userId, chatId)) return;
+  if (!record || (turnKey && !turnKeyEquals(record.plan.key, turnKey)) || !views.isOpen(userId, chatId)) return;
   const resumed = await resumeStoppedPictures(spindle, record, path, userId, config);
   if (!resumed) return;
   for (const job of resumed.jobs) {
@@ -1633,6 +1635,23 @@ async function processAssistantMessage(
   }
 }
 
+/**
+ * A reply generation ended without a reply (stopped, empty or failed), so the
+ * turn it would have replaced is the chat's turn again. GENERATION_STARTED
+ * stopped that turn's pictures without stamping them (a reply usually
+ * follows); they resume as a reopen would resume them, once the stopped batch
+ * has returned. Only with the view open and nothing else on the chat's turn
+ * (a plan in flight claims it itself).
+ */
+function resumeWithoutReply(spindle: SpindleAPI, chatId: string, userId: string | undefined): void {
+  const runtime = chatRuntime(userId, chatId);
+  if (!views.isOpen(userId, chatId) || runtime.phase.kind !== "idle" || runtime.generating) return;
+  const settling = runtime.settling ?? Promise.resolve();
+  void settling.then(() => resumeAfterSettle(spindle, chatId, null, userId)).catch((error: unknown) => {
+    spindle.log.warn(`Resuming stopped pictures failed: ${errorText(error)}`);
+  });
+}
+
 async function generationEnded(spindle: SpindleAPI, payload: GenerationEndedPayloadDTO, userId?: string): Promise<void> {
   spindle.sendToFrontend({
     type: "vn_generation",
@@ -1641,7 +1660,10 @@ async function generationEnded(spindle: SpindleAPI, payload: GenerationEndedPayl
     ...(payload.error ? { error: payload.error } : !payload.content ? { outcome: "empty" as const } : {})
   }, userId);
   dbg(spindle, userId, `event GENERATION_ENDED chat=${payload.chatId} message=${payload.messageId ?? "latest"} contentChars=${payload.content?.length ?? 0}${payload.error ? ` error=${payload.error}` : ""}`);
-  if (payload.error || !payload.content) return;
+  if (payload.error || !payload.content) {
+    resumeWithoutReply(spindle, payload.chatId, userId);
+    return;
+  }
   if (!(await allowAutomaticWork(spindle, userId, payload.chatId, "GENERATION_ENDED"))) return;
   const messages = await spindle.chat.getMessages(payload.chatId) as NormalizedChatMessage[];
   const message = payload.messageId
@@ -2241,7 +2263,7 @@ export function registerVisualNovelBackend(spindle: SpindleAPI): void {
     // once it lands, send it and start a paid batch for a reply that is being
     // replaced). No batch starts until the generation ends; the new turn
     // claims the chat once it is planned. Its jobs are not stamped: a reply
-    // usually follows.
+    // usually follows, and if none does they resume (resumeWithoutReply).
     chatRuntime(userId, payload.chatId).onGenerationStarted("A new generation started before this turn settled.");
     releaseSceneCacheAdmission(spindle, userId, payload.chatId, "generation_started");
     spindle.sendToFrontend({ type: "vn_generation", chatId: payload.chatId, active: true }, userId);
@@ -2257,6 +2279,7 @@ export function registerVisualNovelBackend(spindle: SpindleAPI): void {
     dbg(spindle, userId, `event GENERATION_STOPPED chat=${payload.chatId}`);
     chatRuntime(userId, payload.chatId).onGenerationEnded();
     spindle.sendToFrontend({ type: "vn_generation", chatId: payload.chatId, active: false, outcome: "stopped" }, userId);
+    resumeWithoutReply(spindle, payload.chatId, userId);
   });
   spindle.on("MESSAGE_SWIPED", (payload: MessageSwipedPayloadDTO, userId) => {
     dbg(spindle, userId, "event MESSAGE_SWIPED");
