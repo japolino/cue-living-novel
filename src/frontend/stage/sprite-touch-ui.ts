@@ -78,6 +78,12 @@ type Character = {
   bond: number;
   /** The saved bond and pack arrived (or the host has none to give). */
   loaded: boolean;
+  /**
+   * Reactions while the saved bond was on its way: replayed on top of it when
+   * it lands. Until then nothing is saved, since the local bond counted from
+   * 0 and would overwrite the stored one.
+   */
+  early: TouchReaction[];
   pack: TouchLinePack | null;
   lines: LinesState;
   linesError: string | null;
@@ -183,7 +189,7 @@ export class SpriteTouch {
         continue;
       }
       this.characters.set(ref.characterKey, {
-        ref, memory: touchMemory(), bond: 0, loaded: !this.options.callbacks.onCharacters, pack: null,
+        ref, memory: touchMemory(), bond: 0, loaded: !this.options.callbacks.onCharacters, early: [], pack: null,
         lines: "none", linesError: null, recent: [], saveTimer: null,
       });
       fresh.push(ref);
@@ -201,9 +207,18 @@ export class SpriteTouch {
     for (const state of states) {
       const character = this.characters.get(state.characterKey);
       if (!character) continue;
-      character.loaded = true;
-      // A touch made while the state was on its way counts on top of it.
-      if (!character.saveTimer) character.bond = normalizeTouchBond(state.bond);
+      if (!character.loaded) {
+        character.loaded = true;
+        // Touches made while the state was on its way count on top of it.
+        let bond = normalizeTouchBond(state.bond);
+        for (const reaction of character.early) bond = bondAfter(bond, reaction);
+        const touched = character.early.length > 0;
+        character.early = [];
+        character.bond = bond;
+        if (touched) this.scheduleSave(character);
+      } else if (!character.saveTimer) {
+        character.bond = normalizeTouchBond(state.bond);
+      }
       if (state.pack) {
         character.pack = state.pack;
         character.lines = "ready";
@@ -300,9 +315,10 @@ export class SpriteTouch {
     this.options.sounds.touch(reaction.sound);
     if (line) this.showBubble(line, character.ref.name, input.head, intensity.holdMs, motion);
     const bond = bondAfter(character.bond, reaction);
+    if (!character.loaded) character.early.push(reaction);
     if (bond !== character.bond) {
       character.bond = bond;
-      this.scheduleSave(character);
+      if (character.loaded) this.scheduleSave(character);
       this.renderHud();
     }
     this.last = {
