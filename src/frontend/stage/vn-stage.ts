@@ -338,6 +338,14 @@ const THEME_MARKUP = `
 const OPENING_MOMENT_MS = 1500;
 
 const PLATE_REQUEST_PREFIX = "plate:";
+/**
+ * Sprite mode: a plate or key illustration that failed to load is not asked
+ * for again on every paragraph, but only once this long has passed. The
+ * backend sends no new update for a plate that is already ready, so without
+ * the window one network blip left the previous place on screen until a
+ * chat switch or a reload.
+ */
+export const PLATE_LOAD_RETRY_MS = 30_000;
 /** Scene-image request ids of sprite-mode key illustrations start with this. */
 const ILLUSTRATION_REQUEST_PREFIX = "illustration:";
 
@@ -692,7 +700,8 @@ export class VnStage {
   private queuedPlateUrl: string | null = null;
   /** Key illustration requested for the next microtask (sprite mode). */
   private queuedIllustrationUrl: string | null = null;
-  private readonly failedPlateUrls = new Set<string>();
+  /** Plate and illustration URLs whose load failed, with when (see PLATE_LOAD_RETRY_MS). */
+  private readonly failedPlateUrls = new Map<string, number>();
   /** Sprite-mode depth layers, created on first use so scene mode never has them. */
   private ambientFrontEl: HTMLElement | null = null;
   private plateLightEl: HTMLElement | null = null;
@@ -1663,7 +1672,7 @@ export class VnStage {
     this.spriteLayer.setTalking(this.isTyping);
     // Key moment: a ready illustration replaces the sprites for this paragraph.
     const illustration = this.spriteLayer.illustrationFor(index);
-    if (illustration && !this.failedPlateUrls.has(illustration.url)) {
+    if (illustration && !this.plateLoadFailed(illustration.url)) {
       this.syncSpriteIllustration(index, illustration.url, animate);
       return;
     }
@@ -1691,16 +1700,16 @@ export class VnStage {
       this.queuedIllustrationUrl = null;
       if (this.destroyed || this.presentationMode !== "sprites") return;
       if (this.state.displayedImage?.url === url || this.state.pendingImage?.url === url) return;
-      void this.setSceneImage({ url, alt: `Illustration for paragraph ${index + 1}`, requestId: `${ILLUSTRATION_REQUEST_PREFIX}${index}:${url}` }).then((loaded) => {
+      void this.loadSceneImage({ url, alt: `Illustration for paragraph ${index + 1}`, requestId: `${ILLUSTRATION_REQUEST_PREFIX}${index}:${url}` }).then((outcome) => {
         if (this.destroyed || this.presentationMode !== "sprites") return;
-        if (loaded) {
+        if (outcome === "ready") {
           if (this.state.currentParagraphIndex === index && this.spriteLayer.illustrationFor(index)?.url === url && this.state.displayedImage?.url === url) {
             this.spriteLayer.setIllustrated(url, !this.isRewinding && !this.isSkipping && this.effectIntensity !== "off");
           }
           return;
         }
-        // A broken picture: keep the sprites (they were never hidden).
-        if (this.state.imageError && this.state.displayedImage?.url !== url) this.failedPlateUrls.add(url);
+        // A broken picture keeps the sprites (they were never hidden);
+        // loadSceneImage recorded it in failedPlateUrls.
       });
     });
   }
@@ -1724,7 +1733,7 @@ export class VnStage {
     // A pending key illustration must not land after we moved on: re-request the plate.
     if (this.state.pendingImage?.url === url) return;
     if (this.state.displayedImage?.url === url && !isIllustration(this.state.pendingImage)) return;
-    if (this.failedPlateUrls.has(url) || this.queuedPlateUrl === url) return;
+    if (this.plateLoadFailed(url) || this.queuedPlateUrl === url) return;
     this.queuedPlateUrl = url;
     // Never dispatch from inside render: request the plate right after it.
     queueMicrotask(() => {
@@ -1734,10 +1743,18 @@ export class VnStage {
       if (this.state.pendingImage?.url === url) return;
       if (this.state.displayedImage?.url === url && !isIllustration(this.state.pendingImage)) return;
       const label = [plate.location, plate.timeOfDay, plate.weather].filter(Boolean).join(", ");
-      void this.setSceneImage({ url, alt: label ? `Background: ${label}` : "", requestId: `${PLATE_REQUEST_PREFIX}${plate.plateKey}:${url}` }).then((loaded) => {
-        if (!loaded && this.state.imageError && this.state.displayedImage?.url !== url) this.failedPlateUrls.add(url);
-      });
+      // A broken plate is recorded in failedPlateUrls by loadSceneImage.
+      void this.loadSceneImage({ url, alt: label ? `Background: ${label}` : "", requestId: `${PLATE_REQUEST_PREFIX}${plate.plateKey}:${url}` });
     });
+  }
+
+  /** Whether a plate or illustration failed to load within PLATE_LOAD_RETRY_MS (an older failure is forgotten). */
+  private plateLoadFailed(url: string): boolean {
+    const failedAt = this.failedPlateUrls.get(url);
+    if (failedAt === undefined) return false;
+    if (Date.now() - failedAt < PLATE_LOAD_RETRY_MS) return true;
+    this.failedPlateUrls.delete(url);
+    return false;
   }
 
   /**
@@ -2142,8 +2159,19 @@ export class VnStage {
     this.dispatch({ type: "set-error", error: message });
   }
 
+  /** Load a scene image; true when it is the one now shown. */
   async setSceneImage(request: VnSceneImageRequest): Promise<boolean> {
-    if (this.destroyed) return false;
+    return (await this.loadSceneImage(request)) === "ready";
+  }
+
+  /**
+   * "ready": loaded and shown; "superseded": a newer request (or teardown)
+   * took its place, whether it loaded or not; "failed": the image itself
+   * could not be loaded. A boolean cannot tell the last two apart, and a
+   * healthy plate overtaken by a broken one was taken for broken.
+   */
+  private async loadSceneImage(request: VnSceneImageRequest): Promise<"ready" | "superseded" | "failed"> {
+    if (this.destroyed) return "superseded";
 
     const image: VnSceneImage = {
       url: request.url,
@@ -2154,18 +2182,23 @@ export class VnStage {
 
     try {
       await preloadAndDecodeVnImage(image.url, this.createImage);
-      if (this.destroyed) return false;
+      if (this.destroyed) return "superseded";
       const wasCurrent = this.state.pendingImage?.requestId === image.requestId;
       this.dispatch({ type: "image-ready", requestId: image.requestId });
-      return wasCurrent;
+      return wasCurrent ? "ready" : "superseded";
     } catch (error) {
-      if (this.destroyed) return false;
+      if (this.destroyed) return "superseded";
+      // Recorded before the dispatch: its render would otherwise ask for the
+      // same broken plate again at once.
+      if (image.requestId.startsWith(PLATE_REQUEST_PREFIX) || image.requestId.startsWith(ILLUSTRATION_REQUEST_PREFIX)) {
+        this.failedPlateUrls.set(image.url, Date.now());
+      }
       this.dispatch({
         type: "image-failed",
         requestId: image.requestId,
         error: errorMessage(error),
       });
-      return false;
+      return "failed";
     }
   }
 
