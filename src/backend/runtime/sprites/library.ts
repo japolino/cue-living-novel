@@ -332,8 +332,11 @@ export class SpriteLibraryStore {
         let raw: unknown = null;
         try {
           raw = await this.spindle.userStorage.getJson<unknown>(SPRITE_LIBRARY_PATH, { fallback: null, ...(userId ? { userId } : {}) });
-        } catch {
-          raw = null;
+        } catch (error) {
+          // Never stand in an empty library for one that could not be read:
+          // it would be cached, and the next update would save it over every
+          // set and plate. Nothing is cached, so the next call reads again.
+          throw new Error(`The sprite library could not be read: ${error instanceof Error ? error.message : String(error)}`);
         }
         const library = this.cache.get(key) ?? normalizeSpriteLibrary(raw);
         this.cache.set(key, library);

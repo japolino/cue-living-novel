@@ -141,6 +141,25 @@ describe("sprite library store: persistence", () => {
     expect(reloaded.plates).toEqual({});
   });
 
+  test("a library that cannot be read is never replaced by an empty one; the next call reads again", async () => {
+    const { spindle, data, writes } = storage();
+    await new SpriteLibraryStore(spindle).update("u1", (library, now) => { library.sets.set_a = newSpriteSet(member, "set_a", STYLE, now); });
+    const written = writes.length;
+    const getJson = spindle.userStorage.getJson.bind(spindle.userStorage);
+    let failing = true;
+    (spindle.userStorage as { getJson: unknown }).getJson = async (path: string, options: { fallback: unknown; userId?: string }) => {
+      if (failing) throw new Error("storage is busy");
+      return getJson(path, options as never);
+    };
+    const store = new SpriteLibraryStore(spindle);
+    await expect(store.get("u1")).rejects.toThrow("storage is busy");
+    await expect(store.update("u1", (library, now) => { library.plates.p1 = newPlate({ plateKey: "p1", location: "Pier", timeOfDay: null, weather: null, description: "" }, STYLE, now); })).rejects.toThrow("could not be read");
+    expect(writes.length).toBe(written);
+    expect(Object.keys((data.get(`u1:${SPRITE_LIBRARY_PATH}`) as { sets: object }).sets)).toEqual(["set_a"]);
+    failing = false;
+    expect((await store.get("u1")).sets.set_a?.name).toBe("Mira");
+  });
+
   test("bursts of updates are serialized and coalesced; the last write holds the final state", async () => {
     const { spindle, writes, setDelay } = storage();
     setDelay(5);
