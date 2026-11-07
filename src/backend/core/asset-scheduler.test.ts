@@ -223,6 +223,69 @@ describe("Finding #2: asset scheduler prompt reuse and dependent propagation", (
     expect(scheduler.get("owner-survive")?.status).toBe("generated");
   });
 
+  test("cancelling a dependent while its owner is generating settles it at once", async () => {
+    const scheduler = new AssetScheduler({ testp: { concurrency: 1 } });
+    // A picture ahead keeps the owner queued, so the dependent attaches before
+    // the owner starts and is moved to "generating" with it.
+    const ahead = deferred();
+    const blocker = scheduler.schedule(job("ahead-1", "testp"), async () => {
+      await ahead.promise;
+      return { imageId: "ahead" };
+    });
+    const gate = deferred();
+    const ownerJob = job("owner-running", "testp");
+    const depJob = { ...job("dep-running", "testp"), promptFingerprint: ownerJob.promptFingerprint };
+    const first = scheduler.schedule(ownerJob, async () => {
+      await gate.promise;
+      return { imageId: "img" };
+    });
+    const second = scheduler.schedule(depJob, async () => ({ imageId: "img" }));
+    ahead.resolve();
+    await blocker.promise;
+    await flush();
+    expect(scheduler.get("dep-running")?.status).toBe("generating");
+
+    expect(scheduler.cancel("dep-running")).toBe(true);
+    expect(scheduler.get("dep-running")?.status).toBe("cancelled");
+    expect((await second.promise).status).toBe("cancelled");
+
+    gate.resolve();
+    expect((await first.promise).status).toBe("generated");
+    expect(scheduler.get("dep-running")?.status).toBe("cancelled");
+  });
+
+  test("cancelling a turn while an owner and its dependent generate settles both", async () => {
+    const scheduler = new AssetScheduler({ testp: { concurrency: 1 } });
+    const ahead = deferred();
+    const blocker = scheduler.schedule(job("ahead-2", "testp"), async () => {
+      await ahead.promise;
+      return { imageId: "ahead" };
+    });
+    const gate = deferred();
+    const ownerJob = job("turn-owner", "testp");
+    const depJob = { ...job("turn-dep", "testp"), promptFingerprint: ownerJob.promptFingerprint };
+    const first = scheduler.schedule(ownerJob, async (_job, signal) => {
+      await Promise.race([gate.promise, new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }))]);
+      return { imageId: "img" };
+    });
+    const second = scheduler.schedule(depJob, async () => ({ imageId: "img" }));
+    ahead.resolve();
+    await blocker.promise;
+    await flush();
+    expect(scheduler.get("turn-dep")?.status).toBe("generating");
+
+    // The owner's cancel takes its dependent with it.
+    expect(scheduler.cancelTurn((candidate) => candidate.jobId.startsWith("turn-"))).toContain("turn-owner");
+    const settled = await Promise.race([
+      Promise.allSettled([first.promise, second.promise]).then(() => "settled"),
+      new Promise((resolve) => setTimeout(() => resolve("hung"), 200)),
+    ]);
+    expect(settled).toBe("settled");
+    expect((await first.promise).status).toBe("cancelled");
+    expect((await second.promise).status).toBe("cancelled");
+    gate.resolve();
+  });
+
   test("scheduling after owner completed immediately reuses generated result", async () => {
     const scheduler = new AssetScheduler({ testp: { concurrency: 1 } });
     const ownerJob = job("owner-done", "testp");

@@ -179,7 +179,10 @@ export class AssetScheduler {
         parent.dependents = parent.dependents.filter((d) => d.job.jobId !== jobId);
       }
     }
-    if (item.job.status === "queued") {
+    // A dependent never runs an executor of its own, and it was just detached
+    // from its owner, whose run would otherwise settle it: settle it here,
+    // whether it still waits ("queued") or rides on the owner ("generating").
+    if (item.job.status === "queued" || item.parentJobId) {
       item.job = AssetJobSchema.parse({
         ...item.job,
         status: "cancelled",
