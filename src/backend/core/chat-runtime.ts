@@ -19,7 +19,8 @@ import { compareTurnKeys } from "./guards.js";
  *
  * Alongside the phase:
  * - `generating`: a reply is being generated (GENERATION_STARTED until it
- *   ends). No batch starts meanwhile: that reply replaces the turn.
+ *   ends, or for at most GENERATION_DEADLINE_MS if its end event is lost). No
+ *   batch starts meanwhile: that reply replaces the turn.
  * - `intakeEpoch`: bumped by every event that makes an intake in flight stale.
  * - `provisional`: the text shown before the plan, so a view that reopens on
  *   the plan in flight shows it again. Only in memory.
@@ -41,6 +42,7 @@ import { compareTurnKeys } from "./guards.js";
  * | abort                   | idle            | idle                | idle (batch aborted)                        |
  * | onGenerationStarted     | idle, generating| idle, generating    | idle, generating (batch aborted)            |
  * | onGenerationEnded       | not generating  | not generating      | not generating                              |
+ * | deadline, no end event  | not generating  | not generating      | not generating                              |
  */
 
 export type AssetBatch = {
@@ -71,9 +73,23 @@ export type BatchStart =
     }
   | { readonly ok: false; readonly reason: BatchRefusal };
 
+/**
+ * How long a reply generation counts as running without GENERATION_ENDED or
+ * GENERATION_STOPPED. The host always sends one of them; this only bounds a
+ * lost end event, after which the chat stops waiting: batches start again and
+ * a reopen resumes the stopped pictures. Long enough for a slow local model
+ * writing a long reply; one that runs longer only lets pictures start early,
+ * as they always could before batches waited for the reply.
+ */
+export const GENERATION_DEADLINE_MS = 10 * 60_000;
+
 export type ChatRuntimeHooks = {
   /** Cancel the chat's plans, queued or running. */
   cancelPlanning(reason: string): void;
+  /** A generation passed GENERATION_DEADLINE_MS with no end event and is now treated as over. */
+  generationOverdue?(): void;
+  /** The clock (default `Date.now`). */
+  now?(): number;
 };
 
 const IDLE: ChatPhase = { kind: "idle" };
@@ -83,6 +99,7 @@ export class ChatRuntime {
   /** Aborts `current.batch`; set exactly while a batch is in the phase. */
   private batchController: AbortController | null = null;
   private replying = false;
+  private replyingSince = 0;
   private epoch = 0;
   private pending: ProvisionalTurn | null = null;
   private settleChain: Promise<void> | null = null;
@@ -93,7 +110,12 @@ export class ChatRuntime {
     return this.current;
   }
 
+  /** Whether a reply is being generated. Past GENERATION_DEADLINE_MS with no end event, it no longer is. */
   get generating(): boolean {
+    if (this.replying && this.now() - this.replyingSince >= GENERATION_DEADLINE_MS) {
+      this.replying = false;
+      this.hooks.generationOverdue?.();
+    }
     return this.replying;
   }
 
@@ -165,7 +187,7 @@ export class ChatRuntime {
     if (this.current.kind !== "owned" || !compareTurnKeys(this.current.turnKey, turnKey).accepted) {
       return { ok: false, reason: "not_owner" };
     }
-    if (this.replying) {
+    if (this.generating) {
       this.release(this.current.turnKey);
       return { ok: false, reason: "generating" };
     }
@@ -219,6 +241,7 @@ export class ChatRuntime {
   /** A reply is being generated: it replaces the turn, so everything in flight stops. */
   onGenerationStarted(reason: string): TurnKey | null {
     this.replying = true;
+    this.replyingSince = this.now();
     this.epoch += 1;
     return this.abort(reason);
   }
@@ -256,6 +279,10 @@ export class ChatRuntime {
     void settled.then(() => { if (this.settleChain === settled) this.settleChain = null; });
   }
 
+  private now(): number {
+    return this.hooks.now?.() ?? Date.now();
+  }
+
   private stopBatch(reason: string): void {
     if (this.current.kind !== "owned" || !this.current.batch) return;
     this.batchController?.abort(reason);
@@ -268,13 +295,21 @@ export class ChatRuntime {
 export class ChatRuntimes {
   private readonly chats = new Map<string, ChatRuntime>();
 
-  constructor(private readonly cancelPlanning: (userId: string | undefined, chatId: string, reason: string) => void = () => {}) {}
+  constructor(
+    private readonly cancelPlanning: (userId: string | undefined, chatId: string, reason: string) => void = () => {},
+    private readonly options: { generationOverdue?: (userId: string | undefined, chatId: string) => void; now?: () => number } = {}
+  ) {}
 
   get(userId: string | undefined, chatId: string): ChatRuntime {
     const key = `${userId ?? "owner"}:${chatId}`;
     let runtime = this.chats.get(key);
     if (!runtime) {
-      runtime = new ChatRuntime({ cancelPlanning: (reason) => this.cancelPlanning(userId, chatId, reason) });
+      const { generationOverdue, now } = this.options;
+      runtime = new ChatRuntime({
+        cancelPlanning: (reason) => this.cancelPlanning(userId, chatId, reason),
+        ...(generationOverdue ? { generationOverdue: () => generationOverdue(userId, chatId) } : {}),
+        ...(now ? { now } : {})
+      });
       this.chats.set(key, runtime);
     }
     return runtime;

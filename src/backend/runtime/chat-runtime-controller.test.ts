@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setSystemTime, test } from "bun:test";
 import type { SpindleAPI } from "lumiverse-spindle-types";
 import { registerVisualNovelBackend } from "./controller.js";
 import { chatStatePath, turnPath, type StoredChatState, type StoredTurnRecord } from "./storage.js";
@@ -259,4 +259,30 @@ describe("(e) a generation that ends without a reply gives the pictures back", (
       expect(assets.filter((status) => status === "generated")).toHaveLength(2);
     });
   }
+});
+
+describe("a generation whose end event never arrives", () => {
+  test("stops holding the chat's pictures after GENERATION_DEADLINE_MS", async () => {
+    const f = fixture("lost-end");
+    f.open();
+    f.reply(A);
+    await waitFor(() => f.gates.length >= 1);
+    // A reply starts; the host never sends GENERATION_ENDED or GENERATION_STOPPED.
+    f.fire("GENERATION_STARTED", { chatId: "lost-end" });
+    f.gates[0]!.resolve(f.image());
+    await settle();
+    // While the reply may still be generating, a reopen resumes nothing.
+    f.request({ type: "vn_get_state", chatId: "lost-end", viewOpen: true });
+    await settle(120);
+    expect(f.gates.length).toBe(1);
+    // Eleven minutes on (the clock stands still while it is set).
+    setSystemTime(new Date(Date.now() + 11 * 60_000));
+    try {
+      f.request({ type: "vn_get_state", chatId: "lost-end", viewOpen: true });
+      await settle(150);
+      expect(f.gates.length).toBe(2);
+    } finally {
+      setSystemTime();
+    }
+  });
 });

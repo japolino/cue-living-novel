@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { TurnKey } from "../../shared/contracts.js";
 import type { TurnView } from "../../protocol.js";
-import { ChatRuntime, ChatRuntimes, type AssetBatch, type ChatPhase } from "./chat-runtime.js";
+import { ChatRuntime, ChatRuntimes, GENERATION_DEADLINE_MS, type AssetBatch, type ChatPhase } from "./chat-runtime.js";
 
 /** A turn of the chat: one per message name ("T1", "T2"); each call is a new, equal key object. */
 function turn(name: string): TurnKey {
@@ -210,6 +210,40 @@ describe("ChatRuntime", () => {
     expect(runtime.settling).toBeNull();
   });
 
+  test("a generation whose end event never arrives stops counting after the deadline, with one warning", () => {
+    let now = 1_000;
+    let overdue = 0;
+    const runtime = new ChatRuntime({ cancelPlanning: () => {}, now: () => now, generationOverdue: () => { overdue += 1; } });
+    runtime.onGenerationStarted("A new generation started.");
+    runtime.claim(turn("T1"));
+    now += GENERATION_DEADLINE_MS - 1;
+    expect(runtime.generating).toBe(true);
+    // Still generating: the batch is refused and the claim given back.
+    expect(runtime.startBatch(turn("T1"))).toEqual({ ok: false, reason: "generating" });
+    expect(runtime.phase.kind).toBe("idle");
+    now += 1;
+    expect(runtime.generating).toBe(false);
+    expect(runtime.generating).toBe(false);
+    expect(overdue).toBe(1);
+    runtime.claim(turn("T1"));
+    expect(runtime.startBatch(turn("T1")).ok).toBe(true);
+  });
+
+  test("a new generation restarts the deadline, and an end event clears it without a warning", () => {
+    let now = 0;
+    let overdue = 0;
+    const runtime = new ChatRuntime({ cancelPlanning: () => {}, now: () => now, generationOverdue: () => { overdue += 1; } });
+    runtime.onGenerationStarted("A new generation started.");
+    now += GENERATION_DEADLINE_MS - 10;
+    runtime.onGenerationStarted("Another generation started.");
+    now += 20;
+    expect(runtime.generating).toBe(true);
+    runtime.onGenerationEnded();
+    now += GENERATION_DEADLINE_MS;
+    expect(runtime.generating).toBe(false);
+    expect(overdue).toBe(0);
+  });
+
   test("a new generation and an explicit bump both make an intake in flight stale", () => {
     const runtime = new ChatRuntime();
     const epoch = runtime.intakeEpoch;
@@ -243,5 +277,15 @@ describe("ChatRuntimes", () => {
     a.abort("Cancelled.");
     runtimes.get(undefined, "c2").onGenerationStarted("A new generation started.");
     expect(cancelled).toEqual(["u1/c1: Cancelled.", "owner/c2: A new generation started."]);
+  });
+
+  test("an overdue generation is reported with its user and chat", () => {
+    let now = 0;
+    const overdue: string[] = [];
+    const runtimes = new ChatRuntimes(() => {}, { now: () => now, generationOverdue: (userId, chatId) => { overdue.push(`${userId ?? "owner"}/${chatId}`); } });
+    runtimes.get("u1", "c1").onGenerationStarted("A new generation started.");
+    now += GENERATION_DEADLINE_MS;
+    expect(runtimes.get("u1", "c1").generating).toBe(false);
+    expect(overdue).toEqual(["u1/c1"]);
   });
 });

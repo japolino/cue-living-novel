@@ -25,7 +25,7 @@ import { ViewRegistry } from "./view-registry.js";
 import { isFrontendRequest } from "../../protocol.js";
 import { turnKeyEquals } from "../core/guards.js";
 import { PlanningQueue, isAbortError } from "../core/planning-queue.js";
-import { ChatRuntimes, type ChatRuntime } from "../core/chat-runtime.js";
+import { ChatRuntimes, GENERATION_DEADLINE_MS, type ChatRuntime } from "../core/chat-runtime.js";
 import { resolveNativeCardJobs } from "./native-assets.js";
 import { handleReferenceImageResponse, loadCardBackgroundUrl } from "./reference-source.js";
 import { CACHE_JOB_PROVIDER, createAssetJobs, prepareAssetJobs, generateAssets, resolveCacheCues, retainPlanEpisodes } from "./images.js";
@@ -89,9 +89,17 @@ const planningQueue = new PlanningQueue();
  * work still settling. One explicit state with its transitions; see
  * `core/chat-runtime.ts`.
  */
-const runtimes = new ChatRuntimes((userId, chatId, reason) => {
-  planningQueue.cancelChat(userId, chatId, undefined, reason);
-});
+const runtimes = new ChatRuntimes(
+  (userId, chatId, reason) => { planningQueue.cancelChat(userId, chatId, undefined, reason); },
+  {
+    // The host lost a generation's end event: say so, since pictures start again from here.
+    generationOverdue: (_userId, chatId) => {
+      runtimeLog?.warn(`A reply generation in chat ${chatId} sent no end event within ${GENERATION_DEADLINE_MS / 60_000} minutes; Cue no longer waits for it before starting pictures.`);
+    }
+  }
+);
+/** The backend's log, for warnings raised outside a request (set on registration). */
+let runtimeLog: SpindleAPI["log"] | null = null;
 function chatRuntime(userId: string | undefined, chatId: string): ChatRuntime {
   return runtimes.get(userId, chatId);
 }
@@ -2247,6 +2255,7 @@ function reconcileMessageEvent(spindle: SpindleAPI, payload: unknown, userId?: s
 }
 
 export function registerVisualNovelBackend(spindle: SpindleAPI): void {
+  runtimeLog = spindle.log;
   spindle.on("PERMISSION_CHANGED", (payload) => {
     spindle.sendToFrontend({
       type: "vn_permission",

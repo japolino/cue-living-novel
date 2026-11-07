@@ -192,7 +192,10 @@ a reply is being generated; a cancel, a close or a new generation that lands
 while it is starting stops it before its first request. A generation that ends
 without a reply (stopped, empty or failed) gives the chat's turn back: with the
 view open, the pictures `GENERATION_STARTED` stopped resume once the stopped
-batch has returned, as a reopen would resume them.
+batch has returned, as a reopen would resume them. The host always ends a
+generation; if its end event is lost, the chat stops waiting for it after
+`GENERATION_DEADLINE_MS` (10 minutes) and logs a warning: batches start again
+and a reopen resumes the stopped pictures.
 
 A scene picture that fails for a passing reason (a timeout, a dropped
 connection, a busy provider: HTTP 408, 425, 429, 5xx, including NovelAI's
