@@ -331,6 +331,10 @@ export class PlateParallax {
       const attributes: WebGLContextAttributes = { alpha: true, premultipliedAlpha: true, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: false };
       const gl = (this.canvas.getContext("webgl", attributes) ?? this.canvas.getContext("experimental-webgl", attributes)) as WebGLRenderingContext | null;
       if (!gl) throw new Error("no WebGL");
+      // Lost (GPU reset, a backgrounded tab) and not restored yet: compiling
+      // on it fails, and that failure would turn 3D off for good. Wait for
+      // webglcontextrestored instead.
+      if (gl.isContextLost()) return null;
       const compile = (type: number, source: string): WebGLShader => {
         const shader = gl.createShader(type)!;
         gl.shaderSource(shader, source);
@@ -502,6 +506,8 @@ export class PlateParallax {
   };
 
   private readonly onContextRestored = (): void => {
-    if (this.shown && this.shown.url === this.url && this.allowed()) this.present(this.shown.url, this.shown.map, this.shown.image);
+    // The plate on screen now, which may have changed during the loss (a
+    // plate kept from before is presented again from memory).
+    if (!this.destroyed && this.allowed()) this.request();
   };
 }

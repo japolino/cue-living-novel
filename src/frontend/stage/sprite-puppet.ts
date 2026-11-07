@@ -1079,6 +1079,14 @@ export class SpritePuppet {
         this.glState = null;
         this.refresh();
       });
+      // Without this a single GPU reset kept every actor on the CSS fallback
+      // until a reload: build again (programs, buffers, textures) once the
+      // browser gives the context back.
+      canvas.addEventListener("webglcontextrestored", () => {
+        if (this.destroyed || this.glState !== null) return;
+        this.glState = undefined;
+        this.refresh();
+      });
     }
     return this.glState;
   }
