@@ -6,6 +6,7 @@ import {
   describeOperationError,
   describePlanningFailure,
   describeRetryScope,
+  operationErrorRoute,
   retryScopeForTurn,
   stageErrorText,
 } from "./turn-status";
@@ -83,6 +84,22 @@ describe("host stage errors", () => {
     expect(withTurn.retryScope).toBe("Try again makes 1 image again.");
     expect(describeOperationError("submit", "offline", turn("ready", [])).retryable).toBe(false);
     expect(describeOperationError("vn_get_state", "x", null)).toEqual({ message: "Something went wrong.", detail: "x", source: "other", retryable: false });
+  });
+
+  test("a failed request reports where it was asked for; only the story's own work blocks the stage", () => {
+    for (const operation of ["plan_turn", "generate_assets", "retry_turn", "submit", "generation_ended", "vn_submit", "vn_retry_turn", "vn_refresh", "vn_get_state"]) {
+      expect(operationErrorRoute(operation)).toBe("story");
+    }
+    expect(operationErrorRoute("vn_sprite_action")).toBe("sprite-library");
+    expect(operationErrorRoute("vn_get_sprite_library")).toBe("sprite-library");
+    expect(operationErrorRoute("vn_scan_audio")).toBe("audio");
+    expect(operationErrorRoute("vn_import_audio_done")).toBe("audio");
+    for (const operation of ["vn_touch_bond", "vn_sprite_face", "vn_sprite_cut_result", "vn_asset_ready", "vn_some_future_request"]) {
+      expect(operationErrorRoute(operation)).toBe("log");
+    }
+    // A thrown request is named by its type: it reads like the operation it ran.
+    expect(describeOperationError("vn_submit", "offline", null).message).toBe("Your reply could not be sent.");
+    expect(describeOperationError("vn_retry_turn", "gone", null).message).toBe("Trying again did not work.");
   });
 
   test("plain-text fallback joins message, detail, and retry scope without duplicates", () => {

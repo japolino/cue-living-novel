@@ -2626,6 +2626,11 @@ export class VisualNovelSettingsPanel {
     this.updateSummaries(this.config);
   }
 
+  /** A library request or action failed (`vn_error`): said in the library, never on the stage. */
+  setSpriteLibraryError(error: string): void {
+    this.spriteLibrary.setError(error);
+  }
+
   /** One sprite image changed (`vn_sprite_update`). An unknown set refreshes the library while it is shown. */
   applySpriteUpdate(setKey: string, image: SpriteImageView): void {
     const known = this.spriteLibrary.applySpriteUpdate(setKey, image);

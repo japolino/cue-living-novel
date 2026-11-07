@@ -36,6 +36,26 @@ async function replyAtTheEnd(h: HostHarness): Promise<void> {
   await flush();
 }
 
+describe("failed backend requests", () => {
+  test("a failed library action never blocks the story", async () => {
+    const h = await open();
+    expect(phase(h)).toBe("revealing");
+    // As the backend sends it for a Re-cut of a set that is gone: no chat id.
+    h.receive({ type: "vn_error", operation: "vn_sprite_action", error: "That sprite set is no longer in the library." });
+    h.receive({ type: "vn_error", chatId: "chat", operation: "vn_touch_bond", error: "storage is busy" });
+    expect(phase(h)).toBe("revealing");
+    expect(h.badges().join(" ")).not.toContain("Something went wrong");
+    h.next();
+    expect(phase(h)).not.toBe("error");
+  });
+
+  test("a failed story request still shows on the stage", async () => {
+    const h = await open();
+    h.receive({ type: "vn_error", chatId: "chat", operation: "plan_turn", error: "planner 500" });
+    expect(phase(h)).toBe("error");
+  });
+});
+
 describe("a reply generation that brings no reply", () => {
   for (const outcome of ["stopped", "empty"] as const) test(`${outcome}: the stage stops waiting and gives the turn back`, async () => {
     const h = await open();

@@ -42,6 +42,7 @@ import { presentAmbient, presentEffect } from "./effect-presentation.js";
 import {
   describeImageFailure,
   describeOperationError,
+  operationErrorRoute,
   describePlanningFailure,
   type HostStageError,
 } from "./turn-status.js";
@@ -1673,6 +1674,23 @@ export function setupVisualNovelFrontend(baseContext: SpindleFrontendContext): (
       if (message.operation === "vn_get_connection_catalog") {
         settingsPanel?.setConnectionCatalog("planner", { status: "error", options: [], error: message.error });
         settingsPanel?.setConnectionCatalog("image", { status: "error", options: [], error: message.error });
+        return;
+      }
+      // Only the story's own work blocks the stage; anything else is
+      // reported where it was asked for, or logged.
+      const route = operationErrorRoute(message.operation);
+      if (route === "sprite-library") {
+        settingsPanel?.setSpriteLibraryError(message.error);
+        return;
+      }
+      if (route === "audio") {
+        settingsPanel?.setAudioStatus(message.operation === "vn_scan_audio"
+          ? `Could not scan the music folder: ${message.error}`
+          : `Could not import the sound files: ${message.error}`);
+        return;
+      }
+      if (route === "log") {
+        console.warn(`[Cue] ${message.operation} failed: ${message.error}`);
         return;
       }
       if (!message.chatId || message.chatId === chatId()) {

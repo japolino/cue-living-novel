@@ -279,6 +279,16 @@ export class SpriteLibraryView {
     this.render();
   }
 
+  /** A request or action failed: say so instead of "Loading…" or the action's note forever. */
+  setError(error: string): void {
+    if (!this.loaded) {
+      this.element.dataset.state = "error";
+      this.summary.textContent = `The library could not be loaded: ${error}`;
+      return;
+    }
+    this.note.textContent = `That did not work: ${error}`;
+  }
+
   /** The set size changed (config spriteExpressionCount): lists, counts and hints follow it. */
   setExpressionCount(count: SpriteExpressionCount): void {
     if (count === this.count) return;

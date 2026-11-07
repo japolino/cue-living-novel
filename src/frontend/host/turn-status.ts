@@ -55,6 +55,28 @@ export type HostStageError = VnStageErrorDetails & {
   retryable: boolean;
 };
 
+/**
+ * Where a failed backend operation (`vn_error.operation`) is reported. Only
+ * the story's own work blocks the stage; a failed library action, audio scan,
+ * touch save or cut-out result belongs to its own panel line, or to the log.
+ * The backend reports any failed request under its request type, so the
+ * list names the story's requests rather than the background ones: a new
+ * request type never blocks the story by accident.
+ */
+export type OperationErrorRoute = "story" | "sprite-library" | "audio" | "log";
+
+const STORY_OPERATIONS: ReadonlySet<string> = new Set([
+  "plan_turn", "generate_assets", "retry_turn", "submit", "generation_ended",
+  "vn_submit", "vn_retry_turn", "vn_refresh", "vn_get_state", "vn_view", "vn_cancel",
+]);
+
+export function operationErrorRoute(operation: string): OperationErrorRoute {
+  if (STORY_OPERATIONS.has(operation)) return "story";
+  if (operation === "vn_get_sprite_library" || operation === "vn_sprite_action") return "sprite-library";
+  if (operation === "vn_scan_audio" || operation.startsWith("vn_import_audio")) return "audio";
+  return "log";
+}
+
 /** Friendly wording per backend `vn_error.operation`, with the raw text kept as detail. */
 export function describeOperationError(
   operation: string,
@@ -76,8 +98,11 @@ export function describeOperationError(
     case "generate_assets":
       return scoped("The scene images could not be made.", "image");
     case "retry_turn":
+    case "vn_retry_turn":
+    case "vn_refresh":
       return scoped("Trying again did not work.", "other");
     case "submit":
+    case "vn_submit":
       return { message: "Your reply could not be sent.", detail: error, source: "submit", retryable: false };
     case "generation_ended":
       return { message: "The reply finished, but the scene could not be updated.", detail: error, source: "generation", retryable: false };
