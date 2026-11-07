@@ -428,6 +428,40 @@ describe("SpriteLayer DOM", () => {
     delayed.destroy();
   });
 
+  test("a picture that fails to load is not taken for shown: the next paragraph that needs it loads it again", async () => {
+    let smileFails = true;
+    const asked: string[] = [];
+    const flaky = new SpriteLayer({
+      container: () => container as unknown as HTMLElement,
+      loadImage: async (url) => {
+        asked.push(url);
+        if (url === "/mira/smile.png" && smileFails) throw new Error("network");
+      },
+    });
+    flaky.setEnabled(true);
+    flaky.setTurn(turnView([
+      { actors: [actor("mira", { focus: true })], plateKey: "plate_a", light: "day" },
+      { actors: [actor("mira", { expression: "smile", focus: true })], plateKey: null, light: "day" },
+      { actors: [actor("mira", { expression: "smile", focus: true })], plateKey: null, light: "day" },
+    ]));
+    flaky.show(0, { animate: false });
+    await wait(0);
+    expect(activeLayer("mira").querySelector("img")!.getAttribute("src")).toBe("/mira/idle.png");
+    flaky.show(1, { animate: false });
+    await wait(0);
+    // The smile did not load: the idle is still what is shown, and what is said to be shown.
+    expect(activeLayer("mira").querySelector("img")!.getAttribute("src")).toBe("/mira/idle.png");
+    expect(flaky.snapshot().actors[0]!.shownExpression).toBe("idle");
+    const askedBefore = asked.filter((url) => url === "/mira/smile.png").length;
+    smileFails = false;
+    flaky.show(2, { animate: false });
+    await wait(0);
+    expect(asked.filter((url) => url === "/mira/smile.png").length).toBeGreaterThan(askedBefore);
+    expect(activeLayer("mira").querySelector("img")!.getAttribute("src")).toBe("/mira/smile.png");
+    expect(flaky.snapshot().actors[0]!.shownExpression).toBe("smile");
+    flaky.destroy();
+  });
+
   test("talking bob only on the focused actor whose name is the speaker, only while typing", () => {
     layer.setTurn(view);
     layer.show(1, { animate: true, speaker: "Mira" });

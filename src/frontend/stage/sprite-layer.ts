@@ -1388,6 +1388,9 @@ export class SpriteLayer {
     }
     const token = ++entry.token;
     const firstImage = entry.url === null;
+    // What is on screen until the new picture lands (a failed load goes back to it).
+    const shownUrl = entry.url;
+    const shownExpression = entry.shownExpression;
     entry.url = image.url;
     entry.shownExpression = image.expression;
     const apply = () => {
@@ -1408,9 +1411,13 @@ export class SpriteLayer {
     this.options.loadImage(image.url).then(
       () => { this.loaded.add(image.url); apply(); },
       () => {
-        // A broken sprite URL: keep what is shown; a later update may fix it.
+        // A broken sprite URL: keep what is shown, and say so. Keeping the
+        // failed URL here made the next paragraph with that expression take
+        // it for shown: it put the failed picture's geometry and face on the
+        // old one, handed it to the puppet, and never loaded it again.
         if (token !== entry.token) return;
-        entry.url = firstImage ? null : entry.url;
+        entry.url = shownUrl;
+        entry.shownExpression = shownExpression;
       },
     );
   }
