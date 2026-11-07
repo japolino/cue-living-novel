@@ -357,11 +357,12 @@ function generationPayload(cues: number[]) {
   };
 }
 
-function generationFixture() {
+function generationFixture(options: { plannerHold?: Promise<void> } = {}) {
   const handlers = new Map<string, Array<(...args: unknown[]) => void>>();
   const data = new Map<string, unknown>();
   const sent: unknown[] = [];
   const gates: Array<{ resolve: (value: { imageId: string; imageUrl?: string | null }) => void; reject: (reason?: unknown) => void }> = [];
+  let plannerCalls = 0;
   data.set("config.json", {
     generateImages: true,
     maxImagesPerTurn: 2,
@@ -400,7 +401,13 @@ function generationFixture() {
       }]
     },
     generate: {
-      raw: async (request: unknown) => storyCheckReply(request) ?? ({ content: JSON.stringify(generationPayload([0, 1])) })
+      raw: async (request: unknown) => {
+        const check = storyCheckReply(request);
+        if (check) return check;
+        plannerCalls += 1;
+        if (options.plannerHold) await options.plannerHold;
+        return { content: JSON.stringify(generationPayload([0, 1])) };
+      }
     },
     imageGen: {
       generate: async () => {
@@ -418,7 +425,7 @@ function generationFixture() {
   const assetStatuses = (): string[] => (sent as Array<Record<string, unknown>>)
     .filter((message) => message.type === "vn_asset")
     .map((message) => (message.asset as Record<string, unknown>).status as string);
-  return { spindle, fire, data, sent, gates, assetStatuses };
+  return { spindle, fire, data, sent, gates, assetStatuses, plannerCalls: () => plannerCalls };
 }
 
 describe("GENERATION_STARTED abort and ownership invalidation", () => {
@@ -450,6 +457,21 @@ describe("GENERATION_STARTED abort and ownership invalidation", () => {
     expect(assetStatuses()).not.toContain("generated");
     // The queued second job never started: the image provider saw exactly one call.
     expect(gates.length).toBe(1);
+  });
+
+  test("cancels the chat's plan in flight: it never claims the turn, sends it or starts its pictures", async () => {
+    const hold = deferred<void>();
+    const { spindle, fire, gates, sent, plannerCalls } = generationFixture({ plannerHold: hold.promise });
+    registerVisualNovelBackend(spindle);
+    viewRegistry().open(undefined, "chat");
+    fire("GENERATION_ENDED", { chatId: "chat", messageId: "assistant-1", content: generationContent });
+    await waitFor(() => plannerCalls() >= 1);
+    // A regenerate (or a new message) starts while the plan still runs.
+    fire("GENERATION_STARTED", { chatId: "chat" });
+    hold.resolve();
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    expect((sent as Array<{ type: string }>).filter((message) => message.type === "vn_turn")).toHaveLength(0);
+    expect(gates.length).toBe(0);
   });
 });
 

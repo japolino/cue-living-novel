@@ -2259,6 +2259,9 @@ export function registerVisualNovelBackend(spindle: SpindleAPI): void {
     const key = runtimeKey(userId, payload.chatId);
     generatingChats.add(key);
     bumpIntakeEpoch(userId, payload.chatId);
+    // A plan still running would claim the turn again once it lands, send it
+    // and start a paid batch for a reply that is being replaced.
+    planningQueue.cancelChat(userId, payload.chatId, undefined, "A new generation started before this turn was planned.");
     activeTurnKeys.delete(key);
     assetControllers.get(key)?.abort("A new generation started before this turn's assets settled.");
     releaseSceneCacheAdmission(spindle, userId, payload.chatId, "generation_started");
